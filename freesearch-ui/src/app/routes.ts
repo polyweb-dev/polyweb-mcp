@@ -1,8 +1,8 @@
 /**
  * Application route table. Workspace route identifiers and the project
  * section registry live here in app routing, not in the visual Sidebar
- * component. The legacy `/providers` redirect stays verbatim in
- * DashboardShell's Routes table so its target is pinned exactly once.
+ * component. Former global paths and their targets live once in
+ * `LEGACY_GLOBAL_REDIRECTS`; DashboardShell renders them as redirects.
  *
  * One permission helper serves both the navigation filter and the route gate,
  * so a hidden link and a rejected direct URL can never disagree. Every gate
@@ -12,24 +12,47 @@ import { PROJECT_PERMISSIONS, SYSTEM_PERMISSIONS, hasPermission } from "@/domain
 import type { PermissionAccess } from "@/domains/projects"
 
 export type TabId =
-  | "routing"
   | "quotas"
   | "settings"
   | "systemCredentials"
   | "systemCapacity"
   | "projects"
   | "account"
-  | "adminUsers"
+  | "accountKeys"
 
 export const TAB_PATHS: Record<TabId, string> = {
-  routing: "/routing",
-  quotas: "/usage",
-  settings: "/settings",
+  quotas: "/system/quotas",
+  settings: "/system/providers",
   systemCredentials: "/system/credentials",
   systemCapacity: "/system/capacity",
   projects: "/projects",
   account: "/account",
-  adminUsers: "/admin/users",
+  accountKeys: "/account/keys",
+}
+
+/** Former System Providers URL for the credentials tab. */
+export const SYSTEM_CREDENTIALS_TAB_PATH = `${TAB_PATHS.settings}?tab=keys`
+
+/**
+ * Former global paths that moved. Each one redirects to its new page.
+ */
+export const LEGACY_GLOBAL_REDIRECTS: Readonly<Record<string, string>> = {
+  "/settings": TAB_PATHS.settings,
+  "/usage": TAB_PATHS.quotas,
+  "/providers": TAB_PATHS.settings,
+  "/system/credentials": TAB_PATHS.accountKeys,
+  "/system/capacity": TAB_PATHS.accountKeys,
+  "/system/keys": TAB_PATHS.accountKeys,
+}
+
+/** Resolve former provider credentials tabs before their query strings are dropped. */
+export function legacyKeysDestination(pathname: string, search: string): string | null {
+  const path = pathname.replace(/\/+$/, "").toLowerCase()
+  const tab = new URLSearchParams(search).get("tab")
+  if (tab !== "keys" && tab !== "credentials") return null
+  const projectSettings = /^(\/p\/[^/]+)\/settings$/i.exec(pathname.replace(/\/+$/, ""))
+  if (projectSettings) return `${projectSettings[1]}/providers`
+  return ["/settings", "/providers", TAB_PATHS.settings].includes(path) ? TAB_PATHS.accountKeys : null
 }
 
 /** Public account routes. They stay outside the protected workspace. */
@@ -48,35 +71,31 @@ export interface WorkspaceRoute {
 }
 
 export const workspaceRoutes: WorkspaceRoute[] = [
-  { id: "routing", path: TAB_PATHS.routing },
   { id: "quotas", path: TAB_PATHS.quotas },
   { id: "settings", path: TAB_PATHS.settings },
-  { id: "systemCredentials", path: TAB_PATHS.systemCredentials },
-  { id: "systemCapacity", path: TAB_PATHS.systemCapacity },
   { id: "projects", path: TAB_PATHS.projects },
   { id: "account", path: TAB_PATHS.account },
-  { id: "adminUsers", path: TAB_PATHS.adminUsers },
+  { id: "accountKeys", path: TAB_PATHS.accountKeys },
 ]
 
 /**
  * System permissions each global route needs, any of them (any-of); `null`
  * means always open.
  *
- * Routing, usage and settings read the global control plane, which the
- * backend gates on `system.settings.read`. Account provisioning needs
- * `system.settings.write`. System credentials need
- * `system.credentials.manage`; Capacity opens with either pool or allocation
- * management. Playground and activity live under projects.
+ * Quotas and providers read the global control plane, which the
+ * backend gates on `system.settings.read`. System credentials need
+ * `system.credentials.manage`; they live as a tab of System Providers, so that
+ * page also opens with that permission alone. Capacity opens with either pool
+ * or allocation management. Playground and activity live under projects.
  */
 const ROUTE_PERMISSIONS: Record<TabId, readonly string[] | null> = {
   projects: null,
   account: null,
-  routing: [SYSTEM_PERMISSIONS.settingsRead],
+  accountKeys: [SYSTEM_PERMISSIONS.vaultManage],
   quotas: [SYSTEM_PERMISSIONS.settingsRead],
-  settings: [SYSTEM_PERMISSIONS.settingsRead],
+  settings: [SYSTEM_PERMISSIONS.settingsRead, SYSTEM_PERMISSIONS.credentialsManage],
   systemCredentials: [SYSTEM_PERMISSIONS.credentialsManage],
   systemCapacity: [SYSTEM_PERMISSIONS.poolsManage, SYSTEM_PERMISSIONS.allocationsManage],
-  adminUsers: [SYSTEM_PERMISSIONS.settingsWrite],
 }
 
 /** Return whether one global route waits for the system access descriptor. */
@@ -170,6 +189,8 @@ export const PROJECT_SECTIONS: readonly ProjectSection[] = [
 export const LEGACY_SECTION_PATHS: Readonly<Record<string, ProjectSectionId>> = {
   "/playground": "playground",
   "/activity": "activity",
+  "/routing": "providers",
+  "/system/routing": "providers",
 }
 
 const PROJECT_UUID_RE =
@@ -227,6 +248,7 @@ export function isInternalPath(value: string | null | undefined): value is strin
   if (!value || !value.startsWith("/") || value.startsWith("//")) return false
   if (Object.values(TAB_PATHS).includes(value)) return true
   if (Object.keys(LEGACY_SECTION_PATHS).includes(value)) return true
+  if (Object.keys(LEGACY_GLOBAL_REDIRECTS).includes(value)) return true
   const parsed = parseProjectPath(value)
   return parsed !== null && PROJECT_UUID_RE.test(parsed.projectId)
 }

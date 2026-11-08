@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import Final
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.configuration.provider_config import ProviderConfig, system_support_mask
@@ -60,7 +61,9 @@ from freesearch.models.users import UserPrincipal
 from freesearch.persistence.bindings import ProjectBindingRepository, StoredBinding
 from freesearch.persistence.credentials import CredentialRepository
 from freesearch.persistence.pools import (
+    CredentialPoolLinkRow,
     PoolAllocationRepository,
+    ProjectPoolAllocationRow,
     StoredAllocation,
     StoredPool,
     StoredPoolLink,
@@ -77,6 +80,7 @@ from freesearch.services.control_access import (
     run_control_write,
 )
 from freesearch.services.control_errors import ResourceConflict, ResourceInvalid, ResourceNotFound
+from freesearch.services.routing_order import catalog_call_costs
 
 #: Audit actions of binding lifecycle events (project scope).
 BINDING_CREATED: Final[str] = "binding.created"
@@ -167,7 +171,9 @@ def _binding_read(binding: StoredBinding) -> ProjectBindingRead:
 def allocation_read(allocation: StoredAllocation) -> AllocationRead:
     """Project one stored allocation onto its wire model."""
 
-    return AllocationRead(
+    # The legacy response schema predates nullable rates. Preserve NULL rather
+    # than coercing an unlimited allocation to zero.
+    return AllocationRead.model_construct(
         project_id=allocation.project_id,
         pool_id=allocation.pool_id,
         operation_scope=allocation.operation,
@@ -219,7 +225,11 @@ class ProviderBindingService:
             bindings = await ProjectBindingRepository(session).list_for_project(
                 project_id=project_id
             )
-            return [_binding_read(binding) for binding in bindings]
+            owned = await CredentialRepository(session).list_for_owner(actor.id)
+            owned_ids = {key.credential.id for key in owned}
+            return [
+                _binding_read(binding) for binding in bindings if binding.credential_id in owned_ids
+            ]
 
         return await run_control_read(self._repository, operation)
 
@@ -322,7 +332,7 @@ class ProviderBindingService:
             await require_project_permission(
                 session, self._authorization, actor, project_id, PermissionAction.PROVIDERS_READ
             )
-            return await self._view_state(session, project_id)
+            return await self._view_state(session, project_id, actor.id)
 
         state = await run_control_read(self._repository, operation)
         providers = [await self._provider_view(provider.value, state) for provider in ProviderName]
@@ -332,7 +342,9 @@ class ProviderBindingService:
             allocations=[allocation_read(allocation) for allocation in state.allocations],
         )
 
-    async def _view_state(self, session: AsyncSession, project_id: UUID) -> _ViewState:
+    async def _view_state(
+        self, session: AsyncSession, project_id: UUID, owner_id: UUID
+    ) -> _ViewState:
         credentials = CredentialRepository(session)
         available = [
             _Available(credential, ALL_CREDENTIAL_OPERATIONS)
@@ -346,17 +358,57 @@ class ProviderBindingService:
                 account_id=self._account_id, project_id=project_id
             )
         )
+        bindings = await ProjectBindingRepository(session).list_for_project(project_id=project_id)
+        bound_ids = {binding.credential_id for binding in bindings}
+        owned = await credentials.list_for_owner(owner_id)
+        owned_ids = {key.credential.id for key in owned}
+        available = [
+            item
+            for item in available
+            if item.credential.id in owned_ids
+            or item.credential.id in bound_ids
+            or item.credential.auth_mode == "keyless"
+        ]
         credential_ids = {item.credential.id for item in available}
         pools = UpstreamPoolRepository(session)
-        links = await pools.links_for_credentials(credential_ids=credential_ids)
+        permitted = {item.credential.id: item.permitted for item in available}
+        rows = (
+            await session.scalars(
+                select(CredentialPoolLinkRow)
+                .join(
+                    ProjectPoolAllocationRow,
+                    (ProjectPoolAllocationRow.pool_id == CredentialPoolLinkRow.pool_id)
+                    & (
+                        ProjectPoolAllocationRow.operation_scope
+                        == CredentialPoolLinkRow.operation_scope
+                    ),
+                )
+                .where(
+                    ProjectPoolAllocationRow.project_id == str(project_id),
+                    CredentialPoolLinkRow.credential_id.in_([str(cid) for cid in credential_ids]),
+                )
+                .order_by(
+                    CredentialPoolLinkRow.credential_id, CredentialPoolLinkRow.operation_scope
+                )
+            )
+        ).all()
+        links = [
+            StoredPoolLink(
+                credential_id=UUID(row.credential_id),
+                operation=CredentialOperation(row.operation_scope),
+                pool_id=UUID(row.pool_id),
+                provider_type=row.provider_type,
+                version=row.version,
+            )
+            for row in rows
+            if CredentialOperation(row.operation_scope) in permitted[UUID(row.credential_id)]
+        ]
         pool_rows = await pools.get_pools(
             account_id=self._account_id, pool_ids={link.pool_id for link in links}
         )
         return _ViewState(
             available=available,
-            bindings=await ProjectBindingRepository(session).list_for_project(
-                project_id=project_id
-            ),
+            bindings=bindings,
             links=links,
             pools=pool_rows,
             health=await credentials.latest_health(credential_ids=credential_ids),
@@ -389,13 +441,24 @@ class ProviderBindingService:
                 )
             )
         effective = frozenset().union(*(binding.effective_operations for binding in bindings))
+        observations = [
+            state.health[binding.credential_id]
+            for binding in bindings
+            if binding.enabled_operations and binding.credential_id in state.health
+        ]
+        health = max(observations, key=lambda observation: observation[1], default=None)
         return ProviderTypeView(
             provider_type=provider_type,
+            keyless=bool(catalog_call_costs(provider_type, keyless=True)),
+            call_cost_usd=catalog_call_costs(provider_type),
+            keyless_call_cost_usd=catalog_call_costs(provider_type, keyless=True),
             capability=capability,
             kill_switch=not config.enabled,
             system_enabled_operations=system_enabled,
             available=bool(own),
             enabled=bool(effective),
+            health_status=None if health is None else health[0],
+            health_checked_at=None if health is None else health[1],
             credentials=[self._credential_view(item, state) for item in own],
             bindings=bindings,
             effective_operations=effective,

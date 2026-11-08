@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
+import { ProviderLogo } from "@/shared/ui/ProviderLogo"
 import { SPEND_CAP, SPEND_CAP_NOTE } from "../model/quotaLabels"
 import { ManualEntryModal, type ManualEntryVariant } from "./ManualEntryModal"
 
@@ -37,7 +38,7 @@ export function ManualQuotaModal(props: ManualQuotaModalProps): ReactNode {
         isOpen={props.open}
         onClose={props.onClose}
         maxWidth="md"
-        title={SPEND_CAP + " — " + props.providerName}
+        title={<><ProviderLogo providerId={props.providerId} name={props.providerName} />{SPEND_CAP + " for " + props.providerName}</>}
         subtitle={SPEND_CAP_NOTE}
       >
         {props.children}

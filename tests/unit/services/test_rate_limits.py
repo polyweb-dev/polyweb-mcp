@@ -175,6 +175,37 @@ class _FakeRateRepository:
                 total += units
         return total
 
+    async def count_catalog_attempts(
+        self,
+        provider: str,
+        bucket_id: str,
+        *,
+        window: RateWindowName,
+        now: datetime,
+        since: datetime | None = None,
+    ) -> Decimal:
+        start = since if since is not None else now - timedelta(seconds=_WINDOW_SECONDS[window])
+        attempts: dict[object, Decimal] = {}
+        for item in self.attempts:
+            instant = item["attempted_at"]
+            units = item["units"]
+            bucket = item["bucket_id"]
+            assert isinstance(instant, datetime)
+            assert isinstance(units, Decimal)
+            assert isinstance(bucket, str)
+            if (
+                item["provider"] == provider
+                and (
+                    bucket == bucket_id
+                    or bucket.startswith((f"{bucket_id}#cred:", f"{bucket_id}#pool:"))
+                )
+                and instant >= start
+            ):
+                attempts[item["attempt_id"]] = max(
+                    attempts.get(item["attempt_id"], Decimal("0")), units
+                )
+        return sum(attempts.values(), Decimal("0"))
+
     async def list_observations(
         self, provider: str, *, session: object | None = None
     ) -> list[RateObservation]:

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { SettingsField } from "@/domains/settings"
-import { controlValue, isInheritPending, parseList, sectionChanges, withoutSection } from "./settingsDraft"
+import { controlValue, draftChanges, isInheritPending } from "./settingsDraft"
 
 function field(id: string, overrides: Partial<SettingsField> = {}): SettingsField {
   return {
@@ -23,16 +23,18 @@ const PREFERRED = field("routing.preferred_providers", { effectiveValue: [], sys
 const RETENTION = field("trace.retention_days", { effectiveValue: 30, systemDefault: 30 })
 const FIELDS = [ATTEMPTS, PREFERRED, RETENTION]
 
-describe("sectionChanges", () => {
-  it("sends only changed fields of one section", () => {
+describe("draftChanges", () => {
+  it("sends only changed fields, across sections", () => {
     const draft = { "routing.max_attempts": 5, "routing.preferred_providers": ["tavily"], "trace.retention_days": 10 }
-    expect(sectionChanges(draft, FIELDS, "routing")).toEqual({ "routing.preferred_providers": ["tavily"] })
-    expect(sectionChanges(draft, FIELDS, "trace")).toEqual({ "trace.retention_days": 10 })
+    expect(draftChanges(draft, FIELDS)).toEqual({
+      "routing.preferred_providers": ["tavily"],
+      "trace.retention_days": 10,
+    })
   })
 
   it("sends null for an inherited override and nothing for inheriting an inherited field", () => {
-    expect(sectionChanges({ "routing.max_attempts": null }, FIELDS, "routing")).toEqual({ "routing.max_attempts": null })
-    expect(sectionChanges({ "trace.retention_days": null }, FIELDS, "trace")).toEqual({})
+    expect(draftChanges({ "routing.max_attempts": null }, FIELDS)).toEqual({ "routing.max_attempts": null })
+    expect(draftChanges({ "trace.retention_days": null }, FIELDS)).toEqual({})
   })
 })
 
@@ -45,8 +47,11 @@ describe("draft display helpers", () => {
     expect(isInheritPending({}, ATTEMPTS)).toBe(false)
   })
 
-  it("drops one section's entries and parses lists", () => {
-    expect(withoutSection({ "routing.max_attempts": 1, "trace.retention_days": 2 }, FIELDS, "routing")).toEqual({ "trace.retention_days": 2 })
-    expect(parseList(" tavily, ,exa ")).toEqual(["tavily", "exa"])
+  it("treats an unchanged list as no change", () => {
+    expect(draftChanges({ "routing.preferred_providers": [] }, [field("routing.preferred_providers", { projectOverride: [] })])).toEqual({})
+  })
+
+  it("treats an inherited field edited back to its shown value as no change", () => {
+    expect(draftChanges({ "trace.retention_days": 30, "routing.preferred_providers": [] }, FIELDS)).toEqual({})
   })
 })

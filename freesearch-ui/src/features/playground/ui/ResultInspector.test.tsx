@@ -60,10 +60,6 @@ describe("ResultInspector", () => {
   it("shows the empty state when no result is selected", () => {
     render(<ResultInspector result={null} />)
 
-    expect(
-      screen.getByText(
-        "Select a search result from the list to inspect full metadata and snippet extraction."
-      )
-    ).toBeInTheDocument()
+    expect(screen.getByText("Select a result to see its details")).toBeInTheDocument()
   })
 })

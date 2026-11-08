@@ -36,7 +36,7 @@ function synthAuth(overrides: Record<string, unknown> = {}): Record<string, unkn
     unknown_tiers: [],
     tier_split_known: true,
     aggregate_pool: null,
-    crd_views: [],
+    usd_views: [],
     rate_progress: [],
     grants: null,
     detail: null,
@@ -102,8 +102,8 @@ describe("decodeProviderLimits", () => {
                 native_unit: "REQUEST",
                 native_remaining: "100",
                 native_allowance: "200",
-                remaining_crd: "0.599",
-                allowance_crd: "1.000",
+                remaining_usd: "0.000599",
+                allowance_usd: "0.001",
                 reset_rule: "monthly_first",
                 reset_at: null,
                 funding_mode: "prepaid",
@@ -113,13 +113,13 @@ describe("decodeProviderLimits", () => {
                 label: null,
               },
             ],
-            crd_views: [
+            usd_views: [
               {
                 state: "finite",
                 operation: "search",
-                remaining_crd: "0.599",
-                local_remaining_crd: "0.599",
-                request_cost_crd: "0.050",
+                remaining_usd: "0.000599",
+                local_remaining_usd: "0.000599",
+                request_cost_usd: "0.000050",
                 shared_pool_id: null,
                 possible_standard_calls: "11",
                 price_version: null,
@@ -132,9 +132,9 @@ describe("decodeProviderLimits", () => {
     ])
     expect(result).toHaveLength(1)
     expect(result[0].auths[0].free_tiers[0].remaining_crd).toBe("0.599")
-    expect(result[0].auths[0].free_tiers[0].allowance_crd).toBe("1.000")
+    expect(result[0].auths[0].free_tiers[0].allowance_crd).toBe("1")
     expect(result[0].auths[0].crd_views[0].remaining_crd).toBe("0.599")
-    expect(result[0].auths[0].crd_views[0].request_cost_crd).toBe("0.050")
+    expect(result[0].auths[0].crd_views[0].request_cost_crd).toBe("0.05")
   })
 
   it("maps backend you to UI youcom via toUiId", () => {
@@ -155,13 +155,13 @@ describe("decodeProviderLimits", () => {
         auths: [
           synthAuth({
             auth_mode: "bogus-mode",
-            crd_views: [
+            usd_views: [
               {
                 state: "bogus-state",
                 operation: "search",
-                remaining_crd: "5",
-                local_remaining_crd: "5",
-                request_cost_crd: null,
+                remaining_usd: "0.005",
+                local_remaining_usd: "0.005",
+                request_cost_usd: null,
                 shared_pool_id: null,
                 possible_standard_calls: null,
                 price_version: null,
@@ -182,13 +182,13 @@ describe("decodeProviderLimits", () => {
       synthProvider("synth-a", {
         auths: [
           synthAuth({
-            crd_views: [
+            usd_views: [
               {
                 state: "finite",
                 operation: "bogus",
-                remaining_crd: "5",
-                local_remaining_crd: "5",
-                request_cost_crd: null,
+                remaining_usd: "0.005",
+                local_remaining_usd: "0.005",
+                request_cost_usd: null,
                 shared_pool_id: null,
                 possible_standard_calls: null,
                 price_version: null,
@@ -250,9 +250,9 @@ describe("decodeLimitHistory", () => {
           reason: "sync",
           old_native: null,
           new_native: null,
-          old_crd: "0.599",
-          new_crd: "0.500",
-          crd_debit: "0.099",
+          old_usd: "0.000599",
+          new_usd: "0.000500",
+          debit_usd: "0.000099",
           native_debit: null,
           actual_usd: null,
           confidence: "authoritative",
@@ -265,7 +265,7 @@ describe("decodeLimitHistory", () => {
     expect(result.next_cursor).toBe("cursor-1")
     expect(result.events).toHaveLength(1)
     expect(result.events[0].old_crd).toBe("0.599")
-    expect(result.events[0].new_crd).toBe("0.500")
+    expect(result.events[0].new_crd).toBe("0.5")
     expect(result.events[0].crd_debit).toBe("0.099")
   })
 
@@ -283,9 +283,9 @@ describe("decodeLimitHistory", () => {
           reason: "sync",
           old_native: null,
           new_native: null,
-          old_crd: null,
-          new_crd: null,
-          crd_debit: null,
+          old_usd: null,
+          new_usd: null,
+          debit_usd: null,
           native_debit: null,
           actual_usd: null,
           confidence: "unknown",
@@ -311,7 +311,7 @@ describe("decodeLimitHistory", () => {
 
 describe("decodeCRDUsageTotals", () => {
   it("decodes an empty wrapped list to []", () => {
-    expect(decodeCRDUsageTotals({ crd_usage_totals: [] })).toEqual([])
+    expect(decodeCRDUsageTotals({ spend_totals: [] })).toEqual([])
   })
 
   it("decodes a bare array of synthetic totals", () => {
@@ -319,7 +319,7 @@ describe("decodeCRDUsageTotals", () => {
       {
         provider: "synth-a",
         operation: "search",
-        normalized_crd: "0.599",
+        spend_usd: "0.000599",
         attempt_count: 2,
         volume_count: 3,
       },
@@ -336,18 +336,18 @@ describe("decodeCRDUsageTotals", () => {
 
   it("decodes a wrapped list of synthetic totals", () => {
     const result = decodeCRDUsageTotals({
-      crd_usage_totals: [
+      spend_totals: [
         {
           provider: "synth-b",
           operation: "fetch",
-          normalized_crd: "1.250",
+          spend_usd: "0.001250",
           attempt_count: 1,
           volume_count: 1,
         },
       ],
     })
     expect(result).toHaveLength(1)
-    expect(result[0].normalized_crd).toBe("1.250")
+    expect(result[0].normalized_crd).toBe("1.25")
   })
 
   it("returns [] for null and undefined", () => {
@@ -355,7 +355,7 @@ describe("decodeCRDUsageTotals", () => {
     expect(decodeCRDUsageTotals(undefined)).toEqual([])
   })
 
-  it("defaults a missing normalized_crd to 0", () => {
+  it("defaults missing spend_usd to 0", () => {
     const result = decodeCRDUsageTotals([
       {
         provider: "synth-a",
@@ -373,7 +373,7 @@ describe("decodeCRDUsageTotals", () => {
       {
         provider: "synth-a",
         operation: "bogus",
-        normalized_crd: "5",
+        spend_usd: "0.005",
         attempt_count: 1,
         volume_count: 1,
       },
@@ -386,7 +386,7 @@ describe("decodeCRDUsageTotals", () => {
       {
         provider: "you",
         operation: "search",
-        normalized_crd: "2",
+        spend_usd: "0.002",
         attempt_count: 1,
         volume_count: 1,
       },
@@ -397,8 +397,8 @@ describe("decodeCRDUsageTotals", () => {
   it("never throws on unknown input", () => {
     expect(() => decodeCRDUsageTotals(42)).not.toThrow()
     expect(decodeCRDUsageTotals(42)).toEqual([])
-    expect(() => decodeCRDUsageTotals({ crd_usage_totals: "bogus" })).not.toThrow()
-    expect(decodeCRDUsageTotals({ crd_usage_totals: "bogus" })).toEqual([])
+    expect(() => decodeCRDUsageTotals({ spend_totals: "bogus" })).not.toThrow()
+    expect(decodeCRDUsageTotals({ spend_totals: "bogus" })).toEqual([])
   })
 })
 
@@ -423,7 +423,7 @@ describe("decodeDetail retry_after_seconds", () => {
               last_sync_at: null,
               stale: false,
               price_version: "1",
-              crd_split_note: null,
+              balance_split_note: null,
               rate_windows: [],
               retry_after_seconds: value,
               tier_split_known: true,

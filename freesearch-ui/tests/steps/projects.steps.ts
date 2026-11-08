@@ -18,6 +18,8 @@ import {
 import { secondTab, setSecondTab } from "./tabs"
 
 const USER_EMAIL = "member@example.com"
+const PEER_EMAIL = "alpha-peer@example.com"
+const PEER_ID = "44444444-4444-4444-8444-444444444444"
 const ALPHA_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 const ALPHA_MEMBERS_URL = `/api/v1/projects/${ALPHA_ID}/members`
 
@@ -38,7 +40,7 @@ async function json(route: import("@playwright/test").Route, body: unknown, stat
   })
 }
 
-async function installProjectAuth(page: Page): Promise<void> {
+async function installProjectAuth(page: Page, id = USER_ID, email = USER_EMAIL): Promise<void> {
   await page.unroute("**/auth/jwt/refresh").catch(() => {})
   await page.unroute("**/users/me").catch(() => {})
   await page.route("**/auth/jwt/refresh", (route) => {
@@ -49,7 +51,7 @@ async function installProjectAuth(page: Page): Promise<void> {
     if (route.request().method() !== "GET") return route.fallback()
     // The backend account carries no role: authority is the system access
     // list served by the project stub plus the per-project access descriptor.
-    return json(route, userAccountBody(USER_ID, USER_EMAIL))
+    return json(route, userAccountBody(id, email))
   })
 }
 
@@ -179,6 +181,61 @@ Then("the members table shows {string}", async ({ page }, email: string) => {
 
 Then("the members table does not show {string}", async ({ page }, email: string) => {
   await expect(page.getByRole("cell", { name: email, exact: true })).toBeHidden()
+})
+
+When("I change the developer's activity permission to {word}", async ({ page }, state: string) => {
+  await page.getByRole("button", { name: `Actions for ${PEER_EMAIL}` }).click()
+  await page.getByRole("button", { name: "Edit permissions", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: `Permissions for ${PEER_EMAIL}` })
+  const toggle = dialog.getByRole("switch", { name: "View activity" })
+  const checked = state === "on"
+  await expect(toggle).toHaveAttribute("aria-checked", String(!checked))
+  await toggle.click()
+  await expect(toggle).toHaveAttribute("aria-checked", String(checked))
+  const response = page.waitForResponse((res) =>
+    res.url().includes(`/members/${PEER_ID}`) && res.request().method() === "PATCH"
+  )
+  await dialog.getByRole("button", { name: "Save permissions" }).click()
+  const saved = await response
+  expect(saved.status()).toBe(200)
+  const member = await saved.json() as { permissions: number }
+  expect((member.permissions & 4) !== 0).toBe(checked)
+  await expect(dialog).toBeHidden()
+})
+
+Then("the member roles and provider owner are shown", async ({ page }) => {
+  const table = page.getByRole("table", { name: "Members" })
+  await expect(table.getByRole("row").filter({ hasText: USER_EMAIL })).toContainText("Project admin")
+  await expect(table.getByRole("row").filter({ hasText: USER_EMAIL })).toContainText("Provider owner")
+  await expect(table.getByRole("row").filter({ hasText: PEER_EMAIL })).toContainText("Developer")
+})
+
+When("I open the provider ownership transfer dialog", async ({ page }) => {
+  await page.getByRole("button", { name: `Actions for ${USER_EMAIL}` }).click()
+  await page.getByRole("button", { name: "Transfer provider ownership" }).click()
+})
+
+Then("the transfer dialog requires another project admin", async ({ page }) => {
+  const dialog = page.getByRole("dialog", { name: "Transfer provider ownership" })
+  await expect(dialog).toContainText("Make another member a project admin first.")
+  await expect(dialog.getByRole("button", { name: "Transfer ownership" })).toHaveCount(0)
+})
+
+When("I cancel the provider ownership transfer", async ({ page }) => {
+  const dialog = page.getByRole("dialog", { name: "Transfer provider ownership" })
+  await dialog.getByRole("button", { name: "Cancel" }).click()
+  await expect(dialog).toBeHidden()
+})
+
+When("I sign in as the developer", async ({ page }) => {
+  setProjectStubAccount(PEER_EMAIL, [], PEER_ID)
+  await installProjectAuth(page, PEER_ID, PEER_EMAIL)
+  const traces = page.waitForResponse((res) =>
+    new URL(res.url()).pathname === `/api/v1/projects/${ALPHA_ID}/traces`
+      && res.request().method() === "GET"
+  )
+  await page.goto(`/p/${ALPHA_ID}/activity`)
+  expect((await traces).status()).toBe(200)
 })
 
 Then("the second tab shows the members table of {word}", async ({ page: _page }, _name: string) => {

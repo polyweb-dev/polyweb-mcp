@@ -1,5 +1,6 @@
 import { FIELD_SPECS, numericMax } from "@/domains/settings"
 import type { SettingsField, SettingsValue } from "@/domains/settings"
+import { Switch } from "@/shared/ui/Switch"
 import { EnumSettingControl } from "./EnumSettingControl"
 import { ListSettingControl } from "./ListSettingControl"
 import { NumberSettingControl } from "./NumberSettingControl"
@@ -9,10 +10,12 @@ interface SettingsFieldControlProps {
   value: SettingsValue
   disabled: boolean
   onChange: (value: SettingsValue) => void
+  /** Number inputs report whether they hold a value the draft can take. */
+  onValidity: (valid: boolean) => void
 }
 
-/** Edit control of one field, by its catalog control kind. */
-export function SettingsFieldControl({ field, value, disabled, onChange }: SettingsFieldControlProps) {
+/** Edit one field by its catalog control kind. */
+export function SettingsFieldControl({ field, value, disabled, onChange, onValidity }: SettingsFieldControlProps) {
   const spec = FIELD_SPECS[field.id]
   if (spec === undefined) return null
   const { control, label } = spec
@@ -20,17 +23,9 @@ export function SettingsFieldControl({ field, value, disabled, onChange }: Setti
 
   if (control.kind === "boolean") {
     return (
-      <label className="inline-flex items-center gap-2 text-[13px]">
-        <input
-          id={id}
-          type="checkbox"
-          aria-label={label}
-          checked={value === true}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.checked)}
-        />
-        {value === true ? "On" : "Off"}
-      </label>
+      <div className="flex h-8 items-center">
+        <Switch id={id} ariaLabel={label} checked={value === true} disabled={disabled} onChange={onChange} />
+      </div>
     )
   }
   if (control.kind === "enum") {
@@ -57,6 +52,36 @@ export function SettingsFieldControl({ field, value, disabled, onChange }: Setti
       />
     )
   }
+  if (field.id === "trace.retention_days" && control.kind === "number") {
+    const max = numericMax(field, control.max)
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <Switch
+          label="Delete old traces"
+          checked={typeof value === "number"}
+          disabled={disabled}
+          onChange={(checked) => onChange(checked ? Math.min(30, max) : null)}
+        />
+        {typeof value === "number" && (
+          <div className="flex items-center gap-2">
+            <span className="text-[var(--muted)]">after</span>
+            <div className="w-20">
+              <NumberSettingControl
+                id={id}
+                label="Days"
+                value={value}
+                bounds={{ ...control, max }}
+                suffix="days"
+                disabled={disabled}
+                onChange={onChange}
+                onValidity={onValidity}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
   return (
     <NumberSettingControl
       id={id}
@@ -65,6 +90,7 @@ export function SettingsFieldControl({ field, value, disabled, onChange }: Setti
       bounds={{ ...control, max: numericMax(field, control.max) }}
       disabled={disabled}
       onChange={onChange}
+      onValidity={onValidity}
     />
   )
 }

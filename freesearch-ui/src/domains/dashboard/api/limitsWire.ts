@@ -1,3 +1,4 @@
+import { ledgerView } from "./usdWire"
 /**
  * Public decoders for the provider limit wire contract.
  *
@@ -143,6 +144,7 @@ function decodeProvider(value: unknown): ProviderLimits | null {
 
 /** Decode one limit response, a dashboard array, or a dashboard field. */
 export function decodeProviderLimits(value: unknown): ProviderLimits[] {
+  value = ledgerView(value)
   if (Array.isArray(value)) return mapItems(value, decodeProvider)
   const item = raw(value)
   if (!item) return []
@@ -152,6 +154,7 @@ export function decodeProviderLimits(value: unknown): ProviderLimits[] {
 }
 
 export function decodeLimitHistory(value: unknown): LimitHistoryPage {
+  value = ledgerView(value)
   const item = raw(value)
   if (!item) return { events: [], next_cursor: null }
   return { events: mapItems(item.events, decodeEvent), next_cursor: maybeText(item.next_cursor) }
@@ -159,6 +162,7 @@ export function decodeLimitHistory(value: unknown): LimitHistoryPage {
 
 /** Accept the bare array or the dashboard field that wraps it. */
 export function decodeCRDUsageTotals(value: unknown): CRDUsageTotal[] {
+  value = ledgerView(value)
   const item = raw(value)
   if (item !== null && Array.isArray(item.crd_usage_totals)) {
     return mapItems(item.crd_usage_totals, decodeUsageTotal)

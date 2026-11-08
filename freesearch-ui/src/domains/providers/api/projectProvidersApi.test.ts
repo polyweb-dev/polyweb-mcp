@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { decodeProjectProviders, getProjectProviders } from "./projectProvidersApi"
+import { decodeProjectProviders } from "./projectProvidersApi"
+import { getProjectProviderView } from "./providerViewApi"
 import { providersForOperation } from "../model/projectProviders"
 import { installFetchStub, ok } from "@/test/fetchMock"
 import { PROJECT_ALPHA_ID } from "@/test/accessFixtures"
@@ -14,11 +15,11 @@ describe("projectProvidersApi", () => {
     const stub = installFetchStub(() => ok(projectProvidersFixture(PROJECT_ALPHA_ID)))
     const controller = new AbortController()
 
-    const providers = await getProjectProviders(PROJECT_ALPHA_ID, controller.signal)
+    const view = await getProjectProviderView(PROJECT_ALPHA_ID, controller.signal)
 
     expect(stub.requests[0]?.url).toBe(`/api/v1/projects/${PROJECT_ALPHA_ID}/providers`)
     expect(stub.requests[0]?.signal).toBe(controller.signal)
-    expect(providers).toHaveLength(8)
+    expect(view.providers).toHaveLength(8)
   })
 
   it("maps wire ids to UI ids and catalog names and keeps only known operations", () => {

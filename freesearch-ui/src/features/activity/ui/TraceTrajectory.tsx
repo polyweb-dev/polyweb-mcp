@@ -7,12 +7,13 @@ import {
   type TraceStage,
 } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
+import { formatLatency } from "@/shared/lib/formatTime"
 import {
   LatencyWaterfall,
-  LatencyWaterfallValue,
   type LatencyWaterfallRow,
 } from "@/shared/ui/LatencyWaterfall"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
+import { traceSpanLabel } from "../model/traceSpanPresentation"
 
 export interface TraceTrajectoryProps {
   stages: readonly TraceStage[]
@@ -24,8 +25,9 @@ export interface TraceTrajectoryProps {
 const PROVIDER_SPAN_NAME = "freesearch.provider"
 const AGGREGATED_PROVIDER = "aggregated"
 const TOTAL_SPAN_NAMES: readonly string[] = ["POST /search", "POST /fetch"]
+/** One accent for provider time; FreeSearch's own stages sit in a neutral step. */
 const TRACK_COLOR = "var(--accent-cyan)"
-const PROCESSING_COLOR = "var(--accent-seafoam)"
+const PROCESSING_COLOR = "color-mix(in srgb, var(--text) 38%, transparent)"
 const ERROR_COLOR = "var(--status-danger)"
 
 /** Shallow, user-level depth: the total is the root, a provider attempt is nested. */
@@ -40,7 +42,7 @@ function outcomeNote(stage: TraceStage): ReactNode {
     <>
       {" "}
       <span className="text-[11px]" style={{ color: ERROR_COLOR }}>
-        {stage.outcome}
+        {stage.outcome === "error" ? "Error" : "Partial"}
       </span>
     </>
   )
@@ -57,7 +59,7 @@ function rowLabel(stage: TraceStage): ReactNode {
   const identity = providerId === null || providerId === "" ? null : providerIdentity(providerId)
   if (identity !== null && identity.id !== "" && identity.id !== AGGREGATED_PROVIDER) {
     return (
-      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap" title={`${identity.name} request`}>
         {/* The recorded stage stays announced even when the badge replaces it. */}
         <span className="sr-only">{stage.label}</span>
         {" "}
@@ -70,7 +72,7 @@ function rowLabel(stage: TraceStage): ReactNode {
   }
   return (
     <span className="block min-w-0">
-      <span className="[overflow-wrap:anywhere]">{stage.label}</span>
+      <span className="[overflow-wrap:anywhere]">{traceSpanLabel(stage)}</span>
       {outcomeNote(stage)}
     </span>
   )
@@ -82,11 +84,13 @@ function trackColor(stage: TraceStage): string {
   return PROCESSING_COLOR
 }
 
-function summaryCell(label: string, value: string): ReactNode {
+function summaryCell(label: string, milliseconds: number): ReactNode {
   return (
     <div key={label} className="min-w-0">
-      <dt className="min-h-8 text-[11px] leading-4 text-[var(--muted)]">{label}</dt>
-      <dd className="tnum text-[12px] text-[var(--text-strong)]">{value}</dd>
+      <dt className="whitespace-nowrap text-[11px] leading-4 text-[var(--muted)]">{label}</dt>
+      <dd className="tnum whitespace-nowrap text-[12px] text-[var(--text-strong)]">
+        {formatLatency(milliseconds)}
+      </dd>
     </div>
   )
 }
@@ -101,20 +105,22 @@ function latencySummary(summary: TraceLatencySummary, hasAttempts: boolean): Rea
     return (
       <p className="text-[12px] text-[var(--muted)]">
         Time outside provider calls{" "}
-        <span className="tnum text-[var(--text-strong)]">{summary.outsideProvidersMs}ms</span>.
-        Provider phases were not recorded for this trace.
+        <span className="tnum text-[var(--text-strong)]">
+          {formatLatency(summary.outsideProvidersMs)}
+        </span>
+        . Provider phases were not recorded for this trace.
       </p>
     )
   }
   return (
     <div className="min-w-0">
-      <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
-        {summaryCell("Before providers", `${summary.beforeProvidersMs}ms`)}
-        {summaryCell("Provider active", `${summary.providerActiveMs}ms`)}
+      <dl className="flex min-w-0 flex-wrap gap-x-6 gap-y-2">
+        {summaryCell("Before providers", summary.beforeProvidersMs)}
+        {summaryCell("Provider active", summary.providerActiveMs)}
         {summary.betweenProvidersMs > 0 &&
-          summaryCell("Between providers", `${summary.betweenProvidersMs}ms`)}
-        {summaryCell("After providers", `${summary.afterProvidersMs}ms`)}
-        {summaryCell("Outside provider calls", `${summary.outsideProvidersMs}ms`)}
+          summaryCell("Between providers", summary.betweenProvidersMs)}
+        {summaryCell("After providers", summary.afterProvidersMs)}
+        {summaryCell("Outside provider calls", summary.outsideProvidersMs)}
       </dl>
     </div>
   )
@@ -129,13 +135,7 @@ function toRow(
     id: stage.spanId,
     label: rowLabel(stage),
     segments: [{ offsetMs: stage.offsetMs, durationMs: stage.durationMs, color: trackColor(stage) }],
-    value: (
-      <LatencyWaterfallValue
-        durationMs={stage.durationMs}
-        resultCount={null}
-        outcome={stage.outcome === "success" ? undefined : stage.outcome}
-      />
-    ),
+    value: formatLatency(stage.durationMs),
     depth: stageDepth(stage),
     selected: stage.spanId === selectedSpanId,
     onSelect: () => onSelect(stage.spanId),

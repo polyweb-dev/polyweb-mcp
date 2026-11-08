@@ -989,11 +989,13 @@ class ProviderLimitsService:
         }
         await self._refresh_daily_pool(provider, pools, now)
         await self._refresh_monthly_pool(provider, pools, now)
+        # Project newer credential-scoped observations for display only.
+        card_pools = _with_scoped_observations(pools)
         return ProviderLimitsResponse(
             provider=provider,
             active_auth_mode=self._active_mode(provider, records),
             auths=[
-                await self._auth_limits(provider, auth_mode, records, pools, now)
+                await self._auth_limits(provider, auth_mode, records, card_pools, now)
                 for auth_mode in _auth_modes(records)
             ],
             documented_keyless_operations=documented_keyless_operations(provider),
@@ -1677,6 +1679,79 @@ def _find(
     return next((record for record in records if record.operation is operation), None)
 
 
+def _has_observation(pool: NativePool) -> bool:
+    """Return whether a pool holds an observed or anchored balance."""
+
+    return pool.observed_at is not None and pool.remaining is not None
+
+
+def _with_scoped_observations(pools: Mapping[str, NativePool]) -> dict[str, NativePool]:
+    """Project credential-scoped observations onto their unobserved catalog pools.
+
+    Execution and the manual refresh record vendor truth on scoped rows
+    (``<catalog pool>#cred:<id>`` or ``#pool:<id>``), one per funds identity,
+    while the provider card reads the catalog pool. A newer scoped observation
+    supersedes an older catalog observation without adding the two together.
+    The returned mapping is a read-only view and is never written back.
+    """
+
+    scoped: dict[str, list[NativePool]] = {}
+    for pool_id, pool in pools.items():
+        base_id, marker, _scope = pool_id.partition("#")
+        if marker and _has_observation(pool):
+            scoped.setdefault(base_id, []).append(pool)
+    projected = dict(pools)
+    for base_id, members in scoped.items():
+        base = pools.get(base_id)
+        newest = max(member.observed_at for member in members if member.observed_at is not None)
+        if (
+            base is not None
+            and _has_observation(base)
+            and base.observed_at is not None
+            and (base.manual_anchor or base.observed_at >= newest)
+        ):
+            continue
+        projected[base_id] = _combined_pool(base_id, members)
+    return projected
+
+
+def _combined_pool(pool_id: str, members: Sequence[NativePool]) -> NativePool:
+    """Fold the scoped funds of distinct identities into one catalog-pool view.
+
+    One identity is shown as observed. Several identities sum their balances;
+    an allowance any member does not report stays unknown, the earliest reset
+    wins, and a stale member marks the view stale.
+    """
+
+    latest = max(members, key=lambda pool: pool.observed_at or datetime.min.replace(tzinfo=UTC))
+    if len(members) == 1:
+        return latest.model_copy(update={"pool_id": pool_id})
+    remaining = Decimal("0")
+    allowance: Decimal | None = Decimal("0")
+    for member in members:
+        remaining += member.remaining or Decimal("0")
+        allowance = (
+            allowance + member.allowance
+            if allowance is not None and member.allowance is not None
+            else None
+        )
+    resets = [member.reset_at for member in members if member.reset_at is not None]
+    confidences = {member.confidence for member in members}
+    return latest.model_copy(
+        update={
+            "pool_id": pool_id,
+            "remaining": remaining,
+            "allowance": allowance,
+            "actual_spend_usd": None,
+            "reset_at": min(resets) if resets else None,
+            "confidence": latest.confidence if len(confidences) == 1 else Confidence.ESTIMATED,
+            "stale": any(member.stale for member in members),
+            "tiers": [],
+            "tier_split_known": False,
+        }
+    )
+
+
 def _aggregate_pool(
     pools: dict[str, NativePool], records: Sequence[ProviderLimitRecord]
 ) -> NativePool | None:
@@ -1778,7 +1853,7 @@ def _split_note(record: ProviderLimitRecord) -> str | None:
     if record.provider == "firecrawl":
         return (
             "Add-ons such as JSON extraction consume extra native credits and extra "
-            "credit units of priced use for the same single fetched URL."
+            "USD of priced use for the same single fetched URL."
         )
     return None
 

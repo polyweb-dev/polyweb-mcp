@@ -1,4 +1,3 @@
-import React from "react"
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -11,11 +10,13 @@ vi.mock("@/services/api/freesearchApi", () => ({
 }))
 
 /**
- * Tavily-only rate-tier dropdown (PLAN 5.2): one native select edits the
+ * Tavily-only rate-tier dropdown (PLAN 5.2): one shared select edits the
  * confirmed `tavily_key_environment` through one partial PATCH. The control
  * declares the stored key environment, never a vendor-plan upgrade, and never
  * calls vendor usage, provider-test, or force-sync endpoints.
  */
+
+const NAME = "Tavily rate tier (key environment)"
 
 function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
@@ -30,7 +31,6 @@ function provider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     globalEnabled: true,
     searchEnabled: true,
     fetchEnabled: true,
-    priority: 3,
     healthStatus: "healthy",
     circuitBreaker: "closed",
     consecutiveFailures: 0,
@@ -61,6 +61,18 @@ function patchMock() {
   return vi.mocked(apiService.patchProvider)
 }
 
+function tierSelect(): HTMLElement {
+  return screen.getByRole("combobox", { name: NAME, exact: true })
+}
+
+const OPTION_NAME: Record<"dev" | "prod", RegExp> = { dev: /^Development/, prod: /^Production/ }
+
+/** Open the shared select and choose one environment. */
+async function choose(user: ReturnType<typeof userEvent.setup>, env: "dev" | "prod"): Promise<void> {
+  await user.click(tierSelect())
+  await user.click(await screen.findByRole("option", { name: OPTION_NAME[env] }))
+}
+
 beforeEach(() => {
   patchMock().mockReset()
 })
@@ -70,31 +82,23 @@ afterEach(() => {
 })
 
 describe("TavilyRateTierSelect", () => {
-  it("exposes the native select with the visible label and the accessible name", () => {
-    render(
-      <TavilyRateTierSelect provider={provider()} canEdit onUpdated={vi.fn()} />
-    )
+  it("exposes the shared select with the visible label and the accessible name", () => {
+    render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={vi.fn()} />)
     expect(screen.getByText("Rate tier (key environment)", { exact: true })).toBeInTheDocument()
-    expect(
-      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-    ).toBeInTheDocument()
+    expect(tierSelect()).toBeInTheDocument()
   })
 
-  it("offers dev and prod options with the 100 and 1000 request texts", () => {
-    render(
-      <TavilyRateTierSelect provider={provider()} canEdit onUpdated={vi.fn()} />
-    )
-    const select = screen.getByRole("combobox", {
-      name: "Tavily rate tier (key environment)",
-      exact: true,
-    })
-    expect(select.tagName).toBe("SELECT")
-    const options = Array.from(select.querySelectorAll("option"))
-    expect(options.map((o) => o.getAttribute("value"))).toEqual(["dev", "prod"])
+  it("offers dev and prod options with the 100 and 1000 request texts", async () => {
+    const user = userEvent.setup()
+    render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={vi.fn()} />)
+    expect(tierSelect().tagName).toBe("BUTTON")
+    await user.click(tierSelect())
+    const options = await screen.findAllByRole("option")
     expect(options.map((o) => o.textContent)).toEqual([
-      "Development — 100 requests per minute",
-      "Production — 1000 requests per minute",
+      "Development100 requests per minute",
+      "Production1,000 requests per minute",
     ])
+    expect(document.body.textContent).not.toContain("—")
   })
 
   it("explains that the choice declares the key environment, not a vendor-plan upgrade", () => {
@@ -102,9 +106,7 @@ describe("TavilyRateTierSelect", () => {
       <TavilyRateTierSelect provider={provider()} canEdit onUpdated={vi.fn()} />
     )
     const titled = container.querySelector("[title]")
-    expect(titled?.getAttribute("title")).toContain(
-      "Declares the current key environment of the stored Tavily key, not a vendor-plan upgrade."
-    )
+    expect(titled?.getAttribute("title")).toContain("It does not change your Tavily plan.")
   })
 
   it("submits one partial PATCH with only tavily_key_environment on a changed selection", async () => {
@@ -113,19 +115,14 @@ describe("TavilyRateTierSelect", () => {
     patchMock().mockResolvedValue({ tavily_key_environment: "prod" } as never)
     render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={onUpdated} />)
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true }),
-      "prod"
-    )
+    await choose(user, "prod")
 
     await waitFor(() => {
       expect(patchMock()).toHaveBeenCalledTimes(1)
     })
     expect(patchMock()).toHaveBeenCalledWith("tavily", { tavily_key_environment: "prod" })
     await waitFor(() => {
-      expect(
-        screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-      ).toHaveValue("prod")
+      expect(tierSelect()).toHaveTextContent("Production")
     })
     expect(onUpdated).toHaveBeenCalledTimes(1)
   })
@@ -135,10 +132,7 @@ describe("TavilyRateTierSelect", () => {
     const onUpdated = vi.fn().mockResolvedValue(undefined)
     render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={onUpdated} />)
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true }),
-      "dev"
-    )
+    await choose(user, "dev")
 
     expect(patchMock()).not.toHaveBeenCalled()
     expect(onUpdated).not.toHaveBeenCalled()
@@ -153,27 +147,17 @@ describe("TavilyRateTierSelect", () => {
     const onUpdated = vi.fn().mockResolvedValue(undefined)
     render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={onUpdated} />)
 
-    const select = screen.getByRole("combobox", {
-      name: "Tavily rate tier (key environment)",
-      exact: true,
-    })
-    await user.selectOptions(select, "prod")
+    await choose(user, "prod")
     await waitFor(() => {
-      expect(
-        screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-      ).toBeDisabled()
+      expect(tierSelect()).toBeDisabled()
     })
 
     resolvePatch({ tavily_key_environment: "prod" })
     await waitFor(() => {
-      expect(
-        screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-      ).not.toBeDisabled()
+      expect(tierSelect()).not.toBeDisabled()
     })
     await waitFor(() => {
-      expect(
-        screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-      ).toHaveValue("prod")
+      expect(tierSelect()).toHaveTextContent("Production")
     })
   })
 
@@ -183,16 +167,11 @@ describe("TavilyRateTierSelect", () => {
     const onUpdated = vi.fn().mockResolvedValue(undefined)
     render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={onUpdated} />)
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true }),
-      "prod"
-    )
+    await choose(user, "prod")
 
     const alert = await screen.findByRole("alert")
     expect(alert.textContent).toContain("db down")
-    expect(
-      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-    ).toHaveValue("dev")
+    expect(tierSelect()).toHaveTextContent("Development")
     expect(onUpdated).not.toHaveBeenCalled()
   })
 
@@ -202,15 +181,10 @@ describe("TavilyRateTierSelect", () => {
     const onUpdated = vi.fn().mockRejectedValue(new Error("dashboard down"))
     render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={onUpdated} />)
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true }),
-      "prod"
-    )
+    await choose(user, "prod")
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-      ).toHaveValue("prod")
+      expect(tierSelect()).toHaveTextContent("Production")
     })
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
     expect(onUpdated).toHaveBeenCalledTimes(1)
@@ -222,16 +196,11 @@ describe("TavilyRateTierSelect", () => {
     const onUpdated = vi.fn().mockResolvedValue(undefined)
     render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={onUpdated} />)
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true }),
-      "prod"
-    )
+    await choose(user, "prod")
 
     await screen.findByText("Confirmation unavailable", { exact: true })
     await waitFor(() => {
-      expect(
-        screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-      ).toBeDisabled()
+      expect(tierSelect()).toBeDisabled()
     })
     expect(patchMock()).toHaveBeenCalledTimes(1)
   })
@@ -247,10 +216,7 @@ describe("TavilyRateTierSelect", () => {
       <TavilyRateTierSelect provider={provider()} canEdit onUpdated={onUpdated} />
     )
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true }),
-      "prod"
-    )
+    await choose(user, "prod")
     unmount()
     resolvePatch({ tavily_key_environment: "prod" })
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -264,13 +230,11 @@ describe("TavilyRateTierSelect", () => {
     const onUpdated = vi.fn().mockResolvedValue(undefined)
     render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={onUpdated} />)
 
-    const select = screen.getByRole("combobox", {
-      name: "Tavily rate tier (key environment)",
-      exact: true,
-    })
-    await user.click(select)
-    expect(select).toHaveFocus()
-    await user.selectOptions(select, "prod")
+    tierSelect().focus()
+    expect(tierSelect()).toHaveFocus()
+    await user.keyboard("{ArrowDown}")
+    await user.keyboard("{ArrowDown}")
+    await user.keyboard("{Enter}")
     await waitFor(() => {
       expect(patchMock()).toHaveBeenCalledTimes(1)
     })
@@ -284,13 +248,8 @@ describe("TavilyRateTierSelect", () => {
         onUpdated={vi.fn()}
       />
     )
-    const select = screen.getByRole("combobox", {
-      name: "Tavily rate tier (key environment)",
-      exact: true,
-    })
-    expect(select).toHaveValue("unknown")
-    expect(select).toBeDisabled()
-    expect(select.querySelector('option[value="unknown"]')).not.toBeNull()
+    expect(tierSelect()).toHaveTextContent("Unknown")
+    expect(tierSelect()).toBeDisabled()
   })
 
   it("shows Unknown when the status value is absent after an invalid readback narrows to null", () => {
@@ -303,9 +262,7 @@ describe("TavilyRateTierSelect", () => {
         onUpdated={vi.fn()}
       />
     )
-    expect(
-      screen.getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-    ).toHaveValue("unknown")
+    expect(tierSelect()).toHaveTextContent("Unknown")
     expect(patchMock()).not.toHaveBeenCalled()
   })
 
@@ -317,10 +274,8 @@ describe("TavilyRateTierSelect", () => {
         onUpdated={vi.fn()}
       />
     )
-    expect(screen.getByText("Keyless — numeric rate unknown", { exact: true })).toBeInTheDocument()
-    expect(
-      screen.queryByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-    ).not.toBeInTheDocument()
+    expect(screen.getByText("Keyless access", { exact: true })).toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: NAME, exact: true })).not.toBeInTheDocument()
     expect(patchMock()).not.toHaveBeenCalled()
   })
 
@@ -328,10 +283,8 @@ describe("TavilyRateTierSelect", () => {
     const { rerender } = render(
       <TavilyRateTierSelect provider={provider()} canEdit={false} onUpdated={vi.fn()} />
     )
-    expect(screen.getByText("Development — 100 requests per minute", { exact: true })).toBeInTheDocument()
-    expect(
-      screen.queryByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-    ).not.toBeInTheDocument()
+    expect(screen.getByText("Development (100 requests per minute)", { exact: true })).toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: NAME, exact: true })).not.toBeInTheDocument()
 
     rerender(
       <TavilyRateTierSelect
@@ -340,39 +293,27 @@ describe("TavilyRateTierSelect", () => {
         onUpdated={vi.fn()}
       />
     )
-    expect(screen.getByText("Production — 1000 requests per minute", { exact: true })).toBeInTheDocument()
+    expect(screen.getByText("Production (1,000 requests per minute)", { exact: true })).toBeInTheDocument()
     expect(patchMock()).not.toHaveBeenCalled()
   })
 
-  it("renders a native select with native options so registry drag exclusion applies", () => {
+  it("renders no native select", () => {
     const { container } = render(
       <TavilyRateTierSelect provider={provider()} canEdit onUpdated={vi.fn()} />
     )
-    const select = container.querySelector("select")
-    expect(select).not.toBeNull()
-    expect(select!.getAttribute("aria-label")).toBe("Tavily rate tier (key environment)")
-    for (const option of Array.from(select!.querySelectorAll("option"))) {
-      expect(option.tagName).toBe("OPTION")
-    }
+    expect(container.querySelector("select")).toBeNull()
+    expect(tierSelect().getAttribute("aria-label")).toBe(NAME)
   })
 })
 
 describe("TavilyRateTierSelect compact (FIX)", () => {
-  function compactSelect(): HTMLSelectElement {
-    return screen.getByRole("combobox", {
-      name: "Tavily rate tier (key environment)",
-      exact: true,
-    }) as HTMLSelectElement
-  }
-
-  it("shows compact Development and Production options with no numeric rate text", () => {
+  it("shows compact Development and Production options with no numeric rate text", async () => {
+    const user = userEvent.setup()
     const { container } = render(
       <TavilyRateTierSelect provider={provider()} canEdit compact onUpdated={vi.fn()} />
     )
-    const select = compactSelect()
-    expect(select.tagName).toBe("SELECT")
-    const options = Array.from(select.querySelectorAll("option"))
-    expect(options.map((o) => o.getAttribute("value"))).toEqual(["dev", "prod"])
+    await user.click(tierSelect())
+    const options = await screen.findAllByRole("option")
     expect(options.map((o) => o.textContent)).toEqual(["Development", "Production"])
     expect(container.textContent).not.toContain("100")
     expect(screen.getByText("Rate tier", { exact: true })).toBeInTheDocument()
@@ -388,9 +329,7 @@ describe("TavilyRateTierSelect compact (FIX)", () => {
       />
     )
     expect(screen.getByText("Keyless access", { exact: true })).toBeInTheDocument()
-    expect(
-      screen.queryByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-    ).not.toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: NAME, exact: true })).not.toBeInTheDocument()
     expect(document.body.textContent).not.toContain("100")
     expect(patchMock()).not.toHaveBeenCalled()
   })
@@ -400,9 +339,7 @@ describe("TavilyRateTierSelect compact (FIX)", () => {
       <TavilyRateTierSelect provider={provider()} canEdit={false} compact onUpdated={vi.fn()} />
     )
     expect(screen.getByText("Development", { exact: true })).toBeInTheDocument()
-    expect(
-      screen.queryByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
-    ).not.toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: NAME, exact: true })).not.toBeInTheDocument()
     expect(patchMock()).not.toHaveBeenCalled()
   })
 
@@ -415,20 +352,13 @@ describe("TavilyRateTierSelect compact (FIX)", () => {
         onUpdated={vi.fn()}
       />
     )
-    expect(compactSelect()).toHaveValue("unknown")
-    expect(compactSelect()).toBeDisabled()
+    expect(tierSelect()).toHaveTextContent("Unknown")
+    expect(tierSelect()).toBeDisabled()
     expect(patchMock()).not.toHaveBeenCalled()
   })
 })
 
 describe("TavilyRateTierSelect confirmation ordering and obsolete responses (FIX)", () => {
-  function tierSelect(): HTMLSelectElement {
-    return screen.getByRole("combobox", {
-      name: "Tavily rate tier (key environment)",
-      exact: true,
-    }) as HTMLSelectElement
-  }
-
   it("calls onConfirmed with the valid readback before onUpdated", async () => {
     const user = userEvent.setup()
     const order: string[] = []
@@ -448,7 +378,7 @@ describe("TavilyRateTierSelect confirmation ordering and obsolete responses (FIX
       />
     )
 
-    await user.selectOptions(tierSelect(), "prod")
+    await choose(user, "prod")
 
     await waitFor(() => {
       expect(onConfirmed).toHaveBeenCalledTimes(1)
@@ -474,14 +404,14 @@ describe("TavilyRateTierSelect confirmation ordering and obsolete responses (FIX
       />
     )
 
-    await user.selectOptions(tierSelect(), "dev")
+    await choose(user, "dev")
 
     await waitFor(() => {
       expect(patchMock()).toHaveBeenCalledTimes(1)
     })
     expect(patchMock()).toHaveBeenCalledWith("tavily", { tavily_key_environment: "dev" })
     await waitFor(() => {
-      expect(tierSelect()).toHaveValue("dev")
+      expect(tierSelect()).toHaveTextContent("Development")
     })
     expect(onConfirmed).toHaveBeenCalledWith("dev")
     expect(onUpdated).toHaveBeenCalledTimes(1)
@@ -493,11 +423,14 @@ describe("TavilyRateTierSelect confirmation ordering and obsolete responses (FIX
     const onUpdated = vi.fn().mockResolvedValue(undefined)
     render(<TavilyRateTierSelect provider={provider()} canEdit onUpdated={onUpdated} />)
 
-    await user.selectOptions(tierSelect(), "prod")
+    await choose(user, "prod")
     await waitFor(() => {
-      expect(tierSelect()).toHaveValue("prod")
+      expect(tierSelect()).toHaveTextContent("Production")
     })
-    await user.selectOptions(tierSelect(), "prod")
+    await waitFor(() => {
+      expect(tierSelect()).not.toBeDisabled()
+    })
+    await choose(user, "prod")
     expect(patchMock()).toHaveBeenCalledTimes(1)
   })
 
@@ -518,7 +451,7 @@ describe("TavilyRateTierSelect confirmation ordering and obsolete responses (FIX
       />
     )
 
-    await user.selectOptions(tierSelect(), "prod")
+    await choose(user, "prod")
     rerender(
       <TavilyRateTierSelect
         provider={provider({ keyVaultStatus: "missing", hasKey: false })}
@@ -542,7 +475,7 @@ describe("TavilyRateTierSelect confirmation ordering and obsolete responses (FIX
     render(
       <TavilyRateTierSelect provider={provider({ tavilyKeyEnvironment: "dev" })} canEdit onUpdated={vi.fn()} />
     )
-    expect(tierSelect()).toHaveValue("dev")
+    expect(tierSelect()).toHaveTextContent("Development")
     expect(tierSelect()).not.toBeDisabled()
     expect(patchMock()).not.toHaveBeenCalled()
   })
@@ -552,7 +485,7 @@ describe("TavilyRateTierSelect confirmation ordering and obsolete responses (FIX
     const { unmount } = render(
       <TavilyRateTierSelect provider={provider()} canEdit={false} onUpdated={vi.fn()} />
     )
-    await user.click(screen.getByText("Development — 100 requests per minute", { exact: true }))
+    await user.click(screen.getByText("Development (100 requests per minute)", { exact: true }))
     unmount()
     render(
       <TavilyRateTierSelect
@@ -561,7 +494,7 @@ describe("TavilyRateTierSelect confirmation ordering and obsolete responses (FIX
         onUpdated={vi.fn()}
       />
     )
-    await user.click(screen.getByText("Keyless — numeric rate unknown", { exact: true }))
+    await user.click(screen.getByText("Keyless access", { exact: true }))
     expect(patchMock()).not.toHaveBeenCalled()
   })
 })

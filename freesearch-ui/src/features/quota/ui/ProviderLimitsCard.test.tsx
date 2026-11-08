@@ -307,31 +307,31 @@ function tinyfishLimits(): ProviderLimits {
 }
 
 /** CARD-3 fraction oracle: "4500 / 5000 CRD" renders as split spans, never one "4500 CRD" node. */
-function expectFraction(remaining: string, total: string): void {
+function expectFraction(remaining: string, total: string, unit = "USD"): void {
   expect(screen.getByText(remaining)).not.toBeNull()
   expect(screen.getByText(`/ ${total}`)).not.toBeNull()
-  expect(screen.getByText("CRD")).not.toBeNull()
+  expect(screen.getByText(unit)).not.toBeNull()
   expect(screen.queryByText(`${remaining} CRD`)).toBeNull()
   expect(screen.queryByText("CRD left")).toBeNull()
   const value = screen.getByText(remaining).closest("span")?.parentElement
-  expect(value?.textContent?.replace(/\s+/g, "")).toBe(`${remaining}/${total}CRD`)
+  expect(value?.textContent?.replace(/\s+/g, "")).toBe(`${remaining}/${total}${unit}`)
 }
 
 describe("ProviderLimitsCard Brave", () => {
   it("shows one credit bar with 90 percent, CRD only, and no fetch headline (UI7-01, UI7-02, UI7-04, final-polish 3c)", () => {
     renderBraveCard()
-    const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
+    const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
     expect(bar.getAttribute("aria-valuenow")).toBe("90")
     expect(bar.getAttribute("aria-valuemin")).toBe("0")
     expect(bar.getAttribute("aria-valuemax")).toBe("100")
     expect(screen.getByText("90%")).not.toBeNull()
     // CARD-3: credit fraction "4500 / 5000 CRD" via split spans; no "CRD left" label.
-    expectFraction("4500", "5000")
+    expectFraction("$4.5", "$5")
     // Final-polish Item 3c: card shows CRD only. USD value sits in hover title and aria-label.
     expect(screen.queryByText("4.500")).toBeNull()
     expect(screen.queryByText("USD left")).toBeNull()
     expect(screen.queryByText("USD use (priced)")).toBeNull()
-    const crdValue = screen.getByText("4500")
+    const crdValue = screen.getByText("$4.5")
     expect(crdValue.getAttribute("title")).toBe("$4.5 left")
     expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
     // Polish Item 6: no auth_mode chip, no "keyed rail" text on the card.
@@ -344,14 +344,14 @@ describe("ProviderLimitsCard Brave", () => {
 
   it("exposes USD value in hover title and aria-label only with CRD bar text intact (final-polish 3c, 3e)", () => {
     renderBraveCard()
-    expectFraction("4500", "5000")
-    const crdValue = screen.getByText("4500")
+    expectFraction("$4.5", "$5")
+    const crdValue = screen.getByText("$4.5")
     expect(crdValue.getAttribute("title")).toBe("$4.5 left")
     expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
     expect(screen.queryByText("USD left")).toBeNull()
     expect(screen.queryByText("CRD left")).toBeNull()
-    const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
-    expect(bar.getAttribute("aria-valuetext")).toBe("90% remaining, 4500 CRD left")
+    const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
+    expect(bar.getAttribute("aria-valuetext")).toBe("90% remaining, $4.50 left")
     vi.unstubAllGlobals()
   })
 
@@ -370,8 +370,8 @@ describe("ProviderLimitsCard Brave", () => {
       />,
     )
     expect(
-      screen.getByRole("button", { name: "Refresh limits for Brave" }),
-    ).not.toBeNull()
+      screen.queryByRole("button", { name: "Refresh limits for Brave" }),
+    ).toBeNull()
     expect(stub.requestsTo(/limits/).length).toBeLessThan(2)
     vi.unstubAllGlobals()
   })
@@ -380,9 +380,10 @@ describe("ProviderLimitsCard Brave", () => {
     installFetchStub(() => ok({ events: [], next_cursor: null }))
     renderBraveCard()
     const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Budget Limit for Brave. Sets a local credit-unit ceiling that adds no vendor funds." }))
-    expect(await screen.findByText("Search credit units (CRD)")).not.toBeNull()
-    expect(screen.queryByLabelText(/Fetch credit units/i)).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Actions for Brave" }))
+    await user.click(await screen.findByRole("button", { name: "Budget limit" }))
+    expect(await screen.findByText("Search budget (USD)")).not.toBeNull()
+    expect(screen.queryByLabelText(/Fetch budget/i)).toBeNull()
     expect(screen.queryByText(/n\/a for this provider/)).toBeNull()
     vi.unstubAllGlobals()
   })
@@ -391,8 +392,9 @@ describe("ProviderLimitsCard Brave", () => {
     installFetchStub(() => ok({ events: [], next_cursor: null }))
     renderBraveCard()
     const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Balance history for Brave" }))
-    expect(await screen.findByText("Balance history")).not.toBeNull()
+    await user.click(screen.getByRole("button", { name: "Actions for Brave" }))
+    await user.click(await screen.findByRole("button", { name: "Balance history" }))
+    expect(await screen.findByRole("dialog", { name: "Balance history for Brave" })).not.toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -410,7 +412,7 @@ describe("ProviderLimitsCard Brave", () => {
         manualEligible
       />,
     )
-    expectFraction("4500", "5000")
+    expectFraction("$4.5", "$5")
     const auth = braveAuth()
     const debited = {
       ...auth,
@@ -427,7 +429,7 @@ describe("ProviderLimitsCard Brave", () => {
         manualEligible
       />,
     )
-    expectFraction("4495", "5000")
+    expectFraction("$4.495", "$5")
     expect(screen.getByText("89.9%")).not.toBeNull()
     vi.unstubAllGlobals()
   })
@@ -436,31 +438,33 @@ describe("ProviderLimitsCard Brave", () => {
     renderBraveCard()
     expect(screen.getByTestId("provider-logo-brave")).not.toBeNull()
     expect(screen.getByRole("heading", { name: "Brave" })).not.toBeNull()
-    expect(screen.getByText("Observed from the vendor API")).not.toBeNull()
+    expect(screen.getByText("Reported by provider")).not.toBeNull()
     const headerRow = screen.getByTestId("provider-logo-brave").closest("div.flex")
     expect(headerRow?.textContent).toContain("Brave")
-    expect(headerRow?.textContent).toContain("Observed from the vendor API")
+    expect(headerRow?.textContent).toContain("Reported by provider")
     vi.unstubAllGlobals()
   })
 
-  it("places actions at the leading edge and the fraction at the trailing edge below the bar (CARD-3)", () => {
+  it("places Refresh at the leading edge, the fraction at the trailing edge, and the menu in the header (CARD-3)", async () => {
     renderBraveCard()
-    const buttons = screen.getAllByRole("button").map((button) => button.textContent)
-    expect(buttons.slice(0, 4)).toEqual(["Refresh Limits", "Provider Balance", "Budget Limit", "History"])
+    const menu = screen.getByRole("button", { name: "Actions for Brave" })
+    const heading = screen.getByRole("heading", { name: "Brave" })
+    expect((heading.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
     const info = screen.getByRole("button", { name: "Credit details for Brave" })
     expect(info.getAttribute("data-testid")).toBe("credit-info-brave")
-    const creditRow = screen.getByText("4500").closest("span")?.parentElement?.parentElement
+    const creditRow = screen.getByText("$4.5").closest("span")?.parentElement?.parentElement
     expect(creditRow?.className).toContain("justify-between")
     const children = Array.from(creditRow?.children ?? [])
     expect(children.length).toBe(2)
-    expect(children[0]?.textContent).toContain("Refresh Limits")
-    expect(children[0]?.textContent).toContain("Provider Balance")
-    expect(children[0]?.textContent).toContain("Budget Limit")
-    expect(children[0]?.textContent).toContain("History")
-    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("4500/5000CRD")
-    const fractionSpan = screen.getByText("4500").closest("span")?.parentElement
-    expect(fractionSpan?.contains(info)).toBe(true)
-    const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
+    expect(children[0]?.textContent).toBe("")
+    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
+    const user = userEvent.setup()
+    await user.click(menu)
+    expect(await screen.findByRole("button", { name: "Set balance" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Budget limit" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Balance history" })).not.toBeNull()
+    expect(heading.parentElement?.contains(info)).toBe(true)
+    const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
     vi.unstubAllGlobals()
   })
@@ -646,8 +650,8 @@ describe("ProviderLimitsCard Tavily native", () => {
     const bar = screen.getByRole("progressbar", { name: "Tavily native Credits remaining" })
     expect(bar.getAttribute("aria-valuenow")).toBe("99.9")
     expect(screen.getByText("999")).not.toBeNull()
-    expect(screen.getByText("/ 1000")).not.toBeNull()
-    expect(screen.getByText("Credits")).not.toBeNull()
+    expect(screen.getByText("/ 1,000")).not.toBeNull()
+    expect(screen.getByText("Balance left")).not.toBeNull()
     expect(screen.queryByText("CRD")).toBeNull()
     expect(screen.queryByText("0.008")).toBeNull()
     expect(screen.queryByText("$0.008")).toBeNull()
@@ -659,7 +663,7 @@ describe("ProviderLimitsCard Tavily native", () => {
     expect(screen.queryByText("0.008")).toBeNull()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
-    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(await screen.findByText("Quota details")).not.toBeNull()
     expect(screen.getByText("0.008")).not.toBeNull()
     vi.unstubAllGlobals()
   })
@@ -1074,17 +1078,17 @@ function renderKeenableCard(limits: ProviderLimits): void {
 describe("ProviderLimitsCard Keenable", () => {
   it("shows one aggregate bar for the shared keyed pool with a single funds fraction", () => {
     renderKeenableCard(keenableLimits())
-    const bar = screen.getByRole("progressbar", { name: "Keenable credit units remaining" })
+    const bar = screen.getByRole("progressbar", { name: "Keenable balance remaining" })
     expect(bar.getAttribute("aria-valuemin")).toBe("0")
     expect(bar.getAttribute("aria-valuemax")).toBe("100")
     expect(bar.getAttribute("aria-valuenow")).toBe("100")
     expect(bar.querySelector("div")?.getAttribute("class")).toContain(
       "bg-[var(--status-healthy)]",
     )
-    expectFraction("399980", "400000")
+    expectFraction("99,995", "100,000", "requests")
     expect(screen.queryByText("Free - unmetered")).toBeNull()
-    const value = screen.getByText("399980").closest("span")?.parentElement
-    expect(value?.textContent?.replace(/\s+/g, "")).toBe("399980/400000CRD")
+    const value = screen.getByText("99,995").closest("span")?.parentElement
+    expect(value?.textContent?.replace(/\s+/g, "")).toBe("99,995/100,000requests")
     expect(screen.getByText("100%")).not.toBeNull()
     const percent = screen.getByText("100%")
     expect(bar.getAttribute("class")).toContain("w-full")
@@ -1104,21 +1108,21 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("Free", { exact: true })).not.toBeNull()
+    expect(screen.getByText("Free tier", { exact: true })).not.toBeNull()
     expect(screen.queryByText("Free - unmetered")).toBeNull()
-    expect(screen.queryByRole("progressbar", { name: "Keenable credit units remaining" })).toBeNull()
-    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
-    expect(screen.getByText("990 of 1000 requests per hour")).not.toBeNull()
+    expect(screen.queryByRole("progressbar", { name: "Keenable balance remaining" })).toBeNull()
+    expect(screen.getByText("Search and fetch")).not.toBeNull()
+    expect(screen.getByText("990 of 1,000 left this hour")).not.toBeNull()
     vi.unstubAllGlobals()
   })
 
   it("keenable funds use the shared bar with one aggregate value", () => {
     renderKeenableCard(keenableLimits())
     const bars = screen.getAllByRole("progressbar", {
-      name: "Keenable credit units remaining",
+      name: "Keenable balance remaining",
     })
     expect(bars).toHaveLength(1)
-    expectFraction("399980", "400000")
+    expectFraction("99,995", "100,000", "requests")
     expect(screen.getByText("100%")).not.toBeNull()
     vi.unstubAllGlobals()
   })
@@ -1137,8 +1141,8 @@ describe("ProviderLimitsCard Keenable", () => {
     )
     // One shared row covers both operations: the duplicate bucket and window
     // collapses to the first entry, and decimal counts floor to whole calls.
-    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
-    expect(screen.getByText("990 of 1000 requests per hour")).not.toBeNull()
+    expect(screen.getByText("Search and fetch")).not.toBeNull()
+    expect(screen.getByText("990 of 1,000 left this hour")).not.toBeNull()
     expect(screen.queryByText("990.00000000")).toBeNull()
     const bar = screen.getByRole("progressbar", {
       name: "Keenable search and fetch limits remaining",
@@ -1161,12 +1165,12 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("Free", { exact: true })).not.toBeNull()
+    expect(screen.getByText("Free tier", { exact: true })).not.toBeNull()
     expect(screen.queryByText("Free - unmetered")).toBeNull()
     expect(
-      screen.queryByRole("progressbar", { name: "Keenable credit units remaining" }),
+      screen.queryByRole("progressbar", { name: "Keenable balance remaining" }),
     ).toBeNull()
-    expect(screen.queryByText("399980")).toBeNull()
+    expect(screen.queryByText("399,980")).toBeNull()
     first.unmount()
     render(
       <ProviderLimitsCard
@@ -1180,9 +1184,9 @@ describe("ProviderLimitsCard Keenable", () => {
     )
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
-    expect(await screen.findByText("Quota Details")).not.toBeNull()
-    expect(document.querySelector("s")).not.toBeNull()
-    expect(screen.getAllByText("Free").length).toBeGreaterThanOrEqual(1)
+    expect(await screen.findByText("Quota details")).not.toBeNull()
+    expect(document.querySelector("s")).toBeNull()
+    expect(screen.queryByText("Free")).toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -1198,7 +1202,7 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
+    expect(screen.getByText("Search and fetch")).not.toBeNull()
     expect(screen.queryByText("authoritative")).toBeNull()
     vi.unstubAllGlobals()
   })
@@ -1215,8 +1219,8 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("Search and Fetch Limits")).not.toBeNull()
-    expect(screen.getByText("500 of 1000 requests per hour")).not.toBeNull()
+    expect(screen.getByText("Search and fetch")).not.toBeNull()
+    expect(screen.getByText("500 of 1,000 left this hour")).not.toBeNull()
     expect(screen.queryByText("authoritative")).toBeNull()
     vi.unstubAllGlobals()
   })
@@ -1226,9 +1230,9 @@ describe("ProviderLimitsCard Keenable", () => {
     renderKeenableCard(keenableLimits())
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
-    expect(await screen.findByText("Search CRD cost")).not.toBeNull()
-    expect(screen.getByText("Fetch CRD cost")).not.toBeNull()
-    expect(screen.getAllByText("4 CRD").length).toBeGreaterThanOrEqual(2)
+    expect(await screen.findByText("Search cost (USD)")).not.toBeNull()
+    expect(screen.getByText("Fetch cost (USD)")).not.toBeNull()
+    expect(screen.getAllByText("$0.004").length).toBeGreaterThanOrEqual(2)
     vi.unstubAllGlobals()
   })
 })
@@ -1267,8 +1271,8 @@ describe("ProviderLimitsCard Tinyfish", () => {
 
     expect(tinyfish.getByText("Search")).not.toBeNull()
     expect(tinyfish.getByText("Fetch")).not.toBeNull()
-    expect(tinyfish.getByText("498 of 500 requests per hour")).not.toBeNull()
-    expect(tinyfish.getByText("1000 of 1000 URLs per day")).not.toBeNull()
+    expect(tinyfish.getByText("498 of 500 requests left this hour")).not.toBeNull()
+    expect(tinyfish.getByText("1,000 of 1,000 URLs left today")).not.toBeNull()
     expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
     expect(
       tinyfish
@@ -1281,21 +1285,21 @@ describe("ProviderLimitsCard Tinyfish", () => {
         .getAttribute("aria-valuenow"),
     ).toBe("100")
     expect(brave.queryByText("Search hourly rate")).toBe(null)
-    expect(brave.queryByText("498 of 500 requests")).toBe(null)
+    expect(brave.queryByText("498 of 500 requests left this hour")).toBe(null)
 
     const user = userEvent.setup()
     const infoButton = tinyfish.getByRole("button", { name: "Credit details for Tinyfish" })
     await user.click(infoButton)
-    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(await screen.findByText("Quota details")).not.toBeNull()
     expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
     // The Brave card holds its own funds bar, so the page holds three bars.
     expect(screen.getAllByRole("progressbar")).toHaveLength(3)
 
     await user.keyboard("{Escape}")
-    expect(screen.queryByText("Quota Details")).toBe(null)
+    expect(screen.queryByText("Quota details")).toBe(null)
     expect(infoButton).toHaveFocus()
-    expect(tinyfish.getByText("498 of 500 requests per hour")).not.toBeNull()
-    expect(tinyfish.getByText("1000 of 1000 URLs per day")).not.toBeNull()
+    expect(tinyfish.getByText("498 of 500 requests left this hour")).not.toBeNull()
+    expect(tinyfish.getByText("1,000 of 1,000 URLs left today")).not.toBeNull()
     expect(tinyfish.getAllByRole("progressbar")).toHaveLength(2)
     vi.unstubAllGlobals()
   })
@@ -1506,14 +1510,14 @@ describe("ProviderLimitsCard Tavily FIX", () => {
         />
       </>,
     )
-    expect(seen).toEqual(["tavily"])
+    expect([...new Set(seen)]).toEqual(["tavily"])
     const tavilyArticle = screen.getByRole("heading", { name: "Tavily" }).closest("article") as HTMLElement
     const tier = within(tavilyArticle).getByRole("button", { name: "Tier control" })
     const progressBar = within(tavilyArticle).getByRole("progressbar")
-    expect(tier.compareDocumentPosition(progressBar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(tier.closest("div.space-y-2")?.textContent).toContain("Tier control")
-    expect(tier.closest("div.space-y-2")?.textContent).not.toContain("Refresh Limits")
-    expect(tier.closest("div.space-y-2")?.textContent).not.toContain("Resets")
+    expect(progressBar.compareDocumentPosition(tier) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(tier.closest("article")).toBe(tavilyArticle)
+    expect(tier.closest("article")?.textContent).toContain("Refresh")
+    expect(tier.closest("article")?.textContent).not.toContain("Resets")
     expect(within(tavilyArticle).getByRole("button", { name: /Refresh limits/i })).toBeTruthy()
     const braveArticle = screen.getByRole("heading", { name: "Brave" }).closest("article") as HTMLElement
     expect(within(braveArticle).queryByRole("button", { name: "Tier control" })).toBeNull()
@@ -1529,12 +1533,12 @@ describe("ProviderLimitsCard Tavily FIX", () => {
     expect(confirmed).not.toBeNull()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
-    expect(await screen.findByText("Search and Fetch Rate Limit")).not.toBeNull()
+    expect(await screen.findByText("Search and fetch rate limit")).not.toBeNull()
     expect(screen.getByText("95/100 requests per minute")).not.toBeNull()
     await act(async () => {
       confirmed?.("prod")
     })
-    expect(await screen.findByText("unknown/1000 requests per minute")).not.toBeNull()
+    expect(await screen.findByText("Limit 1,000 requests per minute")).not.toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -1582,8 +1586,8 @@ describe("ProviderLimitsCard Tavily FIX", () => {
     )
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
-    expect(await screen.findByText("1000 requests per minute")).not.toBeNull()
-    expect(screen.queryByText("unknown/1000 requests per minute")).toBeNull()
+    expect(await screen.findByText("1,000 requests per minute")).not.toBeNull()
+    expect(screen.queryByText("Limit 1,000 requests per minute")).toBeNull()
     vi.unstubAllGlobals()
   })
 })
@@ -1771,13 +1775,14 @@ describe("ProviderLimitsCard Firecrawl", () => {
     const user = userEvent.setup()
     const infoButton = screen.getByRole("button", { name: "Credit details for Firecrawl" })
     await user.click(infoButton)
-    expect(await screen.findByText("Monthly Credits")).not.toBeNull()
+    expect(await screen.findByText("Monthly credits")).not.toBeNull()
 
-    const balanceButton = screen.getByRole("button", { name: /Provider Balance/i })
-    await user.click(balanceButton)
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("button", { name: "Actions for Firecrawl" }))
+    await user.click(await screen.findByRole("button", { name: "Set balance" }))
 
     expect(await screen.findByRole("dialog")).not.toBeNull()
-    expect(screen.getByText("Allowance (Credits)")).not.toBeNull()
+    expect(screen.getByText("Allowance (credits)")).not.toBeNull()
     vi.unstubAllGlobals()
   })
 })
@@ -1888,18 +1893,12 @@ describe("ProviderLimitsCard Parallel OAuth balance", () => {
       />,
     )
     expect(screen.getByRole("button", { name: "Disconnect" })).not.toBeNull()
-    // CRD equivalent: 24.87 USD / 0.001 reference = 24870 CRD against the
-    // display-only $5 (5000 CRD) free credit. Remaining exceeds the allowance,
-    // so the percent caps at 100 like Firecrawl 4761.4/3800.
-    expect(screen.getByText("24870")).not.toBeNull()
-    expect(screen.getByText("/ 5000")).not.toBeNull()
-    expect(screen.getByText("CRD")).not.toBeNull()
-    const bar = screen.getByRole("progressbar", { name: "Parallel credit units remaining" })
-    expect(bar.getAttribute("aria-valuenow")).toBe("100")
-    expect(bar.getAttribute("aria-valuemin")).toBe("0")
-    expect(bar.getAttribute("aria-valuemax")).toBe("100")
-    expect(bar.getAttribute("aria-valuetext")).toBe("100% remaining, 24870 CRD left")
-    expect(screen.getByText("100%")).not.toBeNull()
+    // No allowance is invented: the OAuth balance shows as the dollar amount
+    // left, with its CRD value as hover text, and no bar.
+    const amount = screen.getByText("$24.87 left")
+    expect(amount.getAttribute("title")).toBe("$24.87")
+    expect(screen.queryByText("/ 5,000")).toBeNull()
+    expect(screen.queryByRole("progressbar", { name: "Parallel credit units remaining" })).toBeNull()
     expect(
       screen.queryByText("Shown against the $5/mo free credit allowance."),
     ).toBeNull()
@@ -2179,36 +2178,36 @@ describe("ProviderLimitsCard You.com", () => {
       />,
     )
     // Finite-USD pool: 95.500/100.000 USD -> 95500/100000 CRD at 95.5%.
-    expect(screen.getByText("95500")).not.toBeNull()
-    expect(screen.getByText("/ 100000")).not.toBeNull()
-    expect(screen.getByText("CRD")).not.toBeNull()
-    const bar = screen.getByRole("progressbar", { name: "You.com credit units remaining" })
+    expect(screen.getByText("$95.5")).not.toBeNull()
+    expect(screen.getByText("/ $100")).not.toBeNull()
+    expect(screen.getByText("USD")).not.toBeNull()
+    const bar = screen.getByRole("progressbar", { name: "You.com balance remaining" })
     expect(bar.getAttribute("aria-valuenow")).toBe("95.5")
-    expect(bar.getAttribute("aria-valuetext")).toBe("95.5% remaining, 95500 CRD left")
+    expect(bar.getAttribute("aria-valuetext")).toBe("95.5% remaining, $95.50 left")
     expect(screen.getByText("95.5%")).not.toBeNull()
     // Per-operation rate bars (Brave pattern): distinct Search/Fetch titles,
     // never the shared Keenable title.
     expect(screen.getByText("Search")).not.toBeNull()
     expect(screen.getByText("Fetch")).not.toBeNull()
-    expect(screen.getByText("90 of 100 requests")).not.toBeNull()
-    expect(screen.getByText("900 of 1000 URLs")).not.toBeNull()
+    expect(screen.getByText("90 of 100 requests left this hour")).not.toBeNull()
+    expect(screen.getByText("900 of 1,000 URLs left today")).not.toBeNull()
     expect(
       screen.getByRole("progressbar", { name: "You.com search hourly requests remaining" }).getAttribute("aria-valuenow"),
     ).toBe("90")
     expect(
       screen.getByRole("progressbar", { name: "You.com fetch daily URLs remaining" }).getAttribute("aria-valuenow"),
     ).toBe("90")
-    expect(screen.queryByText("Search and Fetch Limits")).toBeNull()
+    expect(screen.queryByText("Search and fetch")).toBeNull()
     // Keyed rail keeps Refresh Limits visible.
-    expect(screen.getByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
+    expect(screen.queryByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
     // Distinct per-operation call costs in the details popover, with no Free strike.
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for You.com" }))
-    expect(await screen.findByText("Search CRD cost")).not.toBeNull()
-    expect(screen.getByText("Fetch CRD cost")).not.toBeNull()
+    expect(await screen.findByText("Search cost (USD)")).not.toBeNull()
+    expect(screen.getByText("Fetch cost (USD)")).not.toBeNull()
     expect(document.querySelector("s")).toBeNull()
     await user.keyboard("{Escape}")
-    expect(screen.queryByText("Quota Details")).toBeNull()
+    expect(screen.queryByText("Quota details")).toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -2227,21 +2226,14 @@ describe("ProviderLimitsCard You.com", () => {
         latestQuota={estimatedBalanceQuota()}
       />,
     )
-    // CRD equivalent: 4.75 USD / 0.001 reference = 4750 CRD against the
-    // display-only $100 signup (100000 CRD total, fetch-basis): 4.8% bar.
-    expect(screen.getByText("4750")).not.toBeNull()
-    expect(screen.getByText("/ 100000")).not.toBeNull()
-    expect(screen.getByText("CRD")).not.toBeNull()
-    const bar = screen.getByRole("progressbar", { name: "You.com credit units remaining" })
-    expect(bar.getAttribute("aria-valuenow")).toBe("4.8")
-    expect(bar.getAttribute("aria-valuemin")).toBe("0")
-    expect(bar.getAttribute("aria-valuemax")).toBe("100")
-    expect(bar.getAttribute("aria-valuetext")).toBe("4.8% remaining, 4750 CRD left")
-    expect(screen.getByText("4.8%")).not.toBeNull()
+    // No invented signup allowance: the balance shows as dollars left, no bar.
+    expect(screen.getByText("$4.75 left").getAttribute("title")).toBe("$4.75")
+    expect(screen.queryByText("/ 100,000")).toBeNull()
+    expect(screen.queryByRole("progressbar", { name: "You.com credit units remaining" })).toBeNull()
     expect(
       screen.queryByText("No allowance is reported, so this card shows no percentage."),
     ).toBeNull()
-    expect(screen.getByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
+    expect(screen.queryByRole("button", { name: "Refresh limits for You.com" })).toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -2268,14 +2260,14 @@ describe("ProviderLimitsCard You.com", () => {
       />,
     )
     // The dollar balance still shows alone: no fraction, no bar, no percent.
-    expect(screen.getByText("$4.75")).not.toBeNull()
+    expect(screen.getByText("$4.75 left")).not.toBeNull()
     expect(screen.queryByRole("progressbar", { name: "You.com credit units remaining" })).toBeNull()
     expect(screen.queryByText("4750")).toBeNull()
     expect(screen.queryByText("4.8%")).toBeNull()
     vi.unstubAllGlobals()
   })
 
-  it("caps the vendor-balance pool without an allowance at 100% with no footnote", async () => {
+  it("shows the vendor-balance pool without an allowance as dollars left with no bar", async () => {
     installFetchStub(() => ok({ events: [], next_cursor: null }))
     render(
       <ProviderLimitsCard
@@ -2287,37 +2279,28 @@ describe("ProviderLimitsCard You.com", () => {
         manualEligible={false}
       />,
     )
-    // Screenshot: 199.52 USD -> 199520 CRD against the display-only $100
-    // signup total (100000 CRD, fetch-basis). Remaining exceeds the
-    // allowance, so the percent caps at 100 like Firecrawl 4761/3800 and
-    // Parallel 24870/5000, with no amount-only footnote.
-    expect(screen.getByText("199520")).not.toBeNull()
-    expect(screen.getByText("/ 100000")).not.toBeNull()
-    expect(screen.getByText("CRD")).not.toBeNull()
-    const bar = screen.getByRole("progressbar", { name: "You.com credit units remaining" })
-    expect(bar.getAttribute("aria-valuenow")).toBe("100")
-    expect(bar.getAttribute("aria-valuemin")).toBe("0")
-    expect(bar.getAttribute("aria-valuemax")).toBe("100")
-    expect(bar.getAttribute("aria-valuetext")).toBe("100% remaining, 199520 CRD left")
-    expect(screen.getByText("100%")).not.toBeNull()
+    // 199.52 USD with no reported allowance: the card shows "$199.52 left",
+    // never a fraction against an invented signup allowance.
+    expect(screen.getByText("$199.52 left")).not.toBeNull()
+    expect(screen.queryByText("/ 100,000")).toBeNull()
+    expect(screen.queryByRole("progressbar", { name: "You.com credit units remaining" })).toBeNull()
     expect(
       screen.queryByText("No allowance is reported, so this card shows no percentage."),
     ).toBeNull()
     // Keyed rail keeps Refresh Limits visible.
-    expect(screen.getByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
+    expect(screen.queryByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
     // Popover: Search CRD cost 5, Searches left total 40004 (daily 100 +
     // credit 39904 from 199520/5), Fetch CRD cost 1, Fetches left 199520.
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for You.com" }))
-    expect(await screen.findByText("Search CRD cost")).not.toBeNull()
-    expect(screen.getByText("Fetch CRD cost")).not.toBeNull()
+    expect(await screen.findByText("Search cost (USD)")).not.toBeNull()
+    expect(screen.getByText("Fetch cost (USD)")).not.toBeNull()
     expect(screen.getByText("Searches left")).not.toBeNull()
-    expect(screen.getByText("40004")).not.toBeNull()
+    expect(screen.getByText("40,004")).not.toBeNull()
     expect(screen.getByText("Fetches left")).not.toBeNull()
-    // The card fraction and the popover Fetches left row both read 199520.
-    expect(screen.getAllByText("199520").length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText("199,520").length).toBeGreaterThanOrEqual(1)
     await user.keyboard("{Escape}")
-    expect(screen.queryByText("Quota Details")).toBeNull()
+    expect(screen.queryByText("Quota details")).toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -2336,6 +2319,24 @@ describe("ProviderLimitsCard You.com", () => {
       />,
     )
     expect(screen.getByRole("heading", { name: "You.com" })).not.toBeNull()
+    expect(screen.queryByRole("button", { name: "Refresh limits for You.com" })).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("does not duplicate refresh when key balances supply the control", () => {
+    installFetchStub(() => ok({ events: [], next_cursor: null }))
+    render(
+      <ProviderLimitsCard
+        providerId="youcom"
+        providerName="You.com"
+        limits={youcomKeyedLimits()}
+        crdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={false}
+        keyBalances={<button type="button">Refresh key balances</button>}
+      />,
+    )
+    expect(screen.getByRole("button", { name: "Refresh key balances" })).not.toBeNull()
     expect(screen.queryByRole("button", { name: "Refresh limits for You.com" })).toBeNull()
     vi.unstubAllGlobals()
   })

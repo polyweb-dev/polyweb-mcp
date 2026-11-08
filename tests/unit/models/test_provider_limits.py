@@ -32,6 +32,7 @@ from freesearch.models.provider_limits import (
     local_rate_denial,
     native_pool_id,
     parse_exact_decimal,
+    unpriced_ceiling_error,
 )
 from freesearch.routers.limits import _validate_usage_url
 
@@ -256,10 +257,17 @@ def test_local_funds_denial_is_402_with_local_origin() -> None:
     assert error.status_code == 402
     assert error.refusal == "funds"
     assert error.error.status_code == 402
-    assert error.error.code == "crd_exhausted"
+    assert error.error.code == "budget_exhausted"
     assert error.error.details["origin"] == "local"
     assert error.error.details["refusal"] == "funds"
     assert error.retry_after_seconds is None
+
+
+def test_unknown_budget_price_has_public_error_code() -> None:
+    error = unpriced_ceiling_error("synth", LimitOperation.SEARCH)
+    assert error.error.code == "budget_price_unknown"
+    assert error.error.status_code == 422
+    assert error.error.details["reasons"] == ["price_unknown"]
 
 
 def test_local_rate_denial_is_429_with_retry_after() -> None:

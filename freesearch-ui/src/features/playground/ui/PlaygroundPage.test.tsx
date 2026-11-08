@@ -2,7 +2,7 @@ import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import { PlaygroundHarness } from "@/test/renderPlayground"
-import { PLAYGROUND_PROJECT_ID, answerProjectProviders } from "@/test/projectPlayground"
+import { PLAYGROUND_PROJECT_ID, answerProjectProviders as answerProviderView } from "@/test/projectPlayground"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
 import type { FetchStub } from "@/test/fetchMock"
 import { allProvidersFixture, routingConfigFixture, dashboardFixture, searchResponseFixture, fetchResponseFixture } from "@/test/backendFixtures"
@@ -13,6 +13,21 @@ import { PLAYGROUND_PERSIST_VERSION, playgroundPersistKey } from "@/store/playgr
 import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import { initialPlaygroundState } from "@/store/playgroundSlice"
 import type { SearchResponse } from "@/domains/execution"
+
+function answerProjectProviders(req: Parameters<typeof answerProviderView>[0]): Response | null {
+  if (req.method === "GET" && req.url === `/api/v1/projects/${PLAYGROUND_PROJECT_ID}/routing/order`) {
+    const provider = (id: string) => ({ provider: id, name: id, call_cost_usd: null, keyless: false })
+    const operation = (ids: string[]) => ({
+      strategy: "custom", providers: ids.map(provider), has_saved_custom: true, not_allowed: [],
+    })
+    return ok({
+      revision: 1,
+      search: operation(["brave", "keenable", "tavily", "exa", "firecrawl", "you", "parallel", "tinyfish"]),
+      fetch: operation(["keenable", "tavily", "exa", "firecrawl", "you", "parallel", "tinyfish"]),
+    })
+  }
+  return answerProviderView(req)
+}
 
 /**
  * Open the shared provider picker and choose one row by its visible name.
@@ -343,10 +358,11 @@ describe("SearchPlayground inspector contract (characterization)", () => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
     expect(screen.getByText("Returned results (2)")).toBeInTheDocument()
-    expect(screen.getByText("Select item to inspect")).toBeInTheDocument()
+    // One prompt only: the side inspector asks for a selection, the list does not repeat it.
+    expect(screen.queryByText("Select item to inspect")).not.toBeInTheDocument()
     // The side inspector is always present: either the empty prompt or the
     // auto-selected first result, depending on controller defaults.
-    expect(screen.getByText(/Result Inspector|Select a search result/i)).toBeInTheDocument()
+    expect(screen.getByText(/Result details|Select a result to see its details/)).toBeInTheDocument()
   })
 
   it("selects a result into the side inspector on click", async () => {
@@ -363,7 +379,7 @@ describe("SearchPlayground inspector contract (characterization)", () => {
     fireEvent.click(screen.getByText("Live backend result one"))
 
     await waitFor(() => {
-      expect(screen.getByText("Result Inspector")).toBeInTheDocument()
+      expect(screen.getByText("Result details")).toBeInTheDocument()
     })
     expect(screen.getByText("Target URL")).toBeInTheDocument()
     expect(screen.getAllByText("https://example.com/one").length).toBeGreaterThanOrEqual(1)
@@ -621,7 +637,7 @@ describe("C2 PG-S5: Results count replaces the Depth SegmentedControl", () => {
     expect(spin).toHaveAttribute("max", "100")
     expect(spin).toHaveAttribute("step", "1")
     expect(spin).toHaveValue(6)
-    expect(footer.textContent).toMatch(/Results:/)
+    expect(footer.textContent).toMatch(/Results/)
   })
 
   it("editing the count updates the field value (user-typed 25)", async () => {
@@ -746,11 +762,7 @@ describe("SearchPlayground.pg-f1.test.tsx", () => {
  */
 
 const testDir = import.meta.dirname
-// Slice 5 ownership: the SearchPlayground compat shell was removed (CLEANUP
-// 1.1) — DashboardShell renders features/playground directly; RouteSimulator.tsx
-// stays a compatibility shell over features/routing. Read the joined owner
-// sources (same strength as the monolith reads) plus DashboardShell and the
-// routing shell for the shim-compat asserts below.
+// Read the joined playground owner sources and the shell for compatibility assertions.
 const playgroundOwnerFiles = [
   "../model/usePlaygroundController.ts",
   "../model/playgroundFetchAction.ts",
@@ -786,23 +798,6 @@ const executionRunnerFiles = [
 const executionSource = executionRunnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
-const simulatorOwnerFiles = [
-  "../../routing/model/useSimulatorController.ts",
-  "../../routing/ui/RouteSimulator.tsx",
-  "../../routing/ui/SimulatorInputRow.tsx",
-  "../../routing/ui/SimulatorFooter.tsx",
-  "../../routing/ui/SimulatorPipeline.tsx",
-  "../../routing/ui/PipelineStep.tsx",
-  "../../routing/ui/ProviderStep.tsx",
-  "../../routing/ui/FallbackCascade.tsx",
-]
-const simulatorSource = simulatorOwnerFiles
-  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
-  .join("\n")
-const simulatorShim = readFileSync(
-  path.resolve(testDir, "../../../components/routing/RouteSimulator.tsx"),
-  "utf8"
-)
 // PLAN FR-1: content derivation lives in the persisted slice as selectors,
 // never as stored fields or inline controller expressions.
 const sliceSource = readFileSync(
@@ -880,16 +875,14 @@ const tokens = (className: string): string[] =>
   className.split(/\s+/).filter(Boolean)
 
 function expectTransitionClasses(wrapper: HTMLElement) {
-  expect(wrapper.className).toContain("transition-all")
-  expect(wrapper.className).toContain("duration-300")
-  expect(wrapper.className).toContain("ease-out")
-  expect(wrapper.className).toContain("motion-reduce:transition-none")
+  expect(wrapper).toHaveClass("top-docked", "w-full")
+  expect(wrapper.className).not.toMatch(/min-h|max-w|justify-center|transition-all/)
 }
 
 function expectHeroGeometry(wrapper: HTMLElement) {
-  expect(wrapper.className).toMatch(/min-h-\[(55|60)vh\]/)
-  expect(wrapper.className).toContain("max-w-3xl")
-  expect(wrapper.className).not.toContain("top-docked")
+  expect(wrapper.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+  expect(wrapper.className).toContain("w-full")
+  expect(wrapper.className).toContain("top-docked")
 }
 
 function expectComposerBoxClasses(composer: HTMLElement) {
@@ -901,8 +894,7 @@ function expectComposerBoxClasses(composer: HTMLElement) {
   expect(names).toContain("rounded-xl")
   expect(names.some((t) => /^p-\d+$/.test(t))).toBe(true)
   expect(cls).toContain("shadow")
-  expect(cls).toContain("focus-within:")
-  expect(cls).toContain("signal")
+  expect(within(composer).getByRole("textbox").className).toContain("focus-visible:ring-2")
 }
 
 describe("PG-F1 AC-PG-F1-1: idle Fetch is a centered hero (Fetch analogue of PG-S1)", () => {
@@ -921,13 +913,13 @@ describe("PG-F1 AC-PG-F1-1: idle Fetch is a centered hero (Fetch analogue of PG-
     expect(screen.queryByText(/Fetched markdown body/i)).not.toBeInTheDocument()
 
     const wrapper = screen.getByTestId("fetch-layout")
-    expect(wrapper).toHaveAttribute("data-state", "hero")
+    expect(wrapper).toHaveAttribute("data-state", "docked")
     expectHeroGeometry(wrapper)
     expectTransitionClasses(wrapper)
     expect(
       wrapper.querySelector('input[placeholder*="URL to fetch"]')
     ).not.toBeNull()
-    expect(wrapper.className).not.toContain("top-docked")
+    expect(wrapper.className).toContain("top-docked")
   })
 
   it("uses the SAME hero/transition tokens as search-layout", async () => {
@@ -935,30 +927,23 @@ describe("PG-F1 AC-PG-F1-1: idle Fetch is a centered hero (Fetch analogue of PG-
     await readyForSearch()
 
     const searchHero = screen.getByTestId("search-layout")
-    expect(searchHero).toHaveAttribute("data-state", "hero")
+    expect(searchHero).toHaveAttribute("data-state", "docked")
     const searchClasses = new Set(tokens(searchHero.className))
 
     await gotoFetch()
 
     const fetchHero = screen.getByTestId("fetch-layout")
-    expect(fetchHero).toHaveAttribute("data-state", "hero")
+    expect(fetchHero).toHaveAttribute("data-state", "docked")
     // Shared contract: identical transition + hero-geometry tokens.
     for (const token of [
-      "transition-all",
-      "duration-300",
-      "ease-out",
-      "motion-reduce:transition-none",
-      "max-w-3xl",
-      "mx-auto",
-      "flex",
-      "flex-col",
-      "justify-center",
+      "top-docked",
+      "w-full",
     ]) {
       expect(tokens(fetchHero.className)).toContain(token)
       expect(searchClasses.has(token)).toBe(true)
     }
-    expect(fetchHero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(searchHero.className).toMatch(/min-h-\[(55|60)vh\]/)
+    expect(fetchHero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(searchHero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
   })
 })
 
@@ -974,7 +959,7 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
 
     expect(screen.getByTestId("fetch-layout")).toHaveAttribute(
       "data-state",
-      "hero"
+      "docked"
     )
 
     submitFetchUrl("https://example.com/doc")
@@ -1025,7 +1010,7 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
     expect(sliceSource).not.toMatch(/hasFetchContent[?]?:\s*boolean/)
     expect(playgroundSource).toContain("hasFetchContent")
     expect(playgroundSource).toMatch(
-      /hasFetchContent\s*\?\s*["']docked["']\s*:\s*["']hero["']|data-state\s*=\s*\{hasFetchContent/
+      /data-state="docked"/
     )
   })
 })
@@ -1199,8 +1184,8 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(composer.className).toContain("bg-[var(--elevated)]")
     expect(composer.className).toContain("border-[var(--border-subtle)]")
     expect(composer.className).toContain("shadow-lg")
-    expect(composer.className).toContain("focus-within:border-[var(--signal)]/60")
-    expect(composer.className).toContain("motion-reduce:transition-none")
+    // The card border stays neutral; only the focused control shows a ring.
+    expect(composer.className).not.toContain("focus-within:")
 
     const input = screen.getByPlaceholderText(/URL to fetch/i)
     expect(composer.contains(input)).toBe(true)
@@ -1232,9 +1217,9 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(footer.className).toContain("text-[13px]")
     expect(footer.className).toContain("text-[var(--muted)]")
     // Footer owns the Provider row (exact Search footer token strings).
-    expect(footer.textContent).toMatch(/Provider:/)
+    expect(footer.textContent).toMatch(/Provider/)
     const trigger = within(footer).getByTestId("playground-fetch-provider")
-    expect(trigger).toHaveAccessibleName("Provider:")
+    expect(trigger).toHaveAccessibleName("Provider")
     expect(trigger.textContent).toContain("Auto")
     fireEvent.click(trigger)
     expect(
@@ -1247,8 +1232,8 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(
       within(footer).queryByRole("group", { name: /search depth/i })
     ).toBeNull()
-    expect(footer.textContent).not.toMatch(/Suggestions:/)
-    expect(footer.textContent).not.toMatch(/Results:/)
+    expect(footer.textContent).not.toMatch(/Suggestions/)
+    expect(footer.textContent).not.toMatch(/Results/)
   })
 
   it("keeps the Fetch submit button text-only inside the composer (FileText never inside the button)", async () => {
@@ -1288,8 +1273,7 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     // Exact Search token strings live in the shared shell.
     expect(shellSource).toContain("bg-[var(--elevated)]")
     expect(shellSource).toContain("rounded-xl")
-    expect(shellSource).toContain("focus-within:")
-    expect(shellSource).toContain("motion-reduce:transition-none")
+    expect(shellSource).not.toContain("focus-within:")
     expect(shellSource).toContain("text-[13px]")
     expect(shellSource).toContain("text-[var(--muted)]")
     // Compat shell removed (CLEANUP 1.1): features import the shared owner directly.
@@ -1330,15 +1314,13 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     await readyForSearch()
 
     const hero = screen.getByTestId("search-layout")
-    expect(hero).toHaveAttribute("data-state", "hero")
-    expect(hero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(hero.className).toContain("max-w-3xl")
-    expect(hero.className).not.toContain("top-docked")
+    expect(hero).toHaveAttribute("data-state", "docked")
+    expect(hero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(hero.className).toContain("w-full")
+    expect(hero.className).toContain("top-docked")
     for (const token of [
-      "transition-all",
-      "duration-300",
-      "ease-out",
-      "motion-reduce:transition-none",
+      "top-docked",
+      "w-full",
     ]) {
       expect(hero.className).toContain(token)
     }
@@ -1384,10 +1366,11 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       svg!.closest('[aria-hidden="true"]') !== null
     expect(hidden).toBe(true)
     const names = tokens(button.className)
-    expect(names).toContain("px-5")
-    expect(names).toContain("py-2")
-    expect(names).not.toContain("px-4")
-    expect(names).not.toContain("py-1.5")
+    expect(names).toContain("h-8")
+    expect(names).toContain("px-4")
+    expect(names).toContain("gap-2")
+    expect(names).not.toContain("px-5")
+    expect(names).not.toContain("py-2")
 
     const input = screen.getByPlaceholderText(
       /Search the web/i
@@ -1412,7 +1395,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     const composer = screen.getByTestId("search-composer")
     expect(composer.className).toContain("bg-[var(--elevated)]")
     expect(tokens(composer.className)).toContain("rounded-xl")
-    expect(composer.className).toContain("focus-within:")
+    expect(composer.className).not.toContain("focus-within:")
     expect(
       composer.contains(screen.getByPlaceholderText(/Search the web/i))
     ).toBe(true)
@@ -1497,7 +1480,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(spin).toHaveAttribute("max", "100")
     expect(spin).toHaveAttribute("step", "1")
     expect(spin).toHaveValue(6)
-    expect(footer.textContent).toMatch(/Results:/)
+    expect(footer.textContent).toMatch(/Results/)
     expect(screen.queryByRole("group", { name: /search depth/i })).toBeNull()
 
     const input = screen.getByPlaceholderText(
@@ -1531,17 +1514,6 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     expect(
       screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
-
-    // R-Strategy + R-Sim (blessed churn, NOT a regression): the Simulator
-    // now composes via the shared ComposerShell inside a simulator-layout
-    // hero/dock wrapper (Search/Fetch Tab pattern).
-    expect(simulatorSource).toContain("SegmentedControl")
-    expect(simulatorSource).toContain("Simulate route")
-    expect(simulatorSource).toContain("ComposerShell")
-    expect(simulatorSource).toContain("simulator-layout")
-    expect(simulatorSource).not.toContain("fetch-layout")
-    expect(simulatorSource).not.toContain("fetch-composer")
-    expect(simulatorSource).not.toContain("search-composer")
 
     // Fetching logic ownership (PLAN §3.5): the execution runners publish the
     // start/success/failure lifecycle through the slice (start still clears
@@ -1583,10 +1555,6 @@ describe("Slice 5 shim compatibility: shells re-export the feature owners", () =
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 
-  it("RouteSimulator shell re-exports the routing feature without forking UI", () => {
-    expect(simulatorShim).toContain("RouteSimulator")
-    expect(simulatorShim).toContain("features/routing/ui/RouteSimulator")
-  })
 })
 })
 
@@ -1659,11 +1627,9 @@ function submitQuery(query: string) {
 }
 
 function expectTransitionClasses(wrapper: HTMLElement) {
-  // Exact animation contract from the plan — all four tokens required.
-  expect(wrapper.className).toContain("transition-all")
-  expect(wrapper.className).toContain("duration-300")
-  expect(wrapper.className).toContain("ease-out")
-  expect(wrapper.className).toContain("motion-reduce:transition-none")
+  // Composer position and width stay fixed across request states.
+  expect(wrapper).toHaveClass("top-docked", "w-full")
+  expect(wrapper.className).not.toMatch(/min-h|max-w|justify-center|transition-all/)
 }
 
 describe("PG-S1 AC-PG-S1-1: idle search is a centered hero", () => {
@@ -1683,17 +1649,17 @@ describe("PG-S1 AC-PG-S1-1: idle search is a centered hero", () => {
     expect(screen.queryByText(/no provider is configured/i)).not.toBeInTheDocument()
 
     const wrapper = screen.getByTestId("search-layout")
-    expect(wrapper).toHaveAttribute("data-state", "hero")
+    expect(wrapper).toHaveAttribute("data-state", "docked")
     // Hero geometry: tall centered column, constrained width.
-    expect(wrapper.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(wrapper.className).toContain("max-w-3xl")
+    expect(wrapper.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(wrapper.className).toContain("w-full")
     expectTransitionClasses(wrapper)
     // The request form is the wrapped content — same element, not a copy.
     expect(
       wrapper.querySelector('input[placeholder*="Search the web"]')
     ).not.toBeNull()
     // Hero must not carry the docked marker.
-    expect(wrapper.className).not.toContain("top-docked")
+    expect(wrapper.className).toContain("top-docked")
   })
 })
 
@@ -1708,7 +1674,7 @@ describe("PG-S1 AC-PG-S1-2: submit docks the form and keeps it docked while load
     await readyForSearch()
 
     const wrapperBefore = screen.getByTestId("search-layout")
-    expect(wrapperBefore).toHaveAttribute("data-state", "hero")
+    expect(wrapperBefore).toHaveAttribute("data-state", "docked")
 
     submitQuery("docking query")
 
@@ -1906,7 +1872,7 @@ describe("SearchPlayground.pg-s2.test.tsx", () => {
  *
  * Plan under test (ORCHESTRATOR RULING, freesearch-ui/ ONLY):
  *   - submit Button gets a LEADING lucide Search icon (size-3.5, aria-hidden)
- *     + inline-flex gap + px-5 py-2 (was px-4 py-1.5);
+ *     + inline-flex gap + the shared form size (h-8 px-4 gap-2);
  *   - input right-padding floor raised pr-28 -> pr-32/36 (no overlap with the
  *     wider button);
  *   - icon gated on mode === "search" ONLY; Fetch button stays text-only;
@@ -1921,7 +1887,7 @@ describe("SearchPlayground.pg-s2.test.tsx", () => {
  *   AC-PG-S2-2  Icon is gated on mode === "search": svg present in Search
  *               mode, ZERO svg inside the Fetch submit button (Fetch text-only),
  *               and the icon returns when switching back to Search.
- *   AC-PG-S2-3  Button spacing bumped: px-5 + py-2 (+ inline-flex gap);
+ *   AC-PG-S2-3  Button spacing: shared form size h-8 + px-4 + gap-2;
  *               the old px-4 / py-1.5 tokens are gone.
  *   AC-PG-S2-4  Input right-padding floor raised to pr-32 minimum (pr-32 or
  *               pr-36 accepted); pr-28 gone; structural no-overlap contract
@@ -2100,21 +2066,22 @@ describe("PG-S2 AC-PG-S2-2: icon gated on mode === search; Fetch stays text-only
   })
 })
 
-describe("PG-S2 AC-PG-S2-3: submit button spacing bumped px-5 py-2 + inline-flex gap", () => {
+describe("PG-S2 AC-PG-S2-3: submit uses the shared form button h-8 px-4 gap-2", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("carries px-5 + py-2 with inline-flex gap; px-4 / py-1.5 are gone", async () => {
+  it("carries the shared form size h-8 + px-4 + gap-2; px-5 / py-2 are gone", async () => {
     renderWithBackend()
     await readyForSearch()
 
     const button = screen.getByRole("button", { name: "Search", exact: true })
     const names = tokens(button.className)
-    expect(names).toContain("px-5")
-    expect(names).toContain("py-2")
-    expect(names).not.toContain("px-4")
-    expect(names).not.toContain("py-1.5")
+    expect(names).toContain("h-8")
+    expect(names).toContain("px-4")
+    expect(names).toContain("gap-2")
+    expect(names).not.toContain("px-5")
+    expect(names).not.toContain("py-2")
     // Horizontal breathing room pairs with an inline-flex + gap layout.
     expect(names).toContain("inline-flex")
     expect(names.some((t) => /^gap-/.test(t))).toBe(true)
@@ -2155,7 +2122,7 @@ describe("PG-S2 AC-PG-S2-4: input floor raised pr-32/36 with a no-overlap struct
     const absolute = button.closest("div.absolute")
     expect(absolute).not.toBeNull()
     expect(tokens(absolute!.className)).toContain("right-0")
-    // ... and the raised floor clearing the wider px-5 button.
+    // ... and the raised floor clearing the wider form button.
     const names = tokens(input.className)
     expect(names.some((t) => t === "pr-32" || t === "pr-36")).toBe(true)
   })
@@ -2209,10 +2176,10 @@ describe("PG-S2 AC-PG-S2-6 regressions: PG-S1 hero/dock, header, Fetch flow, dis
     await readyForSearch()
 
     const hero = screen.getByTestId("search-layout")
-    expect(hero).toHaveAttribute("data-state", "hero")
-    expect(hero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(hero.className).toContain("max-w-3xl")
-    expect(hero.className).not.toContain("top-docked")
+    expect(hero).toHaveAttribute("data-state", "docked")
+    expect(hero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(hero.className).toContain("w-full")
+    expect(hero.className).toContain("top-docked")
 
     submitQuery("regression dock query")
 
@@ -2360,7 +2327,7 @@ describe("SearchPlayground.pg-s3.test.tsx", () => {
  *               across the transition, header copy, Fetch end-to-end flow.
  *   AC-PG-S3-6  Regressions GREEN before/after: PG-S2 button lock (Search
  *               button exact name + leading size-3.5 aria-hidden svg gated on
- *               Search ONLY, px-5 py-2 inline-flex gap, input pr-32/36 floor,
+ *               Search ONLY, h-8 px-4 gap-2 shared form button, input pr-32/36 floor,
  *               labels Search/Fetch/Executing... unchanged).
  *
  * RED expectation: AC-PG-S3-1..S3-4 FAIL cleanly against the current
@@ -2466,8 +2433,8 @@ function expectComposerBoxClasses(composer: HTMLElement) {
   // Shadow depth.
   expect(cls).toContain("shadow")
   // Focus-within signal: keyboard focus lights the box border/ring.
-  expect(cls).toContain("focus-within:")
-  expect(cls).toContain("signal")
+  expect(cls).not.toContain("focus-within:")
+  expect(screen.getByRole("textbox", { name: "Search query" }).className).toContain("focus-visible:ring-2")
 }
 
 describe("PG-S3 AC-PG-S3-1: Search-mode composer box, Fetch stays bare, seams named with no shared file", () => {
@@ -2549,7 +2516,7 @@ describe("PG-S3 AC-PG-S3-2: clear division idle + docked, results after the comp
     // Ours stays centered when idle (PG-S1 hero preserved under the box).
     expect(screen.getByTestId("search-layout")).toHaveAttribute(
       "data-state",
-      "hero"
+      "docked"
     )
   })
 
@@ -2611,7 +2578,7 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
 
     // All three controls live INSIDE the footer (ChatGPT tray aesthetic).
     // PG-S5: Depth SegmentedControl replaced by the Results number input.
-    const suggestions = within(footer!).getByText(/Suggestions:/i)
+    const suggestions = within(footer!).getByText(/^Suggestions$/i)
     expect(suggestions).toBeInTheDocument()
     const suggestionBtn = within(footer!).getByRole("button", {
       name: /python async search aggregator/i,
@@ -2627,7 +2594,7 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
     expect(count).toHaveAttribute("max", "100")
     expect(count).toHaveAttribute("step", "1")
     expect(count).toHaveValue(6)
-    expect(footer!.textContent).toMatch(/Results:/)
+    expect(footer!.textContent).toMatch(/Results/)
     expect(
       within(footer!).queryByRole("group", { name: /search depth/i })
     ).toBeNull()
@@ -2644,9 +2611,9 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
       document.querySelectorAll("body *")
     ).filter(
       (el) =>
-        el.textContent?.includes("Suggestions:") &&
+        el.textContent?.includes("Suggestions") &&
         !footer!.contains(el) &&
-        el.textContent!.trim().startsWith("Suggestions:")
+        el.textContent!.trim().startsWith("Suggestions")
     )
     expect(outsideSuggestions).toHaveLength(0)
   })
@@ -2665,11 +2632,11 @@ describe("PG-S3 AC-PG-S3-4: focus-within signal + motion-reduce on the composer"
     expect(composer).not.toBeNull()
     const cls = composer!.className
     // Focus signal fires from :focus-within, never a bare :focus on the box.
-    expect(cls).toContain("focus-within:")
-    expect(cls).toContain("signal")
+    expect(cls).not.toContain("focus-within:")
+    expect(screen.getByRole("textbox", { name: "Search query" }).className).toContain("focus-visible:ring-2")
     expect(cls).not.toMatch(/(^|\s)focus:/)
     // Motion hygiene mirrors the PG-S1 layout wrapper.
-    expect(tokens(cls)).toContain("transition-all")
+    expect(tokens(cls)).toContain("transition-colors")
     expect(cls).toContain("motion-reduce:transition-none")
   })
 })
@@ -2684,15 +2651,13 @@ describe("PG-S3 AC-PG-S3-5 regressions: docked-top + same-form + PG-S1 contract 
     await readyForSearch()
 
     const hero = screen.getByTestId("search-layout")
-    expect(hero).toHaveAttribute("data-state", "hero")
-    expect(hero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(hero.className).toContain("max-w-3xl")
-    expect(hero.className).not.toContain("top-docked")
+    expect(hero).toHaveAttribute("data-state", "docked")
+    expect(hero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(hero.className).toContain("w-full")
+    expect(hero.className).toContain("top-docked")
     for (const token of [
-      "transition-all",
-      "duration-300",
-      "ease-out",
-      "motion-reduce:transition-none",
+      "top-docked",
+      "w-full",
     ]) {
       expect(hero.className).toContain(token)
     }
@@ -2770,10 +2735,11 @@ describe("PG-S3 AC-PG-S3-6 regressions: PG-S2 button lock intact inside the box"
     expect(hidden).toBe(true)
 
     const names = tokens(button.className)
-    expect(names).toContain("px-5")
-    expect(names).toContain("py-2")
-    expect(names).not.toContain("px-4")
-    expect(names).not.toContain("py-1.5")
+    expect(names).toContain("h-8")
+    expect(names).toContain("px-4")
+    expect(names).toContain("gap-2")
+    expect(names).not.toContain("px-5")
+    expect(names).not.toContain("py-2")
     expect(names).toContain("inline-flex")
 
     const input = screen.getByPlaceholderText(
@@ -3370,7 +3336,7 @@ describe("PG-S4 AC-PG-S4-5: stopPropagation + disabled while executing", () => {
     await searchAndWait()
 
     // Precondition: first result is the selected preview after search.
-    expect(screen.getByText("Selected result")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Result details" })).toBeInTheDocument()
 
     // Click the SECOND card's fetch button: navigates + fetches, must NOT
     // bubble to the card's onClick (which would select the second result).
@@ -3386,12 +3352,8 @@ describe("PG-S4 AC-PG-S4-5: stopPropagation + disabled while executing", () => {
     await waitFor(() => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
-    expect(
-      screen.getByText(
-        /Select a search result from the list to inspect/i
-      )
-    ).toBeInTheDocument()
-    expect(screen.queryByText("Selected result")).not.toBeInTheDocument()
+    expect(screen.getByText("Select a result to see its details")).toBeInTheDocument()
+    expect(screen.queryByRole("heading", { name: "Result details" })).not.toBeInTheDocument()
   })
 
   it("disables per-card fetch buttons while the next search is in flight (last-good results stay)", async () => {
@@ -3514,15 +3476,13 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     await readyForSearch()
 
     const hero = screen.getByTestId("search-layout")
-    expect(hero).toHaveAttribute("data-state", "hero")
-    expect(hero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(hero.className).toContain("max-w-3xl")
-    expect(hero.className).not.toContain("top-docked")
+    expect(hero).toHaveAttribute("data-state", "docked")
+    expect(hero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(hero.className).toContain("w-full")
+    expect(hero.className).toContain("top-docked")
     for (const token of [
-      "transition-all",
-      "duration-300",
-      "ease-out",
-      "motion-reduce:transition-none",
+      "top-docked",
+      "w-full",
     ]) {
       expect(hero.className).toContain(token)
     }
@@ -3554,7 +3514,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     ).toBeInTheDocument()
   })
 
-  it("PG-S2 Search icon-button lock intact (exact name, leading svg, px-5/py-2, pr-32 floor, labels)", async () => {
+  it("PG-S2 Search icon-button lock intact (exact name, leading svg, h-8/px-4/gap-2, pr-32 floor, labels)", async () => {
     const gate = deferred<Response>()
     renderWithBackend(() => gate.promise)
     await readyForSearch()
@@ -3570,10 +3530,11 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     expect(hidden).toBe(true)
 
     const names = tokens(button.className)
-    expect(names).toContain("px-5")
-    expect(names).toContain("py-2")
-    expect(names).not.toContain("px-4")
-    expect(names).not.toContain("py-1.5")
+    expect(names).toContain("h-8")
+    expect(names).toContain("px-4")
+    expect(names).toContain("gap-2")
+    expect(names).not.toContain("px-5")
+    expect(names).not.toContain("py-2")
     expect(names).toContain("inline-flex")
 
     const input = screen.getByPlaceholderText(
@@ -3613,7 +3574,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     expect(composer).not.toBeNull()
     expect(composer!.className).toContain("bg-[var(--elevated)]")
     expect(tokens(composer!.className)).toContain("rounded-xl")
-    expect(composer!.className).toContain("focus-within:")
+    expect(composer!.className).not.toContain("focus-within:")
     const input = screen.getByPlaceholderText(/Search the web/i)
     expect(composer!.contains(input)).toBe(true)
     const footer = screen.queryByTestId("search-composer-footer")
@@ -3634,7 +3595,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     expect(count).toHaveAttribute("max", "100")
     expect(count).toHaveAttribute("step", "1")
     expect(count).toHaveValue(6)
-    expect(footer!.textContent).toMatch(/Results:/)
+    expect(footer!.textContent).toMatch(/Results/)
     expect(
       within(footer!).queryByRole("group", { name: /search depth/i })
     ).toBeNull()
@@ -3935,8 +3896,8 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     expect(spin).toHaveAttribute("step", "1")
     expect(spin).toHaveValue(6)
 
-    // Visible "Results:" label lives in the same footer row.
-    expect(footer.textContent).toMatch(/Results:/)
+    // Visible "Results" label lives in the same footer row.
+    expect(footer.textContent).toMatch(/Results/)
   })
 
   it("removes the Depth SegmentedControl group (no search-depth group, no Fast/Balanced/Deep)", async () => {
@@ -3973,13 +3934,13 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     const footer = screen.getByTestId("search-composer-footer")
     const trigger = within(footer).getByTestId("playground-search-provider")
     expect(trigger).toBeInTheDocument()
-    expect(trigger).toHaveAccessibleName("Provider:")
+    expect(trigger).toHaveAccessibleName("Provider")
     expect(trigger.textContent).toContain("Auto")
     fireEvent.click(trigger)
     expect(
       await within(footer).findByRole("option", { name: "Auto" })
     ).toBeInTheDocument()
-    expect(footer.textContent).toMatch(/Provider:/)
+    expect(footer.textContent).toMatch(/Provider/)
   })
 
   it("keeps Fetch mode bare with no Results spinbutton and no composer", async () => {
@@ -4176,7 +4137,7 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     // Number contract tokens (all missing before PG-S5).
     expect(playgroundSource).toContain("resultCount")
     expect(playgroundSource).toContain("Number of results")
-    expect(playgroundSource).toContain("Results:")
+    expect(playgroundSource).toContain("<span>Results</span>")
     expect(playgroundSource).toMatch(/type\s*=\s*["']number["']/)
     expect(playgroundSource).toMatch(/maxResults\s*:\s*resultCount/)
 
@@ -4303,7 +4264,7 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
     const composer = screen.getByTestId("search-composer")
     expect(composer.className).toContain("bg-[var(--elevated)]")
     expect(composer.className).toContain("rounded-xl")
-    expect(composer.className).toContain("focus-within:")
+    expect(composer.className).not.toContain("focus-within:")
 
     const divider = screen.getByTestId("search-composer-divider")
     expect(composer.contains(divider)).toBe(true)
@@ -4542,7 +4503,7 @@ describe("PlaygroundPage persistence", () => {
     await screen.findByText("Live backend result one")
     await openFetchTab()
     await submitFetch("https://example.com/remount-doc")
-    await screen.findByText("Parsed Markdown Document")
+    await screen.findByText("Parsed markdown")
 
     // Remount the page while the root provider (and its store) stays mounted.
     rerender(
@@ -4557,7 +4518,7 @@ describe("PlaygroundPage persistence", () => {
     expect(await screen.findByPlaceholderText(/URL to fetch/i)).toHaveValue(
       "https://example.com/remount-doc"
     )
-    expect(await screen.findByText("Parsed Markdown Document")).toBeInTheDocument()
+    expect(await screen.findByText("Parsed markdown")).toBeInTheDocument()
 
     // Search tab state survived too.
     fireEvent.click(screen.getByRole("tab", { name: "Search", exact: true }))

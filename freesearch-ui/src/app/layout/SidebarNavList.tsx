@@ -1,18 +1,9 @@
 import type { LucideIcon } from "lucide-react"
 import { NavLink } from "react-router"
-import {
-  FolderKanban,
-  Gauge,
-  KeyRound,
-  Layers,
-  Route,
-  Settings,
-  ShieldCheck,
-  UserRound,
-} from "lucide-react"
+import { ChartPie, FolderKanban, KeyRound, Plug, UserRound } from "lucide-react"
 import { useProjectsOptional } from "@/domains/projects"
 import { TAB_PATHS, canAccessRoute, type TabId } from "../routes"
-import { navLinkClass } from "./navLinkClass"
+import { NAV_ICON_CLASS, navLinkClass } from "./navLinkClass"
 
 interface NavItem {
   id: TabId
@@ -21,16 +12,13 @@ interface NavItem {
 }
 
 const systemItems: NavItem[] = [
-  { id: "routing", label: "Routing", icon: Route },
-  { id: "quotas", label: "Provider usage", icon: Gauge },
-  { id: "systemCredentials", label: "System credentials", icon: KeyRound },
-  { id: "systemCapacity", label: "Capacity", icon: Layers },
-  { id: "settings", label: "Provider settings", icon: Settings },
-  { id: "adminUsers", label: "Admin", icon: ShieldCheck },
+  { id: "settings", label: "Providers", icon: Plug },
+  { id: "quotas", label: "Quotas", icon: ChartPie },
 ]
 
 const workspaceItems: NavItem[] = [
   { id: "projects", label: "Projects", icon: FolderKanban },
+  { id: "accountKeys", label: "Keys and pools", icon: KeyRound },
   { id: "account", label: "Account", icon: UserRound },
 ]
 
@@ -40,10 +28,11 @@ interface NavListProps {
 }
 
 /**
- * Primary (global) navigation. The list filters with the same permission
- * helper as the route gate, reading the live system access descriptor, so a
- * caller never sees a link to a page it cannot open. A gated link stays
- * hidden until the descriptor has loaded.
+ * Primary (global) navigation: the System group for installation
+ * administrators, then Projects and Account. The list filters with the same
+ * permission helper as the route gate, reading the live system access
+ * descriptor, so a caller never sees a link to a page it cannot open. A gated
+ * link stays hidden until the descriptor has loaded.
  */
 export function NavList({ collapsed, onNavigate }: NavListProps) {
   const { systemAccess } = useProjectsOptional()
@@ -54,28 +43,27 @@ export function NavList({ collapsed, onNavigate }: NavListProps) {
     <NavLink
       key={id}
       to={TAB_PATHS[id]}
+      end={id === "account"}
       aria-label={label}
       title={collapsed ? label : undefined}
       onClick={onNavigate}
       className={({ isActive }) => navLinkClass(collapsed, isActive)}
     >
-      <Icon aria-hidden="true" className="size-[18px] shrink-0" strokeWidth={1.8} />
-      {!collapsed && <span>{label}</span>}
+      <Icon aria-hidden="true" className={NAV_ICON_CLASS} strokeWidth={1.75} />
+      {!collapsed && <span className="truncate">{label}</span>}
     </NavLink>
   )
 
   return (
-    <nav
-      aria-label="Primary"
-      className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-3"
-    >
-      {visibleSystem.length > 0 && (
-        <>
-          {!collapsed && <p className="mb-2 px-3 text-[12px] text-[var(--muted)]">System</p>}
-          {visibleSystem.map(row)}
-          <hr className="mx-1 my-2 border-[var(--border-subtle)]" />
-        </>
-      )}
+    <nav aria-label="Primary" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
+      {visibleSystem.length > 0 &&
+        (collapsed ? (
+          <hr className="mx-2 my-2 border-[var(--border-subtle)]" />
+        ) : (
+          <p className="px-2.5 pt-5 pb-1.5 text-[12px] text-[var(--muted)]">System</p>
+        ))}
+      {visibleSystem.map(row)}
+      <div aria-hidden="true" className="min-h-4 flex-1" />
       {visibleWorkspace.map(row)}
     </nav>
   )

@@ -82,6 +82,12 @@ Given("I am on the Activity view", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Activity", exact: true })).toBeVisible()
 })
 
+Then("the activity list shows relative time with an absolute timestamp", async ({ page }) => {
+  const time = page.getByRole("table").locator("tbody tr").first().getByRole("cell").first()
+  await expect(time).toHaveText(/^(just now|\d+ (min|h|d) ago)$/)
+  await expect(time).toHaveAttribute("title", /.+/)
+})
+
 Then(
   "the activity table should expose the columns {string}, {string}, {string}, {string}, {string}, and {string} with a {string} action column",
   async (
@@ -329,7 +335,9 @@ Then(
   async ({ page }, provider: string, latency: string, count: string) => {
     const row = page.getByRole('row').filter({ hasText: provider }).first()
     await expect(row).toBeVisible()
-    await expect(row).toContainText(latency)
+    // Accept the shared latency format ("2,025 ms") for the feature's "2025ms".
+    const text = (await row.innerText()).replace(/,/g, '').replace(/(\d)\s+ms/g, '$1ms')
+    expect(text).toContain(latency)
     // Result count cell: exact count surrounded by cell boundaries.
     await expect(row).toContainText(count)
   }
@@ -751,10 +759,13 @@ When('I select the trajectory row {string}', async ({ page }, label: string) => 
 Then(
   'the span inspector should show provider {string} with the recorded request and response payload',
   async ({ page }, provider: string) => {
-    const dialog = page.getByRole('dialog')
-    await expect(dialog).toContainText(provider)
-    await expect(dialog).toContainText('freesearch.provider.request')
-    await expect(dialog).toContainText('freesearch.provider.response')
+    const region = spanInspectorRegion(page)
+    await expect(region).toContainText(provider)
+    const raw = region.locator('details', { hasText: 'Show raw data' })
+    await expect(raw).not.toHaveAttribute('open')
+    await raw.locator('summary').click()
+    await expect(raw.getByText('Provider request', { exact: true })).toBeVisible()
+    await expect(raw.getByText('Provider response', { exact: true })).toBeVisible()
   }
 )
 
@@ -1062,7 +1073,8 @@ Then('the latency summary should count overlapping provider calls once', async (
       .getByText(label, { exact: true })
       .locator('xpath=..')
       .locator('dd')
-    return (await dd.innerText()).trim()
+    // Normalize the shared latency format ("1,531 ms") to the bare "1531ms".
+    return (await dd.innerText()).trim().replace(/,/g, '').replace(/\s+ms$/, 'ms')
   }
   await expect(region.getByText('Before providers', { exact: true })).toBeVisible()
   expect(await valueOf('Before providers')).toBe(`${beforeMs}ms`)
@@ -1074,6 +1086,7 @@ Then('the latency summary should count overlapping provider calls once', async (
   )
   // The duration sum must never appear as provider time: the union decides.
   await expect(page.getByRole('dialog')).not.toContainText(`${durationSum}ms`)
+  await expect(page.getByRole('dialog')).not.toContainText(`${durationSum.toLocaleString('en-US')} ms`)
 })
 
 Then('the result inspector should show {string}', async ({ page }, text: string) => {

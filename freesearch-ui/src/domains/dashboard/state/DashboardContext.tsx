@@ -59,7 +59,7 @@ export const DashboardProvider: React.FC<{
       setUsageTotals(mapDashboardTotals(dashboard));
       setDashboardQuotas(mapDashboardQuotas(dashboard));
       setProviderLimits(decodeProviderLimits(dashboard.provider_limits));
-      setCrdUsageTotals(decodeCRDUsageTotals(dashboard.crd_usage_totals));
+      setCrdUsageTotals(decodeCRDUsageTotals(dashboard.spend_totals));
       setDashboardNotice(dashboard.notice);
     } catch (error) {
       if (generation !== requestGeneration.current) return;

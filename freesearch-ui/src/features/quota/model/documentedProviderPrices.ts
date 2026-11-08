@@ -1,4 +1,5 @@
 import type { CRDOperation } from "@/domains/dashboard"
+import { formatCRDAmount } from "./crdDisplay"
 
 /** Prices are references researched in LIMITS.md on 2026-10-05. */
 export const DOCUMENTED_PRICE_VERSION = "LIMITS.md (2026-10-05)"
@@ -17,7 +18,7 @@ const price = (
   priceBasis: string,
 ): DocumentedProviderPrice => ({
   usdPerCall,
-  crdPerCall: crdPerCall === null ? null : crdPerCall + " CRD",
+  crdPerCall: crdPerCall === null ? null : formatCRDAmount(crdPerCall),
   priceBasis,
 })
 

@@ -1,5 +1,6 @@
 import { expect } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
+import { providerQuotaSurface } from "./providerQuotaUi"
 import { setStubbedCrdTotals, setStubbedProviderLimits } from "./backendStub"
 import { userAccountBody } from "./accountStub"
 
@@ -276,7 +277,7 @@ When("I open the Keenable quota details", async ({ page }) => {
   await page
     .getByRole("button", { name: /Credit details for Keenable/i })
     .click()
-  await expect(page.getByText("Quota Details")).toBeVisible()
+  await expect(page.getByText("Quota details")).toBeVisible()
 })
 
 When("I cancel the Keenable details", async ({ page }) => {
@@ -293,15 +294,15 @@ Then(
       })
     } else if (kind === "search") {
       bar = page.getByRole("progressbar", {
-        name: "Keenable search hourly requests remaining",
+        name: "Keenable search and fetch limits remaining",
       })
     } else if (kind === "fetch") {
       bar = page.getByRole("progressbar", {
-        name: "Keenable fetch hourly requests remaining",
+        name: "Keenable search and fetch limits remaining",
       })
     } else if (kind === "rate") {
       bar = page
-        .getByRole("progressbar", { name: /Keenable search hourly requests remaining/i })
+        .getByRole("progressbar", { name: /Keenable search and fetch limits remaining/i })
         .first()
     } else {
       throw new Error(`Unknown Keenable bar kind: ${kind}`)
@@ -319,10 +320,10 @@ Then(
 )
 
 Then("the Keenable rate bar occupies a line below its text", async ({ page }) => {
-  const text = page.getByText("Search hourly rate").first()
+  const text = page.getByText("Search and fetch limits", { exact: true })
   const bar = page
     .getByRole("progressbar", {
-      name: "Keenable search hourly requests remaining",
+      name: "Keenable search and fetch limits remaining",
     })
     .first()
   await expect(text).toBeVisible()
@@ -336,14 +337,14 @@ Then("the Keenable rate bar occupies a line below its text", async ({ page }) =>
 })
 
 Then("the Keenable request counts contain no decimal part", async ({ page }) => {
-  await expect(page.getByText("1000 of 1000 requests").first()).toBeVisible()
+  await expect(page.getByText("1,000 of 1,000 requests left this hour", { exact: true })).toBeVisible()
   await expect(page.getByText("1000.00000000")).toHaveCount(0)
 })
 
-Then("the Keenable keyless value has a strike line next to free", async ({ page }) => {
-  const card = page.locator("article", { hasText: "Keenable" }).first()
-  await expect(card.locator("s", { hasText: "Free - unmetered" })).toBeVisible()
-  await expect(card.getByText("free", { exact: true }).first()).toBeVisible()
+Then("the Keenable keyless costs are struck beside Free", async ({ page }) => {
+  const popover = page.locator('[data-slot="popover-content"]')
+  await expect(popover.locator("s")).toHaveCount(2)
+  await expect(popover.getByText("Free", { exact: true }).first()).toBeVisible()
 })
 
 Then("the Keenable keyless details contain no authoritative label", async ({ page }) => {
@@ -355,12 +356,20 @@ Then("the Keenable details should show {string}", async ({ page }, text: string)
 })
 
 Then("the Keenable card should show the {string} action", async ({ page }, label: string) => {
-  const card = page.locator("article", { hasText: "Keenable" }).first()
-  await expect(card.getByRole("button", { name: new RegExp(label, "i") })).toBeVisible()
+  const card = providerQuotaSurface(page, "Keenable")
+  const direct = card.getByRole("button", { name: new RegExp(label, "i") })
+  if ((await direct.count()) > 0) {
+    await expect(direct.first()).toBeVisible()
+    return
+  }
+  // Dialog actions live in the card `…` menu.
+  await card.getByRole("button", { name: /^Actions for /i }).click()
+  await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible()
+  await page.keyboard.press("Escape")
 })
 
 Then("the Keenable card should show no funds bar", async ({ page }) => {
-  const card = page.locator("article", { hasText: "Keenable" }).first()
+  const card = providerQuotaSurface(page, "Keenable")
   await expect(
     card.getByRole("progressbar", { name: "Keenable credit units remaining" }),
   ).toHaveCount(0)
@@ -370,4 +379,10 @@ Then("the Keenable details control regains focus", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: /Credit details for Keenable/i }),
   ).toBeFocused()
+})
+
+Then("the Keenable card should offer no Refresh action", async ({ page }) => {
+  const surface = providerQuotaSurface(page, "Keenable")
+  await expect(surface).toBeVisible()
+  await expect(surface.getByRole("button", { name: /Refresh/i })).toHaveCount(0)
 })

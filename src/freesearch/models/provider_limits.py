@@ -27,15 +27,16 @@ from freesearch.models.contracts import (
     SearchRequest,
     UnitKind,
 )
+from freesearch.models.credentials import CredentialAuthMode
 from freesearch.models.observability import ActorType
 
 # Approved common reference: one CRD is USD 0.001 of priced native use.
 CRD_USD_REFERENCE: Final[Decimal] = Decimal("0.001")
 CRD_UNIT_NAME: Final[str] = "CRD"
 CRD_PRICE_VERSION: Final[str] = "crd-usd-0.001"
-LOCAL_FUNDS_DENIAL_CODE: Final[str] = "crd_exhausted"
+LOCAL_FUNDS_DENIAL_CODE: Final[str] = "budget_exhausted"
 LOCAL_RATE_DENIAL_CODE: Final[str] = "rate_limited"
-UNPRICED_CEILING_CODE: Final[str] = "crd_price_unknown"
+UNPRICED_CEILING_CODE: Final[str] = "budget_price_unknown"
 MAX_HISTORY_PAGE_SIZE: Final[int] = 100
 DEFAULT_HISTORY_PAGE_SIZE: Final[int] = 50
 DEFAULT_ATTEMPT_LEASE_SECONDS: Final[int] = 300
@@ -246,7 +247,7 @@ class BudgetBlock(ContractModel):
 
     ``standard_native_cost`` is the native amount one standard (no add-on) call
     consumes. ``usd_per_call`` records the standard USD price when the vendor
-    publishes one. Both feed exact CRD conversion.
+    publishes one. Both feed the exact USD projection.
     """
 
     model: BudgetModel = BudgetModel.NONE
@@ -801,6 +802,17 @@ class ProviderLimitsResponse(ContractModel):
         return next((entry for entry in self.auths if entry.auth_mode is auth_mode), None)
 
 
+class VaultKeyUsage(ContractModel):
+    """Sanitized quota observation for one vault key."""
+
+    key_id: UUID
+    label: str
+    owner_email: str
+    auth_mode: CredentialAuthMode = CredentialAuthMode.API_KEY
+    oauth_connected: bool | None = None
+    balance: NativePool | None = None
+
+
 class LimitStoreUnavailable(RuntimeError):
     """Raised when a limit write or capacity check cannot reach durable storage."""
 
@@ -875,7 +887,7 @@ def local_funds_denial(
         ProviderError(
             provider=provider,
             code=LOCAL_FUNDS_DENIAL_CODE,
-            message="local credit balance is exhausted; vendor call skipped",
+            message="local budget is exhausted; vendor call skipped",
             retryable=False,
             status_code=402,
             details={
@@ -930,7 +942,7 @@ def unpriced_ceiling_error(provider: str, operation: LimitOperation) -> LimitDen
         ProviderError(
             provider=provider,
             code=UNPRICED_CEILING_CODE,
-            message="request has no known price and the credit ceiling is finite",
+            message="request has no known price and the budget is finite",
             retryable=False,
             status_code=422,
             details={

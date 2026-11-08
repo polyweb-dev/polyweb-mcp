@@ -20,6 +20,11 @@ export interface CredentialForms {
   rotate: (secret: string) => Promise<boolean>
 }
 
+export interface AddKeyFormControl {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
 /**
  * Add and rotate forms of one credential list. The secret passes straight
  * from the form into one request and never enters this hook's state.
@@ -27,11 +32,14 @@ export interface CredentialForms {
 export function useCredentialForms(
   routes: CredentialRoutes,
   reload: () => void,
-  status: ActionStatus
+  status: ActionStatus,
+  addForm?: AddKeyFormControl
 ): CredentialForms {
   const { begin, finish } = status
   const [formError, setFormError] = useState<string | null>(null)
-  const [adding, setAdding] = useState(false)
+  const [localAdding, setLocalAdding] = useState(false)
+  const adding = addForm?.open ?? localAdding
+  const setAdding = addForm?.onOpenChange ?? setLocalAdding
   const [rotating, setRotating] = useState<CredentialRef | null>(null)
 
   const create = useCallback(
@@ -50,7 +58,7 @@ export function useCredentialForms(
         return false
       }
     },
-    [begin, finish, routes, reload]
+    [begin, finish, routes, reload, setAdding]
   )
 
   const rotate = useCallback(
@@ -77,7 +85,7 @@ export function useCredentialForms(
   const openAdd = useCallback((open: boolean) => {
     setFormError(null)
     setAdding(open)
-  }, [])
+  }, [setAdding])
 
   const openRotate = useCallback((credential: CredentialRef | null) => {
     setFormError(null)

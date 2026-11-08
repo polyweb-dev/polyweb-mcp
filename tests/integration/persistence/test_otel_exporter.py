@@ -386,10 +386,8 @@ def test_exporter_shutdown_releases_nothing(tmp_path: Path) -> None:
     assert SQLiteSpanExporter(tmp_path / "shutdown.db").shutdown() is None
 
 
-@pytest.mark.parametrize("redaction", ["standard", "strict"])
 async def test_capture_time_policy_survives_settings_edit_and_separate_child_batches(
     repository: SQLiteRepository,
-    redaction: str,
 ) -> None:
     """Finished children must never be re-evaluated against flush-time settings."""
     from freesearch.infrastructure.observability import (
@@ -414,9 +412,7 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
     try:
         with use_observability(runtime):
             bind_execution_attribution(attribution)
-            bind_trace_capture(
-                ProjectTracePolicy(detail=TraceDetailPolicy.METADATA, payload_redaction=redaction)
-            )
+            bind_trace_capture(ProjectTracePolicy(detail=TraceDetailPolicy.METADATA))
             with runtime.span("POST /search", kind=SpanKindName.SERVER):
                 with runtime.span("freesearch.provider") as child:
                     child.add_event(
@@ -431,7 +427,7 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
             assert exporter.export(capture.spans[1:]) is SpanExportResult.SUCCESS
         assert len(capture.spans) == 3
         for span in capture.spans:
-            assert span.attributes[TraceAttribute.SAMPLED] is True
+            assert TraceAttribute.SAMPLED not in span.attributes
             assert span.attributes[TraceAttribute.CAPTURE_PAYLOAD] is False
             assert marker not in span.to_json()
         with sqlite3.connect(repository.database_path) as connection:
@@ -482,7 +478,7 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
         runtime.shutdown()
 
 
-async def test_unstamped_or_unsampled_spans_are_never_persisted(
+async def test_unstamped_spans_are_persisted_as_metadata(
     repository: SQLiteRepository,
 ) -> None:
     from freesearch.infrastructure.observability import (
@@ -501,7 +497,7 @@ async def test_unstamped_or_unsampled_spans_are_never_persisted(
     provider.add_span_processor(SimpleSpanProcessor(capture))
     runtime = OtelObservability(provider.get_tracer("unsampled"), provider)
     try:
-        for policy in (None, ProjectTracePolicy(sampling_rate=0.0)):
+        for policy in (None, ProjectTracePolicy(detail="metadata")):
             with use_observability(runtime):
                 bind_execution_attribution(attribution)
                 if policy is not None:
@@ -510,12 +506,12 @@ async def test_unstamped_or_unsampled_spans_are_never_persisted(
                     pass
         assert len(capture.spans) == 2
         assert TraceAttribute.SAMPLED not in capture.spans[0].attributes
-        assert capture.spans[1].attributes[TraceAttribute.SAMPLED] is False
+        assert TraceAttribute.SAMPLED not in capture.spans[1].attributes
         assert (
             SQLiteSpanExporter(repository.database_path).export(capture.spans)
             is SpanExportResult.SUCCESS
         )
-        assert _row_count(repository.database_path) == 0
+        assert _row_count(repository.database_path) == 2
     finally:
         runtime.shutdown()
 

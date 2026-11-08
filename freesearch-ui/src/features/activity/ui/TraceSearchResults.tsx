@@ -25,7 +25,7 @@ export function TraceSearchResults({
   onSelect,
 }: TraceSearchResultsProps) {
   if (results.length === 0) {
-    return <p className="text-[13px] text-[var(--muted)]">No result was returned.</p>
+    return <p className="text-[13px] text-[var(--muted)]">No result was returned</p>
   }
   return (
     <ul aria-label="Ranked results" className="m-0 min-w-0 list-none border-t border-[var(--border-subtle)] p-0">

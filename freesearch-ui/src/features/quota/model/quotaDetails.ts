@@ -92,26 +92,9 @@ export function quotaCaptionFor(
 }
 
 
-/** Visible p95 text, empty when the provider reports no latency (never a placeholder). */
-export function formatUsageP95(latency: number | null): string {
-  return latency === null ? "" : latency + "ms"
-}
-
 /** True when a rolling-window reset is in the past (idle snapshot, recovers on next use). */
 export function isStaleRollingQuota(resetAt: string | null): boolean {
   if (!resetAt) return false
   const time = new Date(resetAt).getTime()
   return !Number.isNaN(time) && time < Date.now()
-}
-
-export function formatQuotaDate(value: string): string {
-  const date = new Date(value + "T00:00:00")
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
-}
-
-export function formatQuotaReset(resetAt: string | null, period: string, fallback: string): string {
-  if (!resetAt || period.toLowerCase() !== "hourly") return fallback
-  const date = new Date(resetAt)
-  if (Number.isNaN(date.getTime())) return fallback
-  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
 }

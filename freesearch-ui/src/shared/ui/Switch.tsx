@@ -40,11 +40,11 @@ export const Switch: React.FC<SwitchProps> = ({
         nativeButton
         render={<button type="button" />}
         className={cn(
-          "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-all duration-200 ease-in-out outline-none motion-reduce:transition-none",
+          "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-colors duration-150 ease-out outline-none motion-reduce:transition-none",
           "before:absolute before:-inset-2 before:content-['']",
           "focus-visible:border-[var(--signal)] focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40",
           checked
-            ? "border-transparent bg-[var(--signal)]"
+            ? "border-transparent bg-[var(--control-on)]"
             : "border-[var(--border-subtle)] bg-transparent",
           "disabled:cursor-not-allowed disabled:opacity-50"
         )}

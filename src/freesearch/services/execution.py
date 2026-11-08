@@ -41,12 +41,14 @@ from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory
@@ -76,7 +78,6 @@ from freesearch.infrastructure.trace_payloads import (
     _search_results_payload,
 )
 from freesearch.models.contracts import (
-    CostPreset,
     FallbackPolicy,
     FetchRequest,
     FetchResponse,
@@ -113,6 +114,7 @@ from freesearch.models.observability import (
     TraceOperation,
     TraceSpanName,
 )
+from freesearch.models.project_routing import RoutingOperation
 from freesearch.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     ApiKeyStatus,
@@ -124,17 +126,23 @@ from freesearch.models.projects import (
 )
 from freesearch.models.provider_limits import (
     DEFAULT_ATTEMPT_LEASE_SECONDS,
+    AuthMode,
     LimitAdmission,
     LimitCallContext,
+    LimitDeniedError,
     LimitOperation,
     LimitStoreUnavailable,
     PoolRateConstraint,
     ProviderObservationScope,
+    SyncResult,
+    VaultKeyUsage,
+    local_funds_denial,
 )
 from freesearch.models.providers import RateConstraint
 from freesearch.models.schema_enums import PoolStatus
 from freesearch.persistence.api_keys import ProjectApiKeyRepository
 from freesearch.persistence.bindings import ProjectBindingRepository, StoredBinding
+from freesearch.persistence.credentials import CredentialRepository, UsagePollingCredential
 from freesearch.persistence.limit_repository import (
     StrictAttemptSpec,
     StrictReservation,
@@ -164,6 +172,7 @@ from freesearch.services.execution_authority import (
     QueuePolicy,
 )
 from freesearch.services.execution_scope import execution_attribution
+from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
     ProviderTiming,
     _adapter_auth_mode,
@@ -172,6 +181,10 @@ from freesearch.services.monitoring import (
     normalize_degenerate_quota,
     tracked_call,
 )
+from freesearch.services.parallel_oauth_adapter import ParallelOAuthAdapter
+from freesearch.services.pool_budget import release as release_pool_budget
+from freesearch.services.pool_budget import reserve_with_window
+from freesearch.services.project_routing import effective_order
 from freesearch.services.projects import ProjectStorageUnavailable
 from freesearch.services.provider_runtime import (
     build_adapter_with_secret,
@@ -179,6 +192,7 @@ from freesearch.services.provider_runtime import (
     routing_policy,
     schedule_quota_refresh,
 )
+from freesearch.services.routing_order import call_cost_usd
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +274,24 @@ def _config_fingerprint(config: ProviderConfig | None) -> str:
     if config is None:
         return "default"
     return hashlib.sha256(config.model_dump_json().encode("utf-8")).hexdigest()
+
+
+def _sync_skipped(provider: str, now: datetime, reason: str) -> SyncResult:
+    """Return one skipped usage sync with a stable, user-mappable reason."""
+
+    return SyncResult(provider=provider, status="skipped", observed_at=now, reason=reason)
+
+
+def _combined_sync_result(results: Sequence[SyncResult]) -> SyncResult:
+    """Fold per-credential syncs into the provider result: synced wins, then failed."""
+
+    for status in ("synced", "failed"):
+        matching = [result for result in results if result.status == status]
+        if matching:
+            return matching[0].model_copy(
+                update={"changed": any(result.changed for result in matching)}
+            )
+    return results[0]
 
 
 def _limit_operation(operation: UsageOperation) -> LimitOperation:
@@ -369,6 +401,48 @@ class _PoolRateWindow:
 
 
 @dataclass(frozen=True)
+class _AllocationScope:
+    """Vault-pool identity and the scope of its allocation limits."""
+
+    key_pool_id: UUID | None
+    limit_scope: str
+
+
+async def _allocation_scope(
+    session: AsyncSession, allocation: StoredAllocation
+) -> _AllocationScope:
+    row = (
+        await session.execute(
+            text(
+                "SELECT key_pool_id, limit_scope FROM project_pool_allocations "
+                "WHERE project_id=:project AND pool_id=:pool AND operation_scope=:operation"
+            ),
+            {
+                "project": str(allocation.project_id),
+                "pool": str(allocation.pool_id),
+                "operation": allocation.operation.value,
+            },
+        )
+    ).one_or_none()
+    if row is None or row.limit_scope not in ("pool", "operation"):
+        raise ExecutionBindingMissing("the project allocation changed before dispatch")
+    if row.limit_scope == "pool" and row.key_pool_id is None:
+        raise ExecutionBindingMissing("the shared allocation has no vault pool")
+    return _AllocationScope(
+        key_pool_id=UUID(row.key_pool_id) if row.key_pool_id is not None else None,
+        limit_scope=row.limit_scope,
+    )
+
+
+async def _check_allocation_scope(
+    session: AsyncSession, allocation: StoredAllocation | None, expected: _AllocationScope | None
+) -> None:
+    current = None if allocation is None else await _allocation_scope(session, allocation)
+    if current != expected:
+        raise ExecutionBindingMissing("the provider configuration changed before dispatch")
+
+
+@dataclass(frozen=True)
 class _Leg:
     """One dispatchable plan leg: project binding to a usable credential."""
 
@@ -381,6 +455,7 @@ class _Leg:
     context: ProjectContext
     #: Strictest project concurrency across every pool/operation allocation.
     project_max_concurrency: int | None = None
+    allocation_scope: _AllocationScope | None = None
 
     @property
     def adapter(self) -> ProviderAdapter:
@@ -412,6 +487,7 @@ class _Candidate:
     binding: StoredBinding
     provider: str
     credential_id: UUID
+    credential_generation: int
     config: ProviderConfig
     health: ProviderHealth | None
 
@@ -465,6 +541,7 @@ class _LegChain:
                 candidate.binding,
                 _operation_code(self._operation),
                 project_max_concurrency=self._project_max_concurrency,
+                expected_generation=candidate.credential_generation,
             )
             if leg is None:
                 continue
@@ -836,6 +913,139 @@ class ExecutionService:
 
         self._limits = limits
 
+    async def sync_system_limits(self, provider: str, now: datetime) -> SyncResult:
+        """Refresh one provider's native usage through active vault credentials.
+
+        Each credential syncs under its own observation scope with the cached
+        adapter its executions lease, so local ledgers and vendor-header
+        counters carry over. The installation-wide card projects those scoped
+        observations. ``no_credential`` names a provider without an active
+        vault credential whose secret material loads.
+        """
+
+        if self._closed or self._limits is None:
+            return _sync_skipped(provider, now, "no_limit_service")
+        try:
+            credentials = await self._credentials.system_materials(provider)
+        except (CredentialStorageUnavailable, ProjectStorageUnavailable):
+            return _sync_skipped(provider, now, "credential_store_unavailable")
+        if not credentials:
+            return _sync_skipped(provider, now, "no_credential")
+        results = [await self._sync_credential_limits(item, now) for item in credentials]
+        return _combined_sync_result(results)
+
+    async def _sync_credential_limits(
+        self, credential: ResolvedCredential, now: datetime
+    ) -> SyncResult:
+        """Run one scoped usage sync with the credential's leased adapter."""
+
+        try:
+            config = await effective_config_for_name(
+                self._repository, credential.provider_type, strict=True
+            )
+            lease = await self._lease_adapter(credential, config)
+        except Exception:
+            logger.warning("limit sync could not build a credential adapter")
+            return SyncResult(
+                provider=credential.provider_type,
+                status="failed",
+                observed_at=now,
+                error_code="adapter_unavailable",
+            )
+        try:
+            adapter = lease.adapter
+            scope = ProviderObservationScope(
+                credential_id=credential.credential_id,
+                upstream_pool_id=await self._observation_upstream_pool(credential.credential_id),
+                credential_generation=credential.generation,
+            )
+            sync = LimitSyncService(
+                self._repository.limits,
+                self._limits,
+                lambda: [adapter],
+                scope=scope,
+                quota_repository=self._repository,
+            )
+            return await sync.sync_provider(credential.provider_type, now)
+        finally:
+            lease.release()
+
+    async def sync_vault_key_limits(
+        self, provider: str, credential_id: UUID, now: datetime
+    ) -> SyncResult:
+        """Poll one previously authorized vault key without changing it."""
+
+        if self._closed or self._limits is None:
+            return _sync_skipped(provider, now, "no_limit_service")
+        try:
+            credentials = await self._credentials.system_materials(
+                provider, credential_id=credential_id
+            )
+        except (CredentialStorageUnavailable, ProjectStorageUnavailable):
+            return _sync_skipped(provider, now, "credential_store_unavailable")
+        if not credentials:
+            return _sync_skipped(provider, now, "no_credential")
+        return await self._sync_credential_limits(credentials[0], now)
+
+    async def _vault_usage_credentials(self, provider: str) -> list[UsagePollingCredential]:
+        async with self._repository.session() as session:
+            return await CredentialRepository(session).list_vault_credentials_for_usage_polling(
+                account_id=self._account_id, provider=provider
+            )
+
+    async def vault_key_usage_owner(self, provider: str, credential_id: UUID) -> UUID | None:
+        """Return an active key's owner for quota-refresh authorization."""
+
+        return next(
+            (
+                item.owner_user_id
+                for item in await self._vault_usage_credentials(provider)
+                if item.credential.id == credential_id
+            ),
+            None,
+        )
+
+    async def vault_key_usage(self, provider: str) -> list[VaultKeyUsage]:
+        """Return sanitized per-key usage observations for installation admins."""
+
+        credentials = await self._vault_usage_credentials(provider)
+        base = self._limits.observation_pool_id(provider, AuthMode.KEYED)
+        results = []
+        for item in credentials:
+            credential = item.credential
+            scope = ProviderObservationScope(
+                credential_id=credential.id,
+                upstream_pool_id=await self._observation_upstream_pool(credential.id),
+                credential_generation=credential.generation,
+            )
+            pool = (
+                await self._repository.limits.get_pool(scope.native_pool_id(base))
+                if base is not None
+                else None
+            )
+            results.append(
+                VaultKeyUsage(
+                    key_id=credential.id,
+                    label=credential.label,
+                    owner_email=item.owner_email,
+                    balance=pool,
+                )
+            )
+        return results
+
+    async def _observation_upstream_pool(self, credential_id: UUID) -> UUID | None:
+        """Return the shared upstream pool a credential's funds belong to, if linked."""
+
+        async with self._repository.session() as session:
+            pools = UpstreamPoolRepository(session)
+            for operation in (CredentialOperation.SEARCH, CredentialOperation.FETCH):
+                link = await pools.pool_for_credential(
+                    credential_id=credential_id, operation=operation
+                )
+                if link is not None:
+                    return link.pool_id
+        return None
+
     # -------------------------------------------------------------- public
 
     async def search(
@@ -1180,6 +1390,29 @@ class ExecutionService:
             raise
         return legs
 
+    async def _resolution_context(
+        self,
+        session: Any,
+        context: ProjectContext,
+        binding: StoredBinding,
+        operation: CredentialOperation,
+        expected_generation: int | None,
+    ) -> ProjectContext:
+        if expected_generation is None:
+            return context
+        context = await self._live_context_in_session(session, context, operation)
+        current = await ProjectBindingRepository(session).get(
+            project_id=context.project_id, binding_id=binding.id
+        )
+        if (
+            current is None
+            or current.credential_id != binding.credential_id
+            or current.version != binding.version
+            or operation not in current.enabled_operations
+        ):
+            raise ExecutionBindingMissing("the binding is no longer enabled and usable")
+        return context
+
     async def _resolve_binding(
         self,
         context: ProjectContext,
@@ -1188,6 +1421,7 @@ class ExecutionService:
         *,
         providers: frozenset[str] | None,
         project_max_concurrency: int | None = None,
+        expected_generation: int | None = None,
     ) -> _Leg | None:
         """Resolve one enabled binding, or return ``None`` when it is unusable."""
 
@@ -1196,6 +1430,7 @@ class ExecutionService:
         credential: ResolvedCredential | None = None
         pool: StoredPool | None = None
         allocation: StoredAllocation | None = None
+        allocation_scope: _AllocationScope | None = None
         # One short session resolves the credential, its pool link and the
         # project allocation. The provider configuration lookup runs after it
         # closes: it opens its own settings sessions, and nesting that lookup
@@ -1203,6 +1438,9 @@ class ExecutionService:
         # concurrency.
         async with self._repository.session() as session:
             await begin_read_snapshot(session)
+            context = await self._resolution_context(
+                session, context, binding, operation, expected_generation
+            )
             usable = await self._credentials.usable_credential_in_session(
                 session,
                 project_id=context.project_id,
@@ -1210,7 +1448,11 @@ class ExecutionService:
                 operation=operation,
             )
             if usable is None:
+                if expected_generation is not None:
+                    raise ExecutionBindingMissing("the credential is no longer usable")
                 return None
+            if expected_generation is not None and usable.generation != expected_generation:
+                raise ExecutionBindingMissing("the credential changed before dispatch")
             if providers is not None and usable.provider_type not in providers:
                 return None
             if adapter_factory(usable.provider_type) is None:
@@ -1234,6 +1476,8 @@ class ExecutionService:
                     pool_id=pool.id,
                     operation=operation,
                 )
+                if allocation is not None:
+                    allocation_scope = await _allocation_scope(session, allocation)
             credential = await self._credentials.resolve_material_in_session(
                 session,
                 context,
@@ -1259,6 +1503,7 @@ class ExecutionService:
             lease=await self._lease_adapter(credential, config),
             context=context,
             project_max_concurrency=project_max_concurrency,
+            allocation_scope=allocation_scope,
         )
 
     async def _lease_adapter(
@@ -1285,13 +1530,18 @@ class ExecutionService:
                     f"no provider adapter is available for {credential.provider_type}"
                 )
             client = self._client if self._client is not None else self._own_client()
+            if (
+                credential.provider_type == ProviderName.PARALLEL.value
+                and credential.auth_mode == "oauth"
+            ):
+                return ParallelOAuthAdapter(client, credential.secret)
             tavily_config = (
                 config if credential.provider_type == ProviderName.TAVILY.value else None
             )
             return build_adapter_with_secret(
                 factory,
                 client,
-                credential.secret.get_secret_value(),
+                None if credential.auth_mode == "keyless" else credential.secret.get_secret_value(),
                 config=tavily_config,
             )
 
@@ -1329,16 +1579,7 @@ class ExecutionService:
         operation: UsageOperation,
         legs: Sequence[_Leg],
     ) -> list[tuple[_Leg, ProviderAdapter]]:
-        """Order and select legs with the pre-binding routing semantics.
-
-        Eligibility is the adapter capability and the provider mask, then
-        health and a hard quota per credential rank. The persisted provider
-        priority, binding priority, route label, and binding id give the
-        deterministic pre-health order; the health rank and provider
-        preference re-rank exactly as ``select_route`` did, a REQUIRE
-        preference filters providers, and the free-first cost preset pins the
-        keyless system rail ahead of paid ones under stable ties.
-        """
+        """Order eligible legs by health, request preference and project order."""
 
         preference = request.routing
         candidates = [leg for leg in legs if self._leg_allows(leg, request, operation)]
@@ -1381,7 +1622,16 @@ class ExecutionService:
                 if preference.mode is RoutingMode.REQUIRE and preference.providers
                 else f"no eligible provider is available for {operation.value}"
             )
-        ordered = self._rank(usable, preference.providers, policy, health)
+        async with self._repository.session() as session:
+            await begin_read_snapshot(session)
+            project_order = await effective_order(
+                session,
+                usable[0].context.project_id,
+                RoutingOperation(operation.value),
+                {leg.provider for leg in usable},
+            )
+        order_index = {provider: index for index, provider in enumerate(project_order)}
+        ordered = self._rank(usable, preference.providers, order_index, health)
         if preference.mode is RoutingMode.FANOUT:
             return [(leg, leg.adapter) for leg in ordered]
         if not preference.allow_fallback or (policy.fallback_policy is FallbackPolicy.FIRST_ONLY):
@@ -1486,29 +1736,18 @@ class ExecutionService:
     def _rank(
         all_legs: Sequence[_Leg],
         preference: tuple[str, ...],
-        policy: Any,
+        order_index: Mapping[str, int],
         health: Mapping[UUID, ProviderHealth],
     ) -> list[_Leg]:
-        """Rank legs by health, provider preference, then configured order.
-
-        The precedence mirrors ``select_route``: healthier first, preferred
-        providers first, and inside a tie the free-first pin (for that preset),
-        the persisted provider priority, binding priority, route label, and
-        binding id break deterministically. Adapters were ranked by name alone
-        before; a binding's exact credential is now part of the rank, so two
-        credentials of one provider are both addressable.
-        """
-
-        pin_free_first = policy.cost_optimization_preset is CostPreset.FREE_FIRST
+        """Rank legs by health, request preference, then project provider order."""
         return sorted(
             all_legs,
             key=lambda leg: ExecutionService._rank_key(
                 health.get(leg.binding_id),
                 leg.provider,
-                leg.config,
+                order_index.get(leg.provider, len(order_index)),
                 leg.binding,
                 preference,
-                pin_free_first,
             ),
         )
 
@@ -1516,11 +1755,10 @@ class ExecutionService:
     def _rank_key(
         observation: ProviderHealth | None,
         provider: str,
-        config: ProviderConfig,
+        order_index: int,
         binding: StoredBinding,
         preference: tuple[str, ...],
-        pin_free_first: bool,
-    ) -> tuple[int, int, int, int, int, str, str]:
+    ) -> tuple[int, int, int, int, str, str]:
         """Return the deterministic rank key shared by planning and the leg chain."""
 
         status = HealthStatus.UNKNOWN if observation is None else observation.status
@@ -1528,8 +1766,7 @@ class ExecutionService:
         return (
             health_order.index(status) if status in health_order else len(health_order),
             0 if provider in preference else 1,
-            0 if pin_free_first and provider == "keenable" else 1,
-            config.priority,
+            order_index,
             binding.priority,
             binding.route_label,
             str(binding.id),
@@ -1608,17 +1845,25 @@ class ExecutionService:
         windows: list[StrictWindowSpec] = []
         pool_id = leg.pool.id if leg.pool is not None else None
         allocation = leg.allocation
-        if allocation is not None and pool_id is not None:
+        if allocation is not None and allocation.base_rate is not None and pool_id is not None:
             # One stable absolute-ceiling identity for both loans modes. The
             # ceiling value may change with the policy, but the bucket cannot:
             # toggling loans must not hide the current window's earlier
             # attempts from the new policy's accounting.
-            bucket = f"project:{allocation.project_id}:{pool_id}:{operation.value}"
+            scope = leg.allocation_scope
+            if scope is not None and scope.key_pool_id is not None:
+                bucket = f"key-pool:{scope.key_pool_id}"
+                if scope.limit_scope == "operation":
+                    bucket += f":{operation.value}"
+            else:
+                bucket = f"project:{allocation.project_id}:{pool_id}:{operation.value}"
+            ceiling = allocation.effective_max_rate
+            assert ceiling is not None
             windows.append(
                 StrictWindowSpec(
                     bucket_id=f"{bucket}:ceiling",
                     window_seconds=allocation.rate_window_seconds,
-                    limit_units=allocation.effective_max_rate,
+                    limit_units=ceiling,
                 )
             )
         if pool_id is not None and leg.pool is not None:
@@ -1740,7 +1985,7 @@ class ExecutionService:
             project_id=attribution.project_id,
             operation=_operation_code(operation),
             weight=1 if allocation is None else max(1, allocation.weight),
-            base_rate=0 if allocation is None else max(0, allocation.base_rate),
+            base_rate=0 if allocation is None else max(0, allocation.base_rate or 0),
             rate_window_seconds=3600 if allocation is None else allocation.rate_window_seconds,
             max_rate=None if allocation is None else allocation.max_rate,
             borrow_enabled=False if allocation is None else allocation.borrow_enabled,
@@ -1818,6 +2063,15 @@ class ExecutionService:
                         _annotate_attempt_identity(
                             observable, request, leg, _operation_name(request).value
                         )
+                        raise
+                    leg = following
+                    hops += 1
+                    continue
+                except LimitDeniedError as error:
+                    if "budget_exhausted" not in error.reasons:
+                        raise
+                    following = await chain.following()
+                    if following is None:
                         raise
                     leg = following
                     hops += 1
@@ -1923,7 +2177,7 @@ class ExecutionService:
 
         code = _operation_code(operation)
         providers = self._provider_subset(request)
-        usable: list[tuple[StoredBinding, str, UUID]] = []
+        usable: list[tuple[StoredBinding, str, UUID, int]] = []
         try:
             async with self._repository.session() as session:
                 await begin_read_snapshot(session)
@@ -1949,7 +2203,15 @@ class ExecutionService:
                         continue
                     if adapter_factory(credential.provider_type) is None:
                         continue
-                    usable.append((binding, credential.provider_type, credential.id))
+                    usable.append(
+                        (binding, credential.provider_type, credential.id, credential.generation)
+                    )
+                project_order = await effective_order(
+                    session,
+                    context.project_id,
+                    RoutingOperation(operation.value),
+                    {provider for _, provider, _, _ in usable},
+                )
         except (CredentialStorageUnavailable, ProjectStorageUnavailable, OperationalError) as error:
             raise ExecutionStorageUnavailable("the credential store is unavailable") from error
         caps = [
@@ -1958,7 +2220,7 @@ class ExecutionService:
             if allocation.max_concurrency is not None
         ]
         configs: dict[str, ProviderConfig] = {}
-        for _binding, provider, _credential_id in usable:
+        for _binding, provider, _credential_id, _generation in usable:
             if provider in configs:
                 continue
             try:
@@ -1968,27 +2230,30 @@ class ExecutionService:
             except ProviderConfigError as error:
                 raise ExecutionError(str(error)) from error
         health = await self._health_snapshots(
-            [(binding.id, provider, credential_id) for binding, provider, credential_id in usable]
+            [
+                (binding.id, provider, credential_id)
+                for binding, provider, credential_id, _generation in usable
+            ]
         )
         candidates = [
             _Candidate(
                 binding=binding,
                 provider=provider,
                 credential_id=credential_id,
+                credential_generation=generation,
                 config=configs[provider],
                 health=health.get(binding.id),
             )
-            for binding, provider, credential_id in usable
+            for binding, provider, credential_id, generation in usable
         ]
-        pin_free_first = policy.cost_optimization_preset is CostPreset.FREE_FIRST
+        order_index = {provider: index for index, provider in enumerate(project_order)}
         candidates.sort(
             key=lambda candidate: self._rank_key(
                 candidate.health,
                 candidate.provider,
-                candidate.config,
+                order_index.get(candidate.provider, len(order_index)),
                 candidate.binding,
                 request.routing.providers,
-                pin_free_first,
             )
         )
         return context, (min(caps) if caps else None), candidates
@@ -2000,6 +2265,7 @@ class ExecutionService:
         operation: CredentialOperation,
         *,
         project_max_concurrency: int | None,
+        expected_generation: int,
     ) -> _Leg | None:
         """Resolve one ranked binding; store failures answer 503 like planning."""
 
@@ -2010,6 +2276,7 @@ class ExecutionService:
                 operation,
                 providers=None,
                 project_max_concurrency=project_max_concurrency,
+                expected_generation=expected_generation,
             )
         except (CredentialStorageUnavailable, ProjectStorageUnavailable, OperationalError) as error:
             raise ExecutionStorageUnavailable("the credential store is unavailable") from error
@@ -2350,6 +2617,20 @@ class _GrantedReservation:
         self.grant.finish()
 
 
+class _BudgetReservation:
+    """Associate an unsent refund with its underlying capacity reservation."""
+
+    def __init__(self, inner: Any, pool_id: UUID, cost: int, window: str) -> None:
+        self.inner = inner
+        self.pool_id = pool_id
+        self.cost = cost
+        self.window = window
+        self.refunded = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
 class _AttemptSeam:
     """One leg's fair-queue and atomic-capacity seam for a single send."""
 
@@ -2473,6 +2754,7 @@ class _AttemptSeam:
                     binding is None
                     or operation not in binding.enabled_operations
                     or binding.version != leg.binding.version
+                    or binding.credential_id != leg.credential.credential_id
                 ):
                     raise ExecutionBindingMissing("the binding is no longer enabled and usable")
                 usable = await service._credentials.usable_credential_in_session(
@@ -2543,6 +2825,7 @@ class _AttemptSeam:
                         raise ExecutionBindingMissing(
                             "the provider configuration changed before dispatch"
                         )
+                    await _check_allocation_scope(session, allocation, leg.allocation_scope)
         except (
             CredentialStorageUnavailable,
             ProjectStorageUnavailable,
@@ -2568,11 +2851,12 @@ class _AttemptSeam:
             await self._live_leg_check(current)
             self._require_deadline()
             reservation = await self._reserve_current(current, grant)
+            reservation = await self._reserve_budget(current, reservation)
             # The admission itself can consume time; a request whose logical
             # deadline passed while reserving must not reach the provider. The
             # reservation is provably unsent, so it is released.
             if self._service._deadline_passed(self._deadline):
-                await _release_capacity(reservation, self._repository_limits, self._limits)
+                await self.release(reservation)
                 raise ExecutionQueueExpired(
                     "the execution queue wait bound expired before dispatch"
                 )
@@ -2582,7 +2866,7 @@ class _AttemptSeam:
             # send never started, so release the reservation instead of
             # charging an uncertain upstream attempt.
             if self._service._deadline_passed(self._deadline):
-                await _release_capacity(reservation, self._repository_limits, self._limits)
+                await self.release(reservation)
                 await self.resolve_dispatch(_attempt_id(reservation), "failed")
                 raise ExecutionQueueExpired(
                     "the execution request deadline expired before the provider call"
@@ -2595,9 +2879,7 @@ class _AttemptSeam:
             return reservation
         except BaseException:
             if reservation is not None:
-                await asyncio.shield(
-                    _release_capacity(reservation, self._repository_limits, self._limits)
-                )
+                await asyncio.shield(self.release(reservation))
             raise
         finally:
             if grant is not None:
@@ -2628,6 +2910,46 @@ class _AttemptSeam:
         )
         reservation = await self._admit(current, attempt_context, spec, attempt_id)
         return reservation
+
+    async def _reserve_budget(self, current: _Leg, reservation: Any) -> Any:
+        scope = current.allocation_scope
+        if scope is None or scope.key_pool_id is None:
+            return reservation
+        price = call_cost_usd(current.provider, RoutingOperation(self._operation.value))
+        if price is None or price == 0:
+            return reservation
+        cost = int((price * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+        task = asyncio.create_task(self._commit_budget(scope.key_pool_id, cost))
+        try:
+            allowed, window = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Commit must finish before deciding whether an unsent debit exists.
+            try:
+                allowed, window = await task
+                if allowed and window is not None:
+                    await asyncio.shield(
+                        self._refund_budget(
+                            _BudgetReservation(reservation, scope.key_pool_id, cost, window)
+                        )
+                    )
+            except Exception:
+                logger.exception("Could not refund a cancelled budget reservation")
+            raise
+        if not allowed:
+            raise local_funds_denial(
+                current.provider,
+                operation=_limit_operation(self._operation),
+                reasons=["budget_exhausted"],
+            )
+        if window is None:
+            return reservation
+        return _BudgetReservation(reservation, scope.key_pool_id, cost, window)
+
+    async def _commit_budget(self, pool_id: UUID, cost: int) -> tuple[bool, str | None]:
+        async with self._service._repository.session() as session:
+            result = await reserve_with_window(session, pool_id, cost)
+            await session.commit()
+        return result
 
     async def _admit(
         self,
@@ -2680,7 +3002,20 @@ class _AttemptSeam:
     async def release(self, reservation: Any) -> None:
         """Undo a reservation proven never to reach the vendor."""
 
-        await _release_capacity(reservation, self._repository_limits, self._limits)
+        budget = reservation.inner if isinstance(reservation, _GrantedReservation) else reservation
+        try:
+            if isinstance(budget, _BudgetReservation) and not budget.refunded:
+                await self._refund_budget(budget)
+        finally:
+            await _release_capacity(reservation, self._repository_limits, self._limits)
+
+    async def _refund_budget(self, budget: _BudgetReservation) -> None:
+        async with self._service._repository.session() as session:
+            await release_pool_budget(
+                session, budget.pool_id, budget.cost, window_start=budget.window
+            )
+            await session.commit()
+        budget.refunded = True
 
     async def resolve_dispatch(self, attempt_id: str, outcome: str) -> None:
         """Resolve the authority recovery record after the attempt settles."""

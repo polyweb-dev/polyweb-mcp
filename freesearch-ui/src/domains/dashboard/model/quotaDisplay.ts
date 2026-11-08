@@ -191,8 +191,3 @@ export function providerQuotaInput(provider: ProviderConfig): QuotaDisplayInput 
     window: quota.window,
   }
 }
-
-/** Resolve one provider's dashboard-overlaid quota into display data. */
-export function providerQuotaDisplay(provider: ProviderConfig): QuotaDisplay {
-  return quotaDisplay(providerQuotaInput(provider))
-}

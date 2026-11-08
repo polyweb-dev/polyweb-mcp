@@ -1276,6 +1276,32 @@ class SQLiteRepository:
             row = await session.scalar(statement)
         return self._health_from_row(row) if row is not None else None
 
+    async def latest_live_credential_health(self, provider: str) -> ProviderHealth | None:
+        """Return the newest observation recorded through a live bound credential.
+
+        Calls through a system or project credential record credential-scoped
+        observations; an unbound or disabled credential no longer serves a
+        project, so its observations are left out.
+        """
+
+        live = text(
+            "SELECT c.id FROM provider_credentials c "
+            "JOIN project_provider_bindings b ON b.credential_id = c.id "
+            "WHERE c.status = 'active' AND json_array_length(b.enabled_operations) > 0"
+        ).columns(id=CHAR(36))
+        statement = (
+            select(ProviderHealthRow)
+            .where(
+                ProviderHealthRow.provider == provider,
+                ProviderHealthRow.credential_id.in_(select(live.subquery().c.id)),
+            )
+            .order_by(ProviderHealthRow.checked_at.desc(), ProviderHealthRow.id.desc())
+            .limit(1)
+        )
+        async with self._session_factory() as session:
+            row = await session.scalar(statement)
+        return self._health_from_row(row) if row is not None else None
+
     async def latest_health_batch(self, providers: Sequence[str]) -> dict[str, ProviderHealth]:
         """Return the newest health observation for each requested provider.
 

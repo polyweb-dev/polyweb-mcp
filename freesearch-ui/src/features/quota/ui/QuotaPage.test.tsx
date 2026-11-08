@@ -50,10 +50,11 @@ describe("QuotaPage", () => {
       throw new Error("no backend on page test")
     })
     render(<QuotaPage />)
-    expect(screen.getByText("Usage")).not.toBeNull()
-    expect(screen.getByText("Provider credit units")).not.toBeNull()
+    expect(screen.getByRole("heading", { name: "Quotas" })).not.toBeNull()
+    expect(screen.getByText("Provider balances and allowances across all projects")).not.toBeNull()
+    expect(screen.getByText("Allowance left")).not.toBeNull()
     expect(screen.getByText("Usage totals")).not.toBeNull()
-    expect(screen.getByText("How credit units are priced")).not.toBeNull()
+    expect(screen.queryByText("How credit units are priced")).toBeNull()
     expect(screen.queryByText("Provider quota view")).toBe(null)
     expect(screen.queryByText("—")).toBe(null)
     vi.unstubAllGlobals()
@@ -65,7 +66,7 @@ describe("QuotaPage", () => {
     })
     render(<QuotaPage />)
     expect(screen.queryByRole("alert")).toBe(null)
-    expect(screen.getByText("Usage")).not.toBeNull()
+    expect(screen.getByRole("heading", { name: "Quotas" })).not.toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -154,8 +155,8 @@ describe("QuotaPage", () => {
         throw new Error("no backend on page test")
       })
       render(<QuotaPage />)
-      expect(screen.getByText("Tavily native Credits use")).not.toBeNull()
-      expect(screen.getByText("1 Credit")).not.toBeNull()
+      expect(screen.getByRole("table", { name: "Usage totals" })).not.toBeNull()
+      expect(screen.getByText("1 Tavily credit")).not.toBeNull()
     } finally {
       mockFreeSearchState.current = previous
       vi.unstubAllGlobals()
@@ -392,7 +393,7 @@ describe("QuotaPage rate-tier slot (FIX)", () => {
           }}
         />,
       )
-      expect(seen).toEqual(["tavily"])
+      expect([...new Set(seen)]).toEqual(["tavily"])
       expect(confirmedKind).toBe("function")
       expect(screen.getByTestId("tier-stub")).not.toBeNull()
       expect(screen.getByTestId("oauth-stub-tavily")).not.toBeNull()

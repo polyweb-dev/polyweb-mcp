@@ -4,7 +4,8 @@ import { SearchResults } from "./SearchResults"
 import type { SearchResponse } from "@/domains/execution"
 
 /**
- * Search result unit labels: Tavily native usage reads as `Credits` while
+ * Search result unit labels: a response that names its unit kind shows the
+ * unit with the amount; otherwise Tavily native usage reads as `Credits` while
  * every other provider keeps `Units`.
  */
 
@@ -59,5 +60,34 @@ describe("SearchResults usage label", () => {
     render(<SearchResults controller={controller() as never} result={result("brave")} />)
     expect(screen.getByText("Units")).not.toBeNull()
     expect(screen.queryByText("Credits")).toBeNull()
+  })
+
+  it("shows the unit with the amount when the response names its unit kind", () => {
+    render(
+      <SearchResults
+        controller={controller() as never}
+        result={{ ...result("exa"), costEstimateCredits: 0.007, costUnitKind: "USD" }}
+      />
+    )
+    expect(screen.getByText("Usage")).not.toBeNull()
+    expect(screen.getByText("0.007 USD")).not.toBeNull()
+    expect(screen.queryByText("Units")).toBeNull()
+  })
+
+  it("names a keyless call Free instead of a zero amount", () => {
+    render(
+      <SearchResults
+        controller={controller() as never}
+        result={{ ...result("keenable"), costEstimateCredits: 0, costUnitKind: "FREE" }}
+      />
+    )
+    expect(screen.getByText("Free")).not.toBeNull()
+  })
+
+  it("uses shared buttons for the raw JSON toggle and no list-level selection hint", () => {
+    render(<SearchResults controller={controller() as never} result={result("brave")} />)
+    const toggle = screen.getByRole("button", { name: "Inspect raw JSON" })
+    expect(toggle).toHaveAttribute("data-slot", "button")
+    expect(screen.queryByText("Select item to inspect")).toBeNull()
   })
 })

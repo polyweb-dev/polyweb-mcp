@@ -2,12 +2,10 @@ import { describe, expect, it } from "vitest"
 import {
   decodeAvailableCredential,
   decodeBinding,
-  decodeGrant,
   decodeOAuthDevice,
   decodeOAuthStatus,
   decodeProjectCredential,
   decodeProviderTypeView,
-  decodeSystemCredential,
 } from "./credentialsWire"
 
 const FAKE_SECRET = "fake-provider-key-123"
@@ -28,35 +26,6 @@ const SECRET_LOOKING = {
 function serialized(value: unknown): string {
   return JSON.stringify(value)
 }
-
-describe("decodeSystemCredential", () => {
-  it("keeps only the documented metadata", () => {
-    const decoded = decodeSystemCredential({
-      id: "c1",
-      provider_type: "tavily",
-      owner_scope: "system",
-      label: "Shared Tavily",
-      auth_mode: "api_key",
-      generation: 3,
-      status: "active",
-      ...SECRET_LOOKING,
-    })
-    expect(decoded).toEqual({
-      id: "c1",
-      providerType: "tavily",
-      label: "Shared Tavily",
-      authMode: "api_key",
-      generation: 3,
-      status: "active",
-    })
-    for (const value of Object.values(SECRET_LOOKING)) expect(serialized(decoded)).not.toContain(value)
-  })
-
-  it("drops a row without id or provider type", () => {
-    expect(decodeSystemCredential({ label: "x" })).toBeNull()
-    expect(decodeSystemCredential("nope")).toBeNull()
-  })
-})
 
 describe("decodeProjectCredential", () => {
   it("keeps can_manage and generation and nothing secret", () => {
@@ -92,6 +61,12 @@ describe("decodeProjectCredential", () => {
 })
 
 describe("decodeProviderTypeView", () => {
+  it("derives keyless access from catalog prices rather than a separate flag", () => {
+    expect(decodeProviderTypeView({ provider_type: "keenable", keyless: false, keyless_call_cost_usd: { search: "0", fetch: "0" } })?.keyless).toBe(true)
+    expect(decodeProviderTypeView({ provider_type: "tavily", keyless: true })?.keyless).toBe(false)
+    expect(decodeProviderTypeView({ provider_type: "exa" })?.keyless).toBe(false)
+  })
+
   it("decodes capability, system state, credentials and bindings", () => {
     const decoded = decodeProviderTypeView({
       provider_type: "tavily",
@@ -148,6 +123,7 @@ describe("decodeAvailableCredential and decodeBinding", () => {
       label: "c",
       authMode: "api_key",
       health: null,
+      healthCheckedAt: null,
       pools: [],
     })
     expect(decodeBinding({ id: "b", credential_id: "c", enabled_operations: ["fetch"] })).toMatchObject({
@@ -155,13 +131,13 @@ describe("decodeAvailableCredential and decodeBinding", () => {
       priority: 0,
     })
   })
-})
 
-describe("decodeGrant", () => {
-  it("keeps the permitted operations and version", () => {
-    expect(
-      decodeGrant({ credential_id: "c", project_id: "p", permitted_operations: ["search"], version: 2, granted_by: "x" })
-    ).toEqual({ credentialId: "c", projectId: "p", permittedOperations: ["search"], version: 2 })
+  it("decodes the time of the real call without leaking unrelated fields", () => {
+    const checkedAt = "2026-11-08T09:50:48Z"
+    expect(decodeAvailableCredential({ id: "c", owner_scope: "system", health_status: "healthy", health_checked_at: checkedAt, ...SECRET_LOOKING })).toMatchObject({
+      health: "healthy",
+      healthCheckedAt: checkedAt,
+    })
   })
 })
 

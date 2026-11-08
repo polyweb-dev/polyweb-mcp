@@ -28,7 +28,6 @@ import {
 /** One card-level limit entry with no vendor funds, so the card mounts. */
 function limitEntry(provider: string): Record<string, unknown> {
   const profile = {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: "1",
     cost_basis: "priced_native_use",
     price_version: "v2026-09",
@@ -75,7 +74,7 @@ function limitEntry(provider: string): Record<string, unknown> {
         unknown_tiers: [],
         tier_split_known: true,
         aggregate_pool: null,
-        crd_views: [],
+        usd_views: [],
         rate_progress: [],
         grants: null,
         detail: null,
@@ -138,7 +137,7 @@ function renderWithManualStub(latestQuota = manualQuotaRows()) {
       return ok(routingConfigFixture())
     }
     if (req.url.endsWith("/manual-quota") && req.method === "GET") {
-      return err(404, { detail: "no manual quota configured" })
+      return ok(null)
     }
     if (req.url.endsWith("/manual-quota") && req.method === "PUT") {
       const provider = req.url.split("/providers/")[1]?.split("/manual-quota")[0] ?? "unknown"
@@ -166,25 +165,48 @@ function renderWithManualStub(latestQuota = manualQuotaRows()) {
   return stub
 }
 
+type User = ReturnType<typeof userEvent.setup>
+
+/** The labels of one card's `…` menu; the menu closes again afterwards. */
+async function menuLabels(user: User, providerName: string): Promise<string[]> {
+  await user.click(screen.getByRole("button", { name: "Actions for " + providerName }))
+  await screen.findByRole("button", { name: "Budget limit" })
+  const labels = ["Set balance", "Budget limit", "Balance history"].filter(
+    (label) => screen.queryByRole("button", { name: label }) !== null,
+  )
+  await user.keyboard("{Escape}")
+  return labels
+}
+
+/** Open one dialog through the card `…` menu. */
+async function openCardAction(user: User, providerName: string, label: string): Promise<void> {
+  await user.click(screen.getByRole("button", { name: "Actions for " + providerName }))
+  await user.click(await screen.findByRole("button", { name: label }))
+}
+
+async function waitForCard(providerName: string): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "Actions for " + providerName })).toBeInTheDocument()
+  })
+}
+
 describe("QuotaAnalytics manual billing entry (UI7)", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("offers Provider Balance on Exa and Tinyfish, never on Brave, Parallel, or Tavily (UI7-07, NUDGE-5)", async () => {
+  it("offers Set balance on Exa and Tinyfish, never on Brave, Parallel, or Tavily (UI7-07, NUDGE-5)", async () => {
+    const user = userEvent.setup()
     renderWithManualStub()
-    await waitFor(() => {
-      expect(screen.getByTestId("manual-quota-open-tinyfish")).toBeInTheDocument()
-    })
-    expect(screen.getByTestId("manual-quota-open-tinyfish")).toHaveTextContent("Provider Balance")
-    expect(screen.getByTestId("manual-quota-open-exa")).toHaveTextContent("Provider Balance")
+    await waitForCard("Tinyfish")
+    expect(await menuLabels(user, "Tinyfish")).toContain("Set balance")
+    expect(await menuLabels(user, "Exa")).toContain("Set balance")
     // Parallel stays out: its prepaid USD balance comes from the OAuth Account
     // API (AUTHORITATIVE snapshot), never from a manual seed.
-    expect(screen.queryByTestId("manual-quota-open-parallel")).toBe(null)
+    expect(await menuLabels(user, "Parallel")).not.toContain("Set balance")
     // NUDGE-5 lock: Brave reports a vendor budget, so its card keeps no entry control.
     expect(screen.getByRole("heading", { name: "Brave Search" })).toBeInTheDocument()
-    expect(screen.queryByTestId("manual-quota-open-brave")).toBe(null)
-    expect(screen.queryByTestId("manual-quota-open-tavily")).toBe(null)
+    expect(await menuLabels(user, "Brave Search")).not.toContain("Set balance")
     // NUDGE-5 lock: the Provider actions section left the page.
     expect(screen.queryByText("Provider actions")).toBe(null)
   })
@@ -192,30 +214,41 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
   it("opens the native-anchor dialog for Tinyfish while its budget stays unconfigured (UI7-07)", async () => {
     const user = userEvent.setup()
     const stub = renderWithManualStub()
-    await waitFor(() => {
-      expect(screen.getByTestId("manual-quota-open-tinyfish")).toBeInTheDocument()
-    })
-    expect(screen.getByTestId("manual-quota-open-tinyfish")).toHaveTextContent("Provider Balance")
-    await user.click(screen.getByTestId("manual-quota-open-tinyfish"))
+    await waitForCard("Tinyfish")
+    await openCardAction(user, "Tinyfish", "Set balance")
     const dialog = await screen.findByRole("dialog")
     expect(dialog).toHaveTextContent("Tinyfish")
+    expect(dialog).not.toHaveTextContent(/error|failed/i)
     expect(stub.requestsTo("/api/v1/providers/tinyfish/manual-quota").map((request) => request.method)).toContain("GET")
+  })
+
+  it("loads an empty manual entry without an error", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const stub = renderWithManualStub()
+      await waitFor(() => {
+        expect(stub.requestsTo("/api/v1/providers/tinyfish/manual-quota")).not.toHaveLength(0)
+      })
+      await waitForCard("Tinyfish")
+      expect(screen.queryByTestId("manual-quota-error")).toBeNull()
+      expect(consoleError).not.toHaveBeenCalled()
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 
   it("accepts Exa balance in USD and stores exact USD allowance and usage", async () => {
     const user = userEvent.setup()
     const stub = renderWithManualStub()
-    await waitFor(() => {
-      expect(screen.getByTestId("manual-quota-open-exa")).toBeInTheDocument()
-    })
+    await waitForCard("Exa")
 
-    await user.click(screen.getByTestId("manual-quota-open-exa"))
+    await openCardAction(user, "Exa", "Set balance")
     expect(screen.getByLabelText<HTMLInputElement>("Allowance (USD)").value).toBe("")
     expect(screen.getByLabelText<HTMLInputElement>("Balance remaining (USD)").value).toBe("")
-    fireEvent.change(screen.getByTestId("manual-quota-start"), {
+    fireEvent.change(screen.getByLabelText("Billing start"), {
       target: { value: "2026-10-01" },
     })
-    fireEvent.change(screen.getByTestId("manual-quota-end"), {
+    fireEvent.change(screen.getByLabelText("Billing end"), {
       target: { value: "2026-10-31" },
     })
     fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
@@ -239,18 +272,16 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
     })
   })
 
-  it("saves a Tinyfish window through the unchanged native payload (UI7-07)", async () => {
+  it("saves a Tinyfish balance as usage in the native payload (UI7-07)", async () => {
     const user = userEvent.setup()
     const stub = renderWithManualStub()
-    await waitFor(() => {
-      expect(screen.getByTestId("manual-quota-open-tinyfish")).toBeInTheDocument()
-    })
+    await waitForCard("Tinyfish")
 
-    await user.click(screen.getByTestId("manual-quota-open-tinyfish"))
-    fireEvent.change(screen.getByTestId("manual-quota-start"), {
+    await openCardAction(user, "Tinyfish", "Set balance")
+    fireEvent.change(screen.getByLabelText("Billing start"), {
       target: { value: "2026-09-01" },
     })
-    fireEvent.change(screen.getByTestId("manual-quota-end"), {
+    fireEvent.change(screen.getByLabelText("Billing end"), {
       target: { value: "2026-09-30" },
     })
     fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
@@ -270,21 +301,16 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
       billing_start: "2026-09-01",
       billing_end: "2026-09-30",
       allowance: "5.00",
-      current_usage: "0.88",
+      current_usage: "4.12",
     })
   })
 
-  it("locks Provider Balance wording with its accessible meaning and no legacy labels (CARD-3)", async () => {
+  it("locks the sentence-case menu wording and no legacy labels (CARD-3)", async () => {
+    const user = userEvent.setup()
     renderWithManualStub()
-    await waitFor(() => {
-      expect(screen.getByTestId("manual-quota-open-tinyfish")).toBeInTheDocument()
-    })
-    expect(screen.getByTestId("manual-quota-open-tinyfish")).toHaveTextContent("Provider Balance")
-    expect(
-      screen.getByRole("button", {
-        name: "Provider Balance for Tinyfish. Records the balance the vendor dashboard shows, as an estimate.",
-      }),
-    ).toBeInTheDocument()
+    await waitForCard("Tinyfish")
+    expect(await menuLabels(user, "Tinyfish")).toEqual(["Set balance", "Budget limit", "Balance history"])
+    expect(screen.queryByText("Provider Balance")).toBe(null)
     expect(screen.queryByText("Balance entry")).toBe(null)
     expect(screen.queryByText("Manual entry")).toBe(null)
   })
@@ -298,6 +324,7 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
     expect(screen.queryByText("Provider quota view")).toBe(null)
     expect(screen.queryByTestId("manual-quota-estimate-brave")).toBe(null)
     expect(screen.queryByTestId("manual-quota-open-brave")).toBe(null)
+    expect(screen.queryByRole("button", { name: "Set balance" })).toBe(null)
   })
 })
 
@@ -321,12 +348,12 @@ describe("QuotaAnalytics Developer read-only", () => {
         return ok(routingConfigFixture())
       }
       if (req.url.endsWith("/manual-quota") && req.method === "GET") {
-        return err(404, { detail: "no manual quota configured" })
+        return ok(null)
       }
       if (req.url.endsWith("/manual-quota") && req.method === "PUT") {
         return err(403, { detail: "insufficient role" })
       }
-      if (req.url.includes("/crd-grants/") && req.method === "PUT") {
+      if (req.url.includes("/budgets/") && req.method === "PUT") {
         return err(403, { detail: "insufficient role" })
       }
       if (req.url.startsWith("/dashboard")) {
@@ -357,19 +384,16 @@ describe("QuotaAnalytics Developer read-only", () => {
     const user = userEvent.setup()
 
     // Controls stay visible for Developer reads.
-    await waitFor(() => {
-      expect(screen.getByTestId("manual-quota-open-tinyfish")).toBeInTheDocument()
-    })
-    expect(screen.getByTestId("manual-quota-open-tinyfish")).toHaveTextContent("Provider Balance")
-    expect(screen.getByTestId("crd-grant-open-tinyfish")).toHaveTextContent("Budget Limit")
+    await waitForCard("Tinyfish")
+    expect(await menuLabels(user, "Tinyfish")).toEqual(["Set balance", "Budget limit", "Balance history"])
 
     // Manual save attempt rejects with 403, keeps the alert and the open modal.
-    await user.click(screen.getByTestId("manual-quota-open-tinyfish"))
+    await openCardAction(user, "Tinyfish", "Set balance")
     await screen.findByRole("dialog")
-    fireEvent.change(screen.getByTestId("manual-quota-start"), {
+    fireEvent.change(screen.getByLabelText("Billing start"), {
       target: { value: "2026-09-01" },
     })
-    fireEvent.change(screen.getByTestId("manual-quota-end"), {
+    fireEvent.change(screen.getByLabelText("Billing end"), {
       target: { value: "2026-09-30" },
     })
     fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
@@ -393,16 +417,16 @@ describe("QuotaAnalytics Developer read-only", () => {
     })
 
     // Grant save attempt rejects with 403, keeps the alert and the open modal.
-    await user.click(screen.getByTestId("crd-grant-open-tinyfish"))
+    await openCardAction(user, "Tinyfish", "Budget limit")
     await screen.findByRole("dialog")
-    await user.clear(screen.getByLabelText("Search credit units (CRD)"))
-    await user.type(screen.getByLabelText("Search credit units (CRD)"), "5")
+    await user.clear(screen.getByLabelText("Search budget (USD)"))
+    await user.type(screen.getByLabelText("Search budget (USD)"), "5")
     await user.click(screen.getByRole("button", { name: "Save budget limit" }))
     const grantAlert = await screen.findByRole("alert")
     expect(grantAlert).toHaveTextContent("insufficient role")
     expect(screen.getByRole("dialog")).toBeInTheDocument()
     expect(
-      stub.requestsTo(/\/crd-grants\//).map((request) => request.method)
+      stub.requestsTo(/\/budgets\//).map((request) => request.method)
     ).toContain("PUT")
 
     // Nothing persists: no estimate appears and no dashboard refresh follows a rejection.

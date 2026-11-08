@@ -23,12 +23,12 @@ export function PlaygroundPage({ scope }: { scope: PlaygroundScope }) {
       onValueChange={(value) => controller.switchMode(value as "search" | "fetch")}
       ariaLabel="Playground view"
       idPrefix="playground"
-      className="flex flex-1 flex-col space-y-8"
+      className="flex flex-1 flex-col space-y-6"
     >
       {/* Page heading */}
       <PageHeader
         title="Playground"
-        description="Run search and fetch through this project's providers."
+        description="Run search and fetch through this project's providers"
       />
 
       <PillTabsPanel value="search" className="flex flex-1 flex-col space-y-8">

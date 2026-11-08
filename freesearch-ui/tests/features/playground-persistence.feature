@@ -17,13 +17,13 @@ Feature: Playground persistence across navigation and reload
     Then the persisted search results should show "Live backend result one"
     When I open the playground tab "Fetch"
     And I submit the playground fetch URL "https://example.com/persisted-doc"
-    Then the persisted fetch document should show "Parsed Markdown Document"
+    Then the persisted fetch document should show "Parsed markdown"
     When I follow the "Members" link of the Project navigation
     Then I should see the "Members" heading
     When I follow the "Playground" link of the Project navigation
     Then I should see the "Playground" heading
     And the persisted fetch URL should be "https://example.com/persisted-doc"
-    And the persisted fetch document should show "Parsed Markdown Document"
+    And the persisted fetch document should show "Parsed markdown"
     When I open the playground tab "Search"
     Then the persisted search draft should be "persistence probe query"
     And the persisted search results should show "Live backend result one"
@@ -33,7 +33,7 @@ Feature: Playground persistence across navigation and reload
     And the persisted search results should show "Live backend result one"
     When I open the playground tab "Fetch"
     Then the persisted fetch URL should be "https://example.com/persisted-doc"
-    And the persisted fetch document should show "Parsed Markdown Document"
+    And the persisted fetch document should show "Parsed markdown"
     And the persisted search request count should be 1
     And the persisted fetch request count should be 1
     And the last search request should name project Alpha

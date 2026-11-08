@@ -1,8 +1,10 @@
+import { multiplyDecimal } from "../model/manualQuotaMath"
 import type { ReactNode } from "react"
 import type { CRDConversionProfile, TierBalance, TierBarView } from "@/domains/dashboard"
-import { formatCRDAmount, sumAmounts, tierBarModel } from "../model/crdDisplay"
+import { dollarText, sumAmounts, tierBarModel } from "../model/crdDisplay"
 import { formatTavilyPopoverAmount, tavilyCRDToCredits } from "../model/tavilyCredits"
 import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
+import { groupDigits } from "../model/numberText"
 
 export interface ProviderTierBarsProps {
   providerName: string
@@ -14,11 +16,11 @@ export interface ProviderTierBarsProps {
 
 /** Known tier amounts only; an unknown tier yields no row at all. */
 function barAmount(bar: TierBarView): string | null {
-  if (bar.state === "unmetered") return "Free - unmetered"
+  if (bar.state === "unmetered") return "Free"
   if (bar.state === "postpaid") return "Postpaid access"
   if (bar.remainingCRD === null) return null
-  if (bar.allowanceCRD === null) return formatCRDAmount(bar.remainingCRD)
-  return formatCRDAmount(bar.remainingCRD) + " of " + formatCRDAmount(bar.allowanceCRD)
+  if (bar.allowanceCRD === null) return dollarText(multiplyDecimal(bar.remainingCRD, "0.001") ?? "0")
+  return dollarText(multiplyDecimal(bar.remainingCRD, "0.001") ?? "0") + " of " + dollarText(multiplyDecimal(bar.allowanceCRD, "0.001") ?? "0")
 }
 
 /** A CREDIT-kind unit text of any casing. */
@@ -53,7 +55,7 @@ function nativeCreditsOf(
 
 /** Whole Tavily Credits word of one floored integer amount. */
 function tavilyWord(amount: string): string {
-  return amount === "1" ? "1 Tavily Credit" : amount + " Tavily Credits"
+  return amount === "1" ? "1 Tavily credit" : groupDigits(amount) + " Tavily credits"
 }
 
 /** Native Tavily tier amount with integer display; unknown stays null for the generic fallback. */
@@ -96,11 +98,13 @@ function knownNotes(bar: TierBarView): string[] {
  */
 export function ProviderTierBars({
   providerName,
-  freeTiers,
-  paidTiers,
+  freeTiers: reportedFreeTiers,
+  paidTiers: reportedPaidTiers,
   tierSplitKnown,
   nativeDisplay,
 }: ProviderTierBarsProps): ReactNode {
+  const freeTiers = reportedFreeTiers.filter((tier) => tier.source !== "operator_grant")
+  const paidTiers = reportedPaidTiers.filter((tier) => tier.source !== "operator_grant")
   const bars: TierBarView[] = []
   if (freeTiers.length > 0 || !tierSplitKnown) {
     bars.push(tierBarModel({ tier: "free", balances: freeTiers, tierSplitKnown }))

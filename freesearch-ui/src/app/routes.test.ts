@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest"
 import {
+  LEGACY_GLOBAL_REDIRECTS,
   LEGACY_SECTION_PATHS,
   PROJECT_SECTIONS,
+  SYSTEM_CREDENTIALS_TAB_PATH,
   TAB_PATHS,
   canAccessProjectSection,
   canAccessRoute,
   isGatedRoute,
   isInternalPath,
+  legacyKeysDestination,
   loginPathFor,
   parseProjectPath,
   projectIdFromPath,
@@ -24,18 +27,15 @@ import {
 } from "@/test/accessFixtures"
 
 const ALL_TABS: TabId[] = [
-  "routing",
   "quotas",
   "settings",
   "systemCredentials",
   "systemCapacity",
   "projects",
   "account",
-  "adminUsers",
 ]
 
 const SETTINGS_READER_TABS: TabId[] = [
-  "routing",
   "quotas",
   "settings",
   "projects",
@@ -43,26 +43,57 @@ const SETTINGS_READER_TABS: TabId[] = [
 ]
 
 const OPEN_TABS: TabId[] = ["projects", "account"]
-const SETTINGS_TABS: TabId[] = ["routing", "quotas", "settings"]
+const SETTINGS_TABS: TabId[] = ["quotas", "settings"]
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111"
 
 describe("TAB_PATHS", () => {
   it("maps every tab id to its exact path", () => {
     expect(TAB_PATHS).toEqual({
-      routing: "/routing",
-      quotas: "/usage",
-      settings: "/settings",
+      quotas: "/system/quotas",
+      settings: "/system/providers",
       systemCredentials: "/system/credentials",
       systemCapacity: "/system/capacity",
       projects: "/projects",
       account: "/account",
-      adminUsers: "/admin/users",
+      accountKeys: "/account/keys",
+    })
+    expect(SYSTEM_CREDENTIALS_TAB_PATH).toBe("/system/providers?tab=keys")
+    expect(LEGACY_GLOBAL_REDIRECTS).toEqual({
+      "/settings": "/system/providers",
+      "/usage": "/system/quotas",
+      "/providers": "/system/providers",
+      "/system/credentials": "/account/keys",
+      "/system/capacity": "/account/keys",
+      "/system/keys": "/account/keys",
     })
   })
 })
 
+describe("legacyKeysDestination", () => {
+  it.each(["/settings", "/providers", "/system/providers"])(
+    "redirects keys and the former credentials alias on %s",
+    (path) => {
+      expect(legacyKeysDestination(path, "?other=1&tab=keys")).toBe("/account/keys")
+      expect(legacyKeysDestination(path, "?tab=credentials")).toBe("/account/keys")
+    }
+  )
+
+  it("leaves other tabs alone and redirects former project capacity", () => {
+    expect(legacyKeysDestination("/system/providers", "?tab=providers")).toBeNull()
+    expect(legacyKeysDestination("/settings", "?tab=failover")).toBeNull()
+    expect(legacyKeysDestination(`/p/${PROJECT_ID}/settings`, "?tab=keys")).toBe(`/p/${PROJECT_ID}/providers`)
+    expect(legacyKeysDestination(`/p/${PROJECT_ID}/settings`, "?tab=trace")).toBeNull()
+  })
+})
+
 describe("canAccessRoute", () => {
+  it("opens Keys and pools only with vault access", () => {
+    expect(canAccessRoute("accountKeys", systemAccessFixture(["vault.manage"]))).toBe(true)
+    expect(canAccessRoute("accountKeys", systemAccessFixture([]))).toBe(false)
+    expect(canAccessRoute("accountKeys", null)).toBe(false)
+    expect(isInternalPath("/account/keys")).toBe(true)
+  })
   it.each(ALL_TABS)("grants the system administrator access to %s", (id) => {
     expect(canAccessRoute(id, systemAccessFixture(SYSTEM_ADMIN_PERMISSIONS))).toBe(true)
   })
@@ -71,20 +102,12 @@ describe("canAccessRoute", () => {
     expect(canAccessRoute(id, systemAccessFixture(SETTINGS_READER_PERMISSIONS))).toBe(true)
   })
 
-  it("denies adminUsers without system.settings.write", () => {
-    expect(canAccessRoute("adminUsers", systemAccessFixture(SETTINGS_READER_PERMISSIONS))).toBe(false)
-  })
-
-  it("grants adminUsers with system.settings.write alone", () => {
-    expect(canAccessRoute("adminUsers", systemAccessFixture(["system.settings.write"]))).toBe(true)
-  })
-
   it.each(OPEN_TABS)("grants access to %s without any system permission", (id) => {
     expect(canAccessRoute(id, systemAccessFixture([]))).toBe(true)
     expect(canAccessRoute(id, null)).toBe(true)
   })
 
-  it.each([...SETTINGS_TABS, "adminUsers" as const])(
+  it.each(SETTINGS_TABS)(
     "denies %s without any system permission or before access loads",
     (id) => {
       expect(canAccessRoute(id, systemAccessFixture([]))).toBe(false)
@@ -92,10 +115,13 @@ describe("canAccessRoute", () => {
     }
   )
 
-  it("opens System credentials only with system.credentials.manage", () => {
+  it("opens System credentials only with system.credentials.manage (which also opens System Providers)", () => {
     expect(canAccessRoute("systemCredentials", systemAccessFixture(["system.credentials.manage"]))).toBe(true)
     expect(canAccessRoute("systemCredentials", systemAccessFixture(SETTINGS_READER_PERMISSIONS))).toBe(false)
     expect(canAccessRoute("systemCredentials", systemAccessFixture(["system.pools.manage"]))).toBe(false)
+    // System Providers hosts the Credentials tab, so credential management alone opens it.
+    expect(canAccessRoute("settings", systemAccessFixture(["system.credentials.manage"]))).toBe(true)
+    expect(canAccessRoute("settings", systemAccessFixture(["system.pools.manage"]))).toBe(false)
   })
 
   it("opens Capacity with either pool or allocation management (any-of)", () => {
@@ -111,14 +137,12 @@ describe("canAccessRoute", () => {
 })
 
 describe("isGatedRoute", () => {
-  it("marks exactly the settings, system and admin routes as gated", () => {
+  it("marks exactly the settings and system routes as gated", () => {
     expect(ALL_TABS.filter(isGatedRoute)).toEqual([
-      "routing",
       "quotas",
       "settings",
       "systemCredentials",
       "systemCapacity",
-      "adminUsers",
     ])
   })
 })
@@ -143,7 +167,12 @@ describe("project section registry", () => {
   })
 
   it("maps the former global paths to their project sections", () => {
-    expect(LEGACY_SECTION_PATHS).toEqual({ "/playground": "playground", "/activity": "activity" })
+    expect(LEGACY_SECTION_PATHS).toEqual({
+      "/playground": "playground",
+      "/activity": "activity",
+      "/routing": "providers",
+      "/system/routing": "providers",
+    })
   })
 
   it("builds the path of every registered section", () => {
@@ -210,18 +239,18 @@ describe("isInternalPath", () => {
   it.each([
     "/playground",
     "/routing",
+    "/system/routing",
     "/usage",
     "/activity",
     "/settings",
     "/account",
-    "/admin/users",
     "/system/credentials",
     "/system/capacity",
   ])("accepts the internal path %s", (path) => {
     expect(isInternalPath(path)).toBe(true)
   })
 
-  it.each(["", "playground", "//evil", "https://evil", "/unknown", "/system", "/system/other"])(
+  it.each(["", "playground", "//evil", "https://evil", "/unknown", "/system", "/system/other", "/admin/users"])(
     "rejects the foreign value %s",
     (path) => {
       expect(isInternalPath(path)).toBe(false)
@@ -262,7 +291,8 @@ describe("isInternalPath", () => {
 describe("loginPathFor", () => {
   it("keeps an internal destination in the returnTo query", () => {
     expect(loginPathFor("/playground")).toBe("/login?returnTo=%2Fplayground")
-    expect(loginPathFor("/admin/users")).toBe("/login?returnTo=%2Fadmin%2Fusers")
+    expect(loginPathFor("/account")).toBe("/login?returnTo=%2Faccount")
+    expect(loginPathFor("/admin/users")).toBe("/login")
   })
 
   it.each(["https://evil", "//evil", "/unknown", ""])(
@@ -276,7 +306,8 @@ describe("loginPathFor", () => {
 describe("returnDestination", () => {
   it("keeps a validated internal destination", () => {
     expect(returnDestination("/routing")).toBe("/routing")
-    expect(returnDestination("/admin/users")).toBe("/admin/users")
+    expect(returnDestination("/account")).toBe("/account")
+    expect(returnDestination("/admin/users")).toBe("/")
   })
 
   it.each(["https://evil", "//evil", "/unknown", ""])(

@@ -41,7 +41,6 @@ Given("the auth bootstrap reports an anonymous session", async ({ page }) => {
 
 /** Parsed bodies of the account-creation requests the UI sent (per scenario). */
 const registrationBodies: unknown[] = []
-const provisioningBodies: unknown[] = []
 
 function parsedBody(route: import("@playwright/test").Route): unknown {
   const raw = route.request().postData()
@@ -174,70 +173,4 @@ Then("the register screen offers no account-type choice", async ({ page }) => {
 Then("the registration request carried only email and password", async () => {
   expect(registrationBodies).toHaveLength(1)
   expectEmailAndPasswordOnly(registrationBodies[0], "weak-rule@example.com")
-})
-
-const PROVISIONED_EMAIL = "new-teammate@example.com"
-
-Given("the account provisioning backend accepts new accounts", async ({ page }) => {
-  provisioningBodies.length = 0
-  await page.route(
-    (url) => url.pathname === "/api/v1/users",
-    (route) => {
-      if (route.request().method() !== "POST") return route.fallback()
-      const body = parsedBody(route)
-      provisioningBodies.push(body)
-      const email =
-        body !== null && typeof body === "object" && typeof (body as { email?: unknown }).email === "string"
-          ? (body as { email: string }).email
-          : PROVISIONED_EMAIL
-      return json(
-        route,
-        {
-          id: "55555555-5555-4555-8555-555555555555",
-          email,
-          auth_provider: "local",
-          auth_provider_id: null,
-          username: null,
-          first_name: null,
-          last_name: null,
-          is_active: true,
-          is_verified: false,
-        },
-        201
-      )
-    }
-  )
-})
-
-When("I open the account administration screen", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 })
-  await page.goto("/admin/users")
-  await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toBeVisible({
-    timeout: 15_000,
-  })
-  await expect(page.getByRole("button", { name: "Create account", exact: true })).toBeVisible()
-})
-
-Then("the account administration screen offers no account-type choice", async ({ page }) => {
-  await expectNoAccountTypeChoice(page.locator("main form"))
-})
-
-When("I create the account from the administration screen", async ({ page }) => {
-  const main = page.locator("main")
-  await main.getByLabel("Email", { exact: true }).fill(PROVISIONED_EMAIL)
-  // Test-only placeholder that satisfies the password rule; not a real secret.
-  await main.getByLabel("Password", { exact: true }).fill("Stub-Only-Passw0rd!")
-  await main.getByLabel("Confirm password", { exact: true }).fill("Stub-Only-Passw0rd!")
-  await main.getByRole("button", { name: "Create account", exact: true }).click()
-})
-
-Then("the account provisioning request carried only email and password", async () => {
-  await expect.poll(() => provisioningBodies.length).toBe(1)
-  expectEmailAndPasswordOnly(provisioningBodies[0], PROVISIONED_EMAIL)
-})
-
-Then("the administration receipt names the account without a role", async ({ page }) => {
-  const receipt = page.getByRole("status").filter({ hasText: PROVISIONED_EMAIL })
-  await expect(receipt).toBeVisible()
-  expect((await receipt.textContent()) ?? "").not.toMatch(/\b(Admin|Developer|Agent|role)\b/i)
 })

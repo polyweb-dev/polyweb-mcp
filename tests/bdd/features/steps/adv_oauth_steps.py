@@ -1,10 +1,12 @@
-"""Original adversarial BDD cases on actual A4 credential OAuth endpoints."""
+"""Adversarial BDD cases on account-vault OAuth endpoints."""
 
+import json
 import logging
 from contextlib import suppress
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from behave import given, then, when
 
@@ -13,7 +15,8 @@ from freesearch.models.credentials import CredentialOAuthDeviceRead, CredentialO
 from freesearch.models.schema_enums import OAuthGrantStatus
 from freesearch.services.monitoring import refresh_quotas
 from freesearch.services.parallel_oauth import ParallelOAuthError
-from tests.fixtures.scoped_oauth import bdd_oauth_setup
+from tests.bdd.features.steps.vault_oauth_support import bdd_vault_oauth_setup
+from tests.fixtures.api_keys import database_dump
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
     CLIENT_SECRET_VALUE,
@@ -36,7 +39,7 @@ class _Capture(logging.Handler):
 
 
 def _setup(context):
-    case = bdd_oauth_setup(context)
+    case = bdd_vault_oauth_setup(context)
     context.adv_bodies = []
     context.adv_logs = []
     handler = _Capture(context.adv_logs)
@@ -132,12 +135,8 @@ def step_seeded_anchored(context: Any, credit: int, pending: int) -> None:
 @when('I request a device code for "{provider_id}"')
 def step_request_device(context: Any, provider_id: str) -> None:
     case = context.oauth_case
-    path = (
-        case.path + "/device"
-        if provider_id == "parallel"
-        else f"/api/v1/providers/{provider_id}/oauth/device-code"
-    )
-    _response(context, case.client.post(path, headers=case.headers))
+    assert provider_id == "parallel"
+    _response(context, case.client.post(case.path + "/device", headers=case.headers))
 
 
 @when("I request a device code with an extra smuggled field")
@@ -154,17 +153,50 @@ def step_request_device_extra(context: Any) -> None:
 @when('I read OAuth status for "{provider_id}"')
 def step_read_status(context: Any, provider_id: str) -> None:
     case = context.oauth_case
-    path = (
-        case.path if provider_id == "parallel" else f"/api/v1/providers/{provider_id}/oauth/status"
-    )
-    _response(context, case.client.get(path, headers=case.headers))
+    assert provider_id == "parallel"
+    _response(context, case.client.get(case.path, headers=case.headers))
 
 
 @when('I disconnect OAuth for "{provider_id}"')
 def step_disconnect(context: Any, provider_id: str) -> None:
     case = context.oauth_case
-    path = case.path if provider_id == "parallel" else f"/api/v1/providers/{provider_id}/oauth"
-    _response(context, case.client.delete(path, headers=case.headers))
+    assert provider_id == "parallel"
+    _response(context, case.client.delete(case.path, headers=case.headers))
+
+
+@when('I create a vault OAuth key for "{provider_id}"')
+def step_create_unsupported_key(context: Any, provider_id: str) -> None:
+    case = context.oauth_case
+    context.unsupported_response = case.client.post(
+        "/api/v1/account/vault/keys",
+        headers=case.headers,
+        json={"provider_type": provider_id, "label": "Unsupported", "auth_mode": "oauth"},
+    )
+
+
+@then("the vault should reject the unsupported OAuth provider without vendor calls")
+def step_unsupported_key_rejected(context: Any) -> None:
+    assert context.unsupported_response.status_code == 400
+    assert context.oauth_case.stub.register_calls == 0
+
+
+@when("I access OAuth for an unknown vault key")
+def step_unknown_key(context: Any) -> None:
+    case = context.oauth_case
+    path = f"/api/v1/account/vault/keys/{uuid4()}/oauth"
+    context.unknown_responses = [
+        case.client.post(path + "/device", headers=case.headers),
+        case.client.post(path + "/poll", headers=case.headers),
+        case.client.get(path, headers=case.headers),
+        case.client.delete(path, headers=case.headers),
+    ]
+
+
+@then("every OAuth endpoint should return 404 without vendor calls")
+def step_unknown_key_rejected(context: Any) -> None:
+    assert [response.status_code for response in context.unknown_responses] == [404] * 4
+    assert context.oauth_case.stub.register_calls == 0
+    assert context.oauth_case.stub.poll_calls == 0
 
 
 @when('I disconnect OAuth for "parallel" twice')
@@ -178,7 +210,8 @@ def step_disconnect_twice(context: Any) -> None:
 @when("I start the device flow and poll status to terminal")
 def step_poll_terminal(context: Any) -> None:
     case = context.oauth_case
-    assert case.client.post(case.path + "/device", headers=case.headers).status_code == 201
+    response = case.client.post(case.path + "/device", headers=case.headers)
+    assert response.status_code == 200, response.text
     context.adv_status = _run(context, case.poll())
     context.adv_bodies.append(context.adv_status.model_dump_json())
 
@@ -247,7 +280,7 @@ def step_error_paths(context: Any) -> None:
 @then("the device code response should carry the strict contract shape")
 def step_device_shape(context: Any) -> None:
     response = context.adv_response
-    assert response.status_code == 201
+    assert response.status_code == 200
     assert set(response.json()) == set(CredentialOAuthDeviceRead.model_fields)
     assert response.json()["user_code"] and response.json()["verification_uri"]
     assert response.json()["expires_in"] > 0 and response.json()["interval"] > 0
@@ -262,13 +295,11 @@ def step_device_no_tokens(context: Any) -> None:
 
 @then("the smuggled value should never surface")
 def step_smuggled_never_surfaces(context: Any) -> None:
-    assert context.adv_response.status_code in (201, 422)
+    assert context.adv_response.status_code in (200, 422)
     assert "token-material" not in context.adv_response.text
-
-
-@then("the OAuth response should be 404")
-def step_is_404(context: Any) -> None:
-    assert context.adv_response.status_code == 404
+    assert "token-material" not in "\n".join(context.adv_logs)
+    assert "token-material" not in database_dump(context.repository)
+    assert "token-material" not in json.dumps(context.oauth_case.stub.seen_requests)
 
 
 @then('the OAuth status should become "{status}"')
@@ -283,6 +314,7 @@ def step_becomes(context: Any, status: str) -> None:
 def step_revoke_order(context: Any) -> None:
     assert context.adv_response.status_code == 204
     assert context.oauth_case.stub.revoke_calls == 1
+    assert context.oauth_case.revoke_observations == [(OAuthGrantStatus.CONNECTED.value, True)]
     assert not any(_run(context, context.oauth_case.slots()).values())
     assert _run(context, context.oauth_case.status()).status is OAuthGrantStatus.DISCONNECTED
 
@@ -292,6 +324,19 @@ def step_idempotent(context: Any) -> None:
     assert [r.status_code for r in context.adv_disconnects] == [204, 204]
     assert context.oauth_case.stub.revoke_calls == 1
     assert _run(context, context.oauth_case.status()).status is OAuthGrantStatus.DISCONNECTED
+
+
+@when("I delete the disconnected OAuth vault key after revocation")
+def step_delete_revoked_key(context: Any) -> None:
+    case = context.oauth_case
+    assert case.stub.revoke_calls == 1
+    assert _run(context, case.status()).status is OAuthGrantStatus.DISCONNECTED
+    response = case.client.delete(case.path.removesuffix("/oauth"), headers=case.headers)
+    assert response.status_code == 200, response.text
+    assert case.stub.revoke_calls == 1
+    keys = case.client.get("/api/v1/account/vault/keys", headers=case.headers)
+    assert keys.status_code == 200
+    assert str(case.credential.id) not in {key["id"] for key in keys.json()}
 
 
 @then("the OAuth status should be unpaired without a vendor hot-loop")

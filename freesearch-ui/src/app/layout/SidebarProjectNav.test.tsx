@@ -149,29 +149,33 @@ describe("ProjectNav on global routes", () => {
     )
   }
 
-  it("shows the Back link and only the sections the access permits", async () => {
+  it("shows the remembered project's sections with none marked current once access loads", async () => {
     renderGlobalNav("ok")
-    const back = await screen.findByRole("link", {
-      name: `Back to ${project.name}`,
-    })
-    expect(back).toHaveAttribute("href", `/p/${PROJECT_ALPHA_ID}`)
     await waitFor(() =>
       expect(links().map((link) => link.getAttribute("aria-label"))).toEqual([
-        `Back to ${project.name}`,
         "Overview",
         "Members",
       ])
     )
+    expect(links().map((link) => link.getAttribute("href"))).toEqual([
+      `/p/${PROJECT_ALPHA_ID}`,
+      `/p/${PROJECT_ALPHA_ID}/members`,
+    ])
+    for (const link of links()) expect(link).not.toHaveAttribute("aria-current")
     expect(screen.queryByRole("link", { name: "Providers" })).toBeNull()
+    expect(screen.queryByRole("link", { name: `Back to ${project.name}` })).toBeNull()
   })
 
-  it("shows only the Back link while the access loads or fails", async () => {
+  it("renders nothing while the access loads or fails", async () => {
     renderGlobalNav("error")
-    const back = await screen.findByRole("link", {
-      name: `Back to ${project.name}`,
-    })
-    expect(back).toHaveAttribute("href", `/p/${PROJECT_ALPHA_ID}`)
-    await waitFor(() => expect(links()).toHaveLength(1))
-    expect(links()[0].getAttribute("aria-label")).toBe(`Back to ${project.name}`)
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Project" })).toBeNull()
+    )
+    expect(screen.queryByRole("link", { name: `Back to ${project.name}` })).toBeNull()
+  })
+
+  it("renders nothing while the access is still loading", async () => {
+    renderGlobalNav("slow")
+    expect(screen.queryByRole("navigation", { name: "Project" })).toBeNull()
   })
 })

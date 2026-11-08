@@ -23,22 +23,13 @@ export type ProjectRoleKey =
   | "token_manager"
 
 /** Every project role key, in display order, for role controls. */
-export const PROJECT_ROLE_KEYS: readonly ProjectRoleKey[] = [
+const PROJECT_ROLE_KEYS: readonly ProjectRoleKey[] = [
   "project_admin",
   "project_member",
   "routing_editor",
   "provider_editor",
   "token_manager",
 ]
-
-/** Display label of each project role. Labels carry no permission meaning. */
-export const PROJECT_ROLE_LABELS: Record<ProjectRoleKey, string> = {
-  project_admin: "Project admin",
-  project_member: "Project member",
-  routing_editor: "Routing editor",
-  provider_editor: "Provider editor",
-  token_manager: "Token manager",
-}
 
 /** Safe projection of one project record. */
 export interface Project {
@@ -73,6 +64,9 @@ export interface ProjectMember {
   email: string
   status: MembershipStatus
   roles: string[]
+  role: "admin" | "developer"
+  permissions: number
+  provider_owner: boolean
   version: number
 }
 

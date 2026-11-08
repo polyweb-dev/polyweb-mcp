@@ -78,7 +78,7 @@ When(
   "I capture the first live fetch outcome for provider {string}",
   async ({ page }, provider: string) => {
     const panel = page.locator("main")
-    const content = panel.getByText(/Parsed Markdown Document/i)
+    const content = panel.getByText(/Parsed markdown/i)
     const errors = fetchErrorBanner(page)
     const deadline = Date.now() + 30_000
     let outcome = "indeterminate"
@@ -114,7 +114,7 @@ Then(
   "the playground should show live fetch content without an API-failure alert",
   async ({ page }) => {
     const panel = page.locator("main")
-    await expect(panel.getByText(/Parsed Markdown Document/i).first()).toBeVisible({
+    await expect(panel.getByText(/Parsed markdown/i).first()).toBeVisible({
       timeout: 30_000,
     })
     await expect(fetchErrorBanner(page)).toHaveCount(0)

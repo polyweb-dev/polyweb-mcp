@@ -13,6 +13,7 @@ import {
   readMembers,
   readString,
 } from "@/shared/api/decode"
+import { decodeCallCosts } from "../model/providerPricing"
 import {
   CREDENTIAL_OPERATIONS,
   CREDENTIAL_OWNERS,
@@ -21,14 +22,12 @@ import {
 } from "../model/credentials"
 import type {
   AvailableCredential,
-  CredentialGrant,
   CredentialPoolRef,
   OAuthDeviceStart,
   OAuthStatus,
   ProjectCredential,
   ProviderBinding,
   ProviderTypeView,
-  SystemCredential,
 } from "../model/credentials"
 
 function decodePoolRef(value: unknown): CredentialPoolRef | null {
@@ -55,6 +54,7 @@ export function decodeAvailableCredential(value: unknown): AvailableCredential |
     authMode: readString(record, "auth_mode") ?? "api_key",
     status: readString(record, "status") ?? "unknown",
     health: readString(record, "health_status"),
+    healthCheckedAt: readString(record, "health_checked_at"),
     grantedOperations: readMembers(record, "granted_operations", CREDENTIAL_OPERATIONS),
     supportedOperations: readMembers(record, "supported_operations", CREDENTIAL_OPERATIONS),
     pools: pools.map(decodePoolRef).filter((pool) => pool !== null),
@@ -95,11 +95,16 @@ export function decodeProviderTypeView(value: unknown): ProviderTypeView | null 
   return {
     providerType,
     name: providerTypeName(providerType),
+    keyless: Object.keys(decodeCallCosts(record.keyless_call_cost_usd)).length > 0,
+    callCostUsd: decodeCallCosts(record.call_cost_usd),
+    keylessCallCostUsd: decodeCallCosts(record.keyless_call_cost_usd),
     capability: readMembers(record, "capability", CREDENTIAL_OPERATIONS),
     killSwitch: readFlag(record, "kill_switch"),
     systemEnabledOperations: readMembers(record, "system_enabled_operations", CREDENTIAL_OPERATIONS),
     available: readFlag(record, "available"),
     enabled: readFlag(record, "enabled"),
+    healthStatus: readString(record, "health_status"),
+    healthCheckedAt: readString(record, "health_checked_at"),
     credentials: decodeRows(record.credentials, decodeAvailableCredential),
     bindings: decodeRows(record.bindings, decodeBinding),
     effectiveOperations: readMembers(record, "effective_operations", CREDENTIAL_OPERATIONS),
@@ -124,38 +129,6 @@ export function decodeProjectCredential(value: unknown): ProjectCredential | nul
     permittedOperations: readMembers(record, "permitted_operations", CREDENTIAL_OPERATIONS),
     canManage: readFlag(record, "can_manage"),
     generation: readInt(record, "generation"),
-  }
-}
-
-/** Decode one system credential (`CredentialInstanceRead`). */
-export function decodeSystemCredential(value: unknown): SystemCredential | null {
-  const record = asRecord(value)
-  if (record === null) return null
-  const id = readString(record, "id")
-  const providerType = readString(record, "provider_type")
-  if (id === null || providerType === null) return null
-  return {
-    id,
-    providerType,
-    label: readString(record, "label") ?? id,
-    authMode: readString(record, "auth_mode") ?? "api_key",
-    generation: readInt(record, "generation") ?? 1,
-    status: readString(record, "status") ?? "active",
-  }
-}
-
-/** Decode one project grant of a system credential. */
-export function decodeGrant(value: unknown): CredentialGrant | null {
-  const record = asRecord(value)
-  if (record === null) return null
-  const credentialId = readString(record, "credential_id")
-  const projectId = readString(record, "project_id")
-  if (credentialId === null || projectId === null) return null
-  return {
-    credentialId,
-    projectId,
-    permittedOperations: readMembers(record, "permitted_operations", CREDENTIAL_OPERATIONS),
-    version: readInt(record, "version") ?? 1,
   }
 }
 

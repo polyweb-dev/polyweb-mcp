@@ -63,10 +63,10 @@ from freesearch.models.provider_limits import (
     LimitDeniedError,
     LimitOperation,
     LimitStoreUnavailable,
-    ProviderLimitsResponse,
     ProviderObservationScope,
     local_rate_denial,
 )
+from freesearch.models.quota_api import USDProviderLimits, USDUsageTotal
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import LegacyUsageTotal, SQLiteRepository, UsageTotal
 from freesearch.services.authorization import ScopedAuthorizationService
@@ -220,7 +220,7 @@ class StatsResponse(ContractModel):
     recent_usage: list[RecentUsageEntry]
     latest_quota: list[QuotaSnapshot]
     latest_health: list[LatestHealthEntry]
-    crd_usage_totals: list[CRDUsageTotal] = Field(default_factory=list)
+    spend_totals: list[USDUsageTotal] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _serialize_compat(self, handler: Any) -> Any:
@@ -238,7 +238,7 @@ class DashboardResponse(StatsResponse):
     """JSON dashboard snapshot: the stats read plus its generation instant."""
 
     generated_at: AwareDatetime
-    provider_limits: list[ProviderLimitsResponse] = Field(default_factory=list)
+    provider_limits: list[USDProviderLimits] = Field(default_factory=list)
 
 
 class ProjectUsageResponse(ContractModel):
@@ -1678,7 +1678,7 @@ async def collect_stats(
         recent_usage=_contract_recent(recent),
         latest_quota=latest_quota,
         latest_health=_contract_health(latest_health),
-        crd_usage_totals=crd_totals,
+        spend_totals=[USDUsageTotal.model_validate(row) for row in crd_totals],
     )
 
 

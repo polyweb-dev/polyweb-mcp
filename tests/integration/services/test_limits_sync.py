@@ -171,6 +171,134 @@ async def test_stale_generation_discarded(repository) -> None:
     )
 
 
+async def _scoped_observation(  # type: ignore[no-untyped-def]
+    repository, scope: str, remaining: str, allowance: str | None
+):
+    """Store one credential-scoped funds observation of the synthetic pool."""
+
+    from freesearch.models.provider_limits import NativePool
+
+    pool_id = f"synth:keyed:USD#{scope}"
+    await repository.limits.ensure_pool(
+        NativePool(
+            pool_id=pool_id,
+            provider="synth",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+        )
+    )
+    assert await repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id=pool_id,
+            provider="synth",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=FIXED_AT,
+            remaining=Decimal(remaining),
+            allowance=Decimal(allowance) if allowance is not None else None,
+        )
+    )
+
+
+async def _synth_limits(repository) -> ProviderLimitsService:  # type: ignore[no-untyped-def]
+    svc = ProviderLimitsService(
+        repository.limits,
+        records=[_record()],
+        tier_defaults={},
+        clock=lambda: FIXED_AT,
+    )
+    await svc.initialize()
+    return svc
+
+
+async def test_card_shows_credential_scoped_funds_when_catalog_pool_is_unobserved(
+    repository,
+) -> None:
+    """Regression: keys moved to stored credentials, so funds land on scoped rows."""
+
+    svc = await _synth_limits(repository)
+    await _scoped_observation(repository, "cred:00000000-0000-4000-8000-000000000001", "4.5", "5")
+
+    keyed = (await svc.provider_view("synth")).auths[0]
+
+    assert keyed.aggregate_pool is not None
+    assert keyed.aggregate_pool.pool_id == "synth:keyed:USD"
+    assert keyed.aggregate_pool.remaining == Decimal("4.5")
+    assert keyed.aggregate_pool.allowance == Decimal("5")
+    assert keyed.detail is not None and keyed.detail.native_balance == Decimal("4.5")
+    # The projection is display-only: the catalog row keeps no balance.
+    stored = await repository.limits.get_pool("synth:keyed:USD")
+    assert stored is not None and stored.remaining is None
+
+
+async def test_card_sums_distinct_scoped_funds_and_keeps_unknown_allowance(repository) -> None:
+    svc = await _synth_limits(repository)
+    await _scoped_observation(repository, "cred:00000000-0000-4000-8000-000000000001", "4", "5")
+    await _scoped_observation(repository, "pool:00000000-0000-4000-8000-000000000002", "2", None)
+
+    pool = (await svc.provider_view("synth")).auths[0].aggregate_pool
+
+    assert pool is not None
+    assert pool.remaining == Decimal("6")
+    assert pool.allowance is None
+
+
+async def test_catalog_observation_wins_over_scoped_funds(repository) -> None:
+    svc = await _synth_limits(repository)
+    assert await repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id="synth:keyed:USD",
+            provider="synth",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=FIXED_AT,
+            remaining=Decimal("3.000"),
+            allowance=Decimal("5"),
+        )
+    )
+    await _scoped_observation(repository, "cred:00000000-0000-4000-8000-000000000001", "1", "5")
+
+    pool = (await svc.provider_view("synth")).auths[0].aggregate_pool
+
+    assert pool is not None and pool.remaining == Decimal("3.000")
+
+
+async def test_missing_adapter_delegates_to_credential_sync(repository) -> None:
+    from freesearch.models.provider_limits import SyncResult
+
+    svc = await _synth_limits(repository)
+    calls: list[str] = []
+
+    async def credential_sync(provider: str, now: datetime) -> SyncResult | None:
+        calls.append(provider)
+        return SyncResult(
+            provider=provider, status="skipped", observed_at=now, reason="no_credential"
+        )
+
+    sync = LimitSyncService(
+        repository.limits, svc, lambda: [], clock=lambda: FIXED_AT, credential_sync=credential_sync
+    )
+    result = await sync.sync_provider("synth", FIXED_AT)
+
+    assert calls == ["synth"]
+    assert result.reason == "no_credential"
+
+
+async def test_missing_adapter_without_credential_sync_stays_no_adapter(repository) -> None:
+    svc = await _synth_limits(repository)
+
+    async def unresolved(provider: str, now: datetime) -> None:
+        return None
+
+    plain = LimitSyncService(repository.limits, svc, lambda: [], clock=lambda: FIXED_AT)
+    unresolved_sync = LimitSyncService(
+        repository.limits, svc, lambda: [], clock=lambda: FIXED_AT, credential_sync=unresolved
+    )
+
+    assert (await plain.sync_provider("synth", FIXED_AT)).reason == "no_adapter"
+    assert (await unresolved_sync.sync_provider("synth", FIXED_AT)).reason == "no_adapter"
+
+
 async def test_rate_progress_hour_day_only(repository) -> None:
     svc = ProviderLimitsService(
         repository.limits,

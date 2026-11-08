@@ -177,6 +177,16 @@ class ProjectPoolAllocationRow(Base):
             name="project_pool_allocations_pool_id_fkey",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["key_pool_id"],
+            ["key_pools.id"],
+            name="project_pool_allocations_key_pool_id_fkey",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "limit_scope IN ('pool', 'operation')",
+            name="project_pool_allocations_limit_scope_allowed",
+        ),
         CheckConstraint(_OPERATION_SCOPE_CHECK, name="project_pool_allocations_operation_allowed"),
         CheckConstraint(
             "(borrow_enabled = 0 AND (max_rate IS NULL OR max_rate = base_rate)) "
@@ -215,7 +225,7 @@ class ProjectPoolAllocationRow(Base):
     project_id: Mapped[str] = mapped_column(CHAR(36), nullable=False)
     pool_id: Mapped[str] = mapped_column(CHAR(36), nullable=False)
     operation_scope: Mapped[str] = mapped_column(String(16), nullable=False)
-    base_rate: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rate_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     borrow_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
     max_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -229,6 +239,10 @@ class ProjectPoolAllocationRow(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    key_pool_id: Mapped[str | None] = mapped_column(CHAR(36))
+    limit_scope: Mapped[str] = mapped_column(Text, nullable=False, server_default="operation")
+    budget_limit: Mapped[int | None] = mapped_column(Integer)
+    budget_window_seconds: Mapped[int | None] = mapped_column(Integer, server_default="2592000")
 
 
 @dataclass(frozen=True)
@@ -268,7 +282,7 @@ class StoredAllocation:
     project_id: UUID
     pool_id: UUID
     operation: CredentialOperation
-    base_rate: int
+    base_rate: int | None
     rate_window_seconds: int
     borrow_enabled: bool
     max_rate: int | None
@@ -282,10 +296,10 @@ class StoredAllocation:
     version: int
 
     @property
-    def effective_max_rate(self) -> int:
+    def effective_max_rate(self) -> int | None:
         """Return the loan ceiling with loans enabled, else the strict base rate."""
 
-        if self.borrow_enabled and self.max_rate is not None:
+        if self.base_rate is not None and self.borrow_enabled and self.max_rate is not None:
             return self.max_rate
         return self.base_rate
 
@@ -642,7 +656,7 @@ def _constraint_windows(
 
 def _require_allocations_feasible(
     constraints: list[dict[str, Any]],
-    allocations: list[tuple[int, int, CredentialOperation]],
+    allocations: list[tuple[int | None, int, CredentialOperation]],
 ) -> None:
     """Reject base rates that exceed any relevant declared pool window.
 
@@ -659,11 +673,14 @@ def _require_allocations_feasible(
             for base_rate, window, operation in allocations
             if operations is None or operation.value in operations
         ]
+        if any(base_rate is None for base_rate, _ in relevant):
+            raise AllocationInfeasibleError("an unlimited allocation exceeds a finite pool limit")
+        finite = [(base_rate, window) for base_rate, window in relevant if base_rate is not None]
         per_second = sum(
-            (Fraction(base_rate, max(1, window)) for base_rate, window in relevant),
+            (Fraction(base_rate, max(1, window)) for base_rate, window in finite),
             Fraction(0),
         )
-        total = sum(base_rate for base_rate, window in relevant if window == seconds)
+        total = sum(base_rate for base_rate, window in finite if window == seconds)
         if total > limit:
             raise AllocationInfeasibleError(
                 "the promised base rates exceed the pool's rate constraint for this window"

@@ -3,6 +3,7 @@ import { useLocation } from "react-router"
 import { cn } from "cn"
 import { useAuth } from "@/domains/auth"
 import { ProjectSelector } from "@/features/projects/ui/ProjectSelector"
+import { Button } from "@/shared/ui/button"
 import { parseProjectPath, projectIdFromPath, projectPath } from "../routes"
 import { Brand } from "./SidebarBrand"
 import { NavList } from "./SidebarNavList"
@@ -57,18 +58,19 @@ function renderBrandRow(isCollapsed: boolean, onToggle: () => void) {
   if (isCollapsed) return <Brand collapsed onExpand={onToggle} />
 
   return (
-    <div className="flex h-16 shrink-0 items-center justify-between pr-2">
+    <div className="flex h-14 shrink-0 items-center justify-between pr-2">
       <Brand />
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="icon-lg"
         aria-label={collapseLabel(isCollapsed)}
         aria-expanded={!isCollapsed}
         aria-controls="primary-sidebar"
         onClick={onToggle}
-        className="grid size-9 shrink-0 place-items-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] motion-reduce:transition-none"
+        className="text-[var(--muted)]"
       >
-        <PanelLeftClose aria-hidden="true" className="size-[18px]" />
-      </button>
+        <PanelLeftClose aria-hidden="true" strokeWidth={1.75} />
+      </Button>
     </div>
   )
 }
@@ -97,14 +99,15 @@ function renderDrawer(
       >
         <div className="flex items-center justify-between pr-3">
           <Brand />
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-lg"
             aria-label="Close navigation"
             onClick={() => onClose(true)}
-            className="grid size-9 place-items-center rounded-md text-[var(--muted)] hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
+            className="text-[var(--muted)]"
           >
-            <X aria-hidden="true" className="size-5" />
-          </button>
+            <X aria-hidden="true" />
+          </Button>
         </div>
         <ProjectSelector
           collapsed={false}
@@ -155,23 +158,27 @@ export function Sidebar({
         <Menu aria-hidden="true" className="size-5" />
       </button>
 
+      {/* The rail surface stretches to the full page height while its content
+          stays pinned to the viewport, so long pages never show the rail ending. */}
       <aside
         id="primary-sidebar"
         className={cn(
-          "sticky top-0 hidden h-screen shrink-0 flex-col overflow-hidden border-r border-[var(--border-subtle)] bg-[var(--elevated)] transition-[width] duration-200 motion-reduce:transition-none md:flex",
+          "hidden min-h-screen shrink-0 self-stretch border-r border-[var(--border-subtle)] bg-[var(--elevated)] transition-[width] duration-200 motion-reduce:transition-none md:block",
           isCollapsed ? "w-16" : "w-60"
         )}
       >
-        {renderBrandRow(isCollapsed, toggleCollapsed)}
+        <div className="sticky top-0 flex h-screen flex-col overflow-hidden">
+          {renderBrandRow(isCollapsed, toggleCollapsed)}
 
-        <ProjectSelector collapsed={isCollapsed} {...projectSelection(pathname)} />
+          <ProjectSelector collapsed={isCollapsed} {...projectSelection(pathname)} />
 
-        <ProjectNav collapsed={isCollapsed} />
+          <ProjectNav collapsed={isCollapsed} />
 
-        <NavList collapsed={isCollapsed} />
+          <NavList collapsed={isCollapsed} />
 
-        <div className="shrink-0 p-2">
-          <SidebarAccountMenu key={menuKey} collapsed={isCollapsed} />
+          <div className="shrink-0 p-2">
+            <SidebarAccountMenu key={menuKey} collapsed={isCollapsed} />
+          </div>
         </div>
       </aside>
 

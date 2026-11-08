@@ -1,5 +1,6 @@
-import { Modal } from "@/shared/ui/Modal"
 import { Button } from "@/shared/ui/button"
+import { FormActions } from "@/shared/ui/FormActions"
+import { Modal } from "@/shared/ui/Modal"
 import { OAuthConnectPanel } from "./OAuthConnectPanel"
 
 interface OAuthConnectDialogProps {
@@ -14,14 +15,14 @@ export function OAuthConnectDialog({ base, onClose, onConnected }: OAuthConnectD
   return (
     <Modal isOpen={base !== null} onClose={onClose} title="Connect Parallel" maxWidth="md">
       {base !== null && (
-        <div className="space-y-4">
+        <>
           <OAuthConnectPanel key={base} base={base} onConnected={onConnected} />
-          <div className="flex justify-end">
-            <Button type="button" variant="outline" onClick={onClose}>
+          <FormActions>
+            <Button type="button" size="form" variant="outline" onClick={onClose}>
               Close
             </Button>
-          </div>
-        </div>
+          </FormActions>
+        </>
       )}
     </Modal>
   )

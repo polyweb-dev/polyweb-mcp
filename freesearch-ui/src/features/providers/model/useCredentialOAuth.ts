@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { pollCredentialOAuth, startCredentialOAuth } from "@/domains/providers"
+import { pollVaultOAuth, startVaultOAuth } from "@/domains/vault"
 import type { OAuthDeviceStart, OAuthGrantStatus } from "@/domains/providers"
 
 /** Phase of one credential's device flow, from start to a final status. */
@@ -14,7 +14,7 @@ export const OAUTH_START_FAILED = "The connection could not be started."
 export const OAUTH_POLL_FAILED = "The connection could not be checked."
 
 interface FlowOptions {
-  /** Credential base path (system or project). */
+  /** Account vault key ID. */
   base: string
   /** Called once when the grant becomes connected. */
   onConnected?: () => void
@@ -48,11 +48,11 @@ export function useCredentialOAuth({ base, onConnected }: FlowOptions): OAuthFlo
         return
       }
       try {
-        const answer = await pollCredentialOAuth(base, controller.signal)
+        const answer = await pollVaultOAuth(base, controller.signal)
         if (controller.signal.aborted) return
         if (answer.status === "pending") {
           setState({ phase: "polling", device, status: "pending" })
-          schedule(device, answer.intervalSeconds ?? device.intervalSeconds)
+          schedule(device, answer.interval ?? device.intervalSeconds)
           return
         }
         setState({ phase: "finished", device, status: answer.status })
@@ -66,9 +66,11 @@ export function useCredentialOAuth({ base, onConnected }: FlowOptions): OAuthFlo
       timer = window.setTimeout(() => void poll(device), seconds * 1000)
     }
 
-    startCredentialOAuth(base, controller.signal).then(
-      (device) => {
+    startVaultOAuth(base, controller.signal).then(
+      (result) => {
         if (controller.signal.aborted) return
+        const device: OAuthDeviceStart = { userCode: result.user_code, verificationUri: result.verification_uri,
+          intervalSeconds: result.interval, expiresInSeconds: result.expires_in }
         deadline = Date.now() + device.expiresInSeconds * 1000
         setState({ phase: "polling", device, status: "pending" })
         schedule(device, device.intervalSeconds)

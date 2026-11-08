@@ -1,5 +1,7 @@
+import { cn } from "cn"
 import { ExternalLink, FileText } from "lucide-react"
 import type { SearchResult } from "@/domains/execution"
+import { Button, buttonVariants } from "@/shared/ui/button"
 import { SearchResultCard } from "@/shared/ui/SearchResultCard"
 import { toPlaygroundResultView } from "../model/searchResultPresentation"
 
@@ -35,8 +37,10 @@ export function ResultCard({
       onSelect={() => onSelect(result)}
       actions={
         <>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-sm"
             data-testid={"fetch-result-" + result.id}
             title={canFetch ? "Fetch this page" : "Fetch is not permitted in this project"}
             aria-label={"Fetch " + result.title}
@@ -45,19 +49,20 @@ export function ResultCard({
               e.stopPropagation()
               void onFetch(result)
             }}
-            className="p-1 text-[var(--muted)] transition-colors hover:text-[var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="text-[var(--muted)]"
           >
-            <FileText className="size-3.5" />
-          </button>
+            <FileText aria-hidden="true" className="size-3.5" />
+          </Button>
 
           <a
             href={result.url}
             target="_blank"
             rel="noreferrer"
-            className="shrink-0 p-1 text-[var(--muted)] transition-colors hover:text-[var(--text-strong)]"
+            aria-label={"Open " + result.title}
+            className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-[var(--muted)]")}
             title="Open external link"
           >
-            <ExternalLink className="size-3.5" />
+            <ExternalLink aria-hidden="true" className="size-3.5" />
           </a>
         </>
       }

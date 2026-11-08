@@ -47,13 +47,13 @@ from freesearch.models.provider_limits import (
     BudgetBlock,
     BudgetModel,
     CRDPriceProfile,
-    CRDUsageTotal,
     LimitCallContext,
     LimitOperation,
     NativeUsageSnapshot,
     ProviderLimitRecord,
     RateBlock,
 )
+from freesearch.models.quota_api import USDUsageTotal
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services import monitoring
@@ -306,7 +306,7 @@ _DASHBOARD_KEYS = {
     "latest_quota",
     "latest_health",
     "generated_at",
-    "crd_usage_totals",
+    "spend_totals",
     "provider_limits",
 }
 
@@ -316,7 +316,7 @@ _STATS_KEYS = {
     "recent_usage",
     "latest_quota",
     "latest_health",
-    "crd_usage_totals",
+    "spend_totals",
 }
 
 
@@ -339,7 +339,7 @@ def _assert_dashboard_contract_keys(body: Any) -> None:
     assert isinstance(body, dict)
     assert set(body) == _DASHBOARD_KEYS
     assert body["notice"] == monitoring.MONITORING_NOTICE
-    assert isinstance(body["crd_usage_totals"], list)
+    assert isinstance(body["spend_totals"], list)
     assert isinstance(body["provider_limits"], list)
 
 
@@ -849,10 +849,10 @@ async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
         "recent_usage",
         "latest_quota",
         "latest_health",
-        "crd_usage_totals",
+        "spend_totals",
     }
     assert stats.notice == monitoring.MONITORING_NOTICE
-    assert stats.crd_usage_totals == []
+    assert stats.spend_totals == []
     assert [
         (total.provider, total.operation, total.total_units, total.event_count)
         for total in stats.usage_totals
@@ -939,11 +939,11 @@ async def test_crd_usage_totals_sum_exact_success_volume_only(
 
     stats = await monitoring.collect_stats(repository, adapter_names=(), limits=limits)
 
-    assert stats.crd_usage_totals == [
-        CRDUsageTotal(
+    assert stats.spend_totals == [
+        USDUsageTotal(
             provider="totals-provider",
             operation=LimitOperation.SEARCH,
-            normalized_crd=Decimal("10"),
+            spend_usd=Decimal("0.010"),
             attempt_count=2,
             volume_count=2,
         )
@@ -1082,9 +1082,9 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
         "recent_usage",
         "latest_quota",
         "latest_health",
-        "crd_usage_totals",
+        "spend_totals",
     }
-    assert low.json()["crd_usage_totals"] == []
+    assert low.json()["spend_totals"] == []
     assert len(low.json()["recent_usage"]) == 1
     assert len(high.json()["recent_usage"]) == monitoring.MAX_RECENT_LIMIT
     assert (
@@ -1095,9 +1095,11 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
 
 def test_dashboard_route_declares_pydantic_response_model(auth_secret: str) -> None:
     app = create_app([_StubAdapter("response-model")], repository=None)
-    dashboard_route = next(route for route in app.routes if route.path == "/dashboard")
-
-    assert dashboard_route.response_model is _dashboard_response_model()
+    schema = app.openapi()
+    response = schema["paths"]["/dashboard"]["get"]["responses"]["200"]
+    assert response["content"]["application/json"]["schema"]["$ref"].endswith(
+        f"/{_dashboard_response_model().__name__}"
+    )
 
 
 async def test_no_repository_stats_and_dashboard_reads_are_empty_200(
@@ -1148,7 +1150,7 @@ async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
         "recent_usage": [],
         "latest_quota": [],
         "latest_health": [],
-        "crd_usage_totals": [],
+        "spend_totals": [],
     }
     assert dashboard.status_code == 200
     assert "application/json" in dashboard.headers["content-type"]
@@ -1159,7 +1161,7 @@ async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
     assert dashboard_body["recent_usage"] == []
     assert dashboard_body["latest_quota"] == []
     assert dashboard_body["latest_health"] == []
-    assert dashboard_body["crd_usage_totals"] == []
+    assert dashboard_body["spend_totals"] == []
     # provider_limits is catalog-driven, not a monitoring read: the read-failure
     # seam leaves the eight canonical providers visible while stats stay empty.
     assert {item["provider"] for item in dashboard_body["provider_limits"]} == {
@@ -1215,7 +1217,7 @@ def test_dashboard_response_contract_is_strict_and_decimal_round_trip() -> None:
     }
     assert dashboard_model.model_config.get("extra") == "forbid"
     assert dashboard.provider_limits == []
-    assert dashboard.crd_usage_totals == []
+    assert dashboard.spend_totals == []
     assert dashboard.model_dump() == {**payload, "provider_limits": []}
     assert dashboard.usage_totals[0].total_units == Decimal("123.456789")
     assert dashboard.recent_usage[0].units == Decimal("0.000001")
@@ -1278,7 +1280,7 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
         for key, value in dashboard_body.items()
         if key not in ("generated_at", "provider_limits")
     } == stats_body
-    assert dashboard_body["crd_usage_totals"] == stats_body["crd_usage_totals"] == []
+    assert dashboard_body["spend_totals"] == stats_body["spend_totals"] == []
     assert isinstance(dashboard_body["provider_limits"], list)
     catalog_records = await repository.limits.list_records()
     expected_cards = len({record.provider for record in catalog_records})
@@ -1427,8 +1429,8 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
     dashboard_body = dashboard_response.json()
     _assert_dashboard_contract_keys(dashboard_body)
     _assert_stats_contract_keys(stats_body)
-    assert stats_body["crd_usage_totals"] == []
-    assert dashboard_body["crd_usage_totals"] == []
+    assert stats_body["spend_totals"] == []
+    assert dashboard_body["spend_totals"] == []
     assert isinstance(dashboard_body["provider_limits"], list)
     catalog_records = await repository.limits.list_records()
     expected_cards = len({record.provider for record in catalog_records})
@@ -1610,13 +1612,16 @@ async def _bound_key_credentials(
 
     service, key = await mcp_project_key(repository, prefix)
     secrets: dict[str, str] = {}
-    await seed_provider_bindings(
+    from tests.fixtures.project_order import seed_order_pools
+
+    await seed_order_pools(
         repository,
         project_id=key.project_id,
         actor_id=key.owner.id,
         store=_encrypted_store(repository),
         providers=("x",),
         secrets=secrets,
+        operations={"x": frozenset({"search", "fetch"})},
     )
 
     def adapter_factory(name: str) -> Any:
@@ -2010,7 +2015,9 @@ async def test_injected_repository_remains_open_after_server_lifespan(
 
 def test_resolve_database_path_prefers_environment_then_argument_then_default(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     env_path = Path.cwd() / "from-env.db"
     argument_path = Path.cwd() / "from-argument.db"
     monkeypatch.setenv("FREESEARCH_DB", str(env_path))

@@ -75,7 +75,7 @@ describe("ProviderTierBars", () => {
         tierSplitKnown
       />,
     )
-    expect(screen.getByText("≈0.6 CRD of 1 CRD")).not.toBeNull()
+    expect(screen.getByText("$0.000599 of $0.001")).not.toBeNull()
   })
 
   it("renders no row for unknown capacity and never an invented zero (UI7-01)", () => {
@@ -115,7 +115,7 @@ describe("ProviderTierBars", () => {
         tierSplitKnown
       />,
     )
-    expect(screen.getAllByText("5 CRD of 10 CRD")).toHaveLength(2)
+    expect(screen.getAllByText("$0.005 of $0.01")).toHaveLength(2)
     expect(screen.queryByRole("progressbar")).toBe(null)
   })
 
@@ -130,7 +130,7 @@ describe("ProviderTierBars", () => {
         tierSplitKnown
       />,
     )
-    expect(screen.getByText("5 CRD")).not.toBeNull()
+    expect(screen.getByText("$0.005")).not.toBeNull()
     expect(screen.queryByRole("progressbar")).toBe(null)
   })
 
@@ -158,7 +158,7 @@ describe("ProviderTierBars", () => {
     const freeHeading = screen.getByText("Free tier")
     const barGroup = freeHeading.closest("div")?.parentElement
     expect(barGroup).not.toBe(null)
-    expect(within(barGroup as HTMLElement).getByText("5 CRD of 10 CRD")).not.toBeNull()
+    expect(within(barGroup as HTMLElement).getByText("$0.005 of $0.01")).not.toBeNull()
     expect(screen.queryByText("Paid tier")).toBe(null)
   })
 })
@@ -222,7 +222,7 @@ describe("ProviderTierBars nativeDisplay", () => {
         nativeDisplay={nativeAdapter(tavilyProfile())}
       />,
     )
-    expect(screen.getByText("600 Tavily Credits of 1000 Tavily Credits")).not.toBeNull()
+    expect(screen.getByText("600 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
     expect(screen.queryByText("4800 CRD")).toBe(null)
   })
 
@@ -236,7 +236,7 @@ describe("ProviderTierBars nativeDisplay", () => {
         nativeDisplay={nativeAdapter(tavilyProfile())}
       />,
     )
-    expect(screen.getByText("1 Tavily Credit of 1 Tavily Credit")).not.toBeNull()
+    expect(screen.getByText("1 Tavily credit of 1 Tavily credit")).not.toBeNull()
   })
 
   it("floors fractional native tier amounts to whole units", () => {
@@ -249,7 +249,7 @@ describe("ProviderTierBars nativeDisplay", () => {
         nativeDisplay={nativeAdapter(tavilyProfile())}
       />,
     )
-    expect(screen.getByText("999 Tavily Credits of 1000 Tavily Credits")).not.toBeNull()
+    expect(screen.getByText("999 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
   })
 
   it("converts CRD-only tier values through a valid profile", () => {
@@ -270,7 +270,7 @@ describe("ProviderTierBars nativeDisplay", () => {
         nativeDisplay={nativeAdapter(tavilyProfile())}
       />,
     )
-    expect(screen.getByText("1 Tavily Credit of 2 Tavily Credits")).not.toBeNull()
+    expect(screen.getByText("1 Tavily credit of 2 Tavily credits")).not.toBeNull()
   })
 
   it("keeps generic CRD formatting without a valid conversion profile", () => {
@@ -291,8 +291,8 @@ describe("ProviderTierBars nativeDisplay", () => {
         nativeDisplay={nativeAdapter(null)}
       />,
     )
-    expect(screen.getByText("5 CRD of 10 CRD")).not.toBeNull()
-    expect(screen.queryByText(/Tavily Credit/)).toBe(null)
+    expect(screen.getByText("$0.005 of $0.01")).not.toBeNull()
+    expect(screen.queryByText(/Tavily credit/)).toBe(null)
   })
 
   it("renders no native row for unknown facts without an invented zero", () => {

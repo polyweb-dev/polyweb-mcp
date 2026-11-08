@@ -1,5 +1,6 @@
 import { expect } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
+import { providerQuotaSurface } from "./providerQuotaUi"
 import { setStubbedManualQuota } from "./backendStub"
 
 /**
@@ -27,7 +28,10 @@ Given(
 )
 
 When("I open the manual budget entry for provider {string}", async ({ page }, provider: string) => {
-  await page.getByTestId("manual-quota-open-" + provider).click()
+  // The balance dialog opens from the `…` menu of the card that holds this provider's logo.
+  const card = providerQuotaSurface(page, provider === "brave" ? "Brave" : provider)
+  await card.getByRole("button", { name: /^Actions for /i }).click()
+  await page.getByRole("button", { name: "Set balance", exact: true }).click()
   await expect(page.getByTestId("manual-quota-save")).toBeVisible()
 })
 
@@ -56,10 +60,14 @@ Then(
 )
 
 Then("the usage view offers no OAuth pairing control", async ({ page }) => {
-  // U3: the provider-scoped pairing actions are gone; Parallel OAuth is
-  // connected from a credential row (Providers or System credentials).
+  // Pairing happens on the vault page, not inside the quota view.
   const main = page.locator("main")
   await expect(main.getByTestId(/^oauth-device-/)).toHaveCount(0)
   await expect(main.getByRole("button", { name: /^(Connect|Pair|Disconnect)\b/ })).toHaveCount(0)
   await expect(main.getByTestId("oauth-user-code")).toHaveCount(0)
+})
+
+Then("Quotas links to Keys and pools for Parallel", async ({ page }) => {
+  await expect(page.getByRole("link", { name: "Keys and pools", exact: true }))
+    .toHaveAttribute("href", "/account/keys")
 })

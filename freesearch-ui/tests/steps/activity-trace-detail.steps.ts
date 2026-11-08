@@ -118,13 +118,19 @@ Then(
     await expect(inspector.getByText("Execution waterfall", { exact: true })).toBeVisible()
     const list = inspector.getByRole("list", { name: "Provider latency waterfall" })
     await expect(list.getByText("Brave Search", { exact: true }).first()).toBeVisible()
-    await expect(list).toContainText("187ms")
+    await expect(list).toContainText(/187\s?ms/)
     await expect(list).toContainText("2 res")
     // Non-selectable lanes: the shared renderer without onSelect renders no buttons.
     await expect(list.getByRole("button")).toHaveCount(0)
     await expect(list.locator('img[data-testid="provider-logo-brave"]')).toBeVisible()
   }
 )
+
+Then("the playground raw JSON inspector should start collapsed", async ({ page }) => {
+  const main = playgroundMain(page)
+  await expect(main.getByRole("button", { name: "Inspect raw JSON", exact: true })).toHaveAttribute("aria-expanded", "false")
+  await expect(main.getByRole("group", { name: "Raw search response" })).toHaveCount(0)
+})
 
 When("I expand the playground raw JSON inspector", async ({ page }) => {
   await playgroundMain(page)
@@ -154,12 +160,13 @@ Then(
   "the playground fetch result should show metadata, provider badge, and copy action",
   async ({ page }) => {
     const main = playgroundMain(page)
-    await expect(main.getByText("Document Metadata", { exact: true })).toBeVisible()
+    await expect(main.getByText("Document metadata", { exact: true })).toBeVisible()
     await expect(main.getByText("Live document title")).toBeVisible()
     await expect(main).toContainText("https://example.com/parity-doc")
-    await expect(main.getByText("Provider", { exact: true }).first()).toBeVisible()
+    // The composer footer labels its picker "Provider" too; the fact row comes last.
+    await expect(main.getByText("Provider", { exact: true }).last()).toBeVisible()
     await expect(main.locator('img[data-testid^="provider-logo-"]').first()).toBeVisible()
-    await expect(main.getByText("Parsed Markdown Document")).toBeVisible()
+    await expect(main.getByText("Parsed markdown", { exact: true })).toBeVisible()
     const copy = main.getByRole("button", { name: "Copy markdown", exact: true })
     await expect(copy).toBeVisible()
     await copy.click()
@@ -175,7 +182,7 @@ Then(
     // providerIdentity, so the stubbed Keenable fetch shows its catalog name.
     // Scope to the metadata Provider row: the closed provider combobox also
     // holds an exact-name option that must not satisfy this assertion.
-    const providerRow = main.getByText("Provider", { exact: true }).locator("xpath=..")
+    const providerRow = main.getByText("Provider", { exact: true }).last().locator("xpath=..")
     await expect(providerRow.getByText(name, { exact: true })).toBeVisible()
     const logoKey = name.toLowerCase().replace(/[^a-z]/g, "")
     await expect(

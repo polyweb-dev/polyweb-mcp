@@ -142,7 +142,7 @@ export function decodeBudget(value: unknown): LimitBudget | null {
 export function decodeConversion(value: unknown): CRDConversionProfile {
   const item = raw(value) ?? {}
   return {
-    reference_usd_per_crd: amount(item.reference_usd_per_crd) ?? "",
+    reference_usd_per_crd: "0.001",
     native_usd_per_unit: amount(item.native_usd_per_unit),
     cost_basis: text(item.cost_basis),
     price_version: text(item.price_version),

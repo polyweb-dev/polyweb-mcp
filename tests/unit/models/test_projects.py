@@ -763,6 +763,11 @@ def test_downstream_model_contracts_structure() -> None:
         version=1,
     )
     assert alloc.max_rate == 20
+    unlimited = AllocationRead.model_validate(
+        {**alloc.model_dump(), "base_rate": None, "max_rate": None, "effective_max_rate": None}
+    )
+    assert unlimited.base_rate is None
+    assert unlimited.effective_max_rate is None
 
 
 @pytest.mark.asyncio

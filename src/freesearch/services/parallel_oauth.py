@@ -386,6 +386,18 @@ class ParallelOAuthClient:
         except Exception as exc:
             logger.warning(redact_secrets(exc))
 
+    async def revoke_token_required(self, token: SecretStr) -> None:
+        """Revoke before deleting local credentials, failing closed on vendor errors."""
+        try:
+            response = await self._http.post(
+                self._platform + _REVOKE_PATH,
+                data={"refresh_token": token.get_secret_value()},
+            )
+        except httpx.HTTPError:
+            raise ParallelOAuthError("token revocation failed") from None
+        if not 200 <= response.status_code < 300:
+            raise ParallelOAuthError("token revocation failed") from None
+
     async def get_balance(self, access_token: SecretStr) -> BalancePayload:
         """Fetch the account balance; a 401 unpairs the vault via OAuthUnpaired."""
 

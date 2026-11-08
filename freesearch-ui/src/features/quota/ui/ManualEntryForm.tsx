@@ -1,7 +1,7 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
 import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQuotaWire"
-import { formatPercent1dp, subtractDecimal, type ManualAmountMode } from "../model/manualQuotaMath"
+import { subtractDecimal, type ManualAmountMode } from "../model/manualQuotaMath"
 import type { BalancePrefill } from "../model/providerInfo"
 import type { CreditMode } from "../model/quotaLabels"
 import { useQuotaForm, type ManualQuotaDefaults } from "../model/useQuotaForm"
@@ -57,17 +57,18 @@ export function ManualEntryForm(props: ManualEntryFormProps): ReactNode {
     onDelete,
     onClose,
   } = props
-  const [mode, setMode] = useState<CreditMode>(creditMode)
+  const [mode, setMode] = useState<CreditMode>(noun === "USD" ? "paid" : creditMode)
+  const entryAmountMode = mode === "both" ? amountMode : "balance"
   const saved = defaults !== null && defaults.allowance !== "" ? defaults : null
   const estimate = saved === null ? prefillDefaults(observed) : null
   const form = useQuotaForm(
-    saved ?? estimate,
+    currencyDefaults(saved ?? estimate, noun, entryAmountMode),
     {
       onSave: (payload) => onSave(payload, providerId),
       ...(onDelete !== undefined ? { onDelete } : {}),
       onClose,
     },
-    amountMode
+    entryAmountMode
   )
 
   return (
@@ -83,24 +84,9 @@ export function ManualEntryForm(props: ManualEntryFormProps): ReactNode {
         onModeChange={setMode}
         onChange={form.setField}
         providerField={providerField}
-        amountMode={amountMode}
+        amountMode={entryAmountMode}
+        preview={form.preview}
       />
-      {estimate !== null && (
-        <p data-testid="manual-quota-prefill" className="mt-3 text-[12px] text-[var(--muted)]">
-          Prefilled from the observed provider balance, as an estimate.
-        </p>
-      )}
-      <p
-        data-testid="manual-quota-preview"
-        aria-live="polite"
-        className="mt-3 text-[12px] text-[var(--muted)] tnum"
-      >
-        {form.preview === null
-          ? "Enter an allowance and " +
-            (amountMode === "balance" ? "a balance" : "usage") +
-            " to preview the estimated percentage."
-          : "Estimated " + formatPercent1dp(form.preview) + "% remaining"}
-      </p>
       {form.saveError && (
         <p
           role="alert"
@@ -122,4 +108,14 @@ export function ManualEntryForm(props: ManualEntryFormProps): ReactNode {
       />
     </form>
   )
+}
+
+function currencyDefaults(defaults: ManualQuotaDefaults | null, noun: string, amountMode: ManualAmountMode): ManualQuotaDefaults | null {
+  if (defaults === null || noun !== "USD") return defaults
+  const fixed = (value: string) => value.trim() !== "" && Number.isFinite(Number(value))
+    ? Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false }) : value
+  const allowance = fixed(defaults.allowance)
+  const remaining = subtractDecimal(defaults.allowance, defaults.used)
+  const used = amountMode === "balance" && remaining !== null ? subtractDecimal(allowance, fixed(remaining)) ?? defaults.used : fixed(defaults.used)
+  return { ...defaults, allowance, used }
 }

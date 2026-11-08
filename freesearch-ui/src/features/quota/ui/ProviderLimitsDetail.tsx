@@ -1,16 +1,16 @@
 import type { ReactNode } from "react"
 import type {
-  CRDConversionProfile,
   CRDGrantsSummary,
   ProviderAuthLimits,
   ProviderLimitDetail,
 } from "@/domains/dashboard"
-import { formatCRDAmount, resetRuleText } from "../model/crdDisplay"
+import { dollarText, resetRuleText } from "../model/crdDisplay"
 import { operationAvailable } from "../model/crdCardModel"
 import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
-import { tavilyCRDToCredits, formatTavilyPopoverAmount } from "../model/tavilyCredits"
+import { formatTavilyPopoverAmount } from "../model/tavilyCredits"
 import { SPEND_CAP } from "../model/quotaLabels"
 import { dateText } from "../model/timeText"
+import { multiplyDecimal } from "../model/manualQuotaMath"
 
 export interface ProviderLimitsDetailProps {
   providerName: string
@@ -74,40 +74,16 @@ function detailRows(detail: ProviderLimitDetail | null, native: boolean = false)
   return rows
 }
 
+/** The local budget always states USD, including providers with native credits. */
 function grantText(granted: string, consumed: string): string {
-  return formatCRDAmount(granted) + " set, " + formatCRDAmount(consumed) + " used"
-}
-
-/** Whole Tavily Credits word of one floored integer amount. */
-function tavilyWord(amount: string): string {
-  return amount === "1" ? "1 Tavily Credit" : amount + " Tavily Credits"
-}
-
-/**
- * The grant text of one rail: with a native price profile the CRD amounts
- * convert into whole Tavily Credits at the display boundary, and a failed conversion keeps
- * the stored CRD text. The wire values stay untouched. CRD and USD fractions stay intact.
- */
-function grantTextNative(
-  granted: string,
-  consumed: string,
-  profile: CRDConversionProfile | null,
-): string {
-  if (profile === null) return grantText(granted, consumed)
-  const grantedCredits = tavilyCRDToCredits(granted, profile)
-  const usedCredits = tavilyCRDToCredits(consumed, profile)
-  if (grantedCredits === null || usedCredits === null) return grantText(granted, consumed)
-  const grantedInt = formatTavilyPopoverAmount(grantedCredits, "native")
-  const usedInt = formatTavilyPopoverAmount(usedCredits, "native")
-  if (grantedInt === null || usedInt === null) return grantText(granted, consumed)
-  return tavilyWord(grantedInt) + " set, " + tavilyWord(usedInt) + " used"
+  return dollarText(multiplyDecimal(granted, "0.001") ?? "0") + " set, "
+    + dollarText(multiplyDecimal(consumed, "0.001") ?? "0") + " used"
 }
 
 /** Spend cap facts of the supported operations only. */
 function grantRows(
   grants: CRDGrantsSummary | null,
   auth: ProviderAuthLimits,
-  profile: CRDConversionProfile | null,
   native: boolean,
 ): DetailRow[] {
   const rows: DetailRow[] = []
@@ -117,11 +93,11 @@ function grantRows(
   const period = start === null || end === null ? null : dateText(start) + " to " + dateText(end)
   push(rows, "plain", SPEND_CAP + " period", period)
   if (operationAvailable(auth, "search")) {
-    push(rows, "crd", "Search " + SPEND_CAP.toLowerCase(), grantTextNative(grants.search_granted_crd, grants.search_consumed_crd, profile))
+    push(rows, "crd", "Search " + SPEND_CAP.toLowerCase(), grantText(grants.search_granted_crd, grants.search_consumed_crd))
   }
   if (operationAvailable(auth, "fetch")) {
     const operation = native ? "Extract" : "Fetch"
-    push(rows, "crd", operation + " " + SPEND_CAP.toLowerCase(), grantTextNative(grants.fetch_granted_crd, grants.fetch_consumed_crd, profile))
+    push(rows, "crd", operation + " " + SPEND_CAP.toLowerCase(), grantText(grants.fetch_granted_crd, grants.fetch_consumed_crd))
   }
   return rows
 }
@@ -141,10 +117,9 @@ function groupRows(rows: DetailRow[]): DetailRow[] {
  */
 export function ProviderLimitsDetail(props: ProviderLimitsDetailProps): ReactNode {
   const { providerName, auth, nativeDisplay, layout = "default" } = props
-  const profile = nativeDisplay?.profile ?? null
   const native = nativeDisplay !== undefined
   const detail = auth.detail
-  const rows = groupRows([...detailRows(detail, native), ...grantRows(auth.grants, auth, profile, native)])
+  const rows = groupRows([...detailRows(detail, native), ...grantRows(auth.grants, auth, native)])
   const splitNote = detail === null ? null : known(detail.crd_split_note)
   if (rows.length === 0 && splitNote === null) return null
 

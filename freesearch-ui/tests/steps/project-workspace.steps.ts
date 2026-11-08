@@ -465,6 +465,11 @@ Then("the trace detail should say {string}", async ({ page }, copy: string) => {
   await expect(page.getByRole("dialog")).toContainText(copy, { timeout: 15_000 })
 })
 
+Then("the trace detail opens in Summary", async ({ page }) => {
+  const views = page.getByRole("dialog").getByRole("group", { name: "Trace detail views" })
+  await expect(views.getByRole("button", { name: "Summary" })).toHaveAttribute("aria-pressed", "true")
+})
+
 Then("the trace detail should not say {string}", async ({ page }, copy: string) => {
   await expect(page.getByRole("dialog")).not.toContainText(copy)
 })
@@ -519,7 +524,7 @@ Then(
 )
 
 Then("no usage table should show the usage of project Beta", async ({ page }) => {
-  for (const name of ["Usage totals", "Recent usage"]) {
+  for (const name of ["Usage totals"]) {
     const table = usageTable(page, name)
     await expect(table).toBeVisible()
     await expect(table.getByRole("cell", { name: /^exa$/i })).toHaveCount(0)

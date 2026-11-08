@@ -96,34 +96,35 @@ function makeAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimi
 
 describe("formatCRDAmount", () => {
   it("formats zero as 0 CRD", () => {
-    expect(formatCRDAmount("0")).toBe("0 CRD")
+    expect(formatCRDAmount("0")).toBe("0 credits")
   })
 
   it("formats a positive amount below 0.1 as <0.1 CRD", () => {
-    expect(formatCRDAmount("0.05")).toBe("<0.1 CRD")
+    expect(formatCRDAmount("0.05")).toBe("<0.1 credits")
   })
 
   it("rounds 0.599 to one decimal with an approximation mark", () => {
-    expect(formatCRDAmount("0.599")).toBe("≈0.6 CRD")
+    expect(formatCRDAmount("0.599")).toBe("≈0.6 credits")
   })
 
   it("rounds 0.58 to the same text while keeping the exact inputs distinct", () => {
-    expect(formatCRDAmount("0.58")).toBe("≈0.6 CRD")
+    expect(formatCRDAmount("0.58")).toBe("≈0.6 credits")
     const exactA: string = "0.58"
     const exactB: string = "0.599"
     expect(exactA === exactB).toBe(false)
   })
 
   it("formats a whole unit without a trailing .0", () => {
-    expect(formatCRDAmount("1")).toBe("1 CRD")
+    expect(formatCRDAmount("1")).toBe("1 credit")
   })
 
   it("rounds 1.55 half-up to ≈1.6 CRD", () => {
-    expect(formatCRDAmount("1.55")).toBe("≈1.6 CRD")
+    expect(formatCRDAmount("1.55")).toBe("≈1.6 credits")
   })
 
   it("formats 5 as 5 CRD", () => {
-    expect(formatCRDAmount("5")).toBe("5 CRD")
+    expect(formatCRDAmount("5")).toBe("5 credits")
+    expect(formatCRDAmount("1000")).toBe("1,000 credits")
   })
 
   it("formats garbage as Unknown", () => {
@@ -134,8 +135,8 @@ describe("formatCRDAmount", () => {
 })
 
 describe("formatCRD", () => {
-  it("formats an unmetered view as Free - unmetered", () => {
-    expect(formatCRD(makeView({ state: "unmetered" }))).toBe("Free - unmetered")
+  it("formats an unmetered view as Free", () => {
+    expect(formatCRD(makeView({ state: "unmetered" }))).toBe("Free")
   })
 
   it("formats an unavailable view as n/a", () => {
@@ -149,10 +150,10 @@ describe("formatCRD", () => {
   it("picks the minimum of remaining and local remaining", () => {
     expect(
       formatCRD(makeView({ remaining_crd: "5", local_remaining_crd: "3" })),
-    ).toBe("3 CRD")
+    ).toBe("3 credits")
     expect(
       formatCRD(makeView({ remaining_crd: "2", local_remaining_crd: "5" })),
-    ).toBe("2 CRD")
+    ).toBe("2 credits")
   })
 
   it("formats a finite view without any spendable amount as Unknown", () => {
@@ -219,7 +220,7 @@ describe("providerCRDModel", () => {
         ],
       }),
     })
-    expect(model.notes).toContain("Local grant ceiling 3 CRD")
+    expect(model.notes).toContain("Local grant ceiling 3 credits")
   })
 
   it("adds standard-call notes for search and fetch", () => {
@@ -254,7 +255,7 @@ describe("providerCRDModel", () => {
       }),
     })
     expect(model.notes).toContain(
-      "Priced use is not configured; the CRD value stays unknown",
+      "Priced use is not configured; the credit value stays unknown",
     )
   })
 })

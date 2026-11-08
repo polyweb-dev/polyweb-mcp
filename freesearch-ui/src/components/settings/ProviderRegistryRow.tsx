@@ -1,155 +1,118 @@
 import React from "react"
 import { RefreshCw } from "lucide-react"
-import { ProviderLogo } from "@/components/common/ProviderLogo"
 import { Button } from "@/shared/ui/button"
+import { ProviderLogo } from "@/shared/ui/ProviderLogo"
+import { Tag } from "@/shared/ui/Tag"
 import {
   TableCell,
   TableRow,
 } from "@/shared/ui/table"
-import type { ProviderConfig } from "@/domains/providers"
+import { FETCH_BIT, SEARCH_BIT, providerCallCost, type ProviderConfig } from "@/domains/providers"
 import { stripProtocol } from "./providerDisplay"
-import { PriorityIndicator } from "./ProviderPriorityControl"
+import type { TimedTestResult } from "./providerDisplay"
+import { ProviderHealthStatus } from "./ProviderHealthStatus"
 import { ProviderRegistryControls } from "./ProviderRegistryControls"
-import { RowPill } from "./ProviderRowPill"
 
 interface ProviderRegistryRowProps {
   provider: ProviderConfig
-  rank: number
-  providerCount: number
   testing: boolean
+  /** The last connection test of this provider run from this page. */
+  lastResult: TimedTestResult | undefined
+  /** Current time (epoch ms) for relative health times. */
+  now: number
   accessPending: boolean
-  canMoveUp: boolean
-  canMoveDown: boolean
   /** False for a role without control-edit access: read-only values only. */
   canEdit: boolean
-  isDragging?: boolean
-  isDragOver?: boolean
-  onDragStart?: (e: React.DragEvent) => void
-  onDragOver?: (e: React.DragEvent) => void
-  onDrop?: (e: React.DragEvent) => void
-  onDragEnd?: () => void
-  onMovePriority: (direction: "up" | "down") => void
   onToggleGlobal: (enabled: boolean) => void
   onToggleSearch: (enabled: boolean) => void
   onToggleFetch: (enabled: boolean) => void
   onOpenTest: () => void
 }
 
-function getRowClassName(isDragging: boolean, isDragOver: boolean): string {
-  let cls = "border-b border-[var(--border-subtle)] last:border-b-0 hover:bg-[var(--elevated)] transition-colors"
-  if (isDragging) cls += " opacity-40 bg-[var(--elevated)]"
-  if (isDragOver) cls += " border-t-2 border-t-[var(--signal)] bg-[var(--elevated)]"
-  return cls
+const CELL = "whitespace-nowrap px-3 py-2.5"
+
+function callCost(provider: ProviderConfig, operation: "search" | "fetch"): string {
+  const bit = operation === "search" ? SEARCH_BIT : FETCH_BIT
+  if ((provider.supportMask & bit) === 0) return "Not supported"
+  const price = providerCallCost(provider, operation)
+  const keyless = provider.keylessCallCostUsd?.[operation]
+  return keyless != null && Number(keyless) === 0 && price !== "Free" ? `${price} with a key` : price
 }
 
 function renderIdentityCell(provider: ProviderConfig) {
   return (
-    <TableCell className="whitespace-nowrap px-3 py-2.5">
+    <TableCell className={CELL}>
       <div className="flex items-center gap-2">
-        <ProviderLogo providerId={provider.id} />
+        <ProviderLogo providerId={provider.id} name={provider.name} />
         <span className="font-medium text-[var(--text-strong)]">{provider.name}</span>
-        {provider.isCustom && <RowPill tone="signal">custom</RowPill>}
-        {provider.capabilities.includes("keyless_tier") && (
-          <RowPill tone="healthy">keyless</RowPill>
+        {provider.isCustom && <Tag tone="accent">Custom</Tag>}
+        {provider.capabilities.includes("keyless_tier") && <Tag>No key needed</Tag>}
+      </div>
+    </TableCell>
+  )
+}
+
+type HealthCellProps = Pick<ProviderRegistryRowProps, "provider" | "canEdit" | "testing" | "lastResult" | "now" | "onOpenTest">
+
+function renderHealthCell({ provider, canEdit, testing, lastResult, now, onOpenTest }: HealthCellProps) {
+  return (
+    <TableCell className={CELL}>
+      <div className="flex items-center gap-2">
+        <ProviderHealthStatus result={lastResult} testing={testing} now={now} health={provider.healthStatus} checkedAt={provider.healthCheckedAt ?? null} />
+        {canEdit && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            onClick={onOpenTest}
+            disabled={testing}
+            aria-label={`${provider.name} test connection`}
+            title={`Test ${provider.name} connection`}
+            className="text-[var(--muted)]"
+          >
+            <RefreshCw aria-hidden="true" className={`size-3.5 ${testing ? "animate-spin" : ""}`} />
+          </Button>
         )}
       </div>
     </TableCell>
   )
 }
 
-function renderTestCell(
-  provider: ProviderConfig,
-  canEdit: boolean,
-  testing: boolean,
-  onOpenTest: () => void,
-) {
-  return (
-    <TableCell className="whitespace-nowrap px-3 py-2.5">
-      {canEdit ? (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          type="button"
-          onClick={onOpenTest}
-          disabled={testing}
-          aria-label={`${provider.name} test connection`}
-          title={`Test ${provider.name} connection`}
-        >
-          <RefreshCw aria-hidden="true" className={`size-3.5 ${testing ? "animate-spin" : ""}`} />
-        </Button>
-      ) : (
-        <span className="text-[12px] text-[var(--muted)]" title="Read-only for your role">
-          Hidden
-        </span>
-      )}
-    </TableCell>
-  )
-}
-
+/** One provider of the catalog, including its costs and system controls. */
 export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
   provider,
-  rank,
-  providerCount,
   testing,
+  lastResult,
+  now,
   accessPending,
-  canMoveUp,
-  canMoveDown,
   canEdit,
-  isDragging = false,
-  isDragOver = false,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd,
-  onMovePriority,
   onToggleGlobal,
   onToggleSearch,
   onToggleFetch,
   onOpenTest,
-}) => {
-  const handleDragStart = (e: React.DragEvent) => {
-    if ((e.target as HTMLElement).closest("button, input, select, option, [role='switch']")) {
-      e.preventDefault()
-      return
-    }
-    onDragStart?.(e)
-  }
-
-  return (
-    <TableRow
-      draggable={canEdit}
-      onDragStart={canEdit ? handleDragStart : undefined}
-      onDragOver={canEdit ? onDragOver : undefined}
-      onDrop={canEdit ? onDrop : undefined}
-      onDragEnd={canEdit ? onDragEnd : undefined}
-      className={getRowClassName(isDragging, isDragOver)}
-    >
-      <TableCell className="w-24 whitespace-nowrap px-3 py-2.5">
-        <PriorityIndicator
-          provider={provider}
-          rank={rank}
-          providerCount={providerCount}
-          canMoveUp={canMoveUp}
-          canMoveDown={canMoveDown}
-          canEdit={canEdit}
-          onMovePriority={onMovePriority}
-        />
-      </TableCell>
-      {renderIdentityCell(provider)}
-      <TableCell className="max-w-[250px] whitespace-nowrap px-3 py-2.5">
-        <span className="block truncate font-mono text-[12px] text-[var(--muted)]" title={provider.baseUrl}>
-          {stripProtocol(provider.baseUrl)}
-        </span>
-      </TableCell>
-      {renderTestCell(provider, canEdit, testing, onOpenTest)}
-      <ProviderRegistryControls
-        provider={provider}
-        canEdit={canEdit}
-        accessPending={accessPending}
-        onToggleGlobal={onToggleGlobal}
-        onToggleSearch={onToggleSearch}
-        onToggleFetch={onToggleFetch}
-      />
-    </TableRow>
-  )
-}
+}) => (
+  <TableRow className="border-b border-[var(--border-subtle)] last:border-b-0 hover:bg-[var(--elevated)] transition-colors">
+    {renderIdentityCell(provider)}
+    <TableCell className={`max-w-[240px] ${CELL}`}>
+      <span className="block truncate font-mono text-[12px] text-[var(--muted)]" title={provider.baseUrl}>
+        {stripProtocol(provider.baseUrl)}
+      </span>
+    </TableCell>
+    <TableCell className={CELL}>
+      <div className="tabular-nums text-[12px] text-[var(--muted)]">
+        <div>Search: {callCost(provider, "search")}</div>
+        <div>Fetch: {callCost(provider, "fetch")}</div>
+        {provider.capabilities.includes("keyless_tier") && <div>Free without a key</div>}
+      </div>
+    </TableCell>
+    {renderHealthCell({ provider, canEdit, testing, lastResult, now, onOpenTest })}
+    <ProviderRegistryControls
+      provider={provider}
+      canEdit={canEdit}
+      accessPending={accessPending}
+      onToggleGlobal={onToggleGlobal}
+      onToggleSearch={onToggleSearch}
+      onToggleFetch={onToggleFetch}
+    />
+  </TableRow>
+)

@@ -9,11 +9,8 @@ Under Q1 the public endpoints are exactly ``POST /auth/register`` and
 opaque refresh credential in the Bearer header and by nothing else. The access
 JWT gates ``POST /auth/jwt/logout`` and ``GET /users/me``.
 
-Public registration and ``POST /api/v1/users`` create one ordinary human
-account: no role, account type or privilege field exists in either request, and
-a request that sends one is rejected with HTTP 422. Provisioning requires the
-access JWT and a live system administrator assignment. The legacy account
-lookup path denies every authenticated caller.
+Public registration creates one ordinary human account: no role, account type
+or privilege field exists in the request.
 
 Every human dependency here accepts only a verified human session principal. A
 project API key never satisfies one: the guard rejects keys outside execution
@@ -33,7 +30,7 @@ message, so no raw input, hash, or token value can leak through a 422 body.
 """
 
 from collections.abc import AsyncIterator
-from typing import Annotated, Any, Literal, NoReturn, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
@@ -45,7 +42,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi_users import exceptions, schemas
 from fastapi_users.router.common import ErrorCode
 from fastapi_users.router.register import get_register_router
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from freesearch.infrastructure.browser_auth import (
     REFRESH_COOKIE_PATH,
@@ -68,12 +65,9 @@ from freesearch.services.users import (
 )
 
 #: Auth routes whose validation failures must not echo submitted credentials.
-_AUTH_VALIDATION_PREFIXES = ("/auth/", "/users/me", "/api/v1/users")
+_AUTH_VALIDATION_PREFIXES = ("/auth/", "/users/me", "/api/v1/users/me")
 
 _SAFE_VALIDATION_DETAIL = "invalid authentication request"
-
-#: Fixed denial detail of the legacy account lookup and role-change routes.
-_ACCOUNT_MANAGEMENT_DENIED = "account management is not available before project association"
 
 _BEARER_PREFIX = "bearer "
 
@@ -106,7 +100,7 @@ def _publish_bearer_scheme(app: FastAPI) -> None:
 
 
 class UserCreate(schemas.CreateUpdateDictModel):
-    """Registration and provisioning body: email and password only.
+    """Registration body: email and password only.
 
     ``extra="forbid"`` rejects a role, a privilege or status flag, provider
     fields and any other field with HTTP 422, so no request can ask for
@@ -120,8 +114,7 @@ class UserCreate(schemas.CreateUpdateDictModel):
     password: str = Field(repr=False)
 
 
-#: Account projection returned by registration, ``GET /users/me``, provisioning
-#: and deactivation: the one safe human account contract.
+#: Account projection returned by registration and ``GET /users/me``.
 UserRead = UserAccount
 
 
@@ -212,15 +205,6 @@ def _storage_unavailable() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="authentication is temporarily unavailable",
-    )
-
-
-def _account_management_denied() -> HTTPException:
-    """Return the fixed denial of a legacy account-management route."""
-
-    return HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail=_ACCOUNT_MANAGEMENT_DENIED,
     )
 
 
@@ -570,6 +554,7 @@ def register_auth_routes(app: FastAPI) -> None:
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @app.get("/api/v1/users/me", response_model=UserRead)
     @app.get("/users/me", response_model=UserRead)
     async def users_me(request: Request) -> UserRead:
         """Return the authenticated account's own record, never its hash."""
@@ -581,74 +566,6 @@ def register_auth_routes(app: FastAPI) -> None:
             except (exceptions.InvalidID, exceptions.UserNotExists) as missing:
                 raise _unauthenticated("not authenticated") from missing
         return UserRead.model_validate(account)
-
-    _register_admin_account_routes(app)
-
-
-def _register_admin_account_routes(app: FastAPI) -> None:
-    """Register account provisioning and deny the legacy account lookup.
-
-    ``POST /api/v1/users`` needs Bearer access and a live system administrator
-    assignment. It reserves one provisioning attempt, creates one ordinary
-    account with no role, and returns the safe projection of that new account.
-    The response holds no credential and sets no cookie.
-
-    The legacy lookup path stays registered as an explicit compatibility
-    boundary, and every authenticated caller receives HTTP 403. System roles
-    change only through the trusted operator CLI.
-    """
-
-    @app.post("/api/v1/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-    async def provision_user(body: UserCreate, request: Request) -> UserRead:
-        """Create one ordinary standalone account for a system administrator caller."""
-
-        await require_admin(request)
-        service = _auth_service(request)
-        try:
-            retry = await service.reserve_registration(peer_address=peer_address(request))
-        except AuthStorageUnavailable as unavailable:
-            raise _storage_unavailable() from unavailable
-        if retry is not None:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="too many registration attempts",
-                headers={"Retry-After": str(retry)},
-            )
-        try:
-            account = await service.provision_account(str(body.email), SecretStr(body.password))
-        except exceptions.UserAlreadyExists as exists:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=ErrorCode.REGISTER_USER_ALREADY_EXISTS,
-            ) from exists
-        except exceptions.InvalidPasswordException as invalid:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "code": ErrorCode.REGISTER_INVALID_PASSWORD,
-                    "reason": invalid.reason,
-                },
-            ) from invalid
-        except AuthStorageUnavailable as unavailable:
-            raise _storage_unavailable() from unavailable
-        except AuthConfigurationError as unconfigured:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="account authentication is not configured",
-            ) from unconfigured
-        return account
-
-    @app.get("/api/v1/users/{user_id}", response_model=None)
-    async def get_user(user_id: str, request: Request) -> NoReturn:
-        """Deny the legacy account lookup for every authenticated caller.
-
-        The caller is authenticated before the denial, so an absent or invalid
-        credential stays HTTP 401. No target account is read, and the body
-        carries no account data.
-        """
-
-        await _access_principal(request)
-        raise _account_management_denied()
 
 
 __all__ = [

@@ -422,37 +422,6 @@ def test_cookie_never_authenticates_ordinary_routes() -> None:
     assert "state_user" not in seen
 
 
-def test_provisioning_body_cap_applies_before_dispatch() -> None:
-    """T2-PROVISION: POST /api/v1/users carries the 4096-byte cap with Bearer auth."""
-
-    guard, seen = _guard()
-    status, _, body = _run(
-        guard,
-        method="POST",
-        path="/api/v1/users",
-        headers=_bearer("good-access"),
-        body_chunks=[b"X" * 4097],
-    )
-    assert status == 413
-    assert body == b'{"detail": "request body is too large"}'
-    assert "state_user" not in seen
-
-    guard, seen = _guard()
-    status, _, _ = _run(
-        guard,
-        method="POST",
-        path="/api/v1/users",
-        headers=_bearer("good-access"),
-        body_chunks=[b"Y" * 4096],
-    )
-    assert status == 200
-    assert seen["body"] == b"Y" * 4096
-
-    guard, _ = _guard()
-    status, _, _ = _run(guard, method="POST", path="/api/v1/users", headers=_bearer("bad-access"))
-    assert status == 401
-
-
 # --- A1 (TASK-000041): project API keys at the guard ------------------------
 
 _GOOD_KEY = "fs_live_goodgoodgood_" + "k" * 43
@@ -513,7 +482,6 @@ def test_api_key_is_verified_only_by_the_key_verifier_on_execution_routes(path: 
         ("GET", "/api/v1/projects/00000000-0000-4000-8000-0000000000aa/traces"),
         ("GET", "/api/v1/projects"),
         ("POST", "/api/v1/projects/abc/api-keys"),
-        ("POST", "/api/v1/users"),
         ("GET", "/no-such-route"),
         ("GET", "/search"),
     ],

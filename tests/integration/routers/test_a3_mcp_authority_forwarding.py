@@ -24,12 +24,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from freesearch.configuration.config import Settings, get_settings
 from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
@@ -43,25 +43,29 @@ from freesearch.models.contracts import (
 )
 from freesearch.models.credentials import CredentialOperation
 from freesearch.models.observability import TraceRootSpan
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
 from freesearch.models.provider_limits import AuthMode, NativeUsageSnapshot, UnitKind
-from freesearch.models.schema_enums import UpstreamScope
+from freesearch.persistence.credentials import CredentialRepository
 from freesearch.persistence.execution_authority import (
     ExecutionAuthorityRepository,
     ExecutionDispatchRow,
 )
+from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
 from freesearch.persistence.pools import (
-    PoolAllocationRepository,
+    ProjectPoolAllocationRow,
     UpstreamPoolRepository,
+    UpstreamQuotaPoolRow,
 )
 from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
 from freesearch.routers.api import create_app
+from freesearch.services.credentials import credential_secret_slot
 from freesearch.services.execution_forward import (
     DEADLINE_HEADER,
     TRACE_HEADER,
 )
+from freesearch.services.pool_materializer import materialize_pools
 from tests.fixtures.a2_execution import RecordingAdapter
-from tests.fixtures.a3_authority import PROVIDER, seed_credential
+from tests.fixtures.a3_authority import PROVIDER
 from tests.fixtures.api_keys import issue_project_key
 from tests.fixtures.auth import auth_service_for
 from tests.fixtures.auth import test_settings as rig_test_settings
@@ -86,56 +90,60 @@ async def seed_key_project_with_pool(
 
     key = await issue_project_key(repository, prefix=f"a3-mcp-{uuid4().hex[:6]}")
     secret = f"fake-{PROVIDER}-mcp-{uuid4().hex[:10]}"
-    credential = await seed_credential(
-        repository,
-        store,
-        project_id=key.project_id,
-        actor_id=key.owner.id,
-        label="mcp-binding",
-        secret=secret,
-    )
     adapter = RecordingAdapter(PROVIDER)
     install_adapter_map(monkeypatch, [adapter], secrets={PROVIDER: secret})
 
-    constraint = [
-        {
-            "kind": "rate",
-            "algorithm": "trailing_window",
-            "window": 3600,
-            "limit": 100,
-        }
-    ]
     async with repository.session() as session:
-        pools = UpstreamPoolRepository(session)
-        pool = await pools.create_pool(
+        credential = await CredentialRepository(session).insert_credential(
             account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
             provider_type=PROVIDER,
-            upstream_scope=UpstreamScope.ACCOUNT,
-            pool_key=f"a3-{uuid4().hex[:10]}",
-            label="mcp pool",
-            constraints=constraint,
-            max_concurrency=1,
+            owner_scope=CredentialOwnerScope.SYSTEM,
+            owner_project_id=None,
+            owner_user_id=key.owner.id,
+            label="mcp-binding",
+            auth_mode="api_key",
+            created_by=key.owner.id,
         )
-        await pools.link_credential(
-            credential_id=credential.credential_id,
-            operation=CredentialOperation.SEARCH,
-            pool_id=pool.id,
-            provider_type=PROVIDER,
+        await store.create_slot_in_session(
+            session, credential_secret_slot(credential.id, credential.generation), secret
         )
-        await PoolAllocationRepository(session).create(
+        await KeyPoolRepository(session).create(
+            credential_id=credential.id,
             project_id=key.project_id,
-            pool_id=pool.id,
-            operation=CredentialOperation.SEARCH,
-            base_rate=100,
-            rate_window_seconds=3600,
-            granted_by=key.owner.id,
-            borrow_enabled=True,
-            max_rate=100,
-            weight=4,
-            max_concurrency=max_concurrency,
-            max_queued_requests=max_queued_requests,
-            max_queue_wait_ms=max_queue_wait_ms,
+            provider_type=PROVIDER,
+            created_by=key.owner.id,
+            values=KeyPoolValues(
+                label="mcp pool",
+                operations=frozenset({"search"}),
+                rate_limit=100,
+                rate_window_seconds=3600,
+            ),
         )
+        await materialize_pools(session, project_id=key.project_id)
+        pool_id = uuid5(NAMESPACE_URL, f"freesearch:credential-pool:{credential.id}")
+        # Queue rails are internal authority settings, not vault pool fields.
+        await session.execute(
+            update(UpstreamQuotaPoolRow)
+            .where(UpstreamQuotaPoolRow.id == str(pool_id))
+            .values(max_concurrency=1)
+        )
+        await session.execute(
+            update(ProjectPoolAllocationRow)
+            .where(
+                ProjectPoolAllocationRow.project_id == str(key.project_id),
+                ProjectPoolAllocationRow.pool_id == str(pool_id),
+                ProjectPoolAllocationRow.operation_scope == "search",
+            )
+            .values(
+                max_concurrency=max_concurrency,
+                max_queued_requests=max_queued_requests,
+                max_queue_wait_ms=max_queue_wait_ms,
+            )
+        )
+        pool = await UpstreamPoolRepository(session).get_pool(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID, pool_id=pool_id
+        )
+        assert pool is not None
         await session.commit()
     return key, pool, adapter
 

@@ -11,7 +11,7 @@ import asyncio
 import gc
 import json
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,7 @@ from freesearch.services.parallel_oauth import (
     balance_to_snapshot,
 )
 from tests.fixtures.scoped_oauth import open_scoped_oauth
+from tests.fixtures.vault_oauth import open_vault_oauth
 
 FIXED_NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -493,6 +494,9 @@ async def test_status_pending_then_ready_with_bounded_attempts(repository):
         await case.start()
         assert (await case.poll()).status is OAuthGrantStatus.PENDING
         assert case.stub.poll_calls == 1
+        assert (await case.poll()).status is OAuthGrantStatus.PENDING
+        assert case.stub.poll_calls == 1
+        case.clock[0] += timedelta(seconds=case.stub.device_interval)
         assert (await case.poll()).status is OAuthGrantStatus.CONNECTED
         assert case.stub.poll_calls == 2
         for _ in range(3):
@@ -721,10 +725,10 @@ async def test_oauth_balance_flows_through_refresh_quotas(repository):
 
 async def test_control_device_code_shape_and_presence(repository):
     """Origin singleton case: migrated to real A4 credential-scoped behavior."""
-    case = await open_scoped_oauth(repository)
+    case = await open_vault_oauth(repository)
     try:
         response = case.client.post(case.path + "/device", headers=case.headers)
-        assert response.status_code == 201
+        assert response.status_code == 200
         from freesearch.models.credentials import CredentialOAuthDeviceRead
 
         assert set(response.json()) == set(CredentialOAuthDeviceRead.model_fields)
@@ -735,7 +739,7 @@ async def test_control_device_code_shape_and_presence(repository):
 
 async def test_control_status_shape_and_terminal_views(repository):
     """Origin singleton case: migrated to real A4 credential-scoped behavior."""
-    case = await open_scoped_oauth(repository)
+    case = await open_vault_oauth(repository)
     try:
         response = case.client.get(case.path, headers=case.headers)
         assert response.status_code == 200
@@ -765,7 +769,7 @@ async def test_control_rejects_other_and_unknown_providers(repository):
 
 async def test_control_disconnect_is_idempotent_204(repository):
     """Origin singleton case: migrated to real A4 credential-scoped behavior."""
-    case = await open_scoped_oauth(repository)
+    case = await open_vault_oauth(repository)
     try:
         await case.connect()
         for _ in range(2):
@@ -793,7 +797,7 @@ async def test_start_device_flow_conflicts_when_paired(repository):
 
 async def test_control_device_code_409_when_paired(repository):
     """Origin singleton case: migrated to real A4 credential-scoped behavior."""
-    case = await open_scoped_oauth(repository)
+    case = await open_vault_oauth(repository)
     try:
         await case.connect()
         response = case.client.post(case.path + "/device", headers=case.headers)
@@ -884,7 +888,7 @@ async def test_unbound_store_resolves_fail_closed():
 
 async def test_start_device_flow_preflights_writable_store_before_vendor_http(repository):
     """Origin singleton case: migrated to real A4 credential-scoped behavior."""
-    case = await open_scoped_oauth(repository)
+    case = await open_vault_oauth(repository)
     try:
         app = create_app([], repository=case.repository, secret_store=AsyncVaultDouble())
         with TestClient(app) as client:

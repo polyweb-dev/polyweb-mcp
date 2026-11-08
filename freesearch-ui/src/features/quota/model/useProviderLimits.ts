@@ -1,3 +1,4 @@
+import { saveBudget } from "./budgetApi"
 /**
  * Provider limit controller for one provider rail.
  *
@@ -16,9 +17,9 @@ import type {
   CRDGrantPayload,
   LimitAuditEvent,
   ProviderLimits,
-  ProviderLimitsSyncResult,
 } from "@/domains/dashboard"
 import { activeAuth } from "./crdCardModel"
+import { bodyOf, skippedFor, syncText, withTimeout, NO_USAGE_ENDPOINT, NO_CREDENTIAL } from "./providerRefresh"
 
 const STALE_VERSION_TEXT =
   "The server holds a newer version of this record. Reload the limits and try again."
@@ -38,8 +39,12 @@ export interface ProviderLimitsController {
   saveGrant: (payload: CRDGrantPayload) => Promise<boolean>
   syncing: boolean
   syncNote: string | null
-  /** The last refresh was skipped, so the card hides its refresh action. */
+  /** The last refresh said the provider reports no usage, so the card hides its refresh action. */
   refreshSkipped: boolean
+  /** The last refresh found no system key to read usage with. */
+  needsCredential: boolean
+  /** When the last refresh updated the numbers, in epoch milliseconds; null otherwise. */
+  updatedAt: number | null
   syncNow: () => Promise<void>
   history: LimitAuditEvent[]
   historyLoading: boolean
@@ -58,6 +63,17 @@ interface SyncState {
   syncing: boolean
   syncNote: string | null
   skipped: boolean
+  needsCredential: boolean
+  /** When the last refresh updated the numbers, in epoch milliseconds. */
+  updatedAt: number | null
+}
+
+const IDLE_SYNC: SyncState = {
+  syncing: false,
+  syncNote: null,
+  skipped: false,
+  needsCredential: false,
+  updatedAt: null,
 }
 
 interface HistoryState {
@@ -74,38 +90,6 @@ interface HistoryInput {
   reloadKey: number
   snapshotKey: string
   open: boolean
-}
-
-type SyncBody = Partial<ProviderLimitsSyncResult>
-
-/** Whether a refresh reply reports a skip; anything else keeps the action. */
-function isSkippedSync(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false
-  const body = value as SyncBody
-  if (body.status !== "skipped") return false
-  // A held lease means another sync is already running for this provider, so
-  // the card keeps its refresh action instead of hiding it.
-  return body.reason !== "lease_held"
-}
-
-/** Read the refresh reply defensively; a partial body still yields a safe, informative note. */
-function syncText(value: unknown): string {
-  const body = (typeof value === "object" && value !== null ? value : {}) as SyncBody
-  const status = typeof body.status === "string" ? body.status : "failed"
-  // A held lease means another sync is already running for this provider, so
-  // the card reports success: the numbers update when that sync lands.
-  if (status === "skipped" && body.reason === "lease_held") return "Limits refreshed"
-  const note = typeof body.reason === "string" && body.reason ? body.reason : null
-  const code = typeof body.error_code === "string" && body.error_code ? body.error_code : null
-  const detail = note ?? code
-  if (status === "synced") {
-    return detail !== null ? "Limits refreshed: " + detail : "Limits refreshed"
-  }
-  if (status === "skipped") {
-    return detail !== null ? "Refresh skipped: " + detail : "Refresh skipped"
-  }
-  if (detail !== null) return "Refresh failed: " + detail
-  return "Refresh failed"
 }
 
 interface HistoryPage {
@@ -219,7 +203,7 @@ export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsCon
     saveError: null,
     staleVersion: false,
   })
-  const [sync, setSync] = useState<SyncState>({ syncing: false, syncNote: null, skipped: false })
+  const [sync, setSync] = useState<SyncState>(IDLE_SYNC)
 
   const reload = useCallback(async (): Promise<void> => {
     await refreshDashboard()
@@ -230,7 +214,7 @@ export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsCon
     async (payload: CRDGrantPayload): Promise<boolean> => {
       setSave({ saving: true, saveError: null, staleVersion: false })
       try {
-        await apiService.putCRDGrants(backendId, payload)
+        await saveBudget(backendId, payload)
         await refreshDashboard()
         setSave({ saving: false, saveError: null, staleVersion: false })
         setReloadKey((previous) => previous + 1)
@@ -242,7 +226,7 @@ export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsCon
           staleVersion: stale,
           saveError: stale
             ? STALE_VERSION_TEXT
-            : errorMessage(failure, "Unable to save the credit-unit grant"),
+            : errorMessage(failure, "Unable to save the budget"),
         })
         return false
       }
@@ -251,15 +235,21 @@ export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsCon
   )
 
   const syncNow = useCallback(async (): Promise<void> => {
-    setSync({ syncing: true, syncNote: null, skipped: false })
+    setSync({ ...IDLE_SYNC, syncing: true })
     try {
-      const result = await apiService.syncProviderLimits(backendId)
+      const result = await withTimeout(apiService.syncProviderLimits(backendId))
       const note = syncText(result)
-      await refreshDashboard()
-      setSync({ syncing: false, syncNote: note, skipped: isSkippedSync(result) })
+      await withTimeout(refreshDashboard())
+      setSync({
+        syncing: false,
+        syncNote: note,
+        skipped: skippedFor(result, NO_USAGE_ENDPOINT),
+        needsCredential: skippedFor(result, NO_CREDENTIAL),
+        updatedAt: bodyOf(result).status === "synced" ? Date.now() : null,
+      })
       setReloadKey((previous) => previous + 1)
-    } catch (failure) {
-      setSync({ syncing: false, syncNote: errorMessage(failure, "Unable to refresh provider limits"), skipped: false })
+    } catch {
+      setSync({ ...IDLE_SYNC, syncNote: "Refresh failed" })
     }
   }, [backendId, refreshDashboard])
 
@@ -274,6 +264,8 @@ export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsCon
     syncing: sync.syncing,
     syncNote: sync.syncNote,
     refreshSkipped: sync.skipped,
+    needsCredential: sync.needsCredential,
+    updatedAt: sync.updatedAt,
     syncNow,
     ...history,
   }

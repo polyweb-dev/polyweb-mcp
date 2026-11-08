@@ -31,10 +31,12 @@ from sqlalchemy import (
     delete,
     func,
     select,
+    text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from freesearch.models.project_permissions import DEVELOPER_BITS, PROVIDER_OWNER_BIT
 from freesearch.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
@@ -130,6 +132,12 @@ class ProjectMembershipRow(Base):
         ),
         CheckConstraint("version >= 1", name="project_memberships_version_positive"),
         Index("ix_project_memberships_user_id", "user_id"),
+        Index(
+            "project_memberships_one_provider_owner",
+            "project_id",
+            unique=True,
+            sqlite_where=text("(permissions & 32768) != 0"),
+        ),
     )
 
     project_id: Mapped[str] = mapped_column(
@@ -142,6 +150,7 @@ class ProjectMembershipRow(Base):
         String(32), nullable=False, default=MembershipStatus.ACTIVE.value
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    permissions: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 
 class SystemRoleAssignmentRow(Base):
@@ -178,6 +187,10 @@ class ProjectRoleAssignmentRow(Base):
             ondelete="CASCADE",
         ),
         CheckConstraint("version >= 1", name="project_role_assignments_version_positive"),
+        CheckConstraint(
+            "role_key IN ('project_admin', 'project_member')",
+            name="project_role_assignments_role_key_allowed",
+        ),
         Index("ix_project_role_assignments_user_id", "user_id"),
         Index("ix_project_role_assignments_project_user", "project_id", "user_id"),
     )
@@ -196,6 +209,166 @@ class ProjectRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def get_member_permissions(self, project_id: UUID, user_id: UUID) -> int | None:
+        """Return stored permissions, or None for a missing membership."""
+        result = await self._session.execute(
+            text("SELECT permissions FROM project_memberships WHERE project_id=:p AND user_id=:u"),
+            {"p": str(project_id), "u": str(user_id)},
+        )
+        return result.scalar_one_or_none()
+
+    async def set_member_permissions(
+        self, project_id: UUID, user_id: UUID, permissions: int
+    ) -> bool:
+        """Set developer bits without allowing callers to change provider ownership."""
+        if permissions < 0 or permissions & ~DEVELOPER_BITS:
+            raise ValueError("only developer permission bits can be set")
+        result = await self._session.execute(
+            text(
+                "UPDATE project_memberships SET permissions=(permissions & :owner) | :bits, "
+                "version=version+1 WHERE project_id=:p AND user_id=:u RETURNING user_id"
+            ),
+            {
+                "owner": PROVIDER_OWNER_BIT,
+                "bits": permissions,
+                "p": str(project_id),
+                "u": str(user_id),
+            },
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def get_provider_owner(self, project_id: UUID) -> UUID | None:
+        result = await self._session.execute(
+            text(
+                "SELECT user_id FROM project_memberships "
+                "WHERE project_id=:p AND (permissions & :owner) != 0"
+            ),
+            {"p": str(project_id), "owner": PROVIDER_OWNER_BIT},
+        )
+        value = result.scalar_one_or_none()
+        return UUID(value) if value else None
+
+    async def transfer_provider_owner(
+        self, project_id: UUID, from_user: UUID | None, to_user: UUID
+    ) -> bool:
+        """Transfer or claim ownership atomically; False means stale owner or invalid target."""
+        # Start a real SQLite write transaction before the savepoint. Otherwise
+        # releasing an outermost savepoint can commit despite a later rollback.
+        await self._session.execute(
+            text("UPDATE projects SET version=version WHERE id=:p"), {"p": str(project_id)}
+        )
+        async with self._session.begin_nested():
+            current = await self.get_provider_owner(project_id)
+            target = await self._session.execute(
+                text(
+                    "SELECT m.user_id FROM project_memberships m "
+                    "JOIN project_role_assignments r ON r.project_id=m.project_id "
+                    "AND r.user_id=m.user_id "
+                    "JOIN user u ON u.id=m.user_id "
+                    "JOIN projects p ON p.id=m.project_id "
+                    "JOIN accounts a ON a.id=p.account_id "
+                    "WHERE m.project_id=:p AND m.user_id=:u AND m.status='active' "
+                    "AND r.role_key='project_admin' AND u.is_active=1 AND p.status='active' "
+                    "AND a.status='active'"
+                ),
+                {"p": str(project_id), "u": str(to_user)},
+            )
+            if current != from_user or target.first() is None:
+                return False
+            if current == to_user:
+                return True
+            if current is not None:
+                await self._session.execute(
+                    text(
+                        "UPDATE project_memberships SET permissions=permissions & ~:owner, "
+                        "version=version+1 WHERE project_id=:p AND user_id=:u"
+                    ),
+                    {"owner": PROVIDER_OWNER_BIT, "p": str(project_id), "u": str(current)},
+                )
+            await self._session.execute(
+                text(
+                    "UPDATE project_memberships SET permissions=permissions | :owner, "
+                    "version=version+1 WHERE project_id=:p AND user_id=:u"
+                ),
+                {"owner": PROVIDER_OWNER_BIT, "p": str(project_id), "u": str(to_user)},
+            )
+            return True
+
+    async def clear_provider_owner_for_user(self, user_id: UUID) -> list[UUID]:
+        result = await self._session.execute(
+            text(
+                "UPDATE project_memberships SET permissions=permissions & ~:owner, "
+                "version=version+1 WHERE user_id=:u AND (permissions & :owner) != 0 "
+                "RETURNING project_id"
+            ),
+            {"owner": PROVIDER_OWNER_BIT, "u": str(user_id)},
+        )
+        return [UUID(row[0]) for row in result]
+
+    async def list_provider_owner_projects(self, user_id: UUID) -> list[UUID]:
+        result = await self._session.execute(
+            text(
+                "SELECT m.project_id FROM project_memberships m "
+                "JOIN projects p ON p.id=m.project_id JOIN user u ON u.id=m.user_id "
+                "JOIN accounts a ON a.id=p.account_id "
+                "JOIN project_role_assignments r ON r.project_id=m.project_id "
+                "AND r.user_id=m.user_id "
+                "WHERE m.user_id=:u AND (m.permissions & :owner) != 0 "
+                "AND m.status='active' AND p.status='active' AND a.status='active' "
+                "AND u.is_active=1 "
+                "AND r.role_key='project_admin' ORDER BY m.project_id"
+            ),
+            {"owner": PROVIDER_OWNER_BIT, "u": str(user_id)},
+        )
+        return [UUID(row[0]) for row in result]
+
+    async def user_can_use_vault(self, user_id: UUID) -> bool:
+        """Allow active system admins and active admins of active projects."""
+
+        user_cls = _get_user_row()
+        user = (
+            await self._session.execute(
+                select(user_cls).where(user_cls.id == user_id)  # type: ignore[arg-type]
+            )
+        ).scalar_one_or_none()
+        if user is None or not user.is_active:
+            return False
+        system_admin = (
+            await self._session.execute(
+                select(SystemRoleAssignmentRow.user_id)
+                .join(AccountRow, AccountRow.id == SystemRoleAssignmentRow.account_id)
+                .where(
+                    SystemRoleAssignmentRow.user_id == str(user_id),
+                    SystemRoleAssignmentRow.role_key == BuiltinRole.SYSTEM_ADMIN.value,
+                    AccountRow.status == "active",
+                )
+                .limit(1)
+            )
+        ).first()
+        if system_admin is not None:
+            return True
+        project_admin = (
+            await self._session.execute(
+                select(ProjectRoleAssignmentRow.user_id)
+                .join(
+                    ProjectMembershipRow,
+                    (ProjectMembershipRow.project_id == ProjectRoleAssignmentRow.project_id)
+                    & (ProjectMembershipRow.user_id == ProjectRoleAssignmentRow.user_id),
+                )
+                .join(ProjectRow, ProjectRow.id == ProjectMembershipRow.project_id)
+                .join(AccountRow, AccountRow.id == ProjectRow.account_id)
+                .where(
+                    ProjectRoleAssignmentRow.user_id == str(user_id),
+                    ProjectRoleAssignmentRow.role_key == BuiltinRole.PROJECT_ADMIN.value,
+                    ProjectMembershipRow.status == "active",
+                    ProjectRow.status == "active",
+                    AccountRow.status == "active",
+                )
+                .limit(1)
+            )
+        ).first()
+        return project_admin is not None
 
     async def create_project_with_admin(
         self,
@@ -235,6 +408,14 @@ class ProjectRepository:
             raise ValueError(f"Initial admin user {admin_user_id} does not exist")
         if not admin_user.is_active:
             raise ValueError(f"Initial admin user {admin_user_id} is not active")
+        if created_by != admin_user_id:
+            creator = (
+                await self._session.execute(
+                    select(user_cls).where(user_cls.id == created_by)  # type: ignore[arg-type]
+                )
+            ).scalar_one_or_none()
+            if creator is None or not creator.is_active:
+                raise ValueError(f"Project creator {created_by} is not an active user")
 
         project_id = uuid4()
         slug = project_create.slug or _generate_slug(project_create.name)
@@ -283,6 +464,38 @@ class ProjectRepository:
         )
         self._session.add(role_row)
         await self._session.flush()
+
+        if created_by != admin_user_id:
+            self._session.add(
+                ProjectMembershipRow(
+                    project_id=str(project_id),
+                    user_id=str(created_by),
+                    status=MembershipStatus.ACTIVE.value,
+                    version=1,
+                )
+            )
+            await self._session.flush()
+            self._session.add(
+                ProjectRoleAssignmentRow(
+                    project_id=str(project_id),
+                    user_id=str(created_by),
+                    role_key=BuiltinRole.PROJECT_ADMIN.value,
+                    granted_by=str(created_by),
+                    version=1,
+                )
+            )
+            await self._session.flush()
+        await self._session.execute(
+            text(
+                "UPDATE project_memberships SET permissions=:permissions "
+                "WHERE project_id=:project AND user_id=:creator"
+            ),
+            {
+                "permissions": DEVELOPER_BITS | PROVIDER_OWNER_BIT,
+                "project": str(project_id),
+                "creator": str(created_by),
+            },
+        )
 
         project_read = _project_row_to_read(project_row)
         member_read = ProjectMemberRead(

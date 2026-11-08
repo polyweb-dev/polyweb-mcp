@@ -127,6 +127,16 @@ export function decodeProjectAccess(value: unknown): ProjectAccess {
   }
 }
 
+function validMemberExtension(record: Record<string, unknown>): record is Record<string, unknown> & {
+  role: "admin" | "developer"
+  permissions: number
+  provider_owner: boolean
+} {
+  return (record.role === "admin" || record.role === "developer") &&
+    typeof record.permissions === "number" && Number.isInteger(record.permissions) && record.permissions >= 0 &&
+    typeof record.provider_owner === "boolean"
+}
+
 /** Decode one member projection. */
 export function decodeProjectMember(value: unknown): ProjectMember {
   const record = asRecord(value)
@@ -141,7 +151,8 @@ export function decodeProjectMember(value: unknown): ProjectMember {
     email === null ||
     roles === null ||
     !isMembershipStatus(record.status) ||
-    typeof record.version !== "number"
+    typeof record.version !== "number" ||
+    !validMemberExtension(record)
   ) {
     throw invalidProjectResponse()
   }
@@ -152,6 +163,9 @@ export function decodeProjectMember(value: unknown): ProjectMember {
     status: record.status,
     roles,
     version: record.version,
+    role: record.role,
+    permissions: record.permissions,
+    provider_owner: record.provider_owner,
   }
 }
 

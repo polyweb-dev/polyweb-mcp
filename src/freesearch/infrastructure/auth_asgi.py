@@ -31,9 +31,6 @@ Policy (PLAN P3):
 * Public auth bodies are read from the stream and capped at 4096 bytes; Search
   and Fetch bodies use a separate 1 MiB cap for provider options. A declared
   ``Content-Length`` cannot bypass either limit.
-* An authenticated ``POST /api/v1/users`` body is capped at the same 4096 bytes
-  before endpoint dispatch, so a provisioning request cannot stream an unbounded
-  body into the endpoint.
 * Public registration reserves its peer and deployment capacity before endpoint
   dispatch, before schema validation, and before any password hash work.
 """
@@ -102,9 +99,6 @@ _FORBIDDEN_PAYLOAD: dict[str, object] = {"detail": "browser request rejected"}
 
 #: The one body-cap failure message, which carries no request content.
 _TOO_LARGE_PAYLOAD: dict[str, object] = {"detail": "request body is too large"}
-
-#: The one protected route that accepts a credential-bearing JSON body.
-PROVISION_ROUTE: tuple[str, str] = ("POST", "/api/v1/users")
 
 #: Maximum accepted body for a public auth request.
 MAX_PUBLIC_AUTH_BODY_BYTES: int = 4096
@@ -361,11 +355,7 @@ class BearerAuthMiddleware:
     async def _bearer_request(
         self, scope: Scope, receive: Receive, send: Send, method: str, path: str
     ) -> None:
-        """Authenticate one protected request from its Bearer credential.
-
-        The provisioning route also receives the streamed body cap, so its body
-        is bounded before the endpoint can read it.
-        """
+        """Authenticate one protected request from its Bearer credential."""
 
         token = bearer_credential_from_scope(scope)
         principal = await self._authenticate(method, path, token)
@@ -376,9 +366,7 @@ class BearerAuthMiddleware:
         if isinstance(principal, ProjectApiKeyPrincipal) and token is not None:
             store_forwarding_credential(scope, token)
         body_limit: int | None = None
-        if (method, path) == PROVISION_ROUTE:
-            body_limit = MAX_PUBLIC_AUTH_BODY_BYTES
-        elif (method, path) in self._operation_routes:
+        if (method, path) in self._operation_routes:
             body_limit = MAX_PUBLIC_OPERATION_BODY_BYTES
         if body_limit is not None:
             replay = await _capped_body(receive, body_limit)
@@ -514,7 +502,6 @@ __all__ = [
     "MAX_PUBLIC_AUTH_BODY_BYTES",
     "MAX_PUBLIC_OPERATION_BODY_BYTES",
     "OPERATION_ROUTES",
-    "PROVISION_ROUTE",
     "PUBLIC_ROUTES",
     "REFRESH_COOKIE_ROUTES",
     "REFRESH_ROUTE",

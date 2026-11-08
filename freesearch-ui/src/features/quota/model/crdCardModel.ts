@@ -32,26 +32,6 @@ const FREE_UNIT = "FREE"
 const UNKNOWN_TEXT = "unknown"
 const MANUAL_ANCHOR_TEXT = "Estimated · " + BALANCE_ENTRY
 const USD_SCALE = 12
-/**
- * Frontend display-only allowance for the Parallel OAuth balance fallback:
- * $5/mo free credit (LIMITS.md §7, eligible orgs with card) at 1 CRD =
- * $0.001, so $5 = 5000 CRD. Never a backend allowance; only a denominator
- * for the card bar and percent.
- */
-export const PARALLEL_FREE_ALLOWANCE_CRD = "5000"
-/**
- * Frontend display-only allowance for the You.com balance fallback: the $100
- * signup credit (LIMITS.md §11.5, "$100 once + 100 free/day") at 1 CRD =
- * $0.001, so $100 = 100000 CRD total. The shared USD pool prices search at
- * $0.005 (5 CRD) and fetch at $0.001 per live page (1 CRD), so 100000 CRD
- * yields 20000 searches or 100000 fetches (LIMITS.md §11.3). The total
- * 100000 CRD is the display-only denominator, consistent with poolFunds when
- * the backend reports the $100 allowance (95500/100000). Never a backend
- * allowance; only a denominator for the card bar and percent. The 100/day
- * free search pool is a rate fact, not funds, so it stays out of the
- * allowance.
- */
-export const YOUCOM_FREE_ALLOWANCE_CRD = "100000"
 /** Confidence order: the weakest applicable member governs a combined note. */
 const CONFIDENCE_RANK: Record<string, number> = {
   authoritative: 3,

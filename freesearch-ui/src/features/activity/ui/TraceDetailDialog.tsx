@@ -1,12 +1,13 @@
 import {
   deriveProviderAttempts,
-  tracePayloadNotice,
   type TraceDetail,
   type TraceOutput,
   type TraceProviderAttempt,
 } from "@/domains/activity"
+import { formatDateTime } from "@/shared/lib/formatTime"
 import { Button } from "@/shared/ui/button"
 import { Modal } from "@/shared/ui/Modal"
+import { Tag } from "@/shared/ui/Tag"
 import { TraceDetailError } from "./TraceDetailError"
 import { TraceDetailSection } from "./TraceDetailSection"
 import { TraceDetailSummary } from "./TraceDetailSummary"
@@ -31,6 +32,7 @@ function scopedOutput(trace: TraceDetail, spanId: string | null): TraceOutput | 
     (candidate) => candidate.spanId === spanId
   )
   if (attempt === undefined) return trace.output
+  if (trace.output === null && attempt.results.length === 0) return null
   return { kind: "search_results", query: trace.input ?? "", results: attempt.results }
 }
 
@@ -43,61 +45,77 @@ function attemptFor(trace: TraceDetail, spanId: string | null): TraceProviderAtt
   )
 }
 
+/** "Search · Nov 7, 11:35 AM": what ran and when, the one line under the title. */
+function subtitleOf(trace: TraceDetail | null): string | undefined {
+  if (trace === null) return undefined
+  const operation = trace.operation === "fetch" ? "Fetch" : trace.operation === "search" ? "Search" : null
+  const parsed = new Date(trace.startedAt)
+  const time = Number.isNaN(parsed.getTime()) ? null : formatDateTime(trace.startedAt)
+  const parts = [operation, time].filter((part): part is string => part !== null)
+  return parts.length === 0 ? undefined : parts.join(" · ")
+}
+
+/** The recorded query or URL; a metadata-only trace says so with one quiet tag. */
+function inputValue(trace: TraceDetail) {
+  if (trace.input === null) {
+    const noun = trace.operation === "fetch" ? "URL" : "Query"
+    return (
+      <span className="inline-flex items-center gap-2">
+        <span className="text-[12px] text-[var(--muted)]">{noun} not stored</span>
+        <Tag title="Only timing was stored for this trace">Metadata only</Tag>
+      </span>
+    )
+  }
+  return (
+    <p
+      title={trace.input}
+      className="m-0 mono max-h-12 overflow-y-auto text-[12px] leading-[18px] text-[var(--text)] whitespace-pre-wrap [overflow-wrap:anywhere]"
+    >
+      {trace.input}
+    </p>
+  )
+}
+
 interface ReadyViewOptions {
   trace: TraceDetail
   attempt: TraceProviderAttempt | null
   providerSpanId: string | null
 }
 
-/** The decoded part of the detail: rail, failure, query, inspection workspace. */
+/**
+ * The decoded detail, top to bottom: what was asked beside the summary rail
+ * (status, provider, time, results), any failure, then one workspace that
+ * switches between the recorded results and the stage timeline.
+ */
 function readyView({ trace, attempt, providerSpanId }: ReadyViewOptions) {
   // Only a fused fanout is ranking across providers; a single-provider trace
   // (or one provider picked out of a fanout) shows that provider's own order.
   const mode: RankingMode =
     attempt !== null || trace.provider !== "aggregated" ? "provider" : "fusion"
-  const payloadNotice = tracePayloadNotice(trace)
   return (
-    // Exactly the height of the scrolling body, so the workspace below the rail
-    // and the query can be handed what is left and share it. The height must be
-    // definite: with `min-h-full` the leftover is indefinite and the workspace
-    // falls back to its content, which pushes the panes out of the dialog.
-    <div className="flex h-full min-h-0 min-w-0 flex-col gap-2.5 text-[13px]">
-      <div className="grid min-w-0 shrink-0 gap-2 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] sm:items-stretch">
+    <div className="flex min-w-0 flex-col gap-3 text-[13px]">
+      <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] sm:items-stretch">
         <TraceDetailSection title={trace.operation === "fetch" ? "URL" : "Query"}>
-          <p
-            title={trace.input ?? "—"}
-            className="m-0 mono max-h-12 overflow-y-auto text-[12px] leading-[18px] text-[var(--text)] whitespace-pre-wrap [overflow-wrap:anywhere]"
-          >
-            {trace.input ?? "—"}
-          </p>
+          {inputValue(trace)}
         </TraceDetailSection>
         <TraceDetailSummary trace={trace} attempt={attempt} />
       </div>
       <TraceDetailError trace={trace} />
-      {payloadNotice !== null && (
-        <p role="note" className="shrink-0 text-[13px] text-[var(--muted)]">
-          {payloadNotice}
-        </p>
-      )}
-
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <TraceInspectionWorkspace
-          key={`${trace.traceId}:${providerSpanId ?? "all"}`}
-          trace={trace}
-          output={scopedOutput(trace, providerSpanId)}
-          attempt={attempt}
-          mode={mode}
-        />
-      </div>
+      <TraceInspectionWorkspace
+        key={`${trace.traceId}:${providerSpanId ?? "all"}`}
+        trace={trace}
+        output={scopedOutput(trace, providerSpanId)}
+        attempt={attempt}
+        mode={mode}
+      />
     </div>
   )
 }
 
 /**
- * Trace detail. Fixed header and a vertically scrolling body: one telemetry
- * rail, the query, and one inspection workspace that holds the recorded results
- * and the recorded trajectory with the selected payload at its side. Scoped to
- * a provider attempt, both views show that attempt's response instead (PLAN §5).
+ * Trace detail. The dialog sizes to its content: a short trace stays short,
+ * and a long result list or timeline scrolls inside its own pane. Scoped to a
+ * provider attempt, the results show that attempt's response instead.
  */
 export function TraceDetailDialog({
   trace,
@@ -116,9 +134,8 @@ export function TraceDetailDialog({
       isOpen={isOpen}
       onClose={onClose}
       title="Trace detail"
-      subtitle="Stored in this FreeSearch database; query and results are shown only here."
+      subtitle={status === "ready" ? subtitleOf(trace) : undefined}
       maxWidth="7xl"
-      scrollBody
     >
       {status === "loading" && (
         <p className="text-[13px] text-[var(--muted)]" role="status">
@@ -129,9 +146,9 @@ export function TraceDetailDialog({
       {status === "error" && (
         <div className="space-y-3">
           <p role="alert" className="text-[13px]" style={{ color: "var(--status-danger)" }}>
-            Trace detail unavailable — {error}
+            Trace detail unavailable: {error}
           </p>
-          <Button variant="outline" size="sm" onClick={onRetry}>
+          <Button variant="outline" size="form" onClick={onRetry}>
             Retry
           </Button>
         </div>

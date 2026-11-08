@@ -5,8 +5,9 @@ Feature: Project activity and usage
   held in the URL query and cursor pages behind "Load more"; closing a trace
   detail keeps the filters and every loaded row. The detail explains a
   payload the project's trace policy did not store, and a trace the project
-  can no longer read. Usage shows this project's totals and recent ledger
-  only. The default stubbed session is a project member of Alpha.
+  can no longer read. Usage shows this project's totals only and links to
+  Activity for single calls. The default stubbed session is a project member
+  of Alpha.
 
   Background:
     Given the stubbed session works in project Alpha
@@ -38,27 +39,29 @@ Feature: Project activity and usage
     Given project Alpha recorded a metadata-only, a results-not-stored and a pruned trace
     When I open the "activity" section of project Alpha
     And I open the detail of the metadata-only trace
-    Then the trace detail should say "This trace stored metadata only. The project's trace policy did not capture the query or the results."
+    Then the trace detail should say "Metadata only"
+    And the trace detail opens in Summary
     When I close the trace detail dialog
     And I open the detail of the results-not-stored trace
     Then the trace detail should say "The results of this trace were not stored."
     And the trace detail should say "results not stored probe"
-    And the trace detail should not say "This trace stored metadata only."
+    And the trace detail should not say "Metadata only"
     When I close the trace detail dialog
     And I open the detail of the pruned trace
     Then the trace detail should say "This trace is not available in this project."
 
-  Scenario: Usage shows this project's totals and recent ledger only
+  Scenario: Usage shows this project's totals only and links to Activity
     Given the stubbed session works in project Beta
     When I open the "usage" section of project Alpha
     Then I see the heading "Usage"
-    And I see "This project's usage only."
-    And the "Usage totals" table should have the columns "Provider, Operation, Units, Events"
-    And the "Recent usage" table should have the columns "Time, Provider, Operation, Units, Status, Latency"
+    And I see "What this project's calls used, per provider"
+    And the "Usage totals" table should have the columns "Provider, Operation, Calls, Reported cost (USD), Billed requests, Other units"
     And the "Usage totals" table should show a "brave" "search" row
     And the "Usage totals" table should show "14" in the "brave" row
     And the "Usage totals" table should show a "keenable" "fetch" row
-    And the "Recent usage" table should show a "brave" "search" row
+    And the "Usage totals" table should show "Not reported" in the "brave" row
+    And I see "Known cost"
+    And I see "See every call in Activity"
     And no usage table should show the usage of project Beta
     When I open the "usage" section of project Beta
     Then the "Usage totals" table should show "777" in the "exa" row

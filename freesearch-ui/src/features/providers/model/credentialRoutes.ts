@@ -1,14 +1,3 @@
-import {
-  createProjectCredential,
-  createSystemCredential,
-  deleteProjectCredential,
-  deleteSystemCredential,
-  disconnectCredentialOAuth,
-  projectCredentialBase,
-  rotateProjectCredential,
-  rotateSystemCredential,
-  systemCredentialBase,
-} from "@/domains/providers"
 import type { NewCredentialInput } from "@/domains/providers"
 
 /** Row data the credential actions need. */
@@ -27,23 +16,14 @@ export interface CredentialRoutes {
   oauthBase: (id: string) => string
 }
 
-/** Credential routes of the system scope. */
-export const SYSTEM_CREDENTIAL_ROUTES: CredentialRoutes = {
-  create: createSystemCredential,
-  rotate: rotateSystemCredential,
-  remove: deleteSystemCredential,
-  disconnect: (id) => disconnectCredentialOAuth(systemCredentialBase(id)),
-  oauthBase: systemCredentialBase,
-}
-
-/** Credential routes of one project's private credentials. */
-export function projectCredentialRoutes(projectId: string): CredentialRoutes {
+/** Legacy project-key actions are unavailable; keys belong to the account vault. */
+export function projectCredentialRoutes(): CredentialRoutes {
+  const unavailable = () => { throw new Error("Manage keys in Account > Keys and pools.") }
   return {
-    create: (input) => createProjectCredential(projectId, input),
-    rotate: (id, expectedGeneration, secret) =>
-      rotateProjectCredential(projectId, id, { expectedGeneration, secret }),
-    remove: (id) => deleteProjectCredential(projectId, id),
-    disconnect: (id) => disconnectCredentialOAuth(projectCredentialBase(projectId, id)),
-    oauthBase: (id) => projectCredentialBase(projectId, id),
+    create: async () => unavailable(),
+    rotate: async () => unavailable(),
+    remove: async () => unavailable(),
+    disconnect: async () => unavailable(),
+    oauthBase: unavailable,
   }
 }

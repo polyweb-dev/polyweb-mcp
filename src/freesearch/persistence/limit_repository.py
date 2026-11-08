@@ -1809,6 +1809,46 @@ class LimitRepository:
                 since=since,
             )
 
+    async def count_catalog_attempts(
+        self,
+        provider: str,
+        bucket_id: str,
+        *,
+        window: RateWindowName,
+        now: datetime,
+        since: datetime | None = None,
+    ) -> Decimal:
+        """Count a catalog bucket and its credential and pool scopes for display."""
+
+        start = since or (now - timedelta(seconds=_WINDOW_SECONDS[window]))
+        prefix = f"{bucket_id}#"
+        scope = func.substr(RateAttemptRow.bucket_id, len(prefix) + 1)
+        rows = (
+            select(
+                RateAttemptRow.attempt_id,
+                func.max(cast(RateAttemptRow.units_text, _QUANTUM)).label("units"),
+            )
+            .where(
+                RateAttemptRow.provider == provider,
+                RateAttemptRow.attempted_at >= _timestamp(start),
+                (RateAttemptRow.bucket_id == bucket_id)
+                | (
+                    (func.substr(RateAttemptRow.bucket_id, 1, len(prefix)) == prefix)
+                    & (
+                        (func.substr(scope, 1, 5) == "cred:")
+                        | (func.substr(scope, 1, 5) == "pool:")
+                    )
+                ),
+            )
+            .group_by(RateAttemptRow.attempt_id)
+            .subquery()
+        )
+        async with self._session_factory() as session:
+            total = (
+                await session.execute(select(func.coalesce(func.sum(rows.c.units), 0)))
+            ).scalar_one()
+        return Decimal(str(total))
+
     async def oldest_attempt(
         self, bucket_id: str, *, window: RateWindowName, now: datetime
     ) -> datetime | None:
@@ -1881,12 +1921,21 @@ class LimitRepository:
         for observation in await self.list_observations(provider):
             if observation.window.value not in _SLOW_WINDOWS:
                 continue
-            used = await self.count_attempts(
-                observation.bucket_id,
-                window=observation.window,
-                now=now,
-                since=observation.observed_at,
-            )
+            if "#" in observation.bucket_id:
+                used = await self.count_attempts(
+                    observation.bucket_id,
+                    window=observation.window,
+                    now=now,
+                    since=observation.observed_at,
+                )
+            else:
+                used = await self.count_catalog_attempts(
+                    provider,
+                    observation.bucket_id,
+                    window=observation.window,
+                    now=now,
+                    since=observation.observed_at,
+                )
             views.append(_progress_from_observation(observation, used))
         return sorted(views, key=lambda view: (view.bucket_id, view.window))
 

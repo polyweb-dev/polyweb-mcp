@@ -6,7 +6,7 @@ import { installFetchStub, ok, err } from "@/test/fetchMock"
 /**
  * Manual billing-entry client: GET/PUT/DELETE
  * /api/v1/providers/{id}/manual-quota over same-origin relative paths with
- * the shared ApiError mapping (404 on GET means "not configured").
+ * the shared ApiError mapping (200 null on GET means "not configured").
  */
 describe("FreeSearchApiService manual quota", () => {
   const service = new FreeSearchApiService()
@@ -36,10 +36,17 @@ describe("FreeSearchApiService manual quota", () => {
     expect(result).toEqual(wire)
   })
 
-  it("getManualQuota() maps 404 to null (not configured, not an error)", async () => {
-    installFetchStub(() => err(404, { detail: "no manual quota for 'exa'" }))
-
+  it("getManualQuota() accepts 200 null without a console error", async () => {
+    installFetchStub(() => ok(null))
+    const consoleError = vi.spyOn(console, "error")
     await expect(service.getManualQuota("exa")).resolves.toBeNull()
+    expect(consoleError).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it.each([403, 404])("getManualQuota() preserves access denial %s", async (status) => {
+    installFetchStub(() => err(status, { detail: "Forbidden" }))
+    await expect(service.getManualQuota("exa")).rejects.toMatchObject({ status })
   })
 
   it("getManualQuota() rethrows non-404 failures as ApiError", async () => {

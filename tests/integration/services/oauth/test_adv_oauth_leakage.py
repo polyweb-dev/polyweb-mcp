@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from tests.fixtures.api_keys import database_dump
+from tests.fixtures.vault_oauth import vault_oauth_case as vault_oauth_case
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
     CLIENT_SECRET_VALUE,
@@ -55,9 +56,9 @@ async def test_tokens_in_vault_not_in_db(oauth_case):
     assert not find_leaked_secrets(database_dump(case.repository))
 
 
-async def test_status_is_fingerprint_only(oauth_case):
+async def test_status_is_fingerprint_only(vault_oauth_case):
     """Origin test_adv_oauth_leakage.py::test_status_is_fingerprint_only."""
-    case = oauth_case
+    case = vault_oauth_case
     await case.connect()
     probe = case.client.get(case.path, headers=case.headers)
     assert probe.status_code == 200

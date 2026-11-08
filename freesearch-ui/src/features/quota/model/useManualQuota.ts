@@ -34,7 +34,7 @@ function toEstimate(manual: BackendManualQuota | null): ManualQuotaEstimate | nu
 
 /**
  * Manual billing-entry overlay state for one provider row. Reads stay honest:
- * a missing entry (404) or a failed read leaves `manual` null so no
+ * an empty entry (200 null) or a failed read leaves `manual` null so no
  * estimated line is invented. Saves refresh the dashboard and then resolve.
  */
 export function useManualQuota(providerId: string, eligible: boolean): ManualQuotaOverlay {

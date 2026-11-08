@@ -18,7 +18,7 @@ import type {
 } from "@/domains/dashboard"
 import { parseDecimal } from "./manualQuotaMath"
 
-const UNMETERED_TEXT = "Free - unmetered"
+const UNMETERED_TEXT = "Free"
 const UNAVAILABLE_TEXT = "n/a"
 const UNKNOWN_TEXT = "Unknown"
 
@@ -73,18 +73,19 @@ function spendableCRD(view: CRDView): string | null {
 export function formatCRDAmount(amount: string): string {
   const value = scaled(amount)
   if (value === null) return UNKNOWN_TEXT
-  if (value.int === 0n) return "0 CRD"
+  if (value.int === 0n) return "0 credits"
   // Tenths of a CRD, rounded half-up: rounded = round(amount * 10).
   const perTenth = 10n ** BigInt(value.scale)
   const numerator = value.int * 10n
-  if (numerator < perTenth) return "<0.1 CRD"
+  if (numerator < perTenth) return "<0.1 credits"
   const whole = numerator / perTenth
   const remainder = numerator % perTenth
   const rounded = remainder * 2n >= perTenth ? whole + 1n : whole
   const exact = value.int * 10n === rounded * perTenth
-  const wholeText = (rounded / 10n).toString()
+  const wholeText = (rounded / 10n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")
   const numberText = rounded % 10n === 0n ? wholeText : `${wholeText}.${rounded % 10n}`
-  return `${exact ? "" : "≈"}${numberText} CRD`
+  const unit = exact && numberText === "1" ? "credit" : "credits"
+  return `${exact ? "" : "≈"}${numberText} ${unit}`
 }
 
 /** Integer count form of one exact nonnegative decimal count: "498.000000000" becomes "498", and every other input stays verbatim. */
@@ -192,7 +193,7 @@ export function providerCRDModel(input: ProviderCRDInput): ProviderCRDModel {
   const ceiling = lowestCeiling(views)
   if (ceiling !== null) notes.push(`Local grant ceiling ${formatCRDAmount(ceiling)}`)
   if (views.some((view) => view !== null && !view.priced)) {
-    notes.push("Priced use is not configured; the CRD value stays unknown")
+    notes.push("Priced use is not configured; the credit value stays unknown")
   }
   const poolId = sharedPoolId(views)
   const sharedNote = poolId === null ? null : `Shared pool ${poolId}: the two views read the same funds and do not add up.`

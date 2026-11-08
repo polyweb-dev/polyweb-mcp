@@ -38,7 +38,8 @@ Given("the system has a Parallel OAuth credential {string}", async ({}, label: s
 })
 
 When("I connect the credential {string}", async ({ page }, label: string) => {
-  await page.getByRole("button", { name: `Connect ${label}`, exact: true }).click({ timeout: 15_000 })
+  await page.getByRole("button", { name: `Actions for ${label}`, exact: true }).click({ timeout: 15_000 })
+  await page.getByRole("button", { name: "Connect", exact: true }).click()
   await expect(oauthDialog(page)).toBeVisible()
 })
 
@@ -100,10 +101,13 @@ When("I close the open dialog", async ({ page }) => {
 })
 
 When("I disconnect the credential {string}", async ({ page }, label: string) => {
-  await page.getByRole("button", { name: `Disconnect ${label}`, exact: true }).click({ timeout: 15_000 })
+  await page.getByRole("button", { name: `Actions for ${label}`, exact: true }).click({ timeout: 15_000 })
+  await page.getByRole("button", { name: "Disconnect", exact: true }).click()
   await confirmIfAsked(page, "Disconnect")
 })
 
-Then("the credential {string} offers {string}", async ({ page }, _label: string, button: string) => {
-  await expect(page.getByRole("button", { name: button, exact: true })).toBeVisible({ timeout: 15_000 })
+Then("the credential {string} offers {string}", async ({ page }, label: string, item: string) => {
+  await page.getByRole("button", { name: `Actions for ${label}`, exact: true }).click({ timeout: 15_000 })
+  await expect(page.getByRole("button", { name: item, exact: true })).toBeVisible({ timeout: 15_000 })
+  await page.keyboard.press("Escape")
 })

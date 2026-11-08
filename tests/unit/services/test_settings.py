@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from freesearch.models.contracts import CostPreset, FallbackPolicy
+from freesearch.models.contracts import FallbackPolicy
 from freesearch.models.projects import (
     ExecutionSettings,
     ProjectSettingsDocument,
@@ -18,7 +18,30 @@ from freesearch.models.settings import (
     SystemSafetyLimits,
     SystemSettingsDocument,
 )
-from freesearch.services.settings import resolve_settings
+from freesearch.persistence.settings import StoredSettings
+from freesearch.services.settings import _project_document, _system_document, resolve_settings
+
+
+def test_legacy_routing_fields_are_stripped_for_versions_one_and_two() -> None:
+    for version in (1, 2):
+        stored = StoredSettings(
+            namespace="projects",
+            schema_version=version,
+            document={
+                "routing": {
+                    "preferred_providers": ["exa"],
+                    "cost_optimization_preset": "free_first",
+                    "fallback_policy": "first_only",
+                    "max_attempts": 5,
+                }
+            },
+            revision=1,
+        )
+        for document in (_project_document(stored), _system_document(stored)[0]):
+            assert document.routing.fallback_policy == FallbackPolicy.FIRST_ONLY
+            assert document.routing.max_attempts == 5
+            assert "preferred_providers" not in document.routing.model_dump()
+            assert "cost_optimization_preset" not in document.routing.model_dump()
 
 
 def test_resolution_records_defaults_overrides_false_zero_and_constraints() -> None:
@@ -28,7 +51,6 @@ def test_resolution_records_defaults_overrides_false_zero_and_constraints() -> N
     system = SystemSettingsDocument(
         routing=SystemRoutingDefaults(
             max_attempts=4,
-            preferred_providers=("exa", "tavily"),
         ),
         execution=SystemExecutionDefaults(
             cache_enabled=True,
@@ -46,7 +68,6 @@ def test_resolution_records_defaults_overrides_false_zero_and_constraints() -> N
         routing=RoutingSettings(
             fallback_policy=FallbackPolicy.FIRST_ONLY,
             max_attempts=5,
-            preferred_providers=(),
         ),
         execution=ExecutionSettings(
             cache_enabled=False,
@@ -71,9 +92,6 @@ def test_resolution_records_defaults_overrides_false_zero_and_constraints() -> N
     assert resolution.provenance_by_field["routing.fallback_policy"] is (
         SettingsProvenance.PROJECT_OVERRIDE
     )
-    assert resolution.provenance_by_field["routing.cost_optimization_preset"] is (
-        SettingsProvenance.SYSTEM_DEFAULT
-    )
     assert resolution.provenance_by_field["execution.cache_enabled"] is (
         SettingsProvenance.PROJECT_OVERRIDE
     )
@@ -87,10 +105,6 @@ def test_resolution_records_defaults_overrides_false_zero_and_constraints() -> N
     assert resolution.effective_settings["routing.fallback_policy"] == (
         FallbackPolicy.FIRST_ONLY.value
     )
-    assert resolution.effective_settings["routing.cost_optimization_preset"] == (
-        CostPreset.BALANCED.value
-    )
-    assert resolution.effective_settings["routing.preferred_providers"] == []
     assert resolution.effective_settings["execution.cache_enabled"] is False
     assert resolution.effective_settings["execution.cache_ttl_seconds"] == 0
     assert resolution.effective_settings["execution.default_timeout_seconds"] == 60.0
@@ -119,7 +133,6 @@ def test_resolution_records_defaults_overrides_false_zero_and_constraints() -> N
     assert resolution.overrides == {
         "routing.fallback_policy": FallbackPolicy.FIRST_ONLY.value,
         "routing.max_attempts": 5,
-        "routing.preferred_providers": [],
         "execution.cache_enabled": False,
         "execution.default_timeout_seconds": 120.0,
         "execution.max_fanout_concurrency": 15,
@@ -142,17 +155,13 @@ def test_resolution_without_stored_documents_uses_catalog_defaults() -> None:
     assert resolution.project_revision == 0
     assert resolution.effective_settings == {
         "routing.fallback_policy": FallbackPolicy.CHAINED.value,
-        "routing.cost_optimization_preset": CostPreset.BALANCED.value,
         "routing.max_attempts": 3,
-        "routing.preferred_providers": [],
         "execution.cache_enabled": True,
         "execution.default_timeout_seconds": 30.0,
         "execution.max_fanout_concurrency": 5,
         "execution.cache_ttl_seconds": 300,
-        "trace.sampling_rate": 1.0,
-        "trace.detail": "metadata",
-        "trace.payload_redaction": "standard",
-        "trace.retention_days": 30,
+        "trace.detail": "full",
+        "trace.retention_days": None,
         "system.max_timeout_seconds": 300.0,
         "system.max_fanout_concurrency": 20,
         "system.max_trace_retention_days": 365,
@@ -193,3 +202,58 @@ def test_project_override_resolves_against_catalog_when_no_system_row_exists() -
         SettingsProvenance.SYSTEM_DEFAULT
     )
     assert resolution.overrides == {"execution.cache_enabled": False}
+
+
+def test_version_one_trace_documents_upgrade_without_old_controls() -> None:
+    system_stored = StoredSettings(
+        namespace="projects",
+        schema_version=1,
+        revision=4,
+        document={
+            "trace": {
+                "detail": "full",
+                "sampling_rate": 0,
+                "payload_redaction": "strict",
+                "retention_days": 30,
+            }
+        },
+    )
+    project_stored = StoredSettings(
+        namespace="projects",
+        schema_version=1,
+        revision=3,
+        document={"trace": {"sampling_rate": 0, "payload_redaction": "strict"}},
+    )
+    system, _ = _system_document(system_stored)
+    project = _project_document(project_stored)
+    result = resolve_settings(
+        system=system,
+        system_revision=4,
+        project=project,
+        project_revision=3,
+        project_id=uuid4(),
+    )
+    assert result.effective_settings["trace.detail"] == "full"
+    assert result.effective_settings["trace.retention_days"] is None
+    assert "trace.sampling_rate" not in result.fields
+    assert "trace.payload_redaction" not in result.fields
+    assert system_stored.document["trace"]["sampling_rate"] == 0
+    default_system, _ = _system_document(
+        StoredSettings(
+            namespace="projects",
+            schema_version=1,
+            revision=1,
+            document={"trace": {"sampling_rate": 0, "payload_redaction": "strict"}},
+        )
+    )
+    assert default_system.trace.detail.value == "full"
+
+    explicit = _project_document(
+        StoredSettings(
+            namespace="projects",
+            schema_version=1,
+            revision=3,
+            document={"trace": {"retention_days": 45, "payload_redaction": "strict"}},
+        )
+    )
+    assert explicit.trace.retention_days == 45

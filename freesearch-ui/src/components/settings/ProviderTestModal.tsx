@@ -1,43 +1,52 @@
 import React from "react"
 import { Modal } from "@/shared/ui/Modal"
 import { Button } from "@/shared/ui/button"
+import { FormActions } from "@/shared/ui/FormActions"
+import { ProviderLogo } from "@/shared/ui/ProviderLogo"
+import { formatDateTime } from "@/shared/lib/formatTime"
 import type { ProviderConfig } from "@/domains/providers"
-import { useFreeSearch } from "@/context/useFreeSearch"
 import { ModalDetail } from "./ProviderTestModalDetail"
-import { stripProtocol } from "./providerDisplay"
+import { capabilityList, lastResultText, stripProtocol } from "./providerDisplay"
+import type { TimedTestResult } from "./providerDisplay"
 
-type TestResult = Awaited<ReturnType<ReturnType<typeof useFreeSearch>["testProviderConnection"]>>
-
+/**
+ * Connection test of one provider: its endpoint and capabilities, the last
+ * result from this page, and the Test action. Opening it never probes.
+ */
 export const ProviderTestModal: React.FC<{
   provider: ProviderConfig | null
   testing: boolean
-  lastResult?: TestResult
+  lastResult?: TimedTestResult
+  /** Current time (epoch ms) for the relative "checked" text. */
+  now: number
   onClose: () => void
   onTest: (id: string) => void
-}> = ({ provider, testing, lastResult, onClose, onTest }) => (
+}> = ({ provider, testing, lastResult, now, onClose, onTest }) => (
   <Modal
     isOpen={provider !== null}
     onClose={onClose}
-    title={provider ? `Test ${provider.name}` : "Test provider"}
-    subtitle="Inspect the current provider state before running a connection probe."
+    title={provider ? <><ProviderLogo providerId={provider.id} name={provider.name} />Test {provider.name}</> : "Test provider"}
     maxWidth="lg"
   >
     {provider && (
-      <div className="space-y-4">
-        <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[13px]">
+      <>
+        <dl className="grid grid-cols-[120px_minmax(0,1fr)] gap-x-4 gap-y-2 text-[13px]">
           <ModalDetail label="Endpoint" value={stripProtocol(provider.baseUrl)} mono />
-          <ModalDetail label="Capabilities" value={provider.capabilities.join(", ")} />
-          <ModalDetail
-            label="Last result"
-            value={lastResult ? `${lastResult.success ? "healthy" : lastResult.message} · ${lastResult.latencyMs}ms` : "Not tested"}
-          />
+          <ModalDetail label="Capabilities" value={capabilityList(provider.capabilities)} />
+          <dt className="text-[var(--muted)]">Last test</dt>
+          <dd className="text-[var(--text-strong)]" title={lastResult ? formatDateTime(new Date(lastResult.checkedAt).toISOString()) : undefined}>
+            {lastResultText(lastResult, now)}
+          </dd>
         </dl>
-        <div className="flex justify-end border-t border-[var(--border-subtle)] pt-4">
-          <Button type="button" onClick={() => onTest(provider.id)} disabled={testing}>
+        <FormActions>
+          <Button type="button" size="form" variant="outline" onClick={onClose}>
+            Close
+          </Button>
+          <Button type="button" size="form" onClick={() => onTest(provider.id)} disabled={testing}>
             {testing ? "Testing..." : "Test"}
           </Button>
-        </div>
-      </div>
+        </FormActions>
+      </>
     )}
   </Modal>
 )

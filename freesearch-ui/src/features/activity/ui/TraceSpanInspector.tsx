@@ -5,10 +5,17 @@ import {
   type TraceStage,
 } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
+import { formatDateTime, formatLatency } from "@/shared/lib/formatTime"
 import { JsonViewer } from "@/shared/ui/JsonViewer"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
-import { traceSpanLabel, traceSpanPurpose } from "../model/traceSpanPresentation"
+import {
+  traceEventLabel,
+  traceEventOffsetText,
+  traceSpanLabel,
+  traceSpanPurpose,
+} from "../model/traceSpanPresentation"
 import { TraceScopeDetails } from "./TraceScopeDetails"
+import { TraceSpanFacts } from "./TraceSpanFacts"
 
 export interface TraceSpanInspectorProps {
   stage: TraceStage | null
@@ -65,55 +72,71 @@ function spanError(stage: TraceStage): ReactNode {
   if (stage.error === null) return null
   return (
     <p className="min-w-0 text-[12px]" style={{ color: "var(--status-danger)" }}>
-      {stage.error.type}: {stage.error.message}
+      {stage.error.message.trim() === "" ? stage.error.type : stage.error.message}
     </p>
   )
 }
 
+/** One timing figure in the product font with tabular numbers. */
+function timingCell(label: string, value: string): ReactNode {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] text-[var(--muted)]">{label}</dt>
+      <dd className="tnum text-[12px] text-[var(--text-strong)]">{value}</dd>
+    </div>
+  )
+}
+
+/** Duration, and when the step started and ended relative to the trace start. */
 function timingSection(stage: TraceStage): ReactNode {
   return section(
     "Timing",
-    <dl className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-2">
-      {metaRow("Duration", `${stage.durationMs}ms`)}
-      {metaRow("Start offset", `${stage.offsetMs}ms`)}
-      <div className="min-w-0 text-right">
-        <dt className="text-[11px] text-[var(--muted)]">End offset</dt>
-        <dd className="mono min-w-0 text-[11px] text-[var(--text-strong)] [overflow-wrap:anywhere]">
-          {stage.offsetMs + stage.durationMs}ms
-        </dd>
-      </div>
+    <dl className="flex min-w-0 flex-wrap items-start gap-x-8 gap-y-2">
+      {timingCell("Duration", formatLatency(stage.durationMs))}
+      {timingCell("Starts at", `+${formatLatency(stage.offsetMs)}`)}
+      {timingCell("Ends at", `+${formatLatency(stage.offsetMs + stage.durationMs)}`)}
     </dl>
   )
 }
 
-/** One recorded event: its original name and timestamp, then its attributes. */
-function eventBlock(event: TraceEvent, eventKey: string): ReactNode {
+/**
+ * One recorded event: its plain label and when it happened relative to the
+ * trace start, then its attributes. The raw event name stays under Technical
+ * identifiers.
+ */
+function eventBlock(event: TraceEvent, eventKey: string, traceStartedAt: string): ReactNode {
+  const label = traceEventLabel(event.name)
   return (
     <div key={`${eventKey}:${event.name}:${event.timestamp}`} className="min-w-0 space-y-1">
       <p className="text-[11px] text-[var(--muted)]">
-        <span style={{ color: "var(--accent-cyan)" }}>{event.name}</span>
+        <span className="text-[var(--text-strong)]">{label}</span>
         {" · "}
-        <span className="tnum">{new Date(event.timestamp).toISOString()}</span>
+        <span className="tnum" title={formatDateTime(event.timestamp)}>
+          {traceEventOffsetText(event.timestamp, traceStartedAt)}
+        </span>
       </p>
       <JsonViewer
         value={event.attributes}
-        ariaLabel={`${event.name} attributes`}
+        ariaLabel={`${label} attributes`}
         className="max-h-none overflow-visible"
       />
     </div>
   )
 }
 
-function payloadSection(
-  title: string,
-  events: readonly TraceEvent[],
+interface PayloadSectionOptions {
+  title: string
+  events: readonly TraceEvent[]
   spanId: string
-): ReactNode {
+  traceStartedAt: string
+}
+
+function payloadSection({ title, events, spanId, traceStartedAt }: PayloadSectionOptions): ReactNode {
   if (events.length === 0) return null
   return section(
     title,
     <div className="min-w-0 space-y-3">
-      {events.map((event) => eventBlock(event, spanId))}
+      {events.map((event) => eventBlock(event, spanId, traceStartedAt))}
     </div>
   )
 }
@@ -134,11 +157,13 @@ function technicalSection(stage: TraceStage): ReactNode {
         {metaRow("Span name", stage.name)}
         {metaRow("Stage label", stage.label)}
         {metaRow("Kind", stage.kind)}
-        {metaRow("Started at", stage.startedAt)}
+        {metaRow("Started at", <span title={stage.startedAt}>{formatDateTime(stage.startedAt)}</span>)}
         {metaRow("Outcome", stage.outcome)}
         {metaRow("Span", stage.spanId)}
         {metaRow("Parent", stage.parentSpanId ?? "—")}
         {metaRow("Provider ID", stage.providerId ?? "—")}
+        {stage.events.length > 0 &&
+          metaRow("Events", stage.events.map((event) => event.name).join(", "))}
       </dl>
     </details>
   )
@@ -155,7 +180,7 @@ export function TraceSpanInspector({ stage, trace }: TraceSpanInspectorProps) {
     return (
       <div className="min-w-0 space-y-3">
         <p className="text-[12px] text-[var(--muted)]">
-          No span timing was recorded for this trace.
+          No span timing was recorded for this trace
         </p>
         <TraceScopeDetails trace={trace} />
       </div>
@@ -179,9 +204,20 @@ export function TraceSpanInspector({ stage, trace }: TraceSpanInspectorProps) {
       {spanError(stage)}
       {purpose !== null && <p className="text-[12px] text-[var(--muted)]">{purpose}</p>}
       {timingSection(stage)}
-      {payloadSection("Request", requestEvents, stage.spanId)}
-      {payloadSection("Response", responseEvents, stage.spanId)}
-      {otherEvents.length > 0 && payloadSection("Events", otherEvents, stage.spanId)}
+      <TraceSpanFacts events={stage.events} />
+      {stage.events.length > 0 && (
+        <details className="group min-w-0 border-t border-[var(--border-subtle)] pt-3">
+          <summary className="flex list-none cursor-pointer items-center gap-2 text-[12px] text-[var(--muted)]">
+            <span aria-hidden="true" className="inline-flex size-4 shrink-0 items-center justify-center text-[14px] transition-transform motion-reduce:transition-none group-open:rotate-90">›</span>
+            Show raw data
+          </summary>
+          <div className="mt-3 space-y-3">
+            {payloadSection({ title: "Request", events: requestEvents, spanId: stage.spanId, traceStartedAt: trace.startedAt })}
+            {payloadSection({ title: "Response", events: responseEvents, spanId: stage.spanId, traceStartedAt: trace.startedAt })}
+            {payloadSection({ title: "Events", events: otherEvents, spanId: stage.spanId, traceStartedAt: trace.startedAt })}
+          </div>
+        </details>
+      )}
       {technicalSection(stage)}
       <TraceScopeDetails trace={trace} />
     </div>

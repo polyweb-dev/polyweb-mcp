@@ -44,7 +44,7 @@ describe("WorkspaceRouteGate", () => {
   })
 
   it("shows the failure alert for a gated route when access fails", () => {
-    renderAt("routing", "/routing", { availability: "unavailable", systemAccess: null })
+    renderAt("quotas", "/system/quotas", { availability: "unavailable", systemAccess: null })
     expect(screen.getByRole("alert")).toHaveTextContent("The workspace could not be loaded.")
   })
 
@@ -54,7 +54,16 @@ describe("WorkspaceRouteGate", () => {
   })
 
   it("redirects an unauthorized direct URL to the workspace entry", () => {
-    renderAt("adminUsers", "/admin/users", { systemAccess: systemAccessFixture(SETTINGS_READER_PERMISSIONS) })
+    renderAt("systemCapacity", "/system/capacity", { systemAccess: systemAccessFixture(SETTINGS_READER_PERMISSIONS) })
+    expect(screen.getByText("Workspace entry")).toBeInTheDocument()
+    expect(screen.queryByText("Gated page")).toBeNull()
+  })
+
+  it("opens the vault only when the access descriptor grants vault.manage", () => {
+    const view = renderAt("accountKeys", "/account/keys", { systemAccess: systemAccessFixture(["vault.manage"]) })
+    expect(screen.getByText("Gated page")).toBeInTheDocument()
+    view.unmount()
+    renderAt("accountKeys", "/account/keys", { systemAccess: systemAccessFixture([]) })
     expect(screen.getByText("Workspace entry")).toBeInTheDocument()
     expect(screen.queryByText("Gated page")).toBeNull()
   })

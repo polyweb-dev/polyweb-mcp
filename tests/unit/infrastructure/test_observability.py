@@ -429,7 +429,7 @@ def test_bind_without_an_attribution_cell_is_a_noop() -> None:
 
 @pytest.mark.parametrize(
     "policy",
-    [None, ProjectTracePolicy(), ProjectTracePolicy(detail="full", payload_redaction="strict")],
+    [None, ProjectTracePolicy(detail="metadata")],
 )
 def test_metadata_provider_events_never_buffer_query_url_or_results(policy) -> None:
     """Inspect finished memory spans before any exporter can sanitize them."""
@@ -487,12 +487,12 @@ def test_full_capture_redacts_nested_credentials_and_exception_messages_in_memor
 def test_capture_policy_cannot_be_rebound_mid_trace_and_children_keep_decision() -> None:
     runtime, exporter = _attributed_memory_runtime()
     with use_observability(runtime):
-        bind_trace_capture(ProjectTracePolicy(sampling_rate=0.0))
+        bind_trace_capture(ProjectTracePolicy(detail="metadata"))
         with runtime.span("POST /search", kind=SpanKindName.SERVER):
             with pytest.raises(ValueError):
-                bind_trace_capture(ProjectTracePolicy(sampling_rate=1.0, detail="full"))
+                bind_trace_capture(ProjectTracePolicy(detail="full"))
             with runtime.span("freesearch.provider"):
                 pass
     for span in exporter.get_finished_spans():
-        assert span.attributes[TraceAttribute.SAMPLED] is False
+        assert TraceAttribute.SAMPLED not in span.attributes
         assert span.attributes[TraceAttribute.CAPTURE_PAYLOAD] is False

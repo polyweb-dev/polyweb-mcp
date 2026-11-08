@@ -94,7 +94,6 @@ function providerField(
         <ProviderSelect
           id={inputProps.id}
           testId={inputProps["data-testid"]}
-          className={inputProps.className}
           value={target.id}
           options={rows}
           onValueChange={(next) => onChange({ id: next, name: nameOf(next) })}

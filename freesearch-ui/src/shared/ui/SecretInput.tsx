@@ -1,3 +1,6 @@
+import { Field } from "./Field"
+import { fieldDescribedBy } from "./fieldIds"
+
 interface SecretInputProps {
   id: string
   /** Accessible label, e.g. "API key" or "New API key". */
@@ -5,6 +8,10 @@ interface SecretInputProps {
   value: string
   onChange: (value: string) => void
   disabled?: boolean
+  hint?: string
+  /** Validation message; it replaces the hint and marks the input invalid. */
+  error?: string | null
+  placeholder?: string
 }
 
 /**
@@ -15,12 +22,9 @@ interface SecretInputProps {
  * never offers, stores or checks it. The owner clears the value after a save
  * (success or failure) and drops it on cancel and unmount.
  */
-export function SecretInput({ id, label, value, onChange, disabled = false }: SecretInputProps) {
+export function SecretInput({ id, label, value, onChange, disabled = false, hint, error, placeholder }: SecretInputProps) {
   return (
-    <div>
-      <label htmlFor={id} className="mb-1 block text-[12px] text-[var(--muted)]">
-        {label}
-      </label>
+    <Field id={id} label={label} hint={hint} error={error}>
       <input
         id={id}
         name={id}
@@ -33,9 +37,12 @@ export function SecretInput({ id, label, value, onChange, disabled = false }: Se
         data-lpignore="true"
         value={value}
         disabled={disabled}
+        placeholder={placeholder}
+        aria-describedby={fieldDescribedBy(id, hint, error)}
+        aria-invalid={error ? true : undefined}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1.5 font-mono text-[13px] text-[var(--text)] outline-none focus-visible:border-[var(--signal)] disabled:opacity-60"
+        className="fs-input font-mono text-[12px]"
       />
-    </div>
+    </Field>
   )
 }

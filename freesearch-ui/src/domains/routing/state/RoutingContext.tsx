@@ -2,8 +2,7 @@ import React, { useCallback, useState } from "react";
 import { apiService } from "@/services/api/freesearchApi";
 import { errorMessage } from "@/shared/api/http";
 import type { ToastNotification } from "@/shared/notifications/context";
-import type { BackendRoutingConfig } from "@/domains/routing/api/wire";
-import type { FallbackConfig, RoutingPreset } from "@/domains/routing/model/types";
+import type { FallbackConfig } from "@/domains/routing/model/types";
 import { mapRoutingConfig } from "@/services/api/mappers";
 
 export type ShowToast = (message: string, type?: ToastNotification["type"]) => void;
@@ -15,8 +14,6 @@ const INITIAL_FALLBACK_CONFIG: FallbackConfig = {
   fallbackOnTimeout: true,
   fallbackOnServerError: true,
 };
-
-const DEFAULT_COST_PRESET: BackendRoutingConfig["cost_optimization_preset"] = "balanced";
 
 import { RoutingContext } from "./context";
 import { useRoutingPolicy } from "./useRoutingPolicy";
@@ -30,10 +27,6 @@ export const RoutingProvider: React.FC<{
   const [fallbackConfig, setFallbackConfig] = useState<FallbackConfig>(INITIAL_FALLBACK_CONFIG);
   const [routingLoading, setRoutingLoading] = useState(true);
   const [routingError, setRoutingError] = useState<string | null>(null);
-  const [routingPreset, setRoutingPreset] = useState<RoutingPreset>("priority");
-  const [costOptimizationPreset, setCostOptimizationPreset] = useState<
-    BackendRoutingConfig["cost_optimization_preset"]
-  >(DEFAULT_COST_PRESET);
 
   const refreshRouting = useCallback(async () => {
     if (!canReadControls) {
@@ -48,7 +41,6 @@ export const RoutingProvider: React.FC<{
     try {
       const wire = await apiService.getRoutingConfig();
       setFallbackConfig((previous) => ({ ...previous, ...mapRoutingConfig(wire) }));
-      setCostOptimizationPreset(wire.cost_optimization_preset);
     } catch (error) {
       const message = errorMessage(error, "Unable to load routing configuration");
       setRoutingError(message);
@@ -58,38 +50,29 @@ export const RoutingProvider: React.FC<{
     }
   }, [canReadControls, showToast]);
 
-  const { updateFallbackConfig, updateCostPreset } = useRoutingPolicy({
+  const { updateFallbackConfig } = useRoutingPolicy({
     showToast,
     canEditControls,
     fallbackConfig,
-    costOptimizationPreset,
     setFallbackConfig,
-    setCostOptimizationPreset,
   });
   const value = React.useMemo(
     () => ({
       fallbackConfig,
       routingLoading,
       routingError,
-      routingPreset,
-      costOptimizationPreset,
       canReadControls,
       canEditControls,
-      setRoutingPreset,
       updateFallbackConfig,
-      updateCostPreset,
       refreshRouting,
     }),
     [
       fallbackConfig,
       routingLoading,
       routingError,
-      routingPreset,
-      costOptimizationPreset,
       canReadControls,
       canEditControls,
       updateFallbackConfig,
-      updateCostPreset,
       refreshRouting,
     ],
   );

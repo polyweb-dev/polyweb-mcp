@@ -7,7 +7,6 @@ export function routingConfigFixture(
 ): Record<string, unknown> {
   return {
     fallback_policy: "chained",
-    cost_optimization_preset: "balanced",
     max_attempts: 3,
     ...overrides,
   }

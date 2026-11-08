@@ -11,15 +11,16 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Annotated, cast
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from freesearch.configuration.provider_limits import PROVIDER_IDS
+from freesearch.models.projects import PermissionAction
 from freesearch.models.provider_limits import (
     MAX_HISTORY_PAGE_SIZE,
     AuthMode,
-    CRDGrantPayload,
     LimitHistoryPage,
     LimitHistoryQuery,
     LimitOperation,
@@ -29,9 +30,20 @@ from freesearch.models.provider_limits import (
     LimitVersionConflict,
     ProviderLimitsResponse,
     SyncResult,
+    VaultKeyUsage,
+)
+from freesearch.models.quota_api import (
+    USDBudgetPayload,
+    USDHistoryPage,
+    USDProviderLimits,
+    USDVaultKeyUsage,
 )
 from freesearch.models.users import UserPrincipal
-from freesearch.routers.auth import require_admin, require_control_reader
+from freesearch.routers.auth import current_principal, require_admin, require_control_reader
+from freesearch.routers.control_errors import control_repository
+from freesearch.services.authorization import ScopedAuthorizationService, system_query
+from freesearch.services.execution import ExecutionService
+from freesearch.services.limits_sync import add_vault_key_auth_status
 from freesearch.services.provider_limits import ProviderLimitsService
 
 #: Role gates follow the control-plane matrix: Admin guards every mutation and
@@ -39,6 +51,7 @@ from freesearch.services.provider_limits import ProviderLimitsService
 #: and both run before any persistence write or vendor I/O.
 _AdminPrincipal = Annotated[UserPrincipal, Depends(require_admin)]
 _ReaderPrincipal = Annotated[UserPrincipal, Depends(require_control_reader)]
+_Principal = Annotated[UserPrincipal, Depends(current_principal)]
 
 _CREDENTIAL_MARKER = "@"
 _SAFE_SCHEME = "https://"
@@ -47,7 +60,7 @@ _SAFE_SCHEME = "https://"
 def register_limit_routes(app: FastAPI) -> None:
     """Register the limit endpoints on ``app``."""
 
-    @app.get("/api/v1/providers/{provider_id}/limits", response_model=ProviderLimitsResponse)
+    @app.get("/api/v1/providers/{provider_id}/limits", response_model=USDProviderLimits)
     async def get_limits(
         _principal: _ReaderPrincipal, provider_id: str, request: Request
     ) -> ProviderLimitsResponse:
@@ -58,7 +71,7 @@ def register_limit_routes(app: FastAPI) -> None:
 
     @app.patch(
         "/api/v1/providers/{provider_id}/limits/{auth_mode}/{operation}",
-        response_model=ProviderLimitsResponse,
+        response_model=USDProviderLimits,
     )
     async def patch_limits(
         _principal: _AdminPrincipal,
@@ -75,27 +88,29 @@ def register_limit_routes(app: FastAPI) -> None:
         return await _guard(provider_id, lambda: service.update_record(change))
 
     @app.put(
-        "/api/v1/providers/{provider_id}/crd-grants/{auth_mode}",
-        response_model=ProviderLimitsResponse,
+        "/api/v1/providers/{provider_id}/budgets/{auth_mode}",
+        response_model=USDProviderLimits,
     )
-    async def put_crd_grants(
+    async def put_usd_budget(
         _principal: _AdminPrincipal,
         provider_id: str,
         auth_mode: str,
-        payload: CRDGrantPayload,
+        payload: USDBudgetPayload,
         request: Request,
     ) -> ProviderLimitsResponse:
-        """Store the operator credit-unit grant for one period and auth mode."""
+        """Store the operator USD budget for one period and auth mode."""
 
         service = _service(request)
         mode = _auth_mode(auth_mode)
-        if provider_id == "brave" and payload.fetch_crd > 0:
+        if provider_id == "brave" and payload.fetch_usd > 0:
             raise HTTPException(status_code=422, detail="brave has no fetch rail")
         if payload.period_end <= payload.period_start:
             raise HTTPException(status_code=422, detail="period_end must be after period_start")
-        return await _guard(provider_id, lambda: service.save_grant(provider_id, payload, mode))
+        return await _guard(
+            provider_id, lambda: service.save_grant(provider_id, payload.to_ledger(), mode)
+        )
 
-    @app.get("/api/v1/providers/{provider_id}/limits/history", response_model=LimitHistoryPage)
+    @app.get("/api/v1/providers/{provider_id}/limits/history", response_model=USDHistoryPage)
     async def get_limit_history(
         _principal: _ReaderPrincipal,
         provider_id: str,
@@ -127,6 +142,38 @@ def register_limit_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=503, detail="no limit sync service is available")
         return await _guard(provider_id, lambda: sync.sync_provider(provider_id, datetime.now(UTC)))
 
+    @app.get("/api/v1/providers/{provider_id}/limits/keys", response_model=list[USDVaultKeyUsage])
+    async def get_key_usage(
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> list[VaultKeyUsage]:
+        """Return only quota observations and labels, never vault credentials."""
+
+        _require_provider(provider_id)
+        keys = await _execution(request).vault_key_usage(provider_id)
+        return await add_vault_key_auth_status(control_repository(request), keys)
+
+    @app.post(
+        "/api/v1/providers/{provider_id}/limits/keys/{key_id}/sync", response_model=SyncResult
+    )
+    async def sync_key_usage(
+        actor: _Principal, provider_id: str, key_id: UUID, request: Request
+    ) -> SyncResult:
+        """Poll one key only for its owner or a system administrator."""
+
+        _require_provider(provider_id)
+        execution = _execution(request)
+        owner = await execution.vault_key_usage_owner(provider_id, key_id)
+        if owner is None:
+            raise HTTPException(status_code=404, detail="key not found")
+        if owner != actor.id:
+            authorization = ScopedAuthorizationService(control_repository(request))
+            decision = await authorization.authorize(
+                system_query(actor, PermissionAction.SYSTEM_SETTINGS_WRITE)
+            )
+            if not decision.allowed:
+                raise HTTPException(status_code=404, detail="key not found")
+        return await execution.sync_vault_key_limits(provider_id, key_id, datetime.now(UTC))
+
 
 def limit_denial_response(error: object) -> JSONResponse:
     """Build the REST response for one local admission denial."""
@@ -146,6 +193,13 @@ def _service(request: Request) -> ProviderLimitsService:
     if service is None:
         raise HTTPException(status_code=503, detail="no limit store is available")
     return cast(ProviderLimitsService, service)
+
+
+def _execution(request: Request) -> ExecutionService:
+    execution = getattr(request.app.state, "execution", None)
+    if execution is None:
+        raise HTTPException(status_code=503, detail="no execution service is available")
+    return cast(ExecutionService, execution)
 
 
 async def _guard[ResultT](provider_id: str, action: Callable[[], Awaitable[ResultT]]) -> ResultT:
@@ -179,6 +233,9 @@ def _record_update(
     payload = dict(body)
     payload.update({"provider": provider_id, "auth_mode": mode.value, "operation": selected.value})
     _validate_usage_url(payload.get("usage_url"))
+    profile = payload.get("conversion_profile")
+    if isinstance(profile, dict) and "reference_usd_per_crd" in profile:
+        raise HTTPException(status_code=422, detail="Prices use USD per native unit")
     if "version" not in payload:
         raise HTTPException(status_code=422, detail="version is required")
     if provider_id == "brave" and selected is LimitOperation.FETCH and body.get("supported"):

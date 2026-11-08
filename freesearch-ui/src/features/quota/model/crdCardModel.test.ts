@@ -263,7 +263,7 @@ describe("creditCardModel", () => {
       aggregate_pool: { ...(braveAuth().aggregate_pool as unknown as Record<string, unknown>), manual_anchor: true } as never,
     })
     const model = creditCardModel({ auth, usageTotals: [] })
-    expect(model.provenanceNote).toBe("Estimated · Provider Balance")
+    expect(model.provenanceNote).toBe("Estimated · Provider balance")
   })
 })
 
@@ -285,7 +285,7 @@ describe("priceNoteRows", () => {
     expect(rows[0].provider).toBe("brave")
     expect(rows[0].operation).toBe("search")
     expect(rows[0].usdPerCall).toBe("0.005")
-    expect(rows[0].crdPerCall).toBe("5 CRD")
+    expect(rows[0].crdPerCall).toBe("5 credits")
     expect(rows[0].priceVersion).toBe("v2026-09")
 
     const documentedRows = priceNoteRows({
@@ -304,32 +304,32 @@ describe("priceNoteRows", () => {
       documentedRows.find((row) => row.provider === provider && row.operation === operation)
     expect(documentedRows).toHaveLength(14)
     expect(documentedRow("keenable", "search")).toMatchObject({
-      usdPerCall: "0.004", crdPerCall: "4 CRD", free: true,
+      usdPerCall: "0.004", crdPerCall: "4 credits", free: true,
     })
     expect(documentedRow("tinyfish", "fetch")).toMatchObject({
       usdPerCall: null, crdPerCall: null, free: true,
     })
     expect(documentedRow("tavily", "search")).toMatchObject({
-      usdPerCall: "0.008", crdPerCall: "8 CRD", free: false,
+      usdPerCall: "0.008", crdPerCall: "8 credits", free: false,
     })
     expect(documentedRow("tavily", "fetch")).toMatchObject({
-      usdPerCall: "0.0016", crdPerCall: "1.6 CRD", free: false,
+      usdPerCall: "0.0016", crdPerCall: "1.6 credits", free: false,
     })
     expect(documentedRow("exa", "fetch")).toMatchObject({
-      usdPerCall: "0.001", crdPerCall: "1 CRD", priceBasis: "per page, per content type",
+      usdPerCall: "0.001", crdPerCall: "1 credit", priceBasis: "per page, per content type",
     })
     expect(documentedRow("firecrawl", "search")).toMatchObject({
-      usdPerCall: "0.0076", crdPerCall: "7.6 CRD", free: false,
+      usdPerCall: "0.0076", crdPerCall: "7.6 credits", free: false,
     })
     expect(documentedRow("firecrawl", "search")?.priceBasis).toContain("Hobby reference")
     expect(documentedRow("firecrawl", "fetch")).toMatchObject({
-      usdPerCall: "0.0038", crdPerCall: "3.8 CRD", free: false,
+      usdPerCall: "0.0038", crdPerCall: "3.8 credits", free: false,
     })
     expect(documentedRow("parallel", "search")).toMatchObject({
-      usdPerCall: "0.001", crdPerCall: "1 CRD",
+      usdPerCall: "0.001", crdPerCall: "1 credit",
     })
     expect(documentedRow("youcom", "fetch")).toMatchObject({
-      usdPerCall: "0.001", crdPerCall: "1 CRD",
+      usdPerCall: "0.001", crdPerCall: "1 credit",
     })
 
     const zeroCostAuth = braveAuth({
@@ -348,7 +348,7 @@ describe("priceNoteRows", () => {
       }] as never,
     })
     expect(zeroCostRows[0]).toMatchObject({
-      usdPerCall: "0.000", crdPerCall: "0 CRD", free: true,
+      usdPerCall: "0.000", crdPerCall: "0 credits", free: true,
     })
 
     const tinyPositiveAuth = braveAuth({
@@ -382,7 +382,7 @@ describe("polish provenance (Item 4+5)", () => {
       { provider: "brave", operation: "search", normalized_crd: "6", attempt_count: 1, volume_count: 1 },
     ]
     const model = creditCardModel({ auth, usageTotals: totals })
-    expect(model.provenanceNote).toBe("Estimated · Provider Balance")
+    expect(model.provenanceNote).toBe("Estimated · Provider balance")
     expect(model.remainingUSD).toBe("4.500")
     expect(model.pricedUseUSD).toBe("0.011")
   })

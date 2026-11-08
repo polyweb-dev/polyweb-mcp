@@ -12,7 +12,6 @@ import {
 } from "./providerConfigStub"
 import {
   chooseOption,
-  confirmIfAsked,
   consoleCarrying,
   expectWriteOnlySecretInput,
   requestsCarrying,
@@ -24,21 +23,32 @@ import {
 /**
  * Project Providers page and the shared credential form steps (U3 contract,
  * `.tmp/u3/ui-contract.md`). The credential form, rotate and delete steps
- * also drive the System credentials page, which uses the same labels.
+ * also drive the Keys tab of System Providers, which uses the same labels.
  */
 
 const PAGE_SEGMENTS: Record<string, string> = { Providers: "providers", Settings: "settings" }
 
-function providerRegion(page: Page, name: string): Locator {
-  return page.getByRole("region", { name: `${name} provider`, exact: true })
+function routesTable(page: Page): Locator {
+  return page.getByRole("table", { name: "Routes", exact: true })
 }
 
-function credentialsTable(page: Page, name: string): Locator {
-  return page.getByRole("table", { name: `${name} credentials`, exact: true })
+/** The "Not routed" list: keys no route uses yet and providers without a key. */
+function keysTable(page: Page): Locator {
+  return page.getByRole("table", { name: "Not routed", exact: true })
+}
+
+function routeRow(page: Page, routeLabel: string): Locator {
+  return routesTable(page).getByRole("row").filter({ hasText: routeLabel })
 }
 
 function bindingSwitch(page: Page, op: string, routeLabel: string): Locator {
   return page.getByRole("switch", { name: `Enable ${op} for ${routeLabel}`, exact: true })
+}
+
+/** Open the row menu of a key (or a route) and run one item. */
+async function chooseRowAction(page: Page, trigger: string, item: string): Promise<void> {
+  await page.getByRole("button", { name: trigger, exact: true }).click({ timeout: 15_000 })
+  await page.getByRole("button", { name: item, exact: true }).click()
 }
 
 Given("the provider configuration is stubbed", async ({ page }) => {
@@ -52,27 +62,24 @@ When("I open the {word} page of project {word}", async ({ page }, pageName: stri
   await page.goto(`/p/${projectStubId(projectName)}/${segment}`)
 })
 
-Then("the {string} provider shows {string}", async ({ page }, name: string, text: string) => {
-  await expect(providerRegion(page, name)).toContainText(text, { timeout: 15_000 })
+Then("the route {string} shows {string}", async ({ page }, routeLabel: string, text: string) => {
+  await expect(routeRow(page, routeLabel)).toHaveCount(1, { timeout: 15_000 })
+  await expect(routeRow(page, routeLabel)).toContainText(text)
 })
 
 Then(
-  "the {string} credentials table lists {string} with {string} and {string}",
-  async ({ page }, name: string, label: string, owner: string, auth: string) => {
-    const row = credentialsTable(page, name).getByRole("row").filter({ hasText: label })
+  "the keys table lists {string} with {string}",
+  async ({ page }, label: string, text: string) => {
+    const row = keysTable(page).getByRole("row").filter({ hasText: label })
     await expect(row).toHaveCount(1, { timeout: 15_000 })
-    await expect(row).toContainText(owner)
-    await expect(row).toContainText(auth)
+    await expect(row).toContainText(text)
   }
 )
 
-Then(
-  "the {string} credentials table does not list {string}",
-  async ({ page }, name: string, label: string) => {
-    await expect(credentialsTable(page, name)).toBeVisible()
-    await expect(credentialsTable(page, name).getByRole("row").filter({ hasText: label })).toHaveCount(0)
-  }
-)
+Then("the keys table does not list {string}", async ({ page }, label: string) => {
+  await expect(keysTable(page)).toBeVisible()
+  await expect(keysTable(page).getByRole("row").filter({ hasText: label })).toHaveCount(0)
+})
 
 Then("the capacity allocations read:", async ({ page }, table: DataTable) => {
   const explanations = page.getByTestId("allocation-explanation")
@@ -84,15 +91,22 @@ Then("the capacity allocations read:", async ({ page }, table: DataTable) => {
 })
 
 When(
-  "I add a {string} binding to {string} with route label {string}",
-  async ({ page }, name: string, credential: string, routeLabel: string) => {
-    await providerRegion(page, name).getByRole("button", { name: "Add binding", exact: true }).click()
-    await chooseOption(page, "Credential", credential)
-    await page.getByLabel("Route label", { exact: true }).fill(routeLabel)
-    await expect(page.getByLabel("Priority", { exact: true })).toHaveValue("100")
-    await page.getByRole("button", { name: "Create binding", exact: true }).click()
+  "I add a route on the key {string} with route label {string}",
+  async ({ page }, credential: string, routeLabel: string) => {
+    await page.getByRole("button", { name: `Add route for ${credential}`, exact: true }).click()
+    const dialog = page.getByRole("dialog", { name: "Add route", exact: true })
+    await expect(dialog.getByRole("combobox", { name: "Key", exact: true })).toContainText(credential)
+    // The priority is computed so the route goes last; no number is typed.
+    await expect(dialog.getByLabel("Priority", { exact: true })).toHaveCount(0)
+    await dialog.getByLabel("Label", { exact: true }).fill(routeLabel)
+    await dialog.getByRole("button", { name: "Add route", exact: true }).click()
   }
 )
+
+Then("the route {string} is last in the route order", async ({ page }, routeLabel: string) => {
+  await expect(routeRow(page, routeLabel)).toHaveCount(1, { timeout: 15_000 })
+  await expect(routesTable(page).getByRole("row").last()).toContainText(routeLabel)
+})
 
 Then("the binding create request carried no enabled operations", async () => {
   await expect.poll(() => configRequests("POST", /\/bindings$/).length).toBe(1)
@@ -114,30 +128,45 @@ Then(
   }
 )
 
-When("I turn on {word} for binding {string}", async ({ page }, op: string, routeLabel: string) => {
+When("I turn {word} {word} for binding {string}", async ({ page }, _state: string, op: string, routeLabel: string) => {
   await bindingSwitch(page, op, routeLabel).click()
 })
 
+Then(
+  "the {word} toggle of binding {string} is read-only {string}",
+  async ({ page }, op: string, routeLabel: string, value: string) => {
+    await expect(routeRow(page, routeLabel)).toHaveCount(1, { timeout: 15_000 })
+    await expect(bindingSwitch(page, op, routeLabel)).toHaveCount(0)
+    await expect(routeRow(page, routeLabel)).toContainText(value)
+  }
+)
+
 Then("the last binding update enabled exactly {string}", async ({}, list: string) => {
-  await expect.poll(() => configRequests("PATCH", /\/bindings\/[0-9a-f-]{36}$/).length).toBeGreaterThan(0)
-  const patches = configRequests("PATCH", /\/bindings\/[0-9a-f-]{36}$/)
-  const body = patches[patches.length - 1].body ?? {}
-  expect(body.enabled_operations).toEqual(list.split(",").map((s) => s.trim()))
+  const expected = list.split(",").map((s) => s.trim())
+  await expect
+    .poll(() => {
+      const patches = configRequests("PATCH", /\/bindings\/[0-9a-f-]{36}$/)
+      return patches[patches.length - 1]?.body?.enabled_operations ?? null
+    })
+    .toEqual(expected)
 })
 
-When("I remove the binding {string}", async ({ page }, routeLabel: string) => {
-  await page.getByRole("button", { name: `Remove binding ${routeLabel}`, exact: true }).click()
-  await confirmIfAsked(page, `Remove binding`)
+When("I remove the route {string}", async ({ page }, routeLabel: string) => {
+  await chooseRowAction(page, `Actions for route ${routeLabel}`, "Remove route")
+  await page
+    .getByRole("dialog", { name: `Remove route ${routeLabel}`, exact: true })
+    .getByRole("button", { name: "Remove route", exact: true })
+    .click()
 })
 
-Then("the binding {string} is removed", async ({ page }, routeLabel: string) => {
+Then("the route {string} is removed", async ({ page }, routeLabel: string) => {
   await expect.poll(() => configRequests("DELETE", /\/bindings\/[0-9a-f-]{36}$/).length).toBe(1)
-  await expect(page.getByRole("button", { name: `Remove binding ${routeLabel}`, exact: true })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: `Actions for route ${routeLabel}`, exact: true })).toHaveCount(0)
 })
 
 /**
  * Fill and submit the shared credential form (project "Add provider key" or
- * "Add system credential"): Provider, Label, Auth mode, the write-only
+ * the System Providers Keys tab "Add key"): Provider, Label, Authentication, the write-only
  * "API key" input, "Save key".
  */
 async function submitCredentialForm(
@@ -148,19 +177,21 @@ async function submitCredentialForm(
   secret: string | null
 ): Promise<void> {
   await page.getByRole("button", { name: openButton, exact: true }).click()
-  await chooseOption(page, "Provider", provider)
-  await page.getByLabel("Label", { exact: true }).fill(label)
+  const dialog = page.getByRole("dialog", { name: openButton, exact: true })
+  await chooseOption(dialog, "Provider", provider)
+  await dialog.getByLabel("Label", { exact: true }).fill(label)
+  const authentication = dialog.getByRole("group", { name: "Authentication", exact: true })
   if (secret === null) {
-    await page.getByRole("radio", { name: "OAuth", exact: true }).check()
-    await expect(secretInput(page, "API key")).toHaveCount(0)
+    await authentication.getByRole("button", { name: "OAuth", exact: true }).click()
+    await expect(secretInput(dialog, "API key")).toHaveCount(0)
   } else {
-    const apiKeyMode = page.getByRole("radio", { name: "API key", exact: true })
-    if ((await apiKeyMode.count()) > 0) await apiKeyMode.check()
-    const input = secretInput(page, "API key")
+    const apiKeyMode = authentication.getByRole("button", { name: "API key", exact: true })
+    if ((await apiKeyMode.count()) > 0) await apiKeyMode.click()
+    const input = secretInput(dialog, "API key")
     await expectWriteOnlySecretInput(input)
     await input.fill(secret)
   }
-  await page.getByRole("button", { name: "Save key", exact: true }).click()
+  await dialog.getByRole("button", { name: "Save key", exact: true }).click()
 }
 
 When(
@@ -180,14 +211,14 @@ When(
 When(
   "I add a system credential for {string} labelled {string} with API key {string}",
   async ({ page }, provider: string, label: string, secret: string) => {
-    await submitCredentialForm(page, "Add system credential", provider, label, secret)
+    await submitCredentialForm(page, "Add key", provider, label, secret)
   }
 )
 
 When(
   "I add a system OAuth credential for {string} labelled {string}",
   async ({ page }, provider: string, label: string) => {
-    await submitCredentialForm(page, "Add system credential", provider, label, null)
+    await submitCredentialForm(page, "Add key", provider, label, null)
   }
 )
 
@@ -231,15 +262,15 @@ Then("no secret input holds a value", async ({ page }) => {
 
 When("someone else rotates the key {string}", async ({ page }, label: string) => {
   // The page has rendered the current generation before the change.
-  await expect(page.getByRole("button", { name: `Rotate key ${label}`, exact: true })).toBeVisible({
+  await expect(page.getByRole("button", { name: `Actions for ${label}`, exact: true })).toBeVisible({
     timeout: 15_000,
   })
   rotateCredentialElsewhere(label)
 })
 
 When("I rotate the key {string} with {string}", async ({ page }, label: string, secret: string) => {
-  await page.getByRole("button", { name: `Rotate key ${label}`, exact: true }).click()
-  const dialog = page.getByRole("dialog")
+  await chooseRowAction(page, `Actions for ${label}`, "Rotate key")
+  const dialog = page.getByRole("dialog", { name: `Rotate key for ${label}`, exact: true })
   const input = secretInput(dialog, "New API key")
   await expectWriteOnlySecretInput(input)
   await input.fill(secret)
@@ -253,7 +284,7 @@ Then("the last rotate request expected generation {int}", async ({}, generation:
 })
 
 When("I delete the key {string} and confirm", async ({ page }, label: string) => {
-  await page.getByRole("button", { name: `Delete key ${label}`, exact: true }).click()
+  await chooseRowAction(page, `Actions for ${label}`, "Delete key")
   await page.getByRole("dialog").getByRole("button", { name: "Delete key", exact: true }).click()
 })
 
@@ -262,13 +293,10 @@ Then("the stub no longer holds the credential {string}", async ({}, label: strin
 })
 
 Then("the providers page offers no configuration controls", async ({ page }) => {
-  await expect(page.getByRole("region", { name: /provider$/ }).first()).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByRole("button", { name: "Add binding", exact: true })).toHaveCount(0)
+  await expect(routesTable(page)).toBeVisible({ timeout: 15_000 })
   await expect(page.getByRole("button", { name: "Add provider key", exact: true })).toHaveCount(0)
-  await expect(page.getByRole("button", { name: /^Remove binding / })).toHaveCount(0)
-  await expect(page.getByRole("button", { name: /^Rotate key / })).toHaveCount(0)
-  await expect(page.getByRole("button", { name: /^Delete key / })).toHaveCount(0)
-  await expect(page.getByRole("button", { name: /^(Connect|Disconnect) / })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: /^Actions for / })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: /^Add route/ })).toHaveCount(0)
   const switches = page.getByRole("switch")
   const count = await switches.count()
   for (let index = 0; index < count; index += 1) await expect(switches.nth(index)).toBeDisabled()
@@ -277,7 +305,7 @@ Then("the providers page offers no configuration controls", async ({ page }) => 
 Then("the providers page offers no way to reveal or copy a key", async ({ page }) => {
   // Write-only: a saved key has metadata only, never a reveal, copy or
   // shown-once affordance.
-  await expect(page.getByRole("region", { name: /provider$/ }).first()).toBeVisible()
+  await expect(keysTable(page)).toBeVisible()
   await expect(page.getByRole("button", { name: /reveal|copy key|show key|burn/i })).toHaveCount(0)
   await expect(page.getByText(/shown once/i)).toHaveCount(0)
 })

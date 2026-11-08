@@ -17,6 +17,13 @@ import { TraceTrajectory } from "./TraceTrajectory"
  * the nested-disclosure timeline (`TraceTimeline.test.tsx` is deleted).
  */
 describe("TraceTrajectory", () => {
+  it("names the route step Provider selection", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture())
+    const stages = detail.stages.map((stage, index) => index === 0 ? { ...stage, label: "Route selection" } : stage)
+    render(<TraceTrajectory stages={stages} totalMs={detail.totalMs} selectedSpanId={null} onSelect={vi.fn()} />)
+    expect(screen.getByText("Provider selection")).toBeInTheDocument()
+    expect(screen.queryByText("Route selection")).not.toBeInTheDocument()
+  })
   it("renders user-level stages once in canonical order with stable depth", () => {
     const detail = mapTraceDetail(aggregatedTraceDetailFixture())
     const visible = selectUserTraceStages(detail.stages)
@@ -98,7 +105,7 @@ describe("TraceTrajectory", () => {
     const rows = within(list).getAllByRole("button").filter((row) => row.hasAttribute("data-depth"))
     for (const row of rows) {
       expect(row.querySelector('span[style*="left"]')).not.toBeNull()
-      expect(row.textContent).toMatch(/\d+ms/)
+      expect(row.textContent).toMatch(/[\d,]+ ms/)
       expect(row.textContent).not.toMatch(/\d+ res/)
     }
   })
@@ -115,6 +122,7 @@ describe("TraceTrajectory", () => {
     )
 
     expect(screen.getByRole("button", { name: /keenable request/i })).toBeInTheDocument()
+    expect(screen.getByTitle("Keenable request")).toHaveClass("whitespace-nowrap", "overflow-hidden")
     expect(screen.getByRole("button", { name: /parallel request/i })).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /^provider request$/i })).not.toBeInTheDocument()
   })
@@ -172,9 +180,11 @@ describe("TraceTrajectory", () => {
     const row = screen.getByRole("button", { name: /keenable request/i })
     expect(row.className).toContain("focus-visible:ring-inset")
     expect(row.className).toContain("focus-visible:ring-2")
-    expect(screen.getByText(String(detail.totalMs))).toBeInTheDocument()
+    // The compact ruler ticks sit at round values (0 / 2,000 for 3,381 ms).
+    for (const tick of ["0", "2,000"]) expect(screen.getByText(tick)).toBeInTheDocument()
+    expect(screen.queryByText(String(detail.totalMs))).not.toBeInTheDocument()
     expect(screen.getByText("ms")).toBeInTheDocument()
-    expect(screen.queryByText(`${detail.totalMs} ms`)).not.toBeInTheDocument()
+    expect(within(screen.getByRole("list", { name: /trajectory/i })).getByText("3,381 ms")).toBeInTheDocument()
   })
 
   it("marks the selected row and hands its span id to the side payload", async () => {

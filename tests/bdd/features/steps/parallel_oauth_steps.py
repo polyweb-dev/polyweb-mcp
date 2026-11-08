@@ -1,4 +1,4 @@
-"""Original OAuth BDD scenarios on A4 credential-scoped lifecycle and primitives."""
+"""OAuth BDD scenarios on account-vault lifecycle and primitives."""
 
 from datetime import timedelta
 from decimal import Decimal
@@ -9,7 +9,7 @@ from behave import given, then, when
 from freesearch.models.credentials import CredentialOAuthDeviceRead
 from freesearch.models.schema_enums import OAuthGrantStatus
 from freesearch.services.parallel_oauth import OAuthUnpaired
-from tests.fixtures.scoped_oauth import bdd_oauth_setup
+from tests.bdd.features.steps.vault_oauth_support import bdd_vault_oauth_setup
 from tests.integration.services.oauth.oauth_stubs import DEVICE_CODE_VALUE, TOKEN_SENTINELS
 
 
@@ -26,6 +26,9 @@ def _poll(context):
     case = context.oauth_case
     context.token_calls_before = case.stub.poll_calls
     context.oauth_status = _run(context, case.poll())
+    deltas = getattr(context, "token_call_deltas", [])
+    deltas.append(case.stub.poll_calls - context.token_calls_before)
+    context.token_call_deltas = deltas
 
 
 def _balance(context):
@@ -42,26 +45,26 @@ def _balance(context):
 
 @given("an offline Parallel OAuth API with stubbed platform responses")
 def step_given_oauth_api(context: Any) -> None:
-    bdd_oauth_setup(context)
+    bdd_vault_oauth_setup(context)
 
 
 @given("an offline Parallel OAuth API with a pending device flow")
 def step_given_pending_flow(context: Any) -> None:
-    bdd_oauth_setup(context)
+    bdd_vault_oauth_setup(context)
     context.oauth_case.stub.poll_script = ["authorization_pending"]
     _start(context)
 
 
 @given("an offline Parallel OAuth API with an expired device code")
 def step_given_expired_flow(context: Any) -> None:
-    bdd_oauth_setup(context)
+    bdd_vault_oauth_setup(context)
     _start(context)
     context.oauth_case.clock[0] += timedelta(hours=1)
 
 
 @given("an offline Parallel OAuth API with a paired bearer")
 def step_given_paired_bearer(context: Any) -> None:
-    bdd_oauth_setup(context)
+    bdd_vault_oauth_setup(context)
     _run(context, context.oauth_case.connect())
 
 
@@ -73,7 +76,7 @@ def step_when_start_flow(context: Any) -> None:
 @then("the device code response should carry the user code and verification URIs")
 def step_then_device_shape(context: Any) -> None:
     response = context.device_response
-    assert response.status_code == 201
+    assert response.status_code == 200
     body = response.json()
     assert set(body) == set(CredentialOAuthDeviceRead.model_fields)
     assert body["user_code"] and body["verification_uri"]
@@ -124,13 +127,13 @@ def step_then_status_ready(context: Any) -> None:
 
 @then("each status check should have attempted at most one token call")
 def step_then_bounded_poll(context: Any) -> None:
-    assert context.oauth_case.stub.poll_calls - context.token_calls_before <= 1
+    assert all(delta <= 1 for delta in context.token_call_deltas)
 
 
 @when("I check the Parallel OAuth status twice in quick succession")
 def step_when_check_status_twice(context: Any) -> None:
     _poll(context)
-    context.oauth_status = _run(context, context.oauth_case.status())
+    _poll(context)
 
 
 @then("the token endpoint should have been called exactly once")
@@ -267,6 +270,7 @@ def step_when_disconnect(context: Any) -> None:
 def step_then_revoke_before_delete(context: Any) -> None:
     assert context.disconnect_response.status_code == 204
     assert context.oauth_case.stub.revoke_calls == 1
+    assert context.oauth_case.revoke_observations == [(OAuthGrantStatus.CONNECTED.value, True)]
     assert _run(context, context.oauth_case.status()).status is OAuthGrantStatus.DISCONNECTED
     assert not any(_run(context, context.oauth_case.slots()).values())
 
@@ -281,31 +285,3 @@ def step_when_disconnect_again(context: Any) -> None:
 def step_then_disconnect_idempotent(context: Any) -> None:
     assert context.disconnect_response.status_code == 204
     assert context.oauth_case.stub.revoke_calls == 1
-
-
-@when('I start the device flow for "{provider_id}"')
-def step_when_start_flow_for(context: Any, provider_id: str) -> None:
-    case = context.oauth_case
-    context.other_response = case.client.post(
-        f"/api/v1/providers/{provider_id}/oauth/device-code", headers=case.headers
-    )
-
-
-@then("the OAuth response should be 404 oauth-not-supported")
-def step_then_oauth_not_supported(context: Any) -> None:
-    assert context.other_response.status_code == 404
-    assert context.oauth_case.stub.register_calls == 0
-
-
-@when('I check the OAuth status for "{provider_id}"')
-def step_when_check_status_for(context: Any, provider_id: str) -> None:
-    case = context.oauth_case
-    context.other_response = case.client.get(
-        f"/api/v1/providers/{provider_id}/oauth/status", headers=case.headers
-    )
-
-
-@then("the OAuth response should be 404 unknown provider")
-def step_then_unknown_provider(context: Any) -> None:
-    assert context.other_response.status_code == 404
-    assert context.oauth_case.stub.poll_calls == 0

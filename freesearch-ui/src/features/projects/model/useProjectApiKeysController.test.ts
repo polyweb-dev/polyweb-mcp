@@ -13,7 +13,7 @@ function installStub(issue: () => Response = () => ok({ ...apiKeyFixture(), key:
   return installFetchStub((req) => {
     if (req.url.endsWith("/api-keys") && req.method === "GET") return ok([apiKeyFixture()])
     if (req.url.endsWith("/members")) {
-      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", status: "active", roles: [], version: 1 }])
+      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", status: "active", roles: ["project_admin"], role: "admin", permissions: 15, provider_owner: false, version: 1 }])
     }
     if (req.url.endsWith("/api-keys") && req.method === "POST") return issue()
     return err(404, null)

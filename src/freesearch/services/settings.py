@@ -38,7 +38,6 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     CredentialOwnerScope,
@@ -106,10 +105,6 @@ SETTINGS_REVISION_CONFLICT: Final[str] = "SETTINGS_REVISION_CONFLICT"
 #: Conflict code for a write that targets an archived project.
 PROJECT_ARCHIVED: Final[str] = "PROJECT_ARCHIVED"
 
-_VALID_PROVIDER_NAMES: Final[frozenset[str]] = frozenset(
-    provider.value for provider in ProviderName
-)
-
 _CacheKey = tuple[str, str, str, int, int]
 
 
@@ -135,16 +130,26 @@ def _override_document(document: ProjectSettingsDocument) -> dict[str, Any]:
     return document.model_dump(mode="json", exclude={"revision"}, exclude_none=True)
 
 
-def _validate_provider_names(values: Any) -> None:
-    """Reject a preference list naming a provider this build does not know."""
+def _upgrade_stored_document(stored: StoredSettings, *, system: bool) -> dict[str, Any]:
+    """Upgrade historical settings without accepting obsolete API fields."""
 
-    if values is None:
-        return
-    unknown = sorted(value for value in values if value not in _VALID_PROVIDER_NAMES)
-    if unknown:
-        raise SettingsValidationError(
-            f"unknown provider name(s) in preferred_providers: {', '.join(unknown)}"
-        )
+    if stored.schema_version not in (1, 2, SETTINGS_SCHEMA_VERSION):
+        raise SettingsCorrupt("stored settings use an unsupported schema")
+    document = dict(stored.document)
+    if stored.schema_version == 1 and isinstance(document.get("trace"), dict):
+        trace = dict(document["trace"])
+        trace.pop("sampling_rate", None)
+        trace.pop("payload_redaction", None)
+        if system:
+            # Version 1 always persisted the old 30-day default.
+            trace.pop("retention_days", None)
+        document["trace"] = trace
+    if stored.schema_version in (1, 2) and isinstance(document.get("routing"), dict):
+        routing = dict(document["routing"])
+        routing.pop("preferred_providers", None)
+        routing.pop("cost_optimization_preset", None)
+        document["routing"] = routing
+    return document
 
 
 def _system_document(stored: StoredSettings | None) -> tuple[SystemSettingsDocument, int]:
@@ -152,17 +157,13 @@ def _system_document(stored: StoredSettings | None) -> tuple[SystemSettingsDocum
 
     if stored is None:
         return SystemSettingsDocument(revision=0), 0
-    if stored.schema_version != SETTINGS_SCHEMA_VERSION or stored.namespace != SETTINGS_NAMESPACE:
+    if stored.namespace != SETTINGS_NAMESPACE:
         raise SettingsCorrupt("stored system settings use an unsupported schema")
     try:
         document = SystemSettingsDocument.model_validate(
-            {**stored.document, "revision": stored.revision}
+            {**_upgrade_stored_document(stored, system=True), "revision": stored.revision}
         )
     except (ValueError, TypeError) as error:
-        raise SettingsCorrupt("stored system settings are invalid") from error
-    try:
-        _validate_provider_names(document.routing.preferred_providers)
-    except SettingsValidationError as error:
         raise SettingsCorrupt("stored system settings are invalid") from error
     return document, stored.revision
 
@@ -172,17 +173,13 @@ def _project_document(stored: StoredSettings | None) -> ProjectSettingsDocument:
 
     if stored is None:
         return ProjectSettingsDocument()
-    if stored.schema_version != SETTINGS_SCHEMA_VERSION or stored.namespace != SETTINGS_NAMESPACE:
+    if stored.namespace != SETTINGS_NAMESPACE:
         raise SettingsCorrupt("stored project settings use an unsupported schema")
     try:
         document = ProjectSettingsDocument.model_validate(
-            {**stored.document, "revision": stored.revision}
+            {**_upgrade_stored_document(stored, system=False), "revision": stored.revision}
         )
     except (ValueError, TypeError) as error:
-        raise SettingsCorrupt("stored project settings are invalid") from error
-    try:
-        _validate_provider_names(document.routing.preferred_providers)
-    except SettingsValidationError as error:
         raise SettingsCorrupt("stored project settings are invalid") from error
     return document
 
@@ -351,7 +348,7 @@ def resolve_settings(
     overrides: dict[str, Any] = {}
 
     for spec in SETTINGS_FIELD_CATALOG:
-        system_value = getattr(getattr(system, spec.section), spec.attribute)
+        system_value = getattr(getattr(system, spec.section), spec.attribute, None)
         project_section = getattr(project, spec.section, None)
         override_value = (
             None
@@ -387,7 +384,7 @@ def resolve_settings(
                         f"settings field {spec.field_id!r} has no safety limit rule"
                     )
                 safety_limit = getattr(system.safety_limits, limit_attribute)
-                if effective_value > safety_limit:
+                if effective_value is not None and effective_value > safety_limit:
                     effective_value = safety_limit
                     provenance = SettingsProvenance.SYSTEM_CONSTRAINED
                     constraint_applied = True
@@ -480,7 +477,6 @@ class SettingsService:
                     account_id=self._account_id,
                 ),
             )
-            _validate_provider_names(update.routing.preferred_providers)
             repository = SystemSettingsRepository(session)
             stored = await repository.get(SETTINGS_NAMESPACE)
             current_revision = 0 if stored is None else stored.revision
@@ -583,7 +579,6 @@ class SettingsService:
 
             current_document = _project_document(current_stored)
             next_document = self._apply_project_update(current_document, update)
-            _validate_provider_names(next_document.routing.preferred_providers)
             applied = await store.compare_and_set(
                 schema_version=SETTINGS_SCHEMA_VERSION,
                 overrides=_override_document(next_document),
@@ -800,7 +795,6 @@ class SettingsService:
             target_document=target_document,
         )
         next_document = self._copied_document(target_document, fields)
-        _validate_provider_names(next_document.routing.preferred_providers)
         simulated = resolve_settings(
             system=system,
             system_revision=system_revision,

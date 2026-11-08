@@ -1,126 +1,65 @@
 import type { ReactNode } from "react"
+import { RefreshCw } from "lucide-react"
+import { cn } from "cn"
 import { Button } from "@/shared/ui/button"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip"
-import {
-  BALANCE_ENTRY,
-  BALANCE_ENTRY_NOTE,
-  SPEND_CAP,
-  SPEND_CAP_NOTE,
-} from "../model/quotaLabels"
+import { formatDateTime } from "@/shared/lib/formatTime"
 
-/** The one dialog a card can hold open. */
-export type CardModal = "manual" | "grant" | "history" | null
+export type { CardModal } from "./ProviderCardMenu"
 
 export interface ProviderCardActionsProps {
-  providerId: string
   providerName: string
-  manualEligible: boolean
   syncing: boolean
   onSync: () => void
-  /** The last refresh was skipped, so the refresh action stays off the card. */
+  /** The provider reports no usage, so the refresh action stays off the card. */
   refreshSkipped?: boolean
-  onOpenModal: (modal: CardModal) => void
+  /** The plain result of the last refresh; it clears when the next refresh starts. */
+  syncNote?: string | null
+  updatedAt?: number | null
   /**
-   * Composed OAuth control rendered inline at the trailing edge of the same
-   * flex-wrap action row (Parallel Connect/Disconnect). Supplied by composition
-   * so the quota feature never imports the OAuth feature directly.
+   * Composed OAuth control rendered inline after the refresh control.
+   * Supplied by composition so the quota feature never imports the OAuth
+   * feature directly.
    */
   oauthActions?: ReactNode
-  /** The detail disclosure left the card. The info control owns the detail now. */
-  expanded?: boolean
-  /** The panel id of the earlier disclosure; the card mounts no panel now. */
-  panelId?: string
-  /** The toggle of the earlier disclosure; the card mounts no panel now. */
-  onToggleExpanded?: () => void
-}
-
-const ACTION = "px-3"
-const TOOLTIP_DELAY = 200
-
-/** One accessible name that states the named control and its meaning. */
-function actionName(label: string, note: string, providerName: string): string {
-  return label + " for " + providerName + ". " + note
-}
-
-interface DialogAction {
-  label: string
-  note: string
-  testId: string
-  onOpen: () => void
 }
 
 /**
- * One dialog action: the button shows its label only, and its one-sentence
- * meaning sits in the hover tooltip and in the accessible name.
+ * The footer controls of one card: one Refresh button with the result of the
+ * last refresh beside it, then the composed OAuth control. A provider without
+ * a usage endpoint shows no Refresh, because there is nothing to refresh.
  */
-function dialogAction(input: DialogAction, providerName: string): ReactNode {
+export function ProviderCardActions({
+  providerName,
+  syncing,
+  onSync,
+  refreshSkipped = false,
+  syncNote = null,
+  updatedAt = null,
+  oauthActions,
+}: ProviderCardActionsProps): ReactNode {
   return (
-    <Tooltip key={input.testId}>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className={ACTION}
-            data-testid={input.testId}
-            aria-label={actionName(input.label, input.note, providerName)}
-            onClick={input.onOpen}
+    <div className="flex min-w-0 flex-wrap items-center gap-3">
+      {!refreshSkipped && (
+        <Button
+          type="button"
+          variant="outline"
+          size="form"
+          disabled={syncing}
+          aria-label={"Refresh limits for " + providerName}
+          onClick={onSync}
+        >
+          <RefreshCw
+            aria-hidden="true"
+            className={cn("size-3.5", syncing && "animate-spin motion-reduce:animate-none")}
           />
-        }
-      >
-        {input.label}
-      </TooltipTrigger>
-      <TooltipContent>{input.note}</TooltipContent>
-    </Tooltip>
-  )
-}
-
-/**
- * The header controls of one card: sync, the provider balance dialog, the
- * budget limit dialog, the history dialog, and the composed OAuth control
- * inline at the trailing edge of the same flex-wrap row.
- *
- * Each dialog action carries its one-sentence meaning as a hover tooltip and as
- * accessible text, so a screen reader states the difference between a provider
- * balance and a budget limit. The card holds no detail disclosure, because the
- * info control of the card owns the detail. A skipped refresh hides the sync
- * action, because there is nothing to refresh.
- */
-export function ProviderCardActions(input: ProviderCardActionsProps): ReactNode {
-  const { providerId, providerName, manualEligible, syncing, oauthActions } = input
-  const actions: DialogAction[] = []
-  if (manualEligible) {
-    actions.push({
-      label: BALANCE_ENTRY,
-      note: BALANCE_ENTRY_NOTE,
-      testId: "manual-quota-open-" + providerId,
-      onOpen: () => input.onOpenModal("manual"),
-    })
-  }
-  actions.push({
-    label: SPEND_CAP,
-    note: SPEND_CAP_NOTE,
-    testId: "crd-grant-open-" + providerId,
-    onOpen: () => input.onOpenModal("grant"),
-  })
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {input.refreshSkipped !== true && (
-        <Button type="button" variant="outline" size="lg" className={ACTION}
-          disabled={syncing} aria-label={"Refresh limits for " + providerName} onClick={input.onSync}>
-          {syncing ? "Refreshing…" : "Refresh Limits"}
+          {syncing ? "Refreshing…" : "Refresh"}
         </Button>
       )}
-      <TooltipProvider delay={TOOLTIP_DELAY}>
-        {actions.map((action) => dialogAction(action, providerName))}
-      </TooltipProvider>
-      <Button type="button" variant="outline" size="lg" className={ACTION}
-        data-testid={"limit-history-open-" + providerId}
-        aria-label={"Balance history for " + providerName}
-        onClick={() => input.onOpenModal("history")}>
-        History
-      </Button>
+      {syncNote !== null && (
+        <p role="status" title={updatedAt === null ? undefined : formatDateTime(new Date(updatedAt).toISOString())} className="min-w-0 text-[12px] text-[var(--muted)]">
+          {syncNote}
+        </p>
+      )}
       {oauthActions}
     </div>
   )

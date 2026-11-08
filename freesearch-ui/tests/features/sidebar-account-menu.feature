@@ -1,51 +1,49 @@
 @sidebar-account-menu @stub
 Feature: Sidebar account menu
   The sidebar keeps navigation above the account row. The account row opens
-  a popup with the account name, the email, and Sign out. Sign out stays
-  in the popup only. Accounts carry no role: navigation follows the system
+  a popup with Account and Sign out; the identity moves into the popup when
+  the sidebar is collapsed. Sign out stays in the popup only. Accounts carry no role: navigation follows the system
   permissions from GET /api/v1/system/access. A system administrator holds
   every system permission, a settings reader holds only system.settings.read,
   and a member holds no system permission. Playground, Activity and Usage
   are project sections (U2), so the Primary navigation lists the global
-  workspaces only; the installation usage page is "Provider usage". U3 adds
-  "System credentials" and "Capacity" and names the global settings link
-  "Provider settings", so it never shares a name with a project's "Settings".
+  workspaces only. The System group lists "Providers" and "Quotas", then
+  "Projects", "Keys and pools", and "Account".
 
   @sidebar-account-menu @stub
-  Scenario: B1 System administrator sidebar keeps eight links in order
+  Scenario: B1 System administrator sidebar keeps its links in order
     Given the sidebar session belongs to a system administrator
     When I open the workspace for the sidebar check
-    Then the sidebar shows eight links in order with exact hrefs
-    And the sidebar shows the Account and Admin links
+    Then the sidebar shows five links in order with exact hrefs
+    And the sidebar shows the Account link
+    And the sidebar shows no Accounts link
 
   @sidebar-account-menu @stub
-  Scenario Outline: B2 An account without system.settings.write hides the Admin link
+  Scenario Outline: B2 An account without system.settings.write hides the Accounts link
     Given the sidebar session belongs to the "<account>" account
     When I open the workspace for the sidebar check
-    Then the sidebar shows <count> links without Admin
-    And the sidebar shows no Admin link
+    Then the sidebar shows <count> links without an Accounts link
+    And the sidebar shows no Accounts link
     And the Primary navigation lists exactly "<links>"
 
     Examples:
-      | account         | count | links                                                         |
-      | settings reader | 5     | Routing, Provider usage, Provider settings, Projects, Account |
-      | member          | 2     | Projects, Account                                             |
+      | account         | count | links                                         |
+      | settings reader | 4     | Providers, Quotas, Projects, Account |
+      | member          | 2     | Projects, Account                             |
 
   @sidebar-account-menu @stub
-  Scenario Outline: B2b A direct URL outside the system permissions redirects home
+  Scenario Outline: B2b A retired or unauthorized direct URL redirects home
     Given the sidebar session belongs to the "<account>" account
     When I open the gated page "<path>" for the sidebar check
     Then the gated page redirects home to the projects list
 
     Examples:
-      | account         | path                |
-      | settings reader | /admin/users        |
-      | member          | /admin/users        |
-      | member          | /routing            |
-      | member          | /usage              |
-      | member          | /settings           |
-      | settings reader | /system/credentials |
-      | settings reader | /system/capacity    |
+      | account              | path                |
+      | system administrator | /admin/users        |
+      | settings reader      | /admin/users        |
+      | member               | /admin/users        |
+      | member               | /system/quotas      |
+      | member               | /system/providers   |
 
   @sidebar-account-menu @stub
   Scenario: B3 Expanded account row opens the identity popup
@@ -152,7 +150,7 @@ Feature: Sidebar account menu
     Given the sidebar session belongs to a system administrator
     When I open the workspace for the sidebar check
     And I activate the expanded account row
-    And I follow the Routing link with an open popup
+    And I follow the Quotas link with an open popup
     Then the account popup closes without stale identity
     When I activate the expanded account row
     And I toggle sidebar mode with an open popup
@@ -164,7 +162,7 @@ Feature: Sidebar account menu
     When I open the account workspace for the sidebar check
     Then the account page keeps facts without Sign out
     And the account page shows no role
-    And the account creation link follows system.settings.write for the "<account>" account
+    And the account page has no account creation link
 
     Examples:
       | account              |
@@ -176,7 +174,8 @@ Feature: Sidebar account menu
   Scenario: R1 Avatars use larger centered circles
     Given the sidebar session belongs to a system administrator
     When I open the workspace for the sidebar check
-    And I activate the expanded account row
+    And I collapse the sidebar for the account check
+    And I activate the collapsed account avatar
     Then the outside and popup avatars use larger centered circles
 
   @sidebar-refinements @sidebar-account-menu @stub
@@ -242,9 +241,9 @@ Feature: Sidebar account menu
     And I collapse the sidebar for the account check
     And I reload the page
     Then the sidebar keeps the stored collapse choice
-    When I follow the "Routing" sidebar link
-    Then I should see the "Routing" heading
-    And the page URL path should be "/routing"
+    When I follow the "Quotas" sidebar link
+    Then I should see the "Quotas" heading
+    And the page URL path should be "/system/quotas"
     When I open the mobile navigation drawer for the account check
     And I activate the drawer account row
     And I press Escape once for the nested popup

@@ -9,7 +9,7 @@ import type { ApiKeyExpiry } from "@/domains/projects"
 
 export type ExpiryChoice = "default" | "never" | "custom"
 
-export const PAST_EXPIRY_MESSAGE = "Choose an expiration date in the future."
+export const PAST_EXPIRY_MESSAGE = "Choose an expiration date in the future"
 
 export type ExpiryResult = { ok: true; expiry: ApiKeyExpiry } | { ok: false; message: string }
 
@@ -25,7 +25,7 @@ export function toApiKeyExpiry(
   if (choice === "never") return { ok: true, expiry: { kind: "never" } }
   if (!DATE_RE.test(customDate)) return { ok: false, message: PAST_EXPIRY_MESSAGE }
   const endOfDay = new Date(`${customDate}T23:59:59`)
-  if (Number.isNaN(endOfDay.getTime()) || endOfDay.getTime() <= now.getTime()) {
+  if (Number.isNaN(endOfDay.getTime()) || todayInputValue(endOfDay) !== customDate || endOfDay.getTime() <= now.getTime()) {
     return { ok: false, message: PAST_EXPIRY_MESSAGE }
   }
   return { ok: true, expiry: { kind: "at", isoTimestamp: endOfDay.toISOString() } }

@@ -8,6 +8,5 @@ export interface BackendRoutingPreference {
 
 export interface BackendRoutingConfig {
   fallback_policy: "chained" | "first_only"
-  cost_optimization_preset: "balanced" | "free_first"
   max_attempts: number
 }

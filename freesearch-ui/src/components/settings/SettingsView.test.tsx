@@ -2,7 +2,10 @@ import React from "react"
 import { describe, expect, it, afterEach, vi } from "vitest"
 import { render, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { MemoryRouter } from "react-router"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
+import { ProjectsProvider } from "@/domains/projects"
+import { HARNESS_ACCOUNT, installWorkspaceStub } from "@/test/workspaceHarness"
 import { ADMIN_ACCOUNT_ID, DEVELOPER_ACCOUNT_ID } from "@/test/authFixtures"
 import { ToastContainer } from "@/components/common/ToastContainer"
 import { SettingsView } from "./SettingsView"
@@ -48,7 +51,6 @@ function renderSettings(): FetchStub {
       const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
       const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
         enable_mask: number
-        priority: number
       }
       const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
       let enableMask = base.enable_mask
@@ -61,8 +63,7 @@ function renderSettings(): FetchStub {
         if (patch.fetch_enabled === true) enableMask |= 4
         if (patch.fetch_enabled === false) enableMask &= ~4
       }
-      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
-      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0 })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       return ok({
@@ -80,10 +81,12 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SettingsView />
-      <ToastContainer />
-    </FreeSearchProvider>
+    <MemoryRouter>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+        <SettingsView />
+        <ToastContainer />
+      </FreeSearchProvider>
+    </MemoryRouter>
   )
   return stub
 }
@@ -107,31 +110,29 @@ describe("SettingsView (live backend)", () => {
     vi.unstubAllGlobals()
   })
 
-  it("renders exactly Providers and Failover tabs, with no Keys tab or secret input", async () => {
+  it("without key management shows only the Providers view: no tabs, no Failover tab, no secret input", async () => {
     renderSettings()
     await waitForProviders()
 
-    expect(screen.getAllByRole("tab")).toHaveLength(2)
+    expect(screen.queryAllByRole("tab")).toHaveLength(0)
     expect(screen.queryByRole("tab", { name: /^Keys$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole("tab", { name: /^Failover$/ })).not.toBeInTheDocument()
     expect(document.body.querySelector('input[type="password"]')).toBeNull()
-    for (const label of ["Providers", "Failover"]) {
-      expect(screen.getByRole("tab", { name: new RegExp(`^${label}$`) })).toBeInTheDocument()
-    }
     expect(screen.queryByRole("tab", { name: /^Cache$/ })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /add provider/i })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /remove|delete provider/i })).not.toBeInTheDocument()
   })
 
-  it("shows all backend providers with priorities and no add/remove actions", async () => {
+  it("shows all backend providers without order or add/remove actions", async () => {
     renderSettings()
     await waitForProviders()
 
     for (const provider of seedProviderNames) {
       expect(screen.getByText(provider, { exact: true })).toBeInTheDocument()
     }
-    for (let priority = 1; priority <= seedProviderNames.length; priority += 1) {
-      expect(screen.getByText(`P${priority}`, { exact: true })).toBeInTheDocument()
-    }
+    const table = screen.getByRole("table")
+    expect(within(table).queryByRole("columnheader", { name: "Priority" })).not.toBeInTheDocument()
+    expect(within(table).getByRole("columnheader", { name: "Cost per call" })).toBeInTheDocument()
     for (const provider of seedProviderNames) {
       expect(
         screen.getByRole("switch", { name: `${provider} global routing` })
@@ -197,9 +198,9 @@ describe("SettingsView (live backend)", () => {
     const searchPatches = stub.requestsTo("/api/v1/providers/brave")
     expect(searchPatches).toHaveLength(1)
     expect(searchPatches[0].body).toEqual({ search_enabled: false })
-    // Brave is search-only: fetch shows the disabled switch
-    const fetchSwitch = within(row).getByRole("switch", { name: "Brave Search fetch routing (not supported)" })
-    expect(fetchSwitch).toBeDisabled()
+    // Brave is search-only: fetch reads as unavailable, not as a switch
+    expect(within(row).queryByRole("switch", { name: /fetch routing/ })).toBeNull()
+    expect(within(row).getByText("Brave Search does not support fetch")).toBeInTheDocument()
   })
 
 
@@ -207,37 +208,32 @@ describe("SettingsView (live backend)", () => {
 
 
 
-  it("renders failover switches with descriptions and honest timeout copy", async () => {
-    const user = userEvent.setup()
+  it("renders only the persisted fallback controls under the provider table", async () => {
     renderSettings()
     await waitForProviders()
-    await user.click(screen.getByRole("tab", { name: /^Failover$/ }))
 
-    for (const label of [
-      "Fallback chaining",
+    const section = screen.getByRole("heading", { name: "When a provider fails" }).closest("section") as HTMLElement
+    expect(within(section).getByRole("switch", { name: "Fallback" })).toHaveAttribute("aria-checked", "true")
+    expect(within(section).getByText("Max attempts", { exact: true })).toBeInTheDocument()
+    expect(within(section).getByText("3", { exact: true })).toBeInTheDocument()
+    for (const removed of [
       "Failover on rate limit (429)",
       "Failover on timeout",
       "Failover on server error (5xx)",
+      "Cascade depth",
+      "Timeout budget",
     ]) {
-      expect(screen.getByText(label, { exact: true })).toBeInTheDocument()
+      expect(screen.queryByText(removed)).not.toBeInTheDocument()
     }
-    expect(screen.getByText("Cascade depth", { exact: true })).toBeInTheDocument()
     // Honest copy: the invented per-hop budget is gone everywhere in Settings
     expect(screen.queryByText("3,000 ms", { exact: true })).not.toBeInTheDocument()
   })
 
-  it("describes failover as single-attempt dispatch with session-only sub-switches", async () => {
-    const user = userEvent.setup()
+  it("shows no developer notes about session-only or unexposed settings", async () => {
     renderSettings()
     await waitForProviders()
-    await user.click(screen.getByRole("tab", { name: /^Failover$/ }))
 
-    // The master switch must disclose single-attempt dispatch (the backend
-    // never retries across providers on its own).
-    expect(document.body.textContent).toMatch(/single attempt|no cross-provider retry/i)
-    // At least one per-condition sub-switch is session-only (not enforced
-    // by the backend).
-    expect(screen.getByText(/session-only|not enforced/i)).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/session-only|not enforced|not exposed|persisted for backend/i)
   })
 
 })
@@ -259,22 +255,23 @@ describe("SettingsView Developer read-only (canReadControls, no edit)", () => {
       return err(404, { detail: "unhandled test route" })
     })
     render(
-      <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
-        <SettingsView />
-        <ToastContainer />
-      </FreeSearchProvider>
+      <MemoryRouter>
+        <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
+          <SettingsView />
+          <ToastContainer />
+        </FreeSearchProvider>
+      </MemoryRouter>
     )
     return stub
   }
 
-  it("shows no Keys tab or key vault, keeps Providers/Failover, and sends no writes", async () => {
+  it("shows no Keys tab or key vault, keeps the Providers view, and sends no writes", async () => {
     const stub = renderDeveloperSettings()
     await waitForProviders()
 
-    // Read-only markers present: exactly Providers + Failover tabs.
-    expect(screen.getAllByRole("tab")).toHaveLength(2)
-    expect(screen.getByRole("tab", { name: /^Providers$/ })).toBeInTheDocument()
-    expect(screen.getByRole("tab", { name: /^Failover$/ })).toBeInTheDocument()
+    // Read-only markers present: the Providers view only, so no tab list.
+    expect(screen.queryAllByRole("tab")).toHaveLength(0)
+    expect(screen.getByRole("heading", { level: 2, name: "Providers" })).toBeInTheDocument()
     // Mutation affordances absent: no Keys tab, so the vault never mounts.
     expect(screen.queryByRole("tab", { name: /^Keys$/ })).not.toBeInTheDocument()
     expect(screen.queryByRole("heading", { name: "Key vault" })).not.toBeInTheDocument()
@@ -284,5 +281,66 @@ describe("SettingsView Developer read-only (canReadControls, no edit)", () => {
     expect(
       stub.requests.filter((r) => r.method === "PATCH" || r.method === "PUT" || r.method === "POST")
     ).toHaveLength(0)
+  })
+})
+
+describe("SettingsView with key management", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function renderWithKeys(entry: string) {
+    const stub = installWorkspaceStub((req) => {
+      if (req.url === "/api/v1/providers" && req.method === "GET") return ok(allProvidersFixture())
+      if (req.url === "/api/v1/routing/config" && req.method === "GET") return ok(routingConfigFixture())
+      if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
+      if (req.url === "/api/v1/system/credentials" && req.method === "GET") return ok([])
+      return err(404, { detail: "unhandled test route" })
+    })
+    render(
+      <MemoryRouter initialEntries={[entry]}>
+        <ProjectsProvider accountId={HARNESS_ACCOUNT}>
+          <FreeSearchProvider accountId={HARNESS_ACCOUNT} canReadControls canEditControls>
+            <SettingsView />
+          </FreeSearchProvider>
+        </ProjectsProvider>
+      </MemoryRouter>
+    )
+    return stub
+  }
+
+  it("shows the provider catalog without a Keys tab", async () => {
+    renderWithKeys("/system/providers")
+    await waitForProviders()
+    expect(screen.queryAllByRole("tab")).toHaveLength(0)
+    expect(screen.queryByRole("tab", { name: "Failover" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("tab", { name: "Credentials" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Add key" })).toBeNull()
+  })
+
+  it("keeps the catalog visible for the former ?tab=credentials", async () => {
+    const stub = renderWithKeys("/system/providers?tab=credentials")
+    await waitForProviders()
+    expect(screen.queryByRole("heading", { name: "System keys" })).not.toBeInTheDocument()
+    expect(stub.requestsTo("/api/v1/system/credentials")).toHaveLength(0)
+  })
+
+  it("keeps the fallback section visible for the former ?tab=failover", async () => {
+    renderWithKeys("/system/providers?tab=failover")
+    expect(await screen.findByRole("heading", { name: "When a provider fails" })).toBeInTheDocument()
+  })
+
+  it("keeps the catalog visible for the former ?tab=keys", async () => {
+    const stub = renderWithKeys("/system/providers?tab=keys")
+    await waitForProviders()
+    expect(screen.queryByRole("button", { name: "Add key" })).not.toBeInTheDocument()
+    expect(stub.requestsTo("/api/v1/system/credentials")).toHaveLength(0)
+  })
+
+  it("retains the provider controls without a tab list", async () => {
+    renderWithKeys("/system/providers?tab=providers")
+    await waitForProviders()
+    expect(screen.getByRole("switch", { name: "Brave Search global routing" })).toBeInTheDocument()
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument()
   })
 })

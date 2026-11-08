@@ -219,7 +219,7 @@ describe("ProviderLimitsDetail", () => {
         auth={withGrants(authFixture(), grantsFixture())}
       />,
     )
-    expect(screen.getByText("Budget Limit period")).not.toBeNull()
+    expect(screen.getByText("Budget limit period")).not.toBeNull()
     expect(screen.getByText("Search budget limit")).not.toBeNull()
     expect(screen.queryByText("Fetch budget limit")).toBe(null)
   })
@@ -231,7 +231,7 @@ describe("ProviderLimitsDetail", () => {
       "Search budget limit",
       "Fetch budget limit",
       "Reset",
-      "Budget Limit period",
+      "Budget limit period",
       "Vendor-reported USD spend",
     ])
   })
@@ -283,8 +283,8 @@ describe("ProviderLimitsDetail", () => {
     )
     expect(screen.getByText("Search budget limit")).not.toBeNull()
     expect(screen.getByText("Extract budget limit")).not.toBeNull()
-    expect(screen.getByText("1 Tavily Credit set, 0 Tavily Credits used")).not.toBeNull()
-    expect(screen.getByText("2 Tavily Credits set, 0 Tavily Credits used")).not.toBeNull()
+    expect(screen.getByText("$0.008 set, $0 used")).not.toBeNull()
+    expect(screen.getByText("$0.016 set, $0 used")).not.toBeNull()
     expect(screen.queryByText("8 CRD")).toBeNull()
   })
 
@@ -351,8 +351,8 @@ describe("ProviderLimitsDetail nativeDisplay", () => {
         nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
       />,
     )
-    expect(screen.getByText("1 Tavily Credit set, 0 Tavily Credits used")).not.toBeNull()
-    expect(screen.getByText("2 Tavily Credits set, 0 Tavily Credits used")).not.toBeNull()
+    expect(screen.getByText("$0.0099 set, $0 used")).not.toBeNull()
+    expect(screen.getByText("$0.0179 set, $0 used")).not.toBeNull()
   })
 
   it("trims USD spend zeros for the native rail", () => {

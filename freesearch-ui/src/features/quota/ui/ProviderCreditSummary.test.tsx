@@ -44,26 +44,29 @@ describe("ProviderCreditSummary native Credits", () => {
   it("shows the native 999/1000 Credits fraction with a native bar", () => {
     render(<ProviderCreditSummary providerName="Tavily" model={crdModel()} credits={credits()} />)
     expect(screen.getByText("999")).not.toBeNull()
-    expect(screen.getByText("/ 1000")).not.toBeNull()
-    expect(screen.getByText("Credits")).not.toBeNull()
+    expect(screen.getByText("/ 1,000")).not.toBeNull()
+    expect(screen.getByText("Balance left")).not.toBeNull()
     const bar = screen.getByRole("progressbar", { name: "Tavily native Credits remaining" })
     expect(bar.getAttribute("aria-valuenow")).toBe("99.9")
     expect(screen.getByText("99.9%")).not.toBeNull()
     expect(screen.queryByText("CRD")).toBeNull()
   })
 
-  it("states keyless access without a Credits quota", () => {
-    render(
+  it("shows the one quiet empty line for keyless access without a Credits quota", () => {
+    const { container } = render(
       <ProviderCreditSummary
         providerName="Tavily"
         model={crdModel()}
         credits={credits({ state: "keyless", remaining: null, allowance: null })}
+        emptyText="This provider does not report usage"
       />,
     )
-    expect(screen.getByText("Keyless access (no Credits quota is reported)")).not.toBeNull()
+    expect(screen.getByText("This provider does not report usage")).not.toBeNull()
+    expect(container.textContent).not.toContain("no Credits quota")
+    expect(screen.queryByRole("progressbar")).toBeNull()
   })
 
-  it("states transport unavailable without inventing funds", () => {
+  it("states an unavailable provider in plain words without inventing funds", () => {
     render(
       <ProviderCreditSummary
         providerName="Tavily"
@@ -71,7 +74,8 @@ describe("ProviderCreditSummary native Credits", () => {
         credits={credits({ state: "unavailable", remaining: null, allowance: null })}
       />,
     )
-    expect(screen.getByText("Transport unavailable")).not.toBeNull()
+    expect(screen.getByText("Provider unavailable right now")).not.toBeNull()
+    expect(screen.queryByText("Transport unavailable")).toBeNull()
   })
 
   it("states paygo, stale, and local-cap facts in quiet footnotes", () => {
@@ -82,13 +86,13 @@ describe("ProviderCreditSummary native Credits", () => {
         credits={credits({ state: "paygo", paygo: true, stale: true, localCap: "72" })}
       />,
     )
-    expect(screen.getByText(/Free Credits are spent/)).not.toBeNull()
-    expect(screen.getByText("The last vendor read is stale.")).not.toBeNull()
-    expect(screen.getByText(/Local grant ceiling/)).not.toBeNull()
+    expect(screen.getByText(/Free credits are used up/)).not.toBeNull()
+    expect(screen.getByText("The last provider reading is out of date")).not.toBeNull()
+    expect(screen.getByText(/Budget limit/)).not.toBeNull()
   })
 
-  it("shows no percentage text without a reported allowance", () => {
-    render(
+  it("shows the amount without a bar or an apology without a reported allowance", () => {
+    const { container } = render(
       <ProviderCreditSummary
         providerName="Tavily"
         model={crdModel()}
@@ -96,7 +100,7 @@ describe("ProviderCreditSummary native Credits", () => {
       />,
     )
     expect(screen.getByText("999")).not.toBeNull()
-    expect(screen.getByText("No allowance is reported, so this card shows no percentage.")).not.toBeNull()
+    expect(container.textContent).not.toContain("No allowance is reported")
     expect(screen.queryByRole("progressbar")).toBeNull()
   })
 })
@@ -104,12 +108,12 @@ describe("ProviderCreditSummary native Credits", () => {
 describe("ProviderCreditSummary CRD default", () => {
   it("keeps the CRD fraction and USD hover text without native inputs", () => {
     render(<ProviderCreditSummary providerName="Brave" model={crdModel()} />)
-    expect(screen.getByText("4500")).not.toBeNull()
-    expect(screen.getByText("/ 5000")).not.toBeNull()
-    expect(screen.getByText("CRD")).not.toBeNull()
-    const value = screen.getByText("4500")
+    expect(screen.getByText("$4.5")).not.toBeNull()
+    expect(screen.getByText("/ $5")).not.toBeNull()
+    expect(screen.getByText("USD")).not.toBeNull()
+    const value = screen.getByText("$4.5")
     expect(value.getAttribute("title")).toBe("$4.5 left")
-    expect(screen.getByRole("progressbar", { name: "Brave credit units remaining" })).not.toBeNull()
+    expect(screen.getByRole("progressbar", { name: "Brave balance remaining" })).not.toBeNull()
   })
 })
 
@@ -118,13 +122,13 @@ describe("ProviderCreditSummary native bar contract (FIX)", () => {
     const { container } = render(
       <ProviderCreditSummary providerName="Tavily" model={crdModel()} credits={credits()} />,
     )
-    expect(screen.getByText("Credits")).not.toBeNull()
+    expect(screen.getByText("Balance left")).not.toBeNull()
     const bars = screen.getAllByRole("progressbar", { name: "Tavily native Credits remaining" })
     expect(bars).toHaveLength(1)
     expect(screen.getByText("99.9%")).not.toBeNull()
     // The percent shares the track row through the shared showPercent path.
     expect(bars[0].closest("div.flex")?.textContent).toContain("99.9%")
-    expect(bars[0].getAttribute("aria-valuetext")).toBe("999 of 1000 Tavily Credits left")
+    expect(bars[0].getAttribute("aria-valuetext")).toBe("999 of 1,000 Tavily credits left")
     expect(container.textContent).not.toContain("CRD")
   })
 
@@ -210,6 +214,6 @@ describe("ProviderCreditSummary native bar contract (FIX)", () => {
       />,
     )
     expect(screen.queryByRole("progressbar")).toBeNull()
-    expect(screen.getByText(/Free Credits are spent/)).not.toBeNull()
+    expect(screen.getByText(/Free credits are used up/)).not.toBeNull()
   })
 })

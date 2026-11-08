@@ -9,27 +9,28 @@ import pytest
 
 from freesearch.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
 from freesearch.models.schema_enums import OAuthGrantStatus
+from tests.fixtures.vault_oauth import vault_oauth_case as vault_oauth_case
 from tests.integration.services.oauth.conftest import NON_PARALLEL_IDS
 from tests.integration.services.oauth.oauth_stubs import (
     DEVICE_CODE_VALUE,
 )
 
 
-async def test_oauth_routes_registered_for_parallel(oauth_case):
+async def test_oauth_routes_registered_for_parallel(vault_oauth_case):
     """Origin test_adv_oauth_contract.py::test_oauth_routes_registered_for_parallel."""
-    case = oauth_case
-    paths = {getattr(route, "path", "") for route in case.client.app.routes}
-    base = "/api/v1/system/credentials/{credential_id}/oauth"
+    case = vault_oauth_case
+    paths = set(case.client.app.openapi()["paths"])
+    base = "/api/v1/account/vault/keys/{key_id}/oauth"
     assert {base, base + "/device", base + "/poll"} <= paths
     assert not any("/providers/" in path and "/oauth" in path for path in paths)
 
 
-async def test_device_code_shape_exact(oauth_case):
+async def test_device_code_shape_exact(vault_oauth_case):
     """Origin test_adv_oauth_contract.py::test_device_code_shape_exact."""
-    case = oauth_case
+    case = vault_oauth_case
     assert case.client.post(case.path + "/device").status_code == 401
     response = case.client.post(case.path + "/device", headers=case.headers)
-    assert response.status_code == 201, response.text
+    assert response.status_code == 200, response.text
     body = response.json()
     assert set(body) == set(CredentialOAuthDeviceRead.model_fields)
     assert body["user_code"] and body["verification_uri"]
@@ -39,22 +40,22 @@ async def test_device_code_shape_exact(oauth_case):
     await case.assert_no_leaks(response)
 
 
-async def test_device_code_extra_body_ignored_never_reflected(oauth_case):
+async def test_device_code_extra_body_ignored_never_reflected(vault_oauth_case):
     """Origin test_adv_oauth_contract.py::test_device_code_extra_body_ignored_never_reflected."""
-    case = oauth_case
+    case = vault_oauth_case
     response = case.client.post(
         case.path + "/device", headers=case.headers, json={"smuggled": "token-material"}
     )
-    assert response.status_code in (201, 422), response.text
+    assert response.status_code in (200, 422), response.text
     assert "token-material" not in response.text
-    if response.status_code == 201:
+    if response.status_code == 200:
         assert set(response.json()) == set(CredentialOAuthDeviceRead.model_fields)
     await case.assert_no_leaks(response)
 
 
-async def test_device_vendor_failure_leaves_no_partial_state(oauth_case):
+async def test_device_vendor_failure_leaves_no_partial_state(vault_oauth_case):
     """Origin test_adv_oauth_contract.py::test_device_vendor_failure_leaves_no_partial_state."""
-    case = oauth_case
+    case = vault_oauth_case
     case.stub.device_status = 500
     response = case.client.post(case.path + "/device", headers=case.headers)
     assert response.status_code == 502
@@ -63,9 +64,9 @@ async def test_device_vendor_failure_leaves_no_partial_state(oauth_case):
     await case.assert_no_leaks(response)
 
 
-async def test_status_shape_exact_and_unpaired_when_fresh(oauth_case):
+async def test_status_shape_exact_and_unpaired_when_fresh(vault_oauth_case):
     """Origin test_adv_oauth_contract.py::test_status_shape_exact_and_unpaired_when_fresh."""
-    case = oauth_case
+    case = vault_oauth_case
     assert case.client.get(case.path).status_code == 401
     response = case.client.get(case.path, headers=case.headers)
     assert response.status_code == 200
@@ -112,9 +113,9 @@ async def test_unknown_provider_oauth_404(oauth_case):
     assert case.stub.register_calls == case.stub.poll_calls == 0
 
 
-async def test_status_responses_carry_no_token_fields(oauth_case):
+async def test_status_responses_carry_no_token_fields(vault_oauth_case):
     """Origin test_adv_oauth_contract.py::test_status_responses_carry_no_token_fields."""
-    case = oauth_case
+    case = vault_oauth_case
     await case.connect()
     response = case.client.get(case.path, headers=case.headers)
     assert response.status_code == 200

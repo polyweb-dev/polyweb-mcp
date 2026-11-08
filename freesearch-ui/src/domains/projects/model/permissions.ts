@@ -9,6 +9,7 @@ import type { PermissionAccess } from "./types"
 
 /** System-scope actions. */
 export const SYSTEM_PERMISSIONS = {
+  vaultManage: "vault.manage",
   settingsRead: "system.settings.read",
   settingsWrite: "system.settings.write",
   /** Backend gate of `POST /api/v1/projects` (system-scoped). */
@@ -34,6 +35,7 @@ export const PROJECT_PERMISSIONS = {
   usageRead: "usage.read",
   providersRead: "providers.read",
   providersConfigure: "providers.configure",
+  providersSupply: "providers.supply",
   credentialsManagePrivate: "credentials.manage_private",
   settingsRead: "settings.read",
   settingsWrite: "settings.write",

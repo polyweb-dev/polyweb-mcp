@@ -458,9 +458,10 @@ describe("formatCreditValue", () => {
   it("formats whole and fractional Credits without trailing zeros", () => {
     expect(formatCreditValue("1")).toBe("1")
     expect(formatCreditValue("1000")).toBe("1000")
-    expect(formatCreditAmount("1")).toBe("1 Credit")
-    expect(formatCreditAmount("2")).toBe("2 Credits")
-    expect(formatCreditAmount("abc")).toBe("Unknown Credits")
+    expect(formatCreditAmount("1")).toBe("1 credit")
+    expect(formatCreditAmount("2")).toBe("2 credits")
+    expect(formatCreditAmount("1000")).toBe("1,000 credits")
+    expect(formatCreditAmount("abc")).toBe("Unknown credits")
   })
 })
 

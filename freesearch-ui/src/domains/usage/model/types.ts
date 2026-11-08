@@ -39,10 +39,3 @@ export interface UsageUnitAmount {
   unitKind: UnitKind | null
   units: number
 }
-
-/** Compact per-operation summary of the project overview. */
-export interface OperationUsageSummary {
-  operation: string
-  eventCount: number
-  units: UsageUnitAmount[]
-}

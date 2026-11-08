@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
+from freesearch.models.project_permissions import ProjectPermission
 from freesearch.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
@@ -47,6 +48,68 @@ from tests.fixtures.alpha_fixtures import (
 
 
 @pytest.mark.asyncio
+async def test_vault_access_requires_an_active_admin(tmp_path: Path) -> None:
+    result = await bootstrap_fresh_alpha(tmp_path / "vault_access.db")
+    try:
+        async with result.repository.session() as session:
+            user_db = UserDatabase(session, UserRow)
+            admin = await user_db.create(
+                {
+                    "email": "vault-admin@example.com",
+                    "hashed_password": "not-a-real-hash",
+                    "is_active": True,
+                    "is_superuser": False,
+                    "is_verified": True,
+                }
+            )
+            developer = await user_db.create(
+                {
+                    "email": "vault-developer@example.com",
+                    "hashed_password": "not-a-real-hash",
+                    "is_active": True,
+                    "is_superuser": False,
+                    "is_verified": True,
+                }
+            )
+            repo = ProjectRepository(session)
+            for user, role in (
+                (admin, BuiltinRole.PROJECT_ADMIN),
+                (developer, BuiltinRole.PROJECT_MEMBER),
+            ):
+                await repo.add_project_member(
+                    project_id=result.default_project.id,
+                    user_id=user.id,
+                    role_key=role.value,
+                    granted_by=result.admin_user.id,
+                )
+            assert await repo.user_can_use_vault(result.admin_user.id)
+            assert await repo.user_can_use_vault(admin.id)
+            assert not await repo.user_can_use_vault(developer.id)
+            assert not await repo.user_can_use_vault(uuid4())
+
+            membership = await repo.get_membership(
+                project_id=result.default_project.id, user_id=admin.id
+            )
+            assert membership is not None
+            membership.status = "suspended"
+            await session.flush()
+            assert not await repo.user_can_use_vault(admin.id)
+            membership.status = "active"
+            project = await session.get(ProjectRow, str(result.default_project.id))
+            assert project is not None
+            project.status = "archived"
+            await session.flush()
+            assert not await repo.user_can_use_vault(admin.id)
+            assert await repo.user_can_use_vault(result.admin_user.id)
+            project.status = "active"
+            admin.is_active = False
+            await session.flush()
+            assert not await repo.user_can_use_vault(admin.id)
+    finally:
+        await result.repository.close()
+
+
+@pytest.mark.asyncio
 async def test_fresh_database_schema_validation_and_head_revision(tmp_path: Path) -> None:
     """AC 1 & 5: Fresh install brings database to migration head and passes schema validation."""
     db_path = tmp_path / "fresh_schema_test.db"
@@ -54,7 +117,7 @@ async def test_fresh_database_schema_validation_and_head_revision(tmp_path: Path
 
     result = upgrade_database(db_path)
     assert result.current_revision == migration_head()
-    assert result.current_revision == "0002_capacity_actor"
+    assert result.current_revision == "0006_keyless_credentials"
 
     # Schema validator asserts tables, columns, indexes, and FKs
     validate_database_schema(db_path)
@@ -383,17 +446,16 @@ async def test_full_project_member_addition_and_role_management(tmp_path: Path) 
             assert BuiltinRole.PROJECT_MEMBER.value in member_read.roles
             assert role_read.role_key == BuiltinRole.PROJECT_MEMBER.value
 
-        # Assign extra role (ROUTING_EDITOR)
+        # Grant the developer the settings-write permission.
         async with repo.session() as session:
             project_repo = ProjectRepository(session)
-            extra_role = await project_repo.assign_project_role(
-                project_id=project.id,
-                user_id=member_id,
-                role_key=BuiltinRole.ROUTING_EDITOR.value,
-                granted_by=result.admin_user.id,
+            await project_repo.set_member_permissions(
+                project.id, member_id, int(ProjectPermission.SETTINGS_WRITE)
             )
             await session.commit()
-            assert extra_role.role_key == BuiltinRole.ROUTING_EDITOR.value
+            assert await project_repo.get_member_permissions(project.id, member_id) == int(
+                ProjectPermission.SETTINGS_WRITE
+            )
 
         # Inspect members
         async with repo.session() as session:
@@ -404,6 +466,8 @@ async def test_full_project_member_addition_and_role_management(tmp_path: Path) 
             assert BuiltinRole.PROJECT_ADMIN.value in member_map[result.admin_user.id].roles
             teammate_roles = member_map[member_id].roles
             assert BuiltinRole.PROJECT_MEMBER.value in teammate_roles
-            assert BuiltinRole.ROUTING_EDITOR.value in teammate_roles
+            assert await project_repo.get_member_permissions(project.id, member_id) == int(
+                ProjectPermission.SETTINGS_WRITE
+            )
     finally:
         await result.repository.close()

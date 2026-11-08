@@ -947,7 +947,7 @@ async def test_local_spend_exhaustion_is_a_distinct_funds_refusal_and_settles_on
     assert getattr(refusal, "refusal", None) == "funds", getattr(refusal, "refusal", None)
     assert refusal.status_code == 402
     assert refusal.error.retryable is False
-    assert refusal.error.code == "crd_exhausted", refusal.error.code
+    assert refusal.error.code == "budget_exhausted", refusal.error.code
     assert calls == 1, "spend exhaustion sent nothing further to the provider"
     assert len(usage) == 1, (
         f"the funds denial wrote no usage of its own (rows={[row.status for row in usage]})"

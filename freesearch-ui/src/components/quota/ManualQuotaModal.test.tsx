@@ -1,6 +1,6 @@
 import React from "react"
 import { describe, it, expect, vi, afterEach } from "vitest"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { ManualQuotaModal } from "./ManualQuotaModal"
 import { ApiError } from "@/shared/api/http"
@@ -10,8 +10,8 @@ const braveProps = {
   open: true,
   providerId: "brave",
   providerName: "Brave Search",
-  unitKind: "REQUEST" as const,
-  displayUnit: "requests",
+  unitKind: "USD" as const,
+  displayUnit: "USD",
   onClose: () => {},
   onSave: () => Promise.resolve(),
 }
@@ -21,10 +21,10 @@ afterEach(() => {
 })
 
 function fillValidBrave() {
-  fireEvent.change(screen.getByTestId("manual-quota-start"), {
+  fireEvent.change(screen.getByLabelText("Billing start"), {
     target: { value: "2026-09-01" },
   })
-  fireEvent.change(screen.getByTestId("manual-quota-end"), {
+  fireEvent.change(screen.getByLabelText("Billing end"), {
     target: { value: "2026-09-30" },
   })
   fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
@@ -36,10 +36,10 @@ function fillValidBrave() {
 }
 
 describe("ManualQuotaModal", () => {
-  it("adapts labels per unit (requests for Brave)", () => {
+  it("uses USD balance labels for Brave", () => {
     render(<ManualQuotaModal {...braveProps} />)
-    expect(screen.getByText("Allowance (requests)")).toBeInTheDocument()
-    expect(screen.getByText("Current usage (requests)")).toBeInTheDocument()
+    expect(screen.getByText("Allowance (USD)")).toBeInTheDocument()
+    expect(screen.getByText("Balance remaining (USD)")).toBeInTheDocument()
   })
 
   it("reuses USD labels for an Exa budget", () => {
@@ -56,13 +56,13 @@ describe("ManualQuotaModal", () => {
     expect(screen.getByText("Balance remaining (USD)")).toBeInTheDocument()
   })
 
-  it("previews the Brave 0.88/5.00 estimate live as 82.4% remaining", async () => {
+  it("previews the Brave 0.88/5.00 balance as 17.6% remaining", async () => {
     const user = userEvent.setup()
     render(<ManualQuotaModal {...braveProps} />)
     await user.type(screen.getByTestId("manual-quota-allowance"), "5.00")
     await user.type(screen.getByTestId("manual-quota-usage"), "0.88")
     expect(screen.getByTestId("manual-quota-preview")).toHaveTextContent(
-      "Estimated 82.4% remaining"
+      "17.6% remaining"
     )
   })
 
@@ -78,7 +78,7 @@ describe("ManualQuotaModal", () => {
       />
     )
     expect(screen.getByTestId("manual-quota-preview")).toHaveTextContent(
-      "Estimated 25.0% remaining"
+      "25.0% remaining"
     )
   })
 
@@ -87,13 +87,13 @@ describe("ManualQuotaModal", () => {
     const onSave = vi.fn(() => Promise.resolve())
     render(<ManualQuotaModal {...braveProps} onSave={onSave} />)
     fillValidBrave()
-    fireEvent.change(screen.getByTestId("manual-quota-end"), {
+    fireEvent.change(screen.getByLabelText("Billing end"), {
       target: { value: "2026-09-01" },
     })
     await user.click(screen.getByTestId("manual-quota-save"))
     expect(
-      await screen.findByTestId("manual-quota-end-error")
-    ).toHaveTextContent("Billing end must be after billing start.")
+      await screen.findByText("Billing end must be after billing start")
+    ).toHaveTextContent("Billing end must be after billing start")
     expect(onSave).not.toHaveBeenCalled()
   })
 
@@ -101,10 +101,10 @@ describe("ManualQuotaModal", () => {
     const user = userEvent.setup()
     const onSave = vi.fn(() => Promise.resolve())
     render(<ManualQuotaModal {...braveProps} onSave={onSave} />)
-    fireEvent.change(screen.getByTestId("manual-quota-start"), {
+    fireEvent.change(screen.getByLabelText("Billing start"), {
       target: { value: "2026-09-01" },
     })
-    fireEvent.change(screen.getByTestId("manual-quota-end"), {
+    fireEvent.change(screen.getByLabelText("Billing end"), {
       target: { value: "2026-09-30" },
     })
     fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
@@ -136,7 +136,7 @@ describe("ManualQuotaModal", () => {
       billing_start: "2026-09-01",
       billing_end: "2026-09-30",
       allowance: "5.00",
-      current_usage: "0.88",
+      current_usage: "4.12",
     })
     gate.resolve(undefined)
     await waitFor(() => {
@@ -175,6 +175,9 @@ describe("ManualQuotaModal", () => {
       />
     )
     await user.click(screen.getByTestId("manual-quota-clear"))
+    expect(onDelete).not.toHaveBeenCalled()
+    const confirm = await screen.findByRole("dialog", { name: "Clear provider balance" })
+    await user.click(within(confirm).getByRole("button", { name: "Clear entry" }))
     await waitFor(() => {
       expect(onDelete).toHaveBeenCalledTimes(1)
     })

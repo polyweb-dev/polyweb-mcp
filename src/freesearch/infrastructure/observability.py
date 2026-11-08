@@ -62,7 +62,6 @@ from freesearch.models.observability import (
     TRACE_SCHEMA_VERSION,
     ExecutionAttribution,
     TraceAttribute,
-    trace_is_sampled,
 )
 from freesearch.models.projects import ProjectTracePolicy
 
@@ -204,7 +203,7 @@ def _event_attributes(attributes: Mapping[str, object] | None) -> dict[str, Attr
 
     Provider request/response events carry content under provider-native keys
     (``query``, ``url``, ``results``), so the span-attribute content allowlist
-    cannot identify them. Under metadata-only or strict-redaction capture, keep
+    cannot identify them. Under metadata-only capture, keep
     only the documented request-shape/count keys; under full capture keep the
     documented content but still apply the credential-shaped redaction hook.
     Internal decision keys never reach an event.
@@ -234,12 +233,11 @@ def _ownership_attributes(attribution: ExecutionAttribution) -> dict[str, str]:
     }
 
 
-def _capture_attributes(policy: ProjectTracePolicy, trace_id: str) -> dict[str, bool]:
+def _capture_attributes(policy: ProjectTracePolicy) -> dict[str, bool]:
     """Render one immutable capture decision for the trace this span belongs to."""
 
     return {
         TraceAttribute.CAPTURE_PAYLOAD: policy.captures_payload,
-        TraceAttribute.SAMPLED: trace_is_sampled(trace_id, policy.sampling_rate),
     }
 
 
@@ -402,10 +400,9 @@ class _AttributionSpanProcessor(SpanProcessor):
     """Stamp the bound ownership and capture decisions on every span at start.
 
     Registered before the exporter processors so each span carries the trusted
-    project/actor identity and its immutable sampling/detail decision from its
-    first instant. Spans started before the handler binds (or while no request
-    is bound) stay undecided, and the exporter suppresses them rather than
-    persisting optional traces without a trusted decision.
+    project/actor identity and its immutable payload decision from its first
+    instant. Unattributed spans are not persisted; spans without a payload
+    decision are stored as metadata only.
     """
 
     def on_start(self, span: Span, parent_context: Any = None) -> None:
@@ -418,7 +415,7 @@ class _AttributionSpanProcessor(SpanProcessor):
         if cell.policy is not None:
             context = span.get_span_context()
             if context.is_valid:
-                stamped.update(_capture_attributes(cell.policy, format_trace_id(context.trace_id)))
+                stamped.update(_capture_attributes(cell.policy))
         if stamped:
             span.set_attributes(cast("Mapping[str, Any]", stamped))
 
@@ -449,8 +446,8 @@ def bind_trace_capture(policy: ProjectTracePolicy) -> None:
     """Bind the project's resolved trace policy to the current request's spans.
 
     Resolved once at the trusted execution boundary, so a later settings edit
-    cannot change an in-flight trace, and every child sees the same sampling and
-    detail decision. Rebinding the same policy is idempotent; a different policy
+    cannot change an in-flight trace, and every child sees the same detail
+    decision. Rebinding the same policy is idempotent; a different policy
     fails closed. Without an active observability scope this is a no-op.
     """
 
@@ -497,9 +494,7 @@ class _OtelSpan:
         if trace_id is None:
             return
         with _swallow():
-            self._span.set_attributes(
-                cast("Mapping[str, Any]", _capture_attributes(policy, trace_id))
-            )
+            self._span.set_attributes(cast("Mapping[str, Any]", _capture_attributes(policy)))
 
     def add_event(self, name: str, attributes: Mapping[str, object] | None = None) -> None:
         with _swallow():

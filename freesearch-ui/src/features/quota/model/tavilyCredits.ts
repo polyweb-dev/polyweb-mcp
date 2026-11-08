@@ -174,8 +174,9 @@ export function formatCreditValue(amount: string): string | null {
 /** Visible text of one exact Credits amount, always carrying its unit. */
 export function formatCreditAmount(amount: string): string {
   const text = formatCreditValue(amount)
-  if (text === null) return "Unknown Credits"
-  return text === "1" ? "1 Credit" : text + " Credits"
+  if (text === null) return "Unknown credits"
+  const grouped = text.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  return grouped === "1" ? "1 credit" : grouped + " credits"
 }
 
 interface NativeFunds {

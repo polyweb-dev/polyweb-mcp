@@ -14,9 +14,10 @@ interface ProviderRegistryControlsProps {
 }
 
 /**
- * Search, fetch, and global routing cells of one registry row. A role without
- * control-edit access sees the stored values as read-only text.
- * Pending disables all toggles; unsupported operations stay disabled via masks.
+ * Search, Fetch and Enabled cells of one registry row. Enabled is the master
+ * switch: off removes the provider from every project. A role without
+ * control-edit access sees the stored values as read-only text, and a
+ * pending write locks the whole row.
  */
 export function ProviderRegistryControls({
   provider,
@@ -53,7 +54,6 @@ export function ProviderRegistryControls({
         />
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2.5">
-        <span className="sr-only">Global</span>
         {canEdit ? (
           <Switch
             checked={provider.globalEnabled}

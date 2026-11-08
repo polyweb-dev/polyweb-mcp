@@ -50,8 +50,8 @@ describe("TraceInspectionWorkspace", () => {
     expect(within(screen.getByRole("list", { name: "Ranked results" })).getAllByRole("button")[0])
       .toHaveAttribute("aria-pressed", "true")
 
-    await user.click(within(switcher).getByRole("button", { name: "Trace" }))
-    expect(within(switcher).getByRole("button", { name: "Trace" })).toHaveAttribute(
+    await user.click(within(switcher).getByRole("button", { name: "Timeline" }))
+    expect(within(switcher).getByRole("button", { name: "Timeline" })).toHaveAttribute(
       "aria-pressed",
       "true"
     )
@@ -60,13 +60,15 @@ describe("TraceInspectionWorkspace", () => {
     expect(within(switcher).queryByRole("button", { name: "Request data" })).not.toBeInTheDocument()
 
     const inspector = screen.getByRole("region", { name: /details/i })
-    expect(within(inspector).getByText("freesearch.provider.request")).toBeInTheDocument()
-    expect(within(inspector).getByLabelText("freesearch.provider.request attributes")).toHaveTextContent(
+    expect(within(inspector).getByLabelText("Recorded facts")).toHaveTextContent("Results3")
+    const rawData = within(inspector).getByText("Show raw data").closest("details")!
+    expect(rawData).not.toHaveAttribute("open")
+    await user.click(within(inspector).getByText("Show raw data"))
+    expect(within(inspector).getAllByText("Provider request").length).toBeGreaterThan(0)
+    expect(within(inspector).getByLabelText("Provider request attributes")).toHaveTextContent(
       "What is the latest financial news?"
     )
-    const responseAttributes = within(inspector).getByLabelText(
-      "freesearch.provider.response attributes"
-    )
+    const responseAttributes = within(inspector).getByLabelText("Provider response attributes")
     expect(responseAttributes).toHaveTextContent('"result_count": 3')
     await user.click(within(responseAttributes).getByText("3 items"))
     await user.click(within(responseAttributes).getAllByText("5 keys")[0]!)
@@ -79,7 +81,7 @@ describe("TraceInspectionWorkspace", () => {
     const user = userEvent.setup()
     const { container } = renderWorkspace(aggregated())
 
-    await user.click(screen.getByRole("button", { name: "Trace" }))
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
 
     const timeline = screen.getByRole("region", { name: "Trace timeline" })
     const detail = screen.getByRole("region", { name: /details/i })
@@ -87,7 +89,7 @@ describe("TraceInspectionWorkspace", () => {
     expect(container.contains(split)).toBe(true)
     expect(split.className).toMatch(/lg:grid-cols-/)
     expect(detail).toBeInTheDocument()
-    expect(within(detail).getByText("freesearch.provider.request")).toBeInTheDocument()
+    expect(within(detail).getAllByText("Provider request").length).toBeGreaterThan(0)
 
     const providerRow = within(screen.getByRole("list", { name: "Trace trajectory" })).getByRole(
       "button",
@@ -99,7 +101,7 @@ describe("TraceInspectionWorkspace", () => {
     expect(within(trajectory).queryByText(/Provider steps|Other recorded steps|Recorded substeps/)).not.toBeInTheDocument()
 
     await user.click(providerRow)
-    expect(within(detail).getByLabelText("freesearch.provider.response attributes")).toHaveTextContent(
+    expect(within(detail).getByLabelText("Provider response attributes")).toHaveTextContent(
       '"result_count": 3'
     )
     await user.click(within(detail).getByText("Technical identifiers"))
@@ -111,7 +113,7 @@ describe("TraceInspectionWorkspace", () => {
     const user = userEvent.setup()
     renderWorkspace(aggregated())
 
-    await user.click(screen.getByRole("button", { name: "Trace" }))
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
 
     const timeline = screen.getByRole("region", { name: "Trace timeline" })
     const details = screen.getByRole("region", { name: /details/i })
@@ -131,11 +133,11 @@ describe("TraceInspectionWorkspace", () => {
     expect(workspace.className).toMatch(/h-full/)
     expect(workspace.className).toMatch(/flex-1/)
 
-    await user.click(screen.getByRole("button", { name: "Trace" }))
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
 
     expect(screen.getByRole("region", { name: "Trace timeline" })).toBeInTheDocument()
     const inspector = screen.getByRole("region", { name: /details/i })
-    expect(within(inspector).getByText("No span timing was recorded for this trace.")).toBeInTheDocument()
+    expect(within(inspector).getByText("No span timing was recorded for this trace")).toBeInTheDocument()
     await user.click(within(inspector).getByText("Trace metadata"))
     expect(within(inspector).getByText("Trace ID").parentElement).toHaveTextContent(detail.traceId)
     await user.click(within(inspector).getByText("Recorded output"))
@@ -210,12 +212,14 @@ describe("TraceInspectionWorkspace", () => {
     const user = userEvent.setup()
     renderWorkspace(aggregated())
 
-    await user.click(screen.getByRole("button", { name: "Trace" }))
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
     const providerRow = screen.getByRole("button", { name: /Keenable request/ })
     expect(providerRow).toHaveAttribute("aria-pressed", "true")
     const payloadRegion = screen.getByRole("region", { name: /details/i })
     expect(within(payloadRegion).getByText("Keenable")).toBeInTheDocument()
-    expect(screen.getByLabelText(/freesearch.provider.response attributes/i)).toBeInTheDocument()
+    expect(within(payloadRegion).getByLabelText("Recorded facts")).toHaveTextContent("Results3")
+    await user.click(within(payloadRegion).getByText("Show raw data"))
+    expect(screen.getByLabelText(/Provider response attributes/i)).toBeInTheDocument()
   })
 
   it("scopes results to the inspected provider attempt", () => {

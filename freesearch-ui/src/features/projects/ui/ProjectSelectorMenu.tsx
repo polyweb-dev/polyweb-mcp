@@ -1,13 +1,14 @@
 import { useEffect, useRef } from "react"
 import type { KeyboardEvent } from "react"
+import { Check, LayoutList } from "lucide-react"
 import { cn } from "cn"
 import type { Project } from "@/domains/projects"
-
-const MENU_ITEM =
-  "flex w-full cursor-default items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-[13px] text-[var(--text)] hover:bg-[var(--surface)] focus-visible:outline-none focus-visible:bg-[var(--surface)]"
+import { MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from "@/shared/ui/menuStyles"
+import { Tag } from "@/shared/ui/Tag"
 
 export interface ProjectSelectorMenuProps {
   collapsed: boolean
+  /** Projects in display order (the selector sorts them by name). */
   projects: Project[]
   currentId: string | null
   onChoose: (projectId: string) => void
@@ -19,8 +20,9 @@ export interface ProjectSelectorMenuProps {
 /**
  * Open menu of the project selector.
  *
- * The first item takes focus on open; Arrow keys move between items and
- * Escape dismisses back to the trigger, so the popup behaves like a menu.
+ * Rows share the menu row style of every popup; a long name truncates and
+ * shows in full on hover. The first item takes focus on open; Arrow keys move
+ * between items and Escape dismisses back to the trigger.
  */
 export function ProjectSelectorMenu({
   collapsed,
@@ -61,28 +63,31 @@ export function ProjectSelectorMenu({
       aria-label="Projects"
       onKeyDown={onKeyDown}
       className={cn(
-        "absolute z-50 mt-1 max-h-[60vh] w-56 overflow-y-auto rounded border border-[var(--border-subtle)] bg-[var(--elevated)] p-1 shadow-lg",
-        collapsed ? "left-14 top-0" : "left-2 right-2"
+        "absolute z-50 mt-1 max-h-[60vh] overflow-y-auto rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] p-1 shadow-lg",
+        collapsed ? "top-0 left-14 w-64" : "right-2 left-2"
       )}
     >
-      {projects.map((project) => (
-        <button
-          key={project.id}
-          type="button"
-          role="menuitem"
-          aria-current={project.id === currentId ? "true" : undefined}
-          onClick={() => onChoose(project.id)}
-          className={MENU_ITEM}
-        >
-          <span className="min-w-0 truncate">{project.name}</span>
-          {project.status === "archived" && (
-            <span className="text-[10px] uppercase tracking-wide text-[var(--muted)]">
-              Archived
-            </span>
-          )}
-        </button>
-      ))}
-      <button type="button" role="menuitem" onClick={onList} className={MENU_ITEM}>
+      {projects.map((project) => {
+        const current = project.id === currentId
+        return (
+          <button
+            key={project.id}
+            type="button"
+            role="menuitem"
+            title={project.name}
+            aria-current={current ? "true" : undefined}
+            onClick={() => onChoose(project.id)}
+            className={MENU_ITEM_CLASS}
+          >
+            <span className="min-w-0 flex-1 truncate">{project.name}</span>
+            {project.status === "archived" && <Tag>Archived</Tag>}
+            {current && <Check aria-hidden="true" className="text-[var(--text-strong)]" />}
+          </button>
+        )
+      })}
+      <div aria-hidden="true" className={MENU_SEPARATOR_CLASS} />
+      <button type="button" role="menuitem" onClick={onList} className={MENU_ITEM_CLASS}>
+        <LayoutList aria-hidden="true" className="text-[var(--muted)]" />
         All projects
       </button>
     </div>

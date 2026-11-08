@@ -19,5 +19,8 @@ export function usageUnitsText(
   displayUnit?: string | null
 ): string {
   const amount = units.toLocaleString("en-US", { maximumFractionDigits: 4 })
-  return `${amount} ${unitLabel(unitKind, displayUnit)}`
+  const label = unitLabel(unitKind, displayUnit)
+  // One request, one credit: the counted kinds take the singular at exactly 1.
+  const singular = units === 1 && (label === "requests" || label === "credits")
+  return `${amount} ${singular ? label.slice(0, -1) : label}`
 }

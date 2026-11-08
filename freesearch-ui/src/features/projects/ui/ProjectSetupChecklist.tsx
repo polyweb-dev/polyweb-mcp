@@ -22,35 +22,49 @@ export function ProjectSetupChecklist({
 }) {
   const providersPath = `/p/${projectId}/providers`
   const steps = [
-    { text: "Add a provider key", to: providersPath, done: hasCredential },
+    { text: "Add provider capacity", to: providersPath, done: hasCredential },
     { text: "Turn on search or fetch for a provider", to: providersPath, done: hasEffective },
     { text: "Run a first search", to: `/p/${projectId}/playground`, done: false },
   ]
   return (
-    <section className="space-y-2 rounded border border-[var(--border-subtle)] px-4 py-3">
-      <h3 className="text-[13px] font-medium text-[var(--text-strong)]">Set up this project</h3>
+    <section aria-labelledby="project-setup-heading" className="fs-panel p-4">
+      <h3 id="project-setup-heading" className="fs-section-title">
+        Set up this project
+      </h3>
       {canConfigure ? (
-        <ol className="list-decimal space-y-1 pl-5 text-[13px]">
-          {steps.map((step) => (
-            <li key={step.text}>
-              {step.done ? (
-                <span className="inline-flex items-center gap-1 text-[var(--muted)]">
-                  <Check aria-hidden="true" className="size-4" />
-                  <span className="sr-only">Done: </span>
-                  {step.text}
+        <>
+          <p className="fs-section-description">
+            Searches and fetches fail until a provider route can run them.
+          </p>
+          <ol className="mt-3 space-y-1">
+            {steps.map((step, index) => (
+              <li key={step.text} className="flex h-7 items-center gap-3 text-[13px]">
+                <span
+                  aria-hidden="true"
+                  className={
+                    step.done
+                      ? "grid size-5 place-items-center rounded-full bg-[var(--signal)] text-white"
+                      : "fs-keycap size-5 min-w-5 rounded-full"
+                  }
+                >
+                  {step.done ? <Check className="size-3" strokeWidth={2.5} /> : index + 1}
                 </span>
-              ) : (
-                <Link to={step.to} className="text-[var(--signal)] hover:underline">
-                  {step.text}
-                </Link>
-              )}
-            </li>
-          ))}
-        </ol>
+                {step.done ? (
+                  <span className="text-[var(--muted)] line-through decoration-[var(--muted)]/50">
+                    <span className="sr-only">Done: </span>
+                    {step.text}
+                  </span>
+                ) : (
+                  <Link to={step.to} className="fs-link">
+                    {step.text}
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ol>
+        </>
       ) : (
-        <p className="text-[13px] text-[var(--muted)]">
-          Ask a project admin to set up a provider.
-        </p>
+        <p className="fs-section-description">Ask a project admin to set up a provider</p>
       )}
     </section>
   )

@@ -1,18 +1,16 @@
 """Trace-policy projection for persisted span rows (TASK-000044).
 
 The trace policy is resolved once at the trusted execution boundary and its
-immutable decision (sampled, captures payload) is stamped on every span it
+immutable payload decision is stamped on every span it
 opens, children included. This module only projects an already-decided row:
 
-* the exporter drops a span whose stamped decision is unsampled,
 * metadata-only capture keeps timing, provider, outcome, counts, and span
   metadata, and never request/response content,
 * the raw :func:`freesearch.persistence.otel_exporter.write_trace_spans` seed
   path can still write fixture rows directly.
 
 Resolving policy here, at flush time, would let a settings edit retroactively
-capture an in-flight trace and could split one trace's sampling decision across
-batches, so this module never reads settings.
+capture an in-flight trace, so this module never reads settings.
 """
 
 from __future__ import annotations
@@ -24,13 +22,11 @@ from freesearch.models.observability import (
     TRACE_SAFE_EVENT_ATTRIBUTES,
     TraceEventDetail,
     TraceSpanRecord,
-    trace_is_sampled,
 )
 from freesearch.models.projects import ProjectTracePolicy, TraceDetailPolicy
 
 #: Policy used when a record has no capture decision: metadata only.
 METADATA_ONLY_POLICY: Final[ProjectTracePolicy] = ProjectTracePolicy(
-    sampling_rate=1.0,
     detail=TraceDetailPolicy.METADATA,
 )
 
@@ -74,5 +70,4 @@ def apply_trace_policy(record: TraceSpanRecord, policy: ProjectTracePolicy) -> T
 __all__ = [
     "METADATA_ONLY_POLICY",
     "apply_trace_policy",
-    "trace_is_sampled",
 ]

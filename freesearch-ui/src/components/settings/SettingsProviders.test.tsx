@@ -88,8 +88,7 @@ const settingsFeatureSource = [
   readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderPriorityControl.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "../../shared/ui/ReorderHandle.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
@@ -106,6 +105,7 @@ const routesNavSource = readFileSync(
   path.resolve(testDir, "../../app/layout/SidebarNavList.tsx"),
   "utf8"
 )
+const routeTableSource = readFileSync(path.resolve(testDir, "../../app/routes.ts"), "utf8")
 
 const SEED_PROVIDER_NAMES = [
   "Brave Search",
@@ -119,13 +119,13 @@ const SEED_PROVIDER_NAMES = [
 ] as const
 
 const EXPECTED_MERGED_HEADERS = [
-  "Priority",
   "Provider",
   "Endpoint",
-  "Test",
+  "Cost per call",
+  "Health",
   "Search",
   "Fetch",
-  "Global",
+  "On",
 ] as const
 
 let testGate: Promise<Response> | null = null
@@ -134,7 +134,11 @@ function renderSettings(): FetchStub {
   testGate = null
   const stub = installFetchStub((req) => {
     if (req.url === "/api/v1/providers" && req.method === "GET") {
-      return ok(allProvidersFixture())
+      return ok(allProvidersFixture().map((provider) => ({
+        ...provider,
+        ...(provider.provider_id === "keenable" ? { call_cost_usd: { search: "0", fetch: "0" }, keyless_call_cost_usd: { search: "0", fetch: "0" } } : {}),
+        ...(provider.provider_id === "firecrawl" ? { call_cost_usd: { search: "0.0076", fetch: "0.0038" } } : {}),
+      })))
     }
     if (req.url === "/api/v1/routing/config" && req.method === "GET") {
       return ok(routingConfigFixture())
@@ -145,7 +149,6 @@ function renderSettings(): FetchStub {
       const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
       const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
         enable_mask: number
-        priority: number
       }
       const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
       let enableMask = base.enable_mask
@@ -158,8 +161,7 @@ function renderSettings(): FetchStub {
         if (patch.fetch_enabled === true) enableMask |= 4
         if (patch.fetch_enabled === false) enableMask &= ~4
       }
-      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
-      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0 })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       if (testGate) return testGate
@@ -178,9 +180,11 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SettingsView />
-    </FreeSearchProvider>
+    <MemoryRouter>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+        <SettingsView />
+      </FreeSearchProvider>
+    </MemoryRouter>
   )
   return stub
 }
@@ -230,7 +234,8 @@ async function waitForProviders() {
 }
 
 function mergedTable(): HTMLElement {
-  return screen.getByRole("table")
+  // `hidden`: the table stays queryable while the test dialog marks the page inert.
+  return screen.getByRole("table", { hidden: true })
 }
 
 function headerNames(): string[] {
@@ -264,7 +269,7 @@ function cellFor(provider: string, header: string): HTMLElement {
 
 /** Icon button that opens the connection-test modal for a provider row. */
 function testIconFor(provider: string): HTMLElement {
-  const testCell = cellFor(provider, "Test")
+  const testCell = cellFor(provider, "Health")
   const btn = within(testCell).getByRole("button", { name: new RegExp(`${provider}.*test`, "i") })
   return btn
 }
@@ -333,13 +338,28 @@ describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
 // ---------------------------------------------------------------------------
 
 describe("P1F-2: registry controls preserved in the merged table", () => {
+  it("shows read-only per-operation costs without system order controls", async () => {
+    const stub = renderSettings()
+    await waitForProviders()
+    expect(cellFor("Keenable", "Cost per call")).toHaveTextContent("Search: Free")
+    expect(cellFor("Keenable", "Cost per call")).toHaveTextContent("Fetch: Free")
+    expect(cellFor("Firecrawl", "Cost per call")).toHaveTextContent("Search: $0.0076")
+    expect(cellFor("Firecrawl", "Cost per call")).toHaveTextContent("Fetch: $0.0038")
+    expect(cellFor("Brave Search", "Cost per call")).toHaveTextContent("Fetch: Not supported")
+    expect(cellFor("Tavily", "Cost per call")).toHaveTextContent("Search: —")
+    expect(within(mergedTable()).queryByRole("columnheader", { name: "Priority" })).not.toBeInTheDocument()
+    expect(within(mergedTable()).queryByRole("button", { name: /priority (up|down)/i })).not.toBeInTheDocument()
+    expect(mergedTable().querySelector("[draggable=true]")).toBeNull()
+    expect(stub.requests.filter((request) => request.method === "PATCH" || request.method === "PUT")).toHaveLength(0)
+  })
+
   it("keeps 7 global Switches with provider-qualified labels", async () => {
     renderSettings()
     await waitForProviders()
-    // 7-col header must exist AND the 7 switches must sit in Global cells.
+    // 7-col header must exist AND the master switches must sit in Enabled cells.
     expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
     for (const name of SEED_PROVIDER_NAMES) {
-      const cell = cellFor(name, "Global")
+      const cell = cellFor(name, "On")
       expect(
         within(cell).getByRole("switch", { name: `${name} global routing` })
       ).toBeInTheDocument()
@@ -366,20 +386,7 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
     expect(patches[0].body).toEqual({ search_enabled: false })
   })
 
-  it("shows priorities P1..P7 with bounded up/down controls per row", async () => {
-    renderSettings()
-    await waitForProviders()
-    for (let rank = 1; rank <= 8; rank += 1) {
-      expect(screen.getByText(`P${rank}`, { exact: true })).toBeInTheDocument()
-    }
-    expect(screen.queryByText("P100", { exact: true })).toBeNull()
-    expect(
-      screen.getByRole("button", { name: "Move Brave Search priority up" })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Tinyfish priority down" })
-    ).toBeDisabled()
-  })
+
 })
 
 // ---------------------------------------------------------------------------
@@ -391,16 +398,23 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     renderSettings()
     await waitForProviders()
     const braveEndpoint = cellFor("Brave Search", "Endpoint")
-    expect(braveEndpoint.textContent).toContain("api.search.brave.com/res/v1/web/search")
+    expect(braveEndpoint.textContent).toBe("api.search.brave.com")
     expect(braveEndpoint.textContent).not.toMatch(/https?:\/\//)
     const tavilyEndpoint = cellFor("Tavily", "Endpoint")
     expect(tavilyEndpoint.textContent).toContain("api.tavily.com")
   })
 
-  it("does not render Health as a table column", async () => {
+  it("shows the last connection test per row as Health (a muted dash until one runs), with no aggregate count", async () => {
     renderSettings()
     await waitForProviders()
-    expect(headerNames()).not.toContain("Health")
+    expect(headerNames()).toContain("Health")
+    for (const name of SEED_PROVIDER_NAMES) {
+      expect(cellFor(name, "Health").textContent?.trim()).toBe("—")
+    }
+    expect(screen.queryByText("Not tested")).not.toBeInTheDocument()
+    expect(screen.queryByText(/\d+\/\d+ healthy/)).not.toBeInTheDocument()
+    expect(screen.queryByText("Provider registry")).not.toBeInTheDocument()
+    expect(screen.queryByText(/Priority dispatch/)).not.toBeInTheDocument()
   })
 
   it("does not render Quota or p95 as registry columns (telemetry lives in the modal + Usage view)", async () => {
@@ -425,7 +439,7 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     const dialog = await screen.findByRole("dialog")
     expect(dialog.textContent).toContain("Endpoint")
     expect(dialog.textContent).toContain("Capabilities")
-    expect(dialog.textContent).toContain("Last result")
+    expect(dialog.textContent).toContain("Last test")
     expect(dialog.textContent).not.toContain("Health")
     expect(dialog.textContent).not.toContain("p95")
     expect(dialog.textContent).not.toContain("Quota")
@@ -442,8 +456,25 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
   it("keeps row cells left-aligned with no right-aligned drift", async () => {
     renderSettings()
     await waitForProviders()
-    const test = cellFor("Brave Search", "Test")
+    const test = cellFor("Brave Search", "Health")
     expect(test.className).not.toContain("text-right")
+  })
+
+  it("shows capabilities in plain words in the test modal, never raw enum values", async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    await waitForProviders()
+    await user.click(testIconFor("Keenable"))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog.textContent).not.toMatch(/keyless_tier|neural_search|live_crawl/)
+  })
+
+  it("labels the custom and keyless markers with the shared tag, in sentence case", async () => {
+    renderSettings()
+    await waitForProviders()
+    const keenable = cellFor("Keenable", "Provider")
+    expect(within(keenable).getByText("No key needed")).toBeInTheDocument()
+    expect(within(keenable).queryByText("keyless")).not.toBeInTheDocument()
   })
 })
 
@@ -466,10 +497,10 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
     expect(existsSync(removedDialogShimPath)).toBe(false)
   })
 
-  it("exposes one icon test button per row in the Test column", async () => {
+  it("exposes one icon test button per row in the Health column", async () => {
     renderSettings()
     await waitForProviders()
-    expect(headerNames()).toContain("Test")
+    expect(headerNames()).toContain("Health")
     for (const name of SEED_PROVIDER_NAMES) {
       expect(testIconFor(name)).toBeInTheDocument()
     }
@@ -530,10 +561,13 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
       expect(tests).toHaveLength(1)
       expect(tests[0].method).toBe("POST")
     })
-    // Last result lands in the modal (status + latency of the probe).
+    // Last result lands in the modal (status + latency of the probe)...
     await waitFor(() => {
-      expect(screen.getByRole("dialog").textContent).toMatch(/142ms|healthy/)
+      expect(screen.getByRole("dialog").textContent).toMatch(/Healthy · 142 ms/)
     })
+    // ...and in the row's Health cell.
+    expect(cellFor("Brave Search", "Health").textContent).toContain("Healthy · just now")
+    expect(cellFor("Tavily", "Health").textContent?.trim()).toBe("—")
   })
 
   it("Escape closes the test modal", async () => {
@@ -597,16 +631,16 @@ describe("P1F-5: fleet stat cards + capability filter are gone from Settings", (
 // ---------------------------------------------------------------------------
 
 describe("P1F-6: Providers page retired — redirect + no providers nav", () => {
-  it("App drops the ProviderMatrix route and redirects /providers -> /settings", () => {
+  it("App drops the ProviderMatrix route and redirects /providers -> /system/providers", () => {
     expect(dashboardShellSource).not.toMatch(/ProviderMatrix/)
     expect(appSource).not.toMatch(/ProviderMatrix/)
     // Thin App shim renders the shell that owns the redirect.
     expect(appSource).toContain("DashboardShell")
-    expect(dashboardShellSource).toContain('path="/providers"')
-    const idx = dashboardShellSource.indexOf('path="/providers"')
-    const window_ = dashboardShellSource.slice(idx, idx + 300)
-    expect(window_, "/providers must Navigate to /settings").toMatch(/Navigate/)
-    expect(window_, "/providers must Navigate to /settings").toContain("/settings")
+    expect(routeTableSource).toContain('settings: "/system/providers"')
+    expect(routeTableSource).toContain('"/providers": TAB_PATHS.settings')
+    // The shell turns every legacy entry into a Navigate route.
+    expect(dashboardShellSource).toContain("LEGACY_GLOBAL_REDIRECTS")
+    expect(dashboardShellSource).toMatch(/<Navigate to=\{target\}/)
   })
 
   it("Sidebar drops the providers TabId, nav item, and route target", () => {
@@ -618,17 +652,16 @@ describe("P1F-6: Providers page retired — redirect + no providers nav", () => 
     expect(sidebarSource).toMatch(/from\s+["']@\/app\/layout\/Sidebar["']/)
   })
 
-  it("Sidebar renders exactly five workspace links (no Providers)", async () => {
-    renderAppAt("/settings")
+  it("Sidebar renders the System links plus Projects and Account", async () => {
+    await renderAppAt("/system/providers")
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+      expect(screen.getByRole("heading", { level: 2, name: "Providers" })).toBeInTheDocument()
     })
     const nav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(nav).getAllByRole("link")).toHaveLength(8)
-    expect(within(nav).queryByRole("link", { name: "Providers", exact: true })).not.toBeInTheDocument()
-    for (const label of ["Routing", "Provider usage", "Provider settings"]) {
-      expect(within(nav).getByRole("link", { name: label, exact: true })).toBeInTheDocument()
-    }
+    expect(within(nav).getAllByRole("link").map((link) => link.getAttribute("aria-label"))).toEqual([
+      "Providers", "Quotas", "Projects", "Account",
+    ])
+    expect(within(nav).queryByRole("link", { name: "Provider settings", exact: true })).not.toBeInTheDocument()
   })
 
   it("SettingsProviders carries the fleet merge markers", () => {
@@ -669,28 +702,73 @@ describe("P1F-7: merged table scrolls horizontally from 960px", () => {
 // P1F-8: /providers lands on the merged Settings registry (RED)
 // ---------------------------------------------------------------------------
 
-describe("P1F-8: legacy /providers URL renders the merged Settings registry", () => {
-  it("navigating to /providers redirects to /settings", async () => {
-    await renderAppAt("/providers")
-    await waitFor(
-      () => {
-        expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
-      },
-      { timeout: 5000 }
-    )
-    expect(screen.getByTestId("test-location").textContent).toBe("/settings")
+describe("SettingsProviders.s-p2.test.tsx", () => {
+  it("first-column (Provider) cells keep px-3 breathing room", async () => {
+    renderSettings()
+    await waitForProviders()
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
+      const firstCell = row.children[0] as HTMLElement
+      expect(firstCell.tagName).toBe("TD")
+      expect(firstCell.className).toMatch(/px-3/)
+    }
   })
 
-  it("the redirect target shows the merged registry (7 headers, no Providers view)", async () => {
+  it("table + scroller stay intact: single 7-column merged table, overflow-x-auto, nowrap", async () => {
+    renderSettings()
+    await waitForProviders()
+    expect(screen.getAllByRole("table")).toHaveLength(1)
+    const table = screen.getByRole("table")
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(8)
+    // Seven merged columns stand for every row (no Tavily extra cell).
+    for (const name of SEED_PROVIDER_NAMES) {
+      const row = findProviderRowTr(name)
+      expect(row.children).toHaveLength(7)
+    }
+    const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
+    expect(container, "ui/table scroller must wrap the table").not.toBeNull()
+    expect(container!.className).toMatch(/overflow-x-auto/)
+    const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
+    expect(cells.length).toBe(7 + 8 * 7)
+    for (const cell of cells) {
+      expect(cell.className).toMatch(/whitespace-nowrap/)
+    }
+  })
+
+  it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
+    for (const marker of ["Endpoint", "ProviderTestModal"]) {
+      expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
+    }
+  })
+
+  it("freesearch-ui ONLY: no backend/python import paths", () => {
+    expect(settingsFeatureSource).not.toMatch(/\.py["']/)
+    expect(settingsFeatureSource).not.toMatch(/src\/freesearch/)
+  })
+})
+
+describe("P1F-8: legacy /providers URL renders the merged Settings registry", () => {
+  it("navigating to /providers redirects to /system/providers", async () => {
     await renderAppAt("/providers")
     await waitFor(
       () => {
-        expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+        expect(screen.getByRole("heading", { level: 2, name: "Providers" })).toBeInTheDocument()
       },
       { timeout: 5000 }
     )
-    expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
-    expect(screen.queryByRole("heading", { name: "Providers" })).not.toBeInTheDocument()
+    expect(screen.getByTestId("test-location").textContent).toBe("/system/providers")
+  })
+
+  it("the redirect target shows the merged registry (7 headers, no Provider settings page)", async () => {
+    await renderAppAt("/providers")
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { level: 2, name: "Providers" })).toBeInTheDocument()
+      },
+      { timeout: 5000 }
+    )
+    await waitFor(() => expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS]))
+    expect(screen.queryByRole("heading", { name: "Provider settings" })).not.toBeInTheDocument()
   })
 })
 })
@@ -761,8 +839,7 @@ const settingsFeatureSource = [
   readFileSync(path.resolve(testDir, "./ProviderTestModal.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderTestModalDetail.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderPriorityControl.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "../../shared/ui/ReorderHandle.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
@@ -801,13 +878,13 @@ const FETCH_UNSUPPORTED = ["Brave Search"] as const
 const FETCH_SUPPORTED = ["Keenable", "Tavily", "Exa", "Firecrawl", "You.com", "Parallel", "Tinyfish"] as const
 
 const EXPECTED_HEADERS = [
-  "Priority",
   "Provider",
   "Endpoint",
-  "Test",
+  "Cost per call",
+  "Health",
   "Search",
   "Fetch",
-  "Global",
+  "On",
 ] as const
 
 let patchGate: Promise<Response> | null = null
@@ -830,7 +907,6 @@ function renderSettings(): FetchStub {
       const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
       const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
         enable_mask: number
-        priority: number
       }
       const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
       let enableMask = base.enable_mask
@@ -843,8 +919,7 @@ function renderSettings(): FetchStub {
         if (patch.fetch_enabled === true) enableMask |= 4
         if (patch.fetch_enabled === false) enableMask &= ~4
       }
-      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
-      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0 })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       if (testGate) return testGate
@@ -860,9 +935,11 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SettingsView />
-    </FreeSearchProvider>
+    <MemoryRouter>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+        <SettingsView />
+      </FreeSearchProvider>
+    </MemoryRouter>
   )
   return stub
 }
@@ -1050,18 +1127,14 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     expect(settingsFeatureSource).not.toMatch(/if\s*\(\s*globallyDisabled\s*\)\s*return\s+null/)
   })
 
-  it("unsupported fetch shows a disabled switch with tooltip while Global is on (Brave)", async () => {
+  it("unsupported fetch reads as unavailable (a dash, no switch) while Global is on (Brave)", async () => {
     renderSettings()
     await waitForProviders()
     for (const name of FETCH_UNSUPPORTED) {
       const fetchCell = cellFor(name, "Fetch")
-      const switchEl = within(fetchCell).getByRole("switch")
-      expect(switchEl).toBeDisabled()
-      expect(switchEl).toHaveAttribute("aria-checked", "false")
-      expect(switchEl).toHaveAttribute(
-        "aria-label",
-        `${name} fetch routing (not supported)`
-      )
+      expect(within(fetchCell).queryByRole("switch")).toBeNull()
+      expect(within(fetchCell).getByText("—")).toBeInTheDocument()
+      expect(within(fetchCell).getByText(`${name} does not support fetch`)).toBeInTheDocument()
     }
   })
 
@@ -1101,7 +1174,10 @@ describe("S-P1-3: Global-off placeholder keeps columns from collapsing", () => {
     const row = findProviderRowTr("Brave Search")
     expect(row.children).toHaveLength(EXPECTED_HEADERS.length)
     const fetchCell = cellFor("Brave Search", "Fetch")
-    expect(within(fetchCell).getByRole("switch")).toBeDisabled()
+    expect(within(fetchCell).getByText("—")).toBeInTheDocument()
+    expect(
+      within(cellFor("Brave Search", "Search")).getByRole("switch", { name: "Brave Search search routing" })
+    ).toBeDisabled()
     const afterLeft = fetchCell.getBoundingClientRect().left
     expect(Math.abs(afterLeft - beforeLeft)).toBeLessThanOrEqual(1)
   })
@@ -1147,34 +1223,7 @@ describe("S-P1-4: 375px viewport scrolls horizontally without wrapping", () => {
 // ---------------------------------------------------------------------------
 
 describe("S-P1-5: all SettingsProviders contracts preserved in the table", () => {
-  it("shows priorities P1..P7 with bounded up/down controls per row", async () => {
-    renderSettings()
-    await waitForProviders()
-    for (let priority = 1; priority <= 8; priority += 1) {
-      expect(screen.getByText(`P${priority}`, { exact: true })).toBeInTheDocument()
-    }
-    for (const name of SEED_PROVIDER_NAMES) {
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority up` })
-      ).toBeInTheDocument()
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority down` })
-      ).toBeInTheDocument()
-    }
-    // Boundaries come from sorted priority: first row cannot move up, last cannot move down.
-    expect(
-      screen.getByRole("button", { name: "Move Brave Search priority up" })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Tinyfish priority down" })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Brave Search priority down" })
-    ).not.toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Parallel priority up" })
-    ).not.toBeDisabled()
-  })
+
 
   it("keeps 7 global Switches with provider-qualified labels", async () => {
     renderSettings()
@@ -1300,8 +1349,8 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
     // ProviderTestModal (never fetches on open).
     for (const name of SEED_PROVIDER_NAMES) {
       const row = findProviderRowTr(name)
-      // Every row (including Tavily) keeps seven cells; Test column index is unshifted.
-      const testIdx = columnIndex("Test")
+      // Every row (including Tavily) keeps seven cells; the test icon rides in the Health cell.
+      const testIdx = columnIndex("Health")
       const testCell = row.children[testIdx] as HTMLElement
       expect(
         within(testCell).getByRole("button", { name: `${name} test connection` })
@@ -1335,7 +1384,7 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
       })
     )
     await waitFor(() => {
-      expect(screen.getByRole("dialog").textContent).toMatch(/142ms|healthy/)
+      expect(screen.getByRole("dialog").textContent).toMatch(/Healthy · 142 ms/)
     })
     const tests = stub.requestsTo("/api/v1/providers/brave/test")
     expect(tests).toHaveLength(1)
@@ -1348,20 +1397,14 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
 // ---------------------------------------------------------------------------
 
 describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => {
-  it("Settings pills stay Providers/Failover on the pill variant", async () => {
+  it("has no Failover tab: the fallback policy sits under the provider table", async () => {
     renderSettings()
     await waitForProviders()
-    expect(screen.getAllByRole("tab")).toHaveLength(2)
-    for (const label of ["Providers", "Failover"]) {
-      expect(screen.getByRole("tab", { name: new RegExp(`^${label}$`) })).toBeInTheDocument()
-    }
-    const pillList = document.querySelector('[data-slot="tabs-list"][data-variant="pill"]')
-    expect(pillList, "pill tablist must exist").not.toBeNull()
-    expect(
-      within(pillList as HTMLElement)
-        .getAllByRole("tab")
-        .map((t) => t.textContent)
-    ).toEqual(["Providers", "Failover"])
+    // Without key management only the Providers view exists, so no tab list renders.
+    expect(screen.queryAllByRole("tab")).toHaveLength(0)
+    expect(screen.queryByRole("tab", { name: "Failover" })).not.toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "When a provider fails" })).toBeInTheDocument()
+    expect(screen.getByRole("switch", { name: "Fallback" })).toBeInTheDocument()
     expect(
       document.querySelectorAll('[data-slot="tabs-list"][data-variant="line"]')
     ).toHaveLength(0)
@@ -1375,14 +1418,8 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
     expect(norm(indexCssSource).includes("oklch(")).toBe(false)
   })
 
-  it("P1-FINAL route table: five workspace routes + /providers -> /settings redirect", () => {
-    for (const routePath of [
-      "/playground",
-      "/routing",
-      "/usage",
-      "/activity",
-      "/settings",
-    ]) {
+  it("route table: System Providers at /system/providers; /settings and /providers redirect there", () => {
+    for (const routePath of ["/routing", "/system/quotas", "/system/providers"]) {
       expect(routesSource).toContain(`"${routePath}"`)
     }
     expect(dashboardShellSource).toMatch(/<Routes/)
@@ -1390,12 +1427,15 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
     expect(appSource).not.toMatch(/ProviderMatrix/)
     // Thin App shim renders the shell that owns the table.
     expect(appSource).toContain("DashboardShell")
-    // Legacy path survives ONLY as a redirect into Settings.
-    expect(dashboardShellSource).toContain('"/providers"')
-    const idx = dashboardShellSource.indexOf('"/providers"')
-    const window_ = dashboardShellSource.slice(Math.max(0, idx - 120), idx + 300)
-    expect(window_).toMatch(/Navigate/)
-    expect(window_).toContain('"/settings"')
+    // Former global paths live once in LEGACY_GLOBAL_REDIRECTS; the shell renders them as Navigate.
+    const legacyBlock = routesSource.slice(
+      routesSource.indexOf("LEGACY_GLOBAL_REDIRECTS"),
+      routesSource.indexOf("LOGIN_PATH")
+    )
+    expect(legacyBlock).toContain('"/providers": TAB_PATHS.settings')
+    expect(legacyBlock).toContain('"/settings": TAB_PATHS.settings')
+    expect(dashboardShellSource).toContain("LEGACY_GLOBAL_REDIRECTS")
+    expect(dashboardShellSource).toMatch(/Navigate/)
     expect(routesSource).toMatch(/export\s+(type|interface)\s+TabId/)
     expect(routesNavSource.includes("<NavLink")).toBe(true)
     expect(routesNavSource).not.toContain('"providers"')
@@ -1408,9 +1448,8 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
       routesSource.indexOf("WorkspaceRoute")
     )
     for (const [id, href] of [
-      ["routing", "/routing"],
-      ["quotas", "/usage"],
-      ["settings", "/settings"],
+      ["quotas", "/system/quotas"],
+      ["settings", "/system/providers"],
     ]) {
       expect(tabPathsBlock).toContain(`"${href}"`)
       expect(tabPathsBlock).toMatch(new RegExp(`${id}:`))
@@ -1435,678 +1474,7 @@ describe("S-P1-6: P1-FINAL merge guards (inverted — page merged, RED)", () => 
 })
 })
 
-describe("SettingsProviders.s-p2.test.tsx", () => {
 
-/**
- * S-P2 provider priority values — BDD Acceptance (RED phase).
- *
- * User bullet (verbatim): "These values don't make any sense". BUG image-2.png
- * shows every registry row labelled P100 with the up/down arrows clipped at
- * the card edge. Scout: the live backend returns priority 100 for ALL
- * providers, and the UI renders the raw value (`P{provider.priority}`), so
- * every row reads P100 and the indicator column has no width floor.
- *
- * Plan under test (freesearch-ui/ ONLY, no button restyle/space/merge):
- *   SettingsProviders rank display (P{rank 1..7} from sorted order, never raw
- *   P100) + tooltip dispatch order;
- *   FreeSearchContext moveProviderPriority tied-value branch (equal priorities
- *   -> PATCH distinct rank numbers);
- *   PriorityIndicator fixed min-w/shrink-0 + first-cell px-3 (no clipping,
- *   table + scroller intact).
- *
- * AC mapping:
- *   S-P2-1  all-100 stub renders ranks P1..P7 in row order, never P100
- *           (rank display, not raw priority).
- *   S-P2-2  rank follows sorted order: scrambled backend priorities still
- *           render P1..P7 top-to-bottom with the exact row->rank mapping, plus
- *           an exact `Dispatch order N of 7` tooltip per row.
- *   S-P2-3  clipping guards: PriorityIndicator keeps shrink-0 AND gains a
- *           min-w-* floor (non-zero width proxy — jsdom has no layout engine,
- *           same structural-invariant approach as S-P1-2), first-column cells
- *           keep px-3, and the ui/table scroller (overflow-x-auto + nowrap,
- *           single 7x5 table) stays intact.
- *   S-P2-4  arrows exist for all 7 rows with sorted-order boundaries on ties;
- *           a tie move PATCHes DISTINCT rank numbers (landed guard) AND the
- *           PATCH set must reproduce the EXACT adjacent transposition
- *           (direction-correct: rank-3 down -> rank 4, all other rows stable)
- *           both under (priority, provider_id) replay-sort and in the live
- *           post-move top-to-bottom DOM order — full-tie (all-100) plus a new
- *           partial-tie (some tied, some distinct) case; GET refresh + P1..P7
- *           label-set invariant kept.
- *   S-P2-5  scope guards (GREEN before and after): lucide ArrowUp/ArrowDown
- *           untouched (no button restyle), no ProviderMatrix merge, no
- *           backend/python imports, S-P1 table alignment intact.
- *
- * RED expectation (final review: rank display, tooltip, min-w floor, and
- * tied-value DISTINCT PATCH branch have landed — S-P2-1..S-P2-3 and the S-P2-4
- * PATCH-shape guard are GREEN):
- *   S-P2-4 tie-ORDER (replay-sort + exact post-move DOM order, full-tie and
- *   partial-tie) FAILS cleanly until Developer lands production
- *   normalization — the two-PATCH rank swap cannot reproduce the adjacent
- *   transposition while the untouched rows keep their raw values.
- *   S-P2-5 + boundary/scroller guards stay GREEN throughout.
- */
-
-const testDir = import.meta.dirname
-const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
-// Slice 4: PriorityIndicator owns its module; assertions run against the new
-// owner plus the union of the registry feature owners.
-const indicatorSource = readFileSync(
-  path.resolve(testDir, "./ProviderPriorityControl.tsx"),
-  "utf8"
-)
-const settingsFeatureSource = [
-  settingsSource,
-  indicatorSource,
-  readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderTestModal.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
-].join("\n")
-
-const SEED_PROVIDER_NAMES = [
-  "Brave Search",
-  "Keenable",
-  "Tavily",
-  "Exa",
-  "Firecrawl",
-  "You.com",
-  "Parallel",
-  "Tinyfish",
-] as const
-
-const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"] as const
-
-/** Scrambled backend priorities: rank must come from sorted order, not raw. */
-const SCRAMBLED_PRIORITIES: Record<string, number> = {
-  brave: 30,
-  keenable: 10,
-  tavily: 50,
-  exa: 20,
-  firecrawl: 70,
-  you: 40,
-  parallel: 60,
-  tinyfish: 80,
-}
-
-/** Expected row->rank mapping for the scrambled fixture (ascending sort). */
-const SCRAMBLED_RANKS: Record<string, string> = {
-  Keenable: "P1",
-  Exa: "P2",
-  "Brave Search": "P3",
-  "You.com": "P4",
-  Tavily: "P5",
-  Parallel: "P6",
-  Firecrawl: "P7",
-  Tinyfish: "P8",
-}
-
-function all100Fixture(): WireProviderStatus[] {
-  return allProvidersFixture().map((row) => ({ ...row, priority: 100 }))
-}
-
-function scrambledFixture(): WireProviderStatus[] {
-  return allProvidersFixture().map((row) => ({
-    ...row,
-    priority: SCRAMBLED_PRIORITIES[row.provider_id] ?? row.priority,
-  }))
-}
-
-/** Partial tie: brave:1, keenable:2, tavily/exa/firecrawl tied at 5, you:6, parallel:7. */
-const PARTIAL_TIE_PRIORITIES: Record<string, number> = {
-  brave: 1,
-  keenable: 2,
-  tavily: 5,
-  exa: 5,
-  firecrawl: 5,
-  you: 6,
-  parallel: 7,
-  tinyfish: 8,
-}
-
-function partialTieFixture(): WireProviderStatus[] {
-  return allProvidersFixture().map((row) => ({
-    ...row,
-    priority: PARTIAL_TIE_PRIORITIES[row.provider_id] ?? row.priority,
-  }))
-}
-
-const PARTIAL_TIE_PRE_NAMES = [
-  "Brave Search",
-  "Keenable",
-  "Tavily",
-  "Exa",
-  "Firecrawl",
-  "You.com",
-  "Parallel",
-  "Tinyfish",
-] as const
-
-function renderSettingsWith(providers: WireProviderStatus[]): FetchStub {
-  const server = providers.map((row) => ({ ...row }))
-  const stub = installFetchStub((req) => {
-    if (req.url === "/api/v1/providers" && req.method === "GET") {
-      return ok(server)
-    }
-    if (req.url === "/api/v1/routing/config" && req.method === "GET") {
-      return ok(routingConfigFixture())
-    }
-    if (req.url.startsWith("/dashboard")) return ok(dashboardFixture())
-    if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
-      const backendId = req.url.split("/").at(-1) ?? "unknown"
-      const entry = server.find((row) => row.provider_id === backendId)
-      if (!entry) return err(404, { detail: `unknown provider '${backendId}'` })
-      const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
-      if (typeof patch.enable_mask === "number") entry.enable_mask = patch.enable_mask
-      else {
-        if (patch.enabled === true) entry.enable_mask |= 1
-        if (patch.enabled === false) entry.enable_mask &= ~1
-        if (patch.search_enabled === true) entry.enable_mask |= 2
-        if (patch.search_enabled === false) entry.enable_mask &= ~2
-        if (patch.fetch_enabled === true) entry.enable_mask |= 4
-        if (patch.fetch_enabled === false) entry.enable_mask &= ~4
-      }
-      if (typeof patch.priority === "number") entry.priority = patch.priority
-      entry.enabled = (entry.enable_mask & 1) !== 0
-      return ok(entry)
-    }
-    return err(404, { detail: "unhandled test route" })
-  })
-  render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SettingsView />
-    </FreeSearchProvider>
-  )
-  return stub
-}
-
-async function waitForProviders() {
-  await waitFor(() => {
-    expect(screen.getByText("Brave Search", { exact: true })).toBeInTheDocument()
-  })
-}
-
-/**
- * TR-STRICT row lookup (same traversal contract as S-P1: every provider row
- * is a <tr>; throws when rows are still <div>s).
- */
-function findProviderRowTr(provider: string): HTMLTableRowElement {
-  const nameEl = screen.getByText(provider, { exact: true })
-  const tr = nameEl.closest("tr")
-  if (!tr) {
-    throw new Error(
-      `Provider table row <tr> not found for ${provider} — table migration missing`
-    )
-  }
-  return tr as HTMLTableRowElement
-}
-
-/** The single P-rank label inside a provider row (works for P1..P7 AND P100). */
-function priorityLabelInRow(row: HTMLTableRowElement): HTMLElement {
-  const labels = Array.from(row.querySelectorAll("span")).filter((el) =>
-    /^P\d+$/.test(el.textContent?.trim() ?? "")
-  )
-  if (labels.length !== 1) {
-    throw new Error(
-      `Expected exactly one P-rank label in row, found ${labels.length}: [${labels.map((l) => l.textContent).join(", ")}]`
-    )
-  }
-  return labels[0] as HTMLElement
-}
-
-function rankOfRow(provider: string): string {
-  return priorityLabelInRow(findProviderRowTr(provider)).textContent?.trim() ?? ""
-}
-
-/** Rank labels top-to-bottom in render order. */
-function allRankLabelsInRowOrder(): string[] {
-  const rows = Array.from(screen.getByRole("table").querySelectorAll("tbody tr"))
-  return rows.map((row) => priorityLabelInRow(row as HTMLTableRowElement).textContent?.trim() ?? "")
-}
-
-function patchRequests(stub: FetchStub) {
-  return stub.requests.filter(
-    (r) => r.method === "PATCH" && r.url.startsWith("/api/v1/providers/")
-  )
-}
-
-/** Provider display names top-to-bottom in render order. */
-function providerNamesInRowOrder(): string[] {
-  const rows = Array.from(screen.getByRole("table").querySelectorAll("tbody tr"))
-  return rows.map((row) => {
-    const nameEl = (row as HTMLTableRowElement).querySelector("span.font-medium")
-    if (!nameEl) throw new Error("Provider name span.font-medium not found in table row")
-    return nameEl.textContent?.trim() ?? ""
-  })
-}
-
-/**
- * Replay a PATCH set onto a pre-move snapshot, then sort by
- * (priority, provider_id). The result must equal the expected adjacent
- * transposition. The pre-move snapshot is regenerated from the same pure
- * fixture the stub server was seeded with, so values are identical.
- */
-function orderFromPatchSet(
-  preMove: WireProviderStatus[],
-  patches: Array<{ backendId: string; priority: number }>
-): string[] {
-  const priorityById = new Map(preMove.map((row) => [row.provider_id, row.priority]))
-  for (const patch of patches) {
-    if (!priorityById.has(patch.backendId)) {
-      throw new Error(`PATCH for unknown provider '${patch.backendId}'`)
-    }
-    priorityById.set(patch.backendId, patch.priority)
-  }
-  return [...priorityById.entries()]
-    .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-    .map(([id]) => id)
-}
-
-function patchIdAndPriority(
-  stub: FetchStub
-): Array<{ backendId: string; priority: number }> {
-  return patchRequests(stub).map((r) => ({
-    backendId: r.url.split("/").at(-1) ?? "",
-    priority: (r.body as { priority: number }).priority,
-  }))
-}
-
-afterEach(() => {
-  vi.unstubAllGlobals()
-  vi.restoreAllMocks()
-})
-
-// ---------------------------------------------------------------------------
-// S-P2-1: all-100 stub shows P1..P7, never P100
-// ---------------------------------------------------------------------------
-
-describe("S-P2-1: all-100 backend renders rank display P1..P7 (never raw P100)", () => {
-  it("renders ranks P1..P7 top-to-bottom when every backend priority is 100", async () => {
-    renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    expect(allRankLabelsInRowOrder()).toEqual([...EXPECTED_RANKS])
-  })
-
-  it("shows each rank exactly once with zero P100 labels", async () => {
-    renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    for (let rank = 1; rank <= 8; rank += 1) {
-      expect(screen.queryAllByText(`P${rank}`, { exact: true })).toHaveLength(1)
-    }
-    expect(screen.queryByText("P100", { exact: true })).toBeNull()
-    const multiDigit = allRankLabelsInRowOrder().filter((label) => /^P\d{2,}$/.test(label))
-    expect(multiDigit).toEqual([])
-  })
-
-  it("never renders the raw priority interpolation", () => {
-    expect(indicatorSource).not.toContain("P{provider.priority}")
-    // The page renders ranks through the extracted row sibling.
-    expect(settingsSource).toContain("ProviderRegistryRow")
-  })
-})
-
-// ---------------------------------------------------------------------------
-// S-P2-2: rank follows sorted order + tooltip dispatch order
-// ---------------------------------------------------------------------------
-
-describe("S-P2-2: rank follows sorted order with dispatch-order tooltip", () => {
-  it("maps scrambled backend priorities to ranks by ascending sorted order", async () => {
-    renderSettingsWith(scrambledFixture())
-    await waitForProviders()
-    for (const [name, rank] of Object.entries(SCRAMBLED_RANKS)) {
-      expect(rankOfRow(name)).toBe(rank)
-    }
-  })
-
-  it("shows no raw backend values for the scrambled fixture", async () => {
-    renderSettingsWith(scrambledFixture())
-    await waitForProviders()
-    expect(allRankLabelsInRowOrder()).toEqual([...EXPECTED_RANKS])
-    for (const raw of ["P10", "P20", "P30", "P40", "P50", "P60", "P70", "P80"]) {
-      expect(screen.queryByText(raw, { exact: true })).toBeNull()
-    }
-  })
-
-  it("exposes an exact dispatch-order tooltip on every rank label", async () => {
-    renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    for (let rank = 1; rank <= 8; rank += 1) {
-      const label = screen.getByText(`P${rank}`, { exact: true })
-      expect(label.getAttribute("title")).toBe(`Dispatch order ${rank} of 8`)
-    }
-  })
-
-  it("declares the dispatch-order tooltip in source", () => {
-    expect(indicatorSource).toContain("Dispatch order")
-  })
-
-  it("derives arrow boundaries from sorted order on scrambled priorities", async () => {
-    renderSettingsWith(scrambledFixture())
-    await waitForProviders()
-    // Sorted first = Keenable (10), sorted last = Firecrawl (70).
-    expect(
-      screen.getByRole("button", { name: "Move Keenable priority up" })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Tinyfish priority down" })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Keenable priority down" })
-    ).not.toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Firecrawl priority up" })
-    ).not.toBeDisabled()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// S-P2-3: clipping guards (min-w + shrink-0 + px-3, table + scroller intact)
-// ---------------------------------------------------------------------------
-
-describe("S-P2-3: priority indicator never clips at the card edge", () => {
-  it("indicator keeps shrink-0 and gains a min-w-* floor (non-zero width proxy)", async () => {
-    renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    for (let rank = 1; rank <= 8; rank += 1) {
-      const label = screen.getByText(`P${rank}`, { exact: true })
-      const indicator = label.parentElement as HTMLElement | null
-      expect(indicator, `P${rank} indicator wrapper must exist`).not.toBeNull()
-      // shrink-0 stops flex compression; min-w-* floors the width so the
-      // arrows + label cannot collapse to zero at the card edge. jsdom has
-      // no layout engine, so the class invariant IS the executable guard
-      // (same structural approach as S-P1-2); pixel proof needs a browser.
-      expect(indicator!.className).toMatch(/shrink-0/)
-      expect(indicator!.className).toMatch(/min-w-/)
-    }
-  })
-
-  it("declares the min-w floor inside the PriorityIndicator source block", () => {
-    expect(indicatorSource).toMatch(/shrink-0/)
-    expect(indicatorSource).toMatch(/min-w-/)
-  })
-
-  it("first-column (Provider) cells keep px-3 breathing room", async () => {
-    renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    for (const name of SEED_PROVIDER_NAMES) {
-      const row = findProviderRowTr(name)
-      const firstCell = row.children[0] as HTMLElement
-      expect(firstCell.tagName).toBe("TD")
-      expect(firstCell.className).toMatch(/px-3/)
-    }
-  })
-
-  it("table + scroller stay intact: single 7-column merged table, overflow-x-auto, nowrap", async () => {
-    renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    expect(screen.getAllByRole("table")).toHaveLength(1)
-    const table = screen.getByRole("table")
-    expect(table.querySelectorAll("tbody tr")).toHaveLength(8)
-    // Seven merged columns stand for every row (no Tavily extra cell).
-    for (const name of SEED_PROVIDER_NAMES) {
-      const row = findProviderRowTr(name)
-      expect(row.children).toHaveLength(7)
-    }
-    const container = table.closest('[data-slot="table-container"]') as HTMLElement | null
-    expect(container, "ui/table scroller must wrap the table").not.toBeNull()
-    expect(container!.className).toMatch(/overflow-x-auto/)
-    const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    expect(cells.length).toBe(7 + 8 * 7)
-    for (const cell of cells) {
-      expect(cell.className).toMatch(/whitespace-nowrap/)
-    }
-  })
-})
-
-// ---------------------------------------------------------------------------
-// S-P2-4: arrows + boundaries + PATCH distinct on ties + refresh
-// ---------------------------------------------------------------------------
-
-describe("S-P2-4: reorder arrows with tie-safe distinct PATCH + refresh", () => {
-  it("renders up/down arrows for all 7 rows with boundaries on the all-100 stub", async () => {
-    renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    for (const name of SEED_PROVIDER_NAMES) {
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority up` })
-      ).toBeInTheDocument()
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority down` })
-      ).toBeInTheDocument()
-    }
-    // Stable sorted order keeps fixture order on ties: Brave first, Parallel last.
-    expect(
-      screen.getByRole("button", { name: "Move Brave Search priority up" })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Tinyfish priority down" })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Tavily priority up" })
-    ).not.toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Tavily priority down" })
-    ).not.toBeDisabled()
-  })
-
-  it("a tie move PATCHes DISTINCT rank numbers (1..7, never 100) then refreshes", async () => {
-    // Landed guard: the tied-value branch sends rank numbers, not the tied
-    // raw value. Deliberately set-agnostic (no count/exact-value pin) so a
-    // future full-renormalization (N PATCHes) still satisfies it — exact
-    // order is pinned by the transposition tests below.
-    const user = userEvent.setup()
-    const stub = renderSettingsWith(all100Fixture())
-    await waitForProviders()
-
-    // Tavily sits at index 2 (rank 3); moving down swaps with Exa (rank 4).
-    await user.click(screen.getByRole("button", { name: "Move Tavily priority down" }))
-
-    await waitFor(() => {
-      expect(patchRequests(stub).length).toBeGreaterThanOrEqual(2)
-    })
-    const values = patchIdAndPriority(stub).map((p) => p.priority)
-    expect(values.length).toBeGreaterThan(0)
-    for (const value of values) {
-      expect(Number.isInteger(value)).toBe(true)
-      expect(value).toBeGreaterThanOrEqual(1)
-      expect(value).toBeLessThanOrEqual(8)
-    }
-    expect(new Set(values).size).toBe(values.length)
-    expect(values).not.toContain(100)
-
-    // Rank swap is followed by an authoritative GET refresh of the registry.
-    await waitFor(() => {
-      const gets = stub
-        .requestsTo("/api/v1/providers")
-        .filter((r) => r.method === "GET")
-      expect(gets.length).toBeGreaterThanOrEqual(2)
-    })
-
-    // Rank display invariant survives the move: still exactly P1..P7.
-    await waitFor(() => {
-      expect([...allRankLabelsInRowOrder()].sort()).toEqual([...EXPECTED_RANKS])
-    })
-  })
-
-  it("tie PATCH set reproduces the adjacent transposition under (priority, provider_id) sort", async () => {
-    // Tavily (rank 3) moves down past Exa (rank 4): the ONLY correct
-    // end-state is the adjacent transposition
-    // [brave, keenable, exa, tavily, firecrawl, you, parallel].
-    // Replaying the PATCH set onto the pre-move snapshot and sorting by
-    // (priority, provider_id) must yield exactly that order. RED until
-    // Developer lands normalization: the two-PATCH rank swap leaves the
-    // untouched rows at 100, so the replay sorts the swapped pair first.
-    const user = userEvent.setup()
-    const stub = renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    expect(providerNamesInRowOrder()).toEqual([
-      "Brave Search",
-      "Keenable",
-      "Tavily",
-      "Exa",
-      "Firecrawl",
-      "You.com",
-      "Parallel",
-      "Tinyfish",
-    ])
-
-    await user.click(screen.getByRole("button", { name: "Move Tavily priority down" }))
-
-    await waitFor(() => {
-      expect(patchRequests(stub).length).toBeGreaterThanOrEqual(2)
-    })
-    const replayed = orderFromPatchSet(all100Fixture(), patchIdAndPriority(stub))
-    expect(replayed).toEqual([
-      "brave",
-      "keenable",
-      "exa",
-      "tavily",
-      "firecrawl",
-      "you",
-      "parallel",
-      "tinyfish",
-    ])
-  })
-
-  it("tie move yields the exact transposed top-to-bottom order (direction-correct)", async () => {
-    // Same move as above, asserted against the LIVE post-refresh DOM:
-    // Tavily must read direction-correct at rank 4, Exa at rank 3, every
-    // other row stable. RED until Developer lands normalization.
-    const user = userEvent.setup()
-    const stub = renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    await user.click(screen.getByRole("button", { name: "Move Tavily priority down" }))
-
-    // Quiescence first: authoritative GET refresh has landed...
-    await waitFor(() => {
-      const gets = stub
-        .requestsTo("/api/v1/providers")
-        .filter((r) => r.method === "GET")
-      expect(gets.length).toBeGreaterThanOrEqual(2)
-    })
-    // ...then the registry must read as the adjacent transposition.
-    await waitFor(() => {
-      expect(providerNamesInRowOrder()).toEqual([
-        "Brave Search",
-        "Keenable",
-        "Exa",
-        "Tavily",
-        "Firecrawl",
-        "You.com",
-        "Parallel",
-        "Tinyfish",
-      ])
-    })
-    expect(rankOfRow("Tavily")).toBe("P4")
-    expect(rankOfRow("Exa")).toBe("P3")
-  })
-
-  it("partial-tie PATCH set reproduces the adjacent transposition under (priority, provider_id) sort", async () => {
-    // Partial tie: brave:1, keenable:2, tavily/exa/firecrawl tied at 5,
-    // you:6, parallel:7. Exa (rank 4) moves down past Firecrawl (rank 5):
-    // the ONLY correct end-state is
-    // [brave, keenable, tavily, firecrawl, exa, you, parallel].
-    const user = userEvent.setup()
-    const stub = renderSettingsWith(partialTieFixture())
-    await waitForProviders()
-    expect(providerNamesInRowOrder()).toEqual([...PARTIAL_TIE_PRE_NAMES])
-    expect(rankOfRow("Tavily")).toBe("P3")
-    expect(rankOfRow("Exa")).toBe("P4")
-    expect(rankOfRow("Firecrawl")).toBe("P5")
-
-    await user.click(screen.getByRole("button", { name: "Move Exa priority down" }))
-
-    await waitFor(() => {
-      expect(patchRequests(stub).length).toBeGreaterThanOrEqual(2)
-    })
-    const values = patchIdAndPriority(stub).map((p) => p.priority)
-    expect(new Set(values).size).toBe(values.length)
-    for (const value of values) {
-      expect(Number.isInteger(value)).toBe(true)
-      expect(value).toBeGreaterThanOrEqual(1)
-      expect(value).toBeLessThanOrEqual(8)
-    }
-    const replayed = orderFromPatchSet(partialTieFixture(), patchIdAndPriority(stub))
-    expect(replayed).toEqual([
-      "brave",
-      "keenable",
-      "tavily",
-      "firecrawl",
-      "exa",
-      "you",
-      "parallel",
-      "tinyfish",
-    ])
-  })
-
-  it("partial-tie move yields the exact transposed top-to-bottom order", async () => {
-    // Same partial-tie move, asserted against the LIVE post-refresh DOM:
-    // Exa must read direction-correct at rank 5, Firecrawl at rank 4,
-    // every other row stable. RED until Developer lands normalization.
-    const user = userEvent.setup()
-    const stub = renderSettingsWith(partialTieFixture())
-    await waitForProviders()
-    await user.click(screen.getByRole("button", { name: "Move Exa priority down" }))
-
-    await waitFor(() => {
-      const gets = stub
-        .requestsTo("/api/v1/providers")
-        .filter((r) => r.method === "GET")
-      expect(gets.length).toBeGreaterThanOrEqual(2)
-    })
-    await waitFor(() => {
-      expect(providerNamesInRowOrder()).toEqual([
-        "Brave Search",
-        "Keenable",
-        "Tavily",
-        "Firecrawl",
-        "Exa",
-        "You.com",
-        "Parallel",
-        "Tinyfish",
-      ])
-    })
-    expect(rankOfRow("Exa")).toBe("P5")
-    expect(rankOfRow("Firecrawl")).toBe("P4")
-  })
-})
-
-// ---------------------------------------------------------------------------
-// S-P2-5: scope guards — no button restyle/space/merge, freesearch-ui ONLY
-// ---------------------------------------------------------------------------
-
-describe("S-P2-5: no restyle, no merge, freesearch-ui only (stays green)", () => {
-  it("keeps the lucide ArrowUp/ArrowDown controls with exact aria-labels", async () => {
-    expect(indicatorSource).toContain("lucide-react")
-    expect(indicatorSource).toContain("ArrowUp")
-    expect(indicatorSource).toContain("ArrowDown")
-    renderSettingsWith(all100Fixture())
-    await waitForProviders()
-    for (const name of SEED_PROVIDER_NAMES) {
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority up` })
-      ).toBeInTheDocument()
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority down` })
-      ).toBeInTheDocument()
-    }
-  })
-
-  it("P1-FINAL page merge: fleet telemetry merged into SettingsProviders (ProviderMatrix retired)", () => {
-    for (const marker of ["Endpoint", "ProviderTestModal"]) {
-      expect(settingsFeatureSource, `merged registry must carry ${marker}`).toContain(marker)
-    }
-  })
-
-  it("freesearch-ui ONLY: no backend/python import paths", () => {
-    expect(settingsFeatureSource).not.toMatch(/\.py["']/)
-    expect(settingsFeatureSource).not.toMatch(/src\/freesearch/)
-  })
-})
-})
 
 describe("SettingsProviders.s-p3.test.tsx", () => {
 
@@ -2169,7 +1537,7 @@ const settingsModalSource = readFileSync(
   "utf8"
 )
 const settingsPrioritySource = readFileSync(
-  path.resolve(testDir, "./ProviderPriorityControl.tsx"),
+  path.resolve(testDir, "../../shared/ui/ReorderHandle.tsx"),
   "utf8"
 )
 const removedButtonShimPath = path.resolve(testDir, "../ui/button.tsx")
@@ -2180,7 +1548,6 @@ const settingsFeatureSource = [
   settingsPrioritySource,
   readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
@@ -2200,15 +1567,14 @@ const SEED_PROVIDER_NAMES = [
 ] as const
 
 const EXPECTED_HEADERS = [
-  "Priority",
   "Provider",
   "Endpoint",
-  "Test",
+  "Cost per call",
+  "Health",
   "Search",
   "Fetch",
-  "Global",
+  "On",
 ] as const
-const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"] as const
 
 let testGate: Promise<Response> | null = null
 
@@ -2227,7 +1593,6 @@ function renderSettings(): FetchStub {
       const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
       const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
         enable_mask: number
-        priority: number
       }
       const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
       let enableMask = base.enable_mask
@@ -2240,8 +1605,7 @@ function renderSettings(): FetchStub {
         if (patch.fetch_enabled === true) enableMask |= 4
         if (patch.fetch_enabled === false) enableMask &= ~4
       }
-      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
-      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0 })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       if (testGate) return testGate
@@ -2257,9 +1621,11 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SettingsView />
-    </FreeSearchProvider>
+    <MemoryRouter>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+        <SettingsView />
+      </FreeSearchProvider>
+    </MemoryRouter>
   )
   return stub
 }
@@ -2374,14 +1740,14 @@ describe("S-P3-1: icon test buttons open the ProviderTestModal (affordance)", ()
 // ---------------------------------------------------------------------------
 
 describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () => {
-  it("modal opens Not tested with a Test button (type=button, enabled)", async () => {
+  it("modal opens with no test run yet and a Test button (type=button, enabled)", async () => {
     const user = userEvent.setup()
     renderSettings()
     await waitForProviders()
 
     await user.click(testButtonFor("Brave Search"))
     const dialog = await screen.findByRole("dialog")
-    expect(dialog.textContent).toContain("Not tested")
+    expect(within(dialog).getByText("—")).toBeInTheDocument()
     const modalTest = within(dialog).getByRole("button", { name: /^Test$/ })
     expect(modalTest.getAttribute("type")).toBe("button")
     expect(modalTest).not.toBeDisabled()
@@ -2422,7 +1788,7 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
     )
     // Last result lands in the modal (status + latency of the probe).
     await waitFor(() => {
-      expect(screen.getByRole("dialog").textContent).toMatch(/142ms|healthy/)
+      expect(screen.getByRole("dialog").textContent).toMatch(/Healthy · 142 ms/)
     })
   })
 
@@ -2466,8 +1832,8 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
     const headers = Array.from(table.querySelectorAll("thead th")).map(
       (th) => th.textContent?.trim() ?? ""
     )
-    const testIdx = headers.indexOf("Test")
-    expect(testIdx).toBe(EXPECTED_HEADERS.indexOf("Test"))
+    const testIdx = headers.indexOf("Health")
+    expect(testIdx).toBe(EXPECTED_HEADERS.indexOf("Health"))
     const rows = Array.from(table.querySelectorAll("tbody tr"))
     expect(rows).toHaveLength(8)
     for (const name of SEED_PROVIDER_NAMES) {
@@ -2510,56 +1876,9 @@ describe("S-P3-3: no regression â€” S-P1 table, S-P2 ranks, tokens, merge",
     }
   })
 
-  it("S-P2 ranks preserved: P1..P7 never P100 with dispatch-order tooltips", async () => {
-    renderSettings()
-    await waitForProviders()
-    for (let rank = 1; rank <= 8; rank += 1) {
-      expect(screen.queryAllByText(`P${rank}`, { exact: true })).toHaveLength(1)
-      expect(screen.getByText(`P${rank}`, { exact: true }).getAttribute("title")).toBe(
-        `Dispatch order ${rank} of 8`
-      )
-    }
-    expect(screen.queryByText("P100", { exact: true })).toBeNull()
-    expect(settingsPrioritySource).not.toContain("P{provider.priority}")
-    expect(settingsPrioritySource).toContain("Dispatch order")
-  })
 
-  it("S-P2 indicator + arrows intact: shrink-0/min-w floor, px-3, lucide up/down with boundaries", async () => {
-    renderSettings()
-    await waitForProviders()
-    // S-P2-5 scope: arrows stay lucide ArrowUp/ArrowDown with exact aria-labels.
-    // (Deliberately no "no Button in file" assertion â€” Green adds ui/Button
-    // to the Test cell; the restyle guard covers ONLY the arrows.)
-    expect(settingsPrioritySource).toContain("lucide-react")
-    expect(settingsPrioritySource).toContain("ArrowUp")
-    expect(settingsPrioritySource).toContain("ArrowDown")
-    for (let rank = 1; rank <= 8; rank += 1) {
-      const label = screen.getByText(`P${rank}`, { exact: true })
-      const indicator = label.parentElement as HTMLElement | null
-      expect(indicator, `P${rank} indicator wrapper must exist`).not.toBeNull()
-      expect(indicator!.className).toMatch(/shrink-0/)
-      expect(indicator!.className).toMatch(/min-w-/)
-    }
-    for (const name of SEED_PROVIDER_NAMES) {
-      const row = findProviderRowTr(name)
-      expect((row.children[0] as HTMLElement).className).toMatch(/px-3/)
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority up` })
-      ).toBeInTheDocument()
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority down` })
-      ).toBeInTheDocument()
-    }
-    expect(
-      screen.getByRole("button", { name: "Move Brave Search priority up" })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Tinyfish priority down" })
-    ).toBeDisabled()
-    expect(
-      screen.getAllByText([...EXPECTED_RANKS][0], { exact: true })
-    ).toHaveLength(1)
-  })
+
+
 
   it("Carbon Black theme tokens untouched (#1e1e1e scale + #007acc, no oklch)", () => {
     expect(norm(indexCssSource).includes("#1e1e1e")).toBe(true)
@@ -2649,7 +1968,7 @@ const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.t
 // Slice 4: row/modal/priority siblings own their sources; assertions run
 // against the new owners plus the union of the registry feature owners.
 const settingsPrioritySource = readFileSync(
-  path.resolve(testDir, "./ProviderPriorityControl.tsx"),
+  path.resolve(testDir, "../../shared/ui/ReorderHandle.tsx"),
   "utf8"
 )
 const settingsModalSource = readFileSync(
@@ -2664,7 +1983,6 @@ const settingsFeatureSource = [
   readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderRowPill.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
@@ -2687,15 +2005,14 @@ const SEED_PROVIDER_NAMES = [
 ] as const
 
 const EXPECTED_HEADERS = [
-  "Priority",
   "Provider",
   "Endpoint",
-  "Test",
+  "Cost per call",
+  "Health",
   "Search",
   "Fetch",
-  "Global",
+  "On",
 ] as const
-const EXPECTED_RANKS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"] as const
 
 const ORIGINAL_INNER_WIDTH = window.innerWidth
 
@@ -2713,7 +2030,6 @@ function renderSettings(): FetchStub {
       const wire = allProvidersFixture().find((p) => p.provider_id === backendId)
       const base = { ...(wire ?? allProvidersFixture()[0]) } as Record<string, unknown> & {
         enable_mask: number
-        priority: number
       }
       const patch = ((req.body as Record<string, unknown>) ?? {}) as Record<string, unknown>
       let enableMask = base.enable_mask
@@ -2726,8 +2042,7 @@ function renderSettings(): FetchStub {
         if (patch.fetch_enabled === true) enableMask |= 4
         if (patch.fetch_enabled === false) enableMask &= ~4
       }
-      const priority = typeof patch.priority === "number" ? patch.priority : base.priority
-      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0, priority })
+      return ok({ ...base, enable_mask: enableMask, enabled: (enableMask & 1) !== 0 })
     }
     if (req.method === "POST" && req.url.endsWith("/test")) {
       return ok({
@@ -2742,9 +2057,11 @@ function renderSettings(): FetchStub {
     return err(404, { detail: "unhandled test route" })
   })
   render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SettingsView />
-    </FreeSearchProvider>
+    <MemoryRouter>
+      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+        <SettingsView />
+      </FreeSearchProvider>
+    </MemoryRouter>
   )
   return stub
 }
@@ -3042,51 +2359,9 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     }
   })
 
-  it("S-P2 ranks preserved: P1..P7 never P100 with dispatch-order tooltips", async () => {
-    renderSettings()
-    await waitForProviders()
-    for (let rank = 1; rank <= 8; rank += 1) {
-      expect(screen.queryAllByText(`P${rank}`, { exact: true })).toHaveLength(1)
-      expect(screen.getByText(`P${rank}`, { exact: true }).getAttribute("title")).toBe(
-        `Dispatch order ${rank} of 8`
-      )
-    }
-    expect(screen.queryByText("P100", { exact: true })).toBeNull()
-    expect(settingsPrioritySource).not.toContain("P{provider.priority}")
-    expect(settingsPrioritySource).toContain("Dispatch order")
-  })
 
-  it("S-P2 indicator + arrows intact: shrink-0/min-w floor, px-3, lucide up/down with boundaries", async () => {
-    renderSettings()
-    await waitForProviders()
-    expect(settingsPrioritySource).toContain("lucide-react")
-    expect(settingsPrioritySource).toContain("ArrowUp")
-    expect(settingsPrioritySource).toContain("ArrowDown")
-    for (let rank = 1; rank <= 8; rank += 1) {
-      const label = screen.getByText(`P${rank}`, { exact: true })
-      const indicator = label.parentElement as HTMLElement | null
-      expect(indicator, `P${rank} indicator wrapper must exist`).not.toBeNull()
-      expect(indicator!.className).toMatch(/shrink-0/)
-      expect(indicator!.className).toMatch(/min-w-/)
-    }
-    for (const name of SEED_PROVIDER_NAMES) {
-      const row = findProviderRowTr(name)
-      expect((row.children[0] as HTMLElement).className).toMatch(/px-3/)
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority up` })
-      ).toBeInTheDocument()
-      expect(
-        screen.getByRole("button", { name: `Move ${name} priority down` })
-      ).toBeInTheDocument()
-    }
-    expect(
-      screen.getByRole("button", { name: "Move Brave Search priority up" })
-    ).toBeDisabled()
-    expect(
-      screen.getByRole("button", { name: "Move Tinyfish priority down" })
-    ).toBeDisabled()
-    expect(screen.getAllByText([...EXPECTED_RANKS][0], { exact: true })).toHaveLength(1)
-  })
+
+
 
   it("S-P3 Test affordance: icon buttons per row open the modal (ghost icon-sm, exact labels)", async () => {
     renderSettings()
@@ -3104,20 +2379,13 @@ describe("S-P4-5: no regression — S-P1 table, S-P2 ranks, S-P3 buttons, Settin
     expect(existsSync(removedButtonShimPath)).toBe(false)
   })
 
-  it("SettingsView pills stay Providers/Failover on the pill variant", async () => {
+  it("SettingsView has no Failover tab; the fallback section follows the table", async () => {
     renderSettings()
     await waitForProviders()
-    expect(screen.getAllByRole("tab")).toHaveLength(2)
-    for (const label of ["Providers", "Failover"]) {
-      expect(screen.getByRole("tab", { name: new RegExp(`^${label}$`) })).toBeInTheDocument()
-    }
-    const pillList = document.querySelector('[data-slot="tabs-list"][data-variant="pill"]')
-    expect(pillList, "pill tablist must exist").not.toBeNull()
-    expect(
-      within(pillList as HTMLElement)
-        .getAllByRole("tab")
-        .map((t) => t.textContent)
-    ).toEqual(["Providers", "Failover"])
+    expect(screen.queryByRole("tab", { name: "Failover" })).not.toBeInTheDocument()
+    const table = screen.getByRole("table")
+    const fallback = screen.getByRole("heading", { name: "When a provider fails" })
+    expect(table.compareDocumentPosition(fallback) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(
       document.querySelectorAll('[data-slot="tabs-list"][data-variant="line"]')
     ).toHaveLength(0)
@@ -3168,9 +2436,11 @@ describe("SettingsProviders Developer read-only (canReadControls, no edit)", () 
       return err(404, { detail: "unhandled test route" })
     })
     render(
-      <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
-        <SettingsView />
-      </FreeSearchProvider>
+      <MemoryRouter>
+        <FreeSearchProvider accountId={DEVELOPER_ACCOUNT_ID} canReadControls canEditControls={false}>
+          <SettingsView />
+        </FreeSearchProvider>
+      </MemoryRouter>
     )
     return stub
   }
@@ -3185,20 +2455,18 @@ describe("SettingsProviders Developer read-only (canReadControls, no edit)", () 
     const stub = renderDeveloperSettings()
     await waitForDeveloperProviders()
 
-    // Read-only markers present: merged headers intact, ranks P1..P8, Test cells read Hidden.
+    // Read-only markers present: catalog headers intact, Health a muted dash.
     const headers = Array.from(screen.getByRole("table").querySelectorAll("thead th")).map(
       (th) => th.textContent?.trim() ?? ""
     )
-    expect(headers).toEqual(["Priority", "Provider", "Endpoint", "Test", "Search", "Fetch", "Global"])
-    for (let rank = 1; rank <= 8; rank += 1) {
-      expect(screen.getByText(`P${rank}`, { exact: true })).toBeInTheDocument()
-    }
-    expect(screen.getAllByText("Hidden", { exact: true })).toHaveLength(8)
+    expect(headers).toEqual(["Provider", "Endpoint", "Cost per call", "Health", "Search", "Fetch", "On"])
+    expect(within(screen.getByRole("table")).getAllByTitle("No result yet")).toHaveLength(8)
+    expect(screen.queryByText("Not tested", { exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByText("Hidden", { exact: true })).not.toBeInTheDocument()
     expect(screen.getAllByText("On", { exact: true }).length).toBeGreaterThan(0)
-    // Only the unsupported Brave fetch keeps its disabled switch; every editable switch is gone.
-    const switches = screen.getAllByRole("switch")
-    expect(switches).toHaveLength(1)
-    expect(switches[0].getAttribute("aria-label")).toBe("Brave Search fetch routing (not supported)")
+    // Every switch is gone; the unsupported Brave fetch reads as an unavailable dash.
+    expect(screen.queryAllByRole("switch")).toHaveLength(0)
+    expect(screen.getByText("Brave Search does not support fetch")).toBeInTheDocument()
     // Mutation affordances absent: no probe buttons, no priority moves, no global switches, no modal.
     expect(screen.queryByRole("button", { name: /test connection/i })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /priority (up|down)/ })).not.toBeInTheDocument()
@@ -3222,13 +2490,13 @@ describe("SettingsProviders Tavily rate-tier removed from Settings registry", ()
    */
 
   const SLOT_HEADERS = [
-    "Priority",
     "Provider",
     "Endpoint",
-    "Test",
+    "Cost per call",
+    "Health",
     "Search",
     "Fetch",
-    "Global",
+    "On",
   ] as const
 
   const SLOT_NAMES = [
@@ -3265,9 +2533,11 @@ describe("SettingsProviders Tavily rate-tier removed from Settings registry", ()
       return err(404, { detail: "unhandled test route" })
     })
     render(
-      <FreeSearchProvider accountId={accountId} canReadControls canEditControls={canEdit}>
-        <SettingsView />
-      </FreeSearchProvider>
+      <MemoryRouter>
+        <FreeSearchProvider accountId={accountId} canReadControls canEditControls={canEdit}>
+          <SettingsView />
+        </FreeSearchProvider>
+      </MemoryRouter>
     )
     return stub
   }
@@ -3327,7 +2597,7 @@ describe("SettingsProviders Tavily rate-tier removed from Settings registry", ()
       (th) => th.textContent?.trim() ?? ""
     )
     const endpointIdx = headers.indexOf("Endpoint")
-    expect(endpointIdx).toBe(2)
+    expect(endpointIdx).toBe(1)
     const tavilyRow = noSlotRowTr("Tavily")
     const endpointCell = tavilyRow.children[endpointIdx] as HTMLElement
     expect(endpointCell.textContent).toContain("api.tavily.com")
@@ -3353,4 +2623,3 @@ describe("SettingsProviders Tavily rate-tier removed from Settings registry", ()
     expect(quotaSrc).toContain("compact")
   })
 })
-

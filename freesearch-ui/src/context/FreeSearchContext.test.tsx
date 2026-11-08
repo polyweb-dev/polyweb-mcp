@@ -22,7 +22,7 @@ import {
  * toggles, mock executeSearch) to live-backend state:
  * - mount: parallel GET /api/v1/providers + GET /api/v1/routing/config +
  *   GET /dashboard?limit=50, per-route failure tolerance (never invented rows)
- * - pessimistic PATCH toggles/priority, POST breaker reset (closed) vs
+ * - pessimistic PATCH toggles, POST breaker reset (closed) vs
  *   local-only trip (open, ZERO fetch), PUT routing config
  * - search and fetch execution moved to the project playground scope (U2)
  * - removeProvider + cacheStats are DELETED from the API
@@ -80,7 +80,6 @@ function installBackend(server: FakeBackend): FetchStub {
         enabled?: unknown
         search_enabled?: unknown
         fetch_enabled?: unknown
-        priority?: unknown
       }
       if (patch.enable_mask !== undefined && typeof patch.enable_mask === "number") {
         entry.enable_mask = patch.enable_mask
@@ -98,9 +97,6 @@ function installBackend(server: FakeBackend): FetchStub {
             ? entry.enable_mask | 4
             : entry.enable_mask & ~4
         }
-      }
-      if (patch.priority !== undefined && typeof patch.priority === "number") {
-        entry.priority = patch.priority
       }
       entry.enabled = (entry.enable_mask & 1) !== 0
       return ok(entry)
@@ -345,47 +341,6 @@ describe("FreeSearchContext (live backend)", () => {
     })
   })
 
-  it("updateProviderPriority PATCHes {priority} and refreshes from the 200", async () => {
-    const { stub, result } = await mountLoaded()
-
-    await act(async () => {
-      await result.current.updateProviderPriority("exa", 1)
-    })
-
-    const patches = stub.requestsTo("/api/v1/providers/exa")
-    expect(patches).toHaveLength(1)
-    expect(patches[0].method).toBe("PATCH")
-    expect(patches[0].body).toEqual({ priority: 1 })
-    await waitFor(() => {
-      expect(result.current.providers.find((p) => p.id === "exa")?.priority).toBe(1)
-    })
-  })
-
-  it("moveProviderPriority issues sequential PATCHes in order, then refreshes providers", async () => {
-    const { stub, result } = await mountLoaded()
-
-    await act(async () => {
-      await result.current.moveProviderPriority("tavily", "up")
-    })
-
-    const patches = stub.requests.filter(
-      (r) => r.method === "PATCH" && r.url.startsWith("/api/v1/providers/")
-    )
-    expect(patches.map((r) => r.url)).toEqual([
-      "/api/v1/providers/tavily",
-      "/api/v1/providers/keenable",
-    ])
-    expect(patches[0].body).toEqual({ priority: 2 })
-    expect(patches[1].body).toEqual({ priority: 3 })
-    // Final refresh re-reads the registry
-    const lastGet = stub.requestsTo("/api/v1/providers").filter((r) => r.method === "GET")
-    expect(lastGet.length).toBeGreaterThanOrEqual(2)
-    await waitFor(() => {
-      const ids = result.current.providers.map((p) => p.id)
-      expect(ids.indexOf("tavily")).toBeLessThan(ids.indexOf("keenable"))
-    })
-  })
-
   it("setCircuitBreaker closed POSTs reset; open trips locally with ZERO fetch", async () => {
     const server = createServer()
     server.providers.find((p) => p.provider_id === "brave")!.circuit_breaker = {
@@ -449,7 +404,6 @@ describe("FreeSearchContext (live backend)", () => {
     expect(puts[puts.length - 1].method).toBe("PUT")
     expect(puts[puts.length - 1].body).toEqual({
       fallback_policy: "first_only",
-      cost_optimization_preset: "balanced",
       max_attempts: 5,
     })
     expect(result.current.fallbackConfig).toEqual({
@@ -508,88 +462,6 @@ describe("FreeSearchContext (live backend)", () => {
       maxAttempts: 3,
     })
   })
-
-  it("moveProviderPriority failure issues a compensating PATCH then refreshes (no duplicate priorities)", async () => {
-    const server = createServer()
-    const { result } = await mountLoaded(server)
-
-    // tavily(P3) up swaps with keenable(P2). The SECOND PATCH fails: the
-    // context must restore tavily to its original priority (3) with a
-    // compensating PATCH, then GET-refresh the registry.
-    let patchCount = 0
-    const stub = installFetchStub((req) => {
-      if (req.method === "PATCH" && req.url.startsWith("/api/v1/providers/")) {
-        patchCount += 1
-        if (patchCount === 2) return err(500, { detail: "cannot persist priority" })
-        const id = backendIdFromUrl(req.url)
-        const entry = server.providers.find((p) => p.provider_id === id)
-        if (!entry) return err(404, { detail: `unknown provider '${id}'` })
-        Object.assign(entry, (req.body ?? {}) as object)
-        return ok(entry)
-      }
-      if (req.url === "/api/v1/providers" && req.method === "GET") {
-        return ok(server.providers)
-      }
-      if (req.url === "/api/v1/routing/config" && req.method === "GET") {
-        return ok(server.routing)
-      }
-      if (req.url.startsWith("/dashboard") && req.method === "GET") {
-        return ok(server.dashboard)
-      }
-      return err(404, { detail: `unhandled test route ${req.method} ${req.url}` })
-    })
-
-    await act(async () => {
-      await result.current.moveProviderPriority("tavily", "up")
-    })
-
-    const patches = stub.requests.filter(
-      (r) => r.method === "PATCH" && r.url.startsWith("/api/v1/providers/")
-    )
-    // First PATCH (tavily→2) + compensating PATCH restoring tavily→3.
-    expect(patches.length).toBeGreaterThanOrEqual(3)
-    expect(patches[patches.length - 1].url).toBe("/api/v1/providers/tavily")
-    expect(patches[patches.length - 1].body).toEqual({ priority: 3 })
-    const gets = stub
-      .requestsTo("/api/v1/providers")
-      .filter((r) => r.method === "GET")
-    expect(gets.length).toBeGreaterThanOrEqual(1)
-    const priorities = result.current.providers.map((p) => p.priority)
-    expect(new Set(priorities).size).toBe(priorities.length)
-  })
-
-  it("updateCostPreset PUTs free_first preserving fallback policy and attempts", async () => {
-    const { stub, result } = await mountLoaded()
-
-    const api = result.current as unknown as {
-      updateCostPreset: (preset: "balanced" | "free_first") => Promise<void>
-    }
-    await act(async () => {
-      await api.updateCostPreset("free_first")
-    })
-
-    const puts = stub.requestsTo("/api/v1/routing/config")
-    expect(puts.length).toBeGreaterThanOrEqual(1)
-    const lastPut = puts[puts.length - 1]
-    expect(lastPut.method).toBe("PUT")
-    expect(lastPut.body).toEqual({
-      fallback_policy: "chained",
-      cost_optimization_preset: "free_first",
-      max_attempts: 3,
-    })
-  })
-
-  it("exposes costOptimizationPreset from the loaded routing config", async () => {
-    const server = createServer()
-    server.routing = routingConfigFixture({ cost_optimization_preset: "free_first" })
-    const { result } = await mountLoaded(server)
-
-    expect(
-      (result.current as unknown as { costOptimizationPreset?: string })
-        .costOptimizationPreset
-    ).toBe("free_first")
-  })
-
 
   it("RF1: dashboard overlay prefers snapshot values with exact limit strings verbatim", async () => {
     const server = createServer()

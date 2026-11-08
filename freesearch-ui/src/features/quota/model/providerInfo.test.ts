@@ -114,6 +114,29 @@ function auth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
   }
 }
 
+describe("providerInfo prices", () => {
+  it("uses the active keyless catalog price instead of a stale priced projection", () => {
+    const base = record("keenable", { supported: true, transport_available: true, auth_mode: "keyless" })
+    const search = { ...base, conversion_profile: { ...base.conversion_profile, source: "unbilled_keyless" } }
+    const info = providerInfo(auth({
+      auth_mode: "keyless",
+      search,
+      crd_views: [{ operation: "search", request_cost_crd: "4" } as never],
+    }), "keenable")
+    expect(info.facts).toContainEqual({ label: "Search cost", value: "Free", note: null })
+    expect(info.facts.some((fact) => fact.value.includes("CRD"))).toBe(false)
+  })
+
+  it("converts a priced operation to dollars", () => {
+    const search = record("brave", { supported: true, transport_available: true })
+    const info = providerInfo(auth({
+      search,
+      crd_views: [{ operation: "search", request_cost_crd: "5" } as never],
+    }), "brave")
+    expect(info.facts).toContainEqual({ label: "Search cost (USD)", value: "$0.005", note: null })
+  })
+})
+
 describe("providerInfo creditNote", () => {
   it("gives Monthly Credits for the Brave-like rail and never states a tier word", () => {
     const info = providerInfo(
@@ -124,8 +147,8 @@ describe("providerInfo creditNote", () => {
       })
     )
     expect(info.creditMode).toBe("free")
-    expect(info.creditNote).toBe("Monthly Credits")
-    expect(info.creditNote).not.toBe("Free Monthly Credits")
+    expect(info.creditNote).toBe("Monthly credits")
+    expect(info.creditNote).not.toBe("Free Monthly credits")
     expect(info.creditNote).not.toContain("Free")
   })
 
@@ -238,28 +261,28 @@ describe("providerInfo Tavily native", () => {
   it("states 1 and 2 Tavily Credits search costs", () => {
     const info = providerInfo(tavilyAuth(), "tavily")
     const search = info.facts.find((fact) => fact.label === "Search cost")
-    expect(search?.value).toBe("1 Tavily Credit")
-    expect(search?.note).toBe("(advanced: 2 Tavily Credits)")
+    expect(search?.value).toBe("1 Tavily credit")
+    expect(search?.note).toBe("(advanced: 2 Tavily credits)")
   })
 
   it("states 1 to 2 Tavily Credits per five URLs extract costs with the Extract label", () => {
     const info = providerInfo(tavilyAuth(), "tavily")
     const extract = info.facts.find((fact) => fact.label === "Extract cost")
-    expect(extract?.value).toBe("1 Tavily Credit per 5 URLs")
-    expect(extract?.note).toBe("(advanced: 2 Tavily Credits)")
+    expect(extract?.value).toBe("1 Tavily credit per 5 URLs")
+    expect(extract?.note).toBe("(advanced: 2 Tavily credits)")
     expect(info.facts.some((fact) => fact.label === "Fetch cost")).toBe(false)
-    expect(info.facts.some((fact) => fact.label === "Fetch CRD cost")).toBe(true)
-    expect(info.facts.some((fact) => fact.label === "Extract CRD cost")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Extract cost (USD)")).toBe(true)
+    expect(info.facts.some((fact) => fact.label === "Fetch cost in CRD")).toBe(false)
   })
 
   it("shares one Search and Fetch Rate Limit row and states the Retry-After delay", () => {
     const info = providerInfo(tavilyAuth(), "tavily")
-    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
+    const rate = info.facts.find((fact) => fact.label === "Search and fetch rate limit")
     expect(rate?.value).toBe("95/100 requests per minute")
     expect(rate?.note).toBe(null)
     expect(info.facts.some((fact) => fact.label === "Minute headroom")).toBe(false)
     expect(info.facts.some((fact) => fact.label === "Rate limit")).toBe(false)
-    const retry = info.facts.find((fact) => fact.label === "Retry-After")
+    const retry = info.facts.find((fact) => fact.label === "Retry after")
     expect(retry?.value).toBe("12 s")
   })
 
@@ -268,9 +291,9 @@ describe("providerInfo Tavily native", () => {
     const native = info.facts.find((fact) => fact.label === "Search cost")
     expect(native?.value).not.toContain("$")
     expect(native?.note).not.toContain("$")
-    const crd = info.facts.find((fact) => fact.label === "Search CRD cost")
-    expect(crd?.value).toBe("8 CRD")
-    expect(crd?.note).toBe("(≈ $0.008)")
+    const usd = info.facts.find((fact) => fact.label === "Search cost (USD)")
+    expect(usd?.value).toBe("$0.008")
+    expect(usd?.note).toBe(null)
   })
 
   it("shows keyless numeric headroom as unknown with no rate row", () => {
@@ -278,7 +301,7 @@ describe("providerInfo Tavily native", () => {
       tavilyAuth({ auth_mode: "keyless", detail: detail({ rate_windows: [] }) }),
       "tavily",
     )
-    expect(info.facts.some((fact) => fact.label === "Search and Fetch Rate Limit")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Search and fetch rate limit")).toBe(false)
     expect(info.facts.some((fact) => fact.label === "Minute headroom")).toBe(false)
   })
 })
@@ -366,10 +389,10 @@ describe("providerInfo Tavily row order", () => {
       "Extract cost",
       "Searches left",
       "Fetches left",
-      "Search CRD cost",
-      "Fetch CRD cost",
-      "Search and Fetch Rate Limit",
-      "Retry-After",
+      "Search cost (USD)",
+      "Extract cost (USD)",
+      "Search and fetch rate limit",
+      "Retry after",
       "Last sync",
     ])
   })
@@ -437,31 +460,31 @@ describe("providerInfo Tavily combined rate", () => {
 
   it.each([
     ["100", "100", "100 requests per minute"],
-    ["1000", "1000", "1000 requests per minute"],
+    ["1000", "1000", "1,000 requests per minute"],
     ["90", "100", "90/100 requests per minute"],
-    ["900", "1000", "900/1000 requests per minute"],
+    ["900", "1000", "900/1,000 requests per minute"],
     ["0", "100", "0/100 requests per minute"],
   ])("shows dev/prod headroom %s/%s", (remaining, limit, value) => {
     const info = providerInfo(rateAuth(remaining, limit), "tavily")
-    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
+    const rate = info.facts.find((fact) => fact.label === "Search and fetch rate limit")
     expect(rate?.value).toBe(value)
   })
 
   it("floors fractional dashboard headroom through callsText", () => {
     const info = providerInfo(rateAuth("100.000000000", "100.000000000"), "tavily")
-    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
+    const rate = info.facts.find((fact) => fact.label === "Search and fetch rate limit")
     expect(rate?.value).toBe("100 requests per minute")
   })
 
   it("shows unknown headroom with a confirmed ceiling override", () => {
     const info = providerInfo(rateAuth("90", "100"), "tavily", false, "1000")
-    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
-    expect(rate?.value).toBe("unknown/1000 requests per minute")
+    const rate = info.facts.find((fact) => fact.label === "Search and fetch rate limit")
+    expect(rate?.value).toBe("Limit 1,000 requests per minute")
   })
 
   it("keeps dashboard headroom once it confirms the override ceiling", () => {
     const info = providerInfo(rateAuth("95", "100"), "tavily", false, "100")
-    const rate = info.facts.find((fact) => fact.label === "Search and Fetch Rate Limit")
+    const rate = info.facts.find((fact) => fact.label === "Search and fetch rate limit")
     expect(rate?.value).toBe("95/100 requests per minute")
   })
 
@@ -470,7 +493,7 @@ describe("providerInfo Tavily combined rate", () => {
       auth({ auth_mode: "keyless", detail: detail({ rate_windows: [] }) }),
       "tavily",
     )
-    expect(info.facts.some((fact) => fact.label === "Search and Fetch Rate Limit")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Search and fetch rate limit")).toBe(false)
   })
 })
 
@@ -536,17 +559,17 @@ describe("providerInfo Tavily precision", () => {
   it("floors native amounts and trims CRD/USD zeros", () => {
     const info = providerInfo(preciseAuth("1.9", "0.2"), "tavily")
     const search = info.facts.find((fact) => fact.label === "Search cost")
-    expect(search?.value).toBe("1 Tavily Credit")
-    const searchCrd = info.facts.find((fact) => fact.label === "Search CRD cost")
-    expect(searchCrd?.value).toBe("8 CRD")
-    expect(searchCrd?.note).toBe("(≈ $0.008)")
+    expect(search?.value).toBe("1 Tavily credit")
+    const searchCrd = info.facts.find((fact) => fact.label === "Search cost (USD)")
+    expect(searchCrd?.value).toBe("$0.008")
+    expect(searchCrd?.note).toBe(null)
   })
 
   it("keeps the 1.6 CRD extract fraction with its USD fraction", () => {
     const info = providerInfo(preciseAuth("1", "0.2"), "tavily")
-    const fetchCrd = info.facts.find((fact) => fact.label === "Fetch CRD cost")
-    expect(fetchCrd?.value).toBe("1.6 CRD")
-    expect(fetchCrd?.note).toBe("(≈ $0.0016)")
+    const fetchCrd = info.facts.find((fact) => fact.label === "Extract cost (USD)")
+    expect(fetchCrd?.value).toBe("$0.0016")
+    expect(fetchCrd?.note).toBe(null)
   })
 
   it("names Monthly Tavily Credits for a monthly Tavily rail", () => {
@@ -557,13 +580,13 @@ describe("providerInfo Tavily precision", () => {
         budget: budget({ allowance_period: "monthly", free_allowance: "1000" }),
       }),
     })
-    expect(providerInfo(rail, "tavily").creditNote).toBe("Monthly Tavily Credits")
+    expect(providerInfo(rail, "tavily").creditNote).toBe("Monthly Tavily credits")
   })
 
   it("rounds a fractional Retry-After delay up to whole seconds", () => {
     const rail = auth({ detail: detail({ retry_after_seconds: 12.2 }) })
     const info = providerInfo(rail, "tavily")
-    expect(info.facts.find((fact) => fact.label === "Retry-After")?.value).toBe("13 s")
+    expect(info.facts.find((fact) => fact.label === "Retry after")?.value).toBe("13 s")
   })
 })
 
@@ -617,10 +640,10 @@ describe("providerInfo wholeRequests", () => {
     const whole = providerInfo(base, "keenable", true)
     expect(
       whole.facts.filter((fact) => fact.label === "Searches left").map((fact) => fact.value),
-    ).toEqual(["99995"])
+    ).toEqual(["99,995"])
     expect(
       whole.facts.filter((fact) => fact.label === "Fetches left").map((fact) => fact.value),
-    ).toEqual(["99995"])
+    ).toEqual(["99,995"])
   })
 
   it("keeps decimal standard calls without the opt-in flag", () => {
@@ -632,7 +655,7 @@ describe("providerInfo wholeRequests", () => {
     const current = providerInfo(base)
     expect(
       current.facts.filter((fact) => fact.label === "Searches left").map((fact) => fact.value),
-    ).toEqual(["99995.00000000"])
+    ).toEqual(["99,995.00000000"])
   })
 
   it("floors request rate limits only with the opt-in flag", () => {
@@ -668,8 +691,8 @@ describe("providerInfo wholeRequests", () => {
         .filter((fact) => fact.label === "Search rate limit" || fact.label === "Fetch rate limit")
         .map((fact) => [fact.label, fact.value, fact.note]),
     ).toEqual([
-      ["Search rate limit", "10 requests per second", "(team)"],
-      ["Fetch rate limit", "100 requests per second", "(team)"],
+      ["Search rate limit", "10 requests per second", "(per team)"],
+      ["Fetch rate limit", "100 requests per second", "(per team)"],
     ])
     expect(
       facts
@@ -732,11 +755,11 @@ describe("providerInfo wholeRequests", () => {
       detail: detail({ reset_rule: "monthly_first" }),
     })
     const info = providerInfo(base, "keenable", true)
-    expect(info.facts.map((fact) => fact.label)).toContain("Search CRD cost")
-    expect(info.facts.map((fact) => fact.label)).toContain("Fetch CRD cost")
-    expect(info.creditNote).toBe("Monthly Credits")
-    const searchCost = info.facts.find((fact) => fact.label === "Search CRD cost")
-    expect(searchCost?.note).toContain("$0.004")
+    expect(info.facts.map((fact) => fact.label)).toContain("Search cost (USD)")
+    expect(info.facts.map((fact) => fact.label)).toContain("Fetch cost (USD)")
+    expect(info.creditNote).toBe("Monthly credits")
+    const searchCost = info.facts.find((fact) => fact.label === "Search cost (USD)")
+    expect(searchCost?.value).toBe("$0.004")
   })
 
   it("keeps exact input strings unchanged", () => {
@@ -825,24 +848,24 @@ describe("providerInfo Firecrawl", () => {
 
   it("produces correct facts for Firecrawl", () => {
     const info = providerInfo(firecrawlAuth(), "firecrawl", true)
-    const searchCrd = info.facts.find((fact) => fact.label === "Search CRD cost")
-    expect(searchCrd?.value).toBe("7.6 CRD")
-    expect(searchCrd?.note).toBe("(≈ $0.0076)")
+    const searchCrd = info.facts.find((fact) => fact.label === "Search cost (USD)")
+    expect(searchCrd?.value).toBe("$0.0076")
+    expect(searchCrd?.note).toBe(null)
 
-    const fetchCrd = info.facts.find((fact) => fact.label === "Fetch CRD cost")
-    expect(fetchCrd?.value).toBe("3.8 CRD")
-    expect(fetchCrd?.note).toBe("(≈ $0.0038)")
+    const fetchCrd = info.facts.find((fact) => fact.label === "Fetch cost (USD)")
+    expect(fetchCrd?.value).toBe("$0.0038")
+    expect(fetchCrd?.note).toBe(null)
 
     const searchesLeft = info.facts.find((fact) => fact.label === "Searches left")
     expect(searchesLeft?.value).toBe("500")
 
     const fetchesLeft = info.facts.find((fact) => fact.label === "Fetches left")
-    expect(fetchesLeft?.value).toBe("1000")
+    expect(fetchesLeft?.value).toBe("1,000")
 
     const rate = info.facts.find((fact) => fact.label === "Rate limit")
     expect(rate?.value).toBe("10 requests per minute")
 
-    expect(info.creditNote).toBe("Monthly Credits")
+    expect(info.creditNote).toBe("Monthly credits")
   })
 })
 
@@ -899,10 +922,10 @@ describe("providerInfo You.com search total", () => {
     const info = providerInfo(youcomAuth(), "youcom")
     const searchesLeft = info.facts.find((fact) => fact.label === "Searches left")
     // Daily 100 + floor(199520/5) = 100 + 39904 = 40004.
-    expect(searchesLeft?.value).toBe("40004")
+    expect(searchesLeft?.value).toBe("40,004")
     expect(searchesLeft?.note).toBe(null)
     const fetchesLeft = info.facts.find((fact) => fact.label === "Fetches left")
-    expect(fetchesLeft?.value).toBe("199520")
+    expect(fetchesLeft?.value).toBe("199,520")
   })
 
   it("keeps the pool-projected search view verbatim without double-counting", () => {
@@ -935,7 +958,7 @@ describe("providerInfo You.com search total", () => {
       ],
     } as unknown as ProviderAuthLimits
     const info = providerInfo(pooled, "youcom")
-    expect(info.facts.find((fact) => fact.label === "Searches left")?.value).toBe("19100")
-    expect(info.facts.find((fact) => fact.label === "Fetches left")?.value).toBe("95500")
+    expect(info.facts.find((fact) => fact.label === "Searches left")?.value).toBe("19,100")
+    expect(info.facts.find((fact) => fact.label === "Fetches left")?.value).toBe("95,500")
   })
 })

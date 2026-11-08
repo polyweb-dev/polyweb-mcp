@@ -72,7 +72,7 @@ When("I submit the playground fetch URL {string}", async ({ page }, url: string)
 
 Then("the playground should show fetch content or an error banner", async ({ page }) => {
   const panel = page.locator("main")
-  const content = panel.getByText(/Parsed Markdown Document/i)
+  const content = panel.getByText(/Parsed markdown/i)
   const errorBanner = panel.locator('p[style*="status-danger"]', {
     hasText: /unreachable|failed|error|unavailable|no provider|timed out|timeout/i,
   })

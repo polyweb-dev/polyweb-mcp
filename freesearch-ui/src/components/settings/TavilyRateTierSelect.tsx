@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from "react"
 import { apiService } from "@/services/api/freesearchApi"
 import { errorMessage } from "@/shared/api/http"
+import { Field } from "@/shared/ui/Field"
+import { fieldDescribedBy } from "@/shared/ui/fieldIds"
+import { Select, type SelectOption } from "@/shared/ui/select"
 import type { ProviderConfig } from "@/domains/providers"
 import { toBackendId } from "@/domains/providers"
 
@@ -18,53 +21,52 @@ export interface TavilyRateTierSelectProps {
 
 type KeyEnvironment = "dev" | "prod"
 
-const RATE_TIER_LABELS: Record<KeyEnvironment, string> = {
-  dev: "Development — 100 requests per minute",
-  prod: "Production — 1000 requests per minute",
-}
-
-/** Card-only short labels without numeric rate counts. */
-const COMPACT_TIER_LABELS: Record<KeyEnvironment, string> = {
+const TIER_NAMES: Record<KeyEnvironment, string> = {
   dev: "Development",
   prod: "Production",
 }
 
-/** Compact keyless text without a numeric rate. */
-const COMPACT_KEYLESS_TEXT = "Keyless access"
+/** The documented minute ceiling of each key environment. */
+const TIER_RATES: Record<KeyEnvironment, string> = {
+  dev: "100 requests per minute",
+  prod: "1,000 requests per minute",
+}
+
+/** Keyless text without a numeric rate. */
+const KEYLESS_TEXT = "Keyless access"
 
 /** The dropdown declares the stored key environment, never a vendor-plan upgrade. */
-const RATE_TIER_HINT =
-  "Declares the current key environment of the stored Tavily key, not a vendor-plan upgrade."
+const RATE_TIER_HINT = "The environment of the stored Tavily key. It does not change your Tavily plan."
 
-/** Same native select tokens as the other settings inputs (compact cell size). */
-const SELECT_BASE =
-  "rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1 text-[12px] outline-none focus-visible:border-[var(--signal)] disabled:opacity-60"
-const SELECT_CLASS = SELECT_BASE + " text-[var(--text)]"
-const COMPACT_SELECT_CLASS = SELECT_BASE + " text-[var(--text-strong)]"
-const LABEL_CLASS = "mb-1 block text-[12px] text-[var(--muted)]"
-const COMPACT_LABEL_CLASS = "mb-1 block text-[12px] text-[var(--text-strong)]"
-
+const ACCESSIBLE_NAME = "Tavily rate tier (key environment)"
+const CONTROL_ID = "tavily-rate-tier"
 const READONLY_CLASS = "text-[12px] text-[var(--muted)]"
 
-/** The card uses a compact field with the strong label color of the Credits title. */
+/** The card uses a compact field without numeric rate text. */
 function tierControlPresentation(compact: boolean) {
   return compact
-    ? {
-        wrapper: "w-fit min-w-0",
-        label: COMPACT_LABEL_CLASS,
-        select: COMPACT_SELECT_CLASS,
-        title: "Rate tier",
-      }
-    : {
-        wrapper: "min-w-[200px]",
-        label: LABEL_CLASS,
-        select: SELECT_CLASS,
-        title: "Rate tier (key environment)",
-      }
+    ? { wrapper: "w-48 min-w-0", title: "Rate tier" }
+    : { wrapper: "w-72 min-w-0", title: "Rate tier (key environment)" }
 }
 
 function isKeyEnvironment(value: string): value is KeyEnvironment {
   return value === "dev" || value === "prod"
+}
+
+/** The full text of one environment: "Development (100 requests per minute)". */
+function fullTierText(environment: KeyEnvironment): string {
+  return TIER_NAMES[environment] + " (" + TIER_RATES[environment] + ")"
+}
+
+/** The options of the control; a missing confirmed value adds a locked Unknown row. */
+function tierOptions(compact: boolean, confirmed: KeyEnvironment | null): SelectOption[] {
+  const options: SelectOption[] = (["dev", "prod"] as const).map((environment) => ({
+    value: environment,
+    label: TIER_NAMES[environment],
+    ...(compact ? {} : { description: TIER_RATES[environment] }),
+  }))
+  if (confirmed === null) options.push({ value: "unknown", label: "Unknown" })
+  return options
 }
 
 /**
@@ -91,7 +93,7 @@ function confirmedEnvironment(
 
 function rateTierText(confirmed: KeyEnvironment | null, compact: boolean): string {
   if (confirmed === null) return "Unknown"
-  return compact ? COMPACT_TIER_LABELS[confirmed] : RATE_TIER_LABELS[confirmed]
+  return compact ? TIER_NAMES[confirmed] : fullTierText(confirmed)
 }
 
 /** Read-only states share one small render path outside the editable field. */
@@ -102,8 +104,7 @@ function readOnlyTierControl(
   compact: boolean,
 ): React.ReactNode | null {
   if (provider.keyVaultStatus !== "configured") {
-    const keylessText = compact ? COMPACT_KEYLESS_TEXT : "Keyless — numeric rate unknown"
-    return <span className={READONLY_CLASS} title={keylessText}>{keylessText}</span>
+    return <span className={READONLY_CLASS}>{KEYLESS_TEXT}</span>
   }
   if (!canEdit) {
     return (
@@ -116,8 +117,8 @@ function readOnlyTierControl(
 }
 
 /**
- * Tavily-only rate-tier control for the Settings registry. One native select
- * edits the confirmed `tavily_key_environment` through one partial PATCH;
+ * Tavily-only rate-tier control. One shared select edits the confirmed
+ * `tavily_key_environment` through one partial PATCH;
  * every other provider renders nothing, and no inference from funds or key
  * text ever replaces the stored confirmed value.
  */
@@ -180,8 +181,7 @@ export const TavilyRateTierSelect: React.FC<TavilyRateTierSelectProps> = ({
     }
   }
 
-  const handleSelect = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const next = event.target.value
+  const handleSelect = (next: string) => {
     if (!isKeyEnvironment(next)) return // Unknown is a display-only state, never a submit.
     if (next === confirmed) return // Unchanged selection: zero writes.
     void save(next)
@@ -189,31 +189,26 @@ export const TavilyRateTierSelect: React.FC<TavilyRateTierSelectProps> = ({
 
   const readOnlyControl = readOnlyTierControl(provider, canEdit, confirmed, compact)
   if (readOnlyControl !== null) return readOnlyControl
+  const describedBy = fieldDescribedBy(CONTROL_ID, confirmationUnknown, error)
   return (
     <div className={presentation.wrapper} title={RATE_TIER_HINT}>
-      <label htmlFor="tavily-rate-tier" className={presentation.label}>
-        {presentation.title}
-      </label>
-      <select
-        id="tavily-rate-tier"
-        aria-label="Tavily rate tier (key environment)"
-        value={confirmed ?? "unknown"}
-        onChange={handleSelect}
-        disabled={saving || confirmed === null}
-        className={presentation.select}
+      <Field
+        id={CONTROL_ID}
+        label={presentation.title}
+        hint={confirmationUnknown ? "Confirmation unavailable" : undefined}
+        error={error}
       >
-        <option value="dev">{compact ? COMPACT_TIER_LABELS.dev : RATE_TIER_LABELS.dev}</option>
-        <option value="prod">{compact ? COMPACT_TIER_LABELS.prod : RATE_TIER_LABELS.prod}</option>
-        {confirmed === null && <option value="unknown">Unknown</option>}
-      </select>
-      {confirmationUnknown && (
-        <p className="mt-1 text-[12px] text-[var(--muted)]">Confirmation unavailable</p>
-      )}
-      {error && (
-        <p role="alert" className="mt-1 text-[12px] text-[var(--status-danger)]">
-          {error}
-        </p>
-      )}
+        <Select
+          id={CONTROL_ID}
+          ariaLabel={ACCESSIBLE_NAME}
+          value={confirmed ?? "unknown"}
+          options={tierOptions(compact, confirmed)}
+          onValueChange={handleSelect}
+          disabled={saving || confirmed === null}
+          invalid={error !== null}
+          {...(describedBy !== undefined ? { ariaDescribedBy: describedBy } : {})}
+        />
+      </Field>
     </div>
   )
 }

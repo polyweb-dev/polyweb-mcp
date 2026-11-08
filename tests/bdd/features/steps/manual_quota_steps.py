@@ -128,4 +128,5 @@ def step_when_clear_quota(context: Any) -> None:
 @then("the manual quota should be missing")
 def step_then_quota_missing(context: Any) -> None:
     assert context.clear_response.status_code == 204
-    assert context.get_after_clear.status_code == 404
+    assert context.get_after_clear.status_code == 200
+    assert context.get_after_clear.json() is None

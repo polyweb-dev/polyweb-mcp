@@ -27,17 +27,28 @@ from freesearch.infrastructure.secrets import (
     ProviderName,
     provider_env_var_names,
 )
-from freesearch.models.credentials import CredentialCreate, CredentialGrantUpsert
-from freesearch.models.projects import BuiltinRole, ProjectCreate, ProjectMemberAdd, ProjectRead
-from freesearch.models.providers import BindingCreate, BindingUpdate
+from freesearch.models.project_permissions import STANDARD
+from freesearch.models.projects import (
+    DEFAULT_INSTALLATION_ACCOUNT_ID,
+    BuiltinRole,
+    CredentialOwnerScope,
+    ProjectCreate,
+    ProjectMemberAdd,
+    ProjectRead,
+)
 from freesearch.models.users import UserPrincipal
+from freesearch.persistence.credentials import CredentialRepository
+from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.credentials import CredentialService
+from freesearch.services.credentials import credential_secret_slot
+from freesearch.services.pool_materializer import materialize_pools
 from freesearch.services.projects import ProjectService
-from freesearch.services.provider_bindings import ProviderBindingService, provider_capability
+from freesearch.services.provider_bindings import provider_capability
 from freesearch.services.users import AuthService
 
 DEV_DATABASE = "freesearch.dev.db"
+PROVIDER_NAMES = {"brave": "Brave Search", "exa": "Exa", "you": "You.com"}
 # Deliberately public fixture password, for this disposable local database only.
 DEV_PASSWORD = "FreeSearchDev123!"
 USER_EMAILS = (
@@ -112,7 +123,7 @@ async def seed_projects(
     for name, slug, admins, members in PROJECTS:
         administrator = users[admins[0]]
         project = await service.create_project(
-            users[0],
+            administrator,
             ProjectCreate(name=name, slug=slug, initial_admin_user_id=administrator.id),
         )
         for index in (*admins[1:], *members):
@@ -126,6 +137,22 @@ async def seed_projects(
     return seeded
 
 
+async def seed_permissions(
+    repository: SQLiteRepository,
+    users: Sequence[UserPrincipal],
+    projects: Sequence[tuple[ProjectRead, UserPrincipal]],
+) -> None:
+    """Give each developer the standard search, fetch, traces and usage bits."""
+
+    async with repository.session() as session:
+        members = ProjectRepository(session)
+        for (project, _), (_, _, _, indices) in zip(projects, PROJECTS, strict=True):
+            for index in indices:
+                if not await members.set_member_permissions(project.id, users[index].id, STANDARD):
+                    raise ValueError("Seeded project member not found.")
+        await session.commit()
+
+
 async def seed_providers(
     repository: SQLiteRepository,
     settings: Settings,
@@ -133,37 +160,47 @@ async def seed_providers(
     projects: Sequence[tuple[ProjectRead, UserPrincipal]],
     keys: Mapping[ProviderName, SecretStr],
 ) -> None:
-    """Store one shared encrypted credential per provider, grant it, and enable bindings."""
+    """Store admin1's vault keys and assign one pool per provider to Alpha."""
 
     store = EncryptedDbSecretStore(repository, load_secret_codec(settings))
-    credentials = CredentialService(repository, store)
-    bindings = ProviderBindingService(repository)
-    for priority, (provider, secret) in enumerate(keys.items(), start=1):
+    project, _ = projects[0]
+    for provider, secret in keys.items():
+        display_name = PROVIDER_NAMES.get(provider.value, provider.value.capitalize())
         operations = provider_capability(provider.value)
-        credential = await credentials.create_system_credential(
-            users[0],
-            CredentialCreate(provider_type=provider.value, label=f"dev-{provider}", secret=secret),
-        )
-        for project, administrator in projects:
-            await credentials.put_grant(
-                users[0],
-                credential.id,
-                project.id,
-                CredentialGrantUpsert(permitted_operations=operations),
+        async with repository.session() as session:
+            credential = await CredentialRepository(session).insert_credential(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                provider_type=provider.value,
+                owner_scope=CredentialOwnerScope.SYSTEM,
+                owner_project_id=None,
+                owner_user_id=users[0].id,
+                label=f"dev-{provider}",
+                auth_mode="api_key",
+                created_by=users[0].id,
             )
-            binding = await bindings.create_binding(
-                administrator,
-                project.id,
-                BindingCreate(
-                    credential_id=credential.id, route_label=provider.value, priority=priority
+            await store.create_slot_in_session(
+                session,
+                credential_secret_slot(credential.id, credential.generation),
+                secret.get_secret_value(),
+            )
+            await KeyPoolRepository(session).create(
+                credential_id=credential.id,
+                project_id=project.id,
+                provider_type=provider.value,
+                created_by=users[0].id,
+                values=KeyPoolValues.model_validate(
+                    {
+                        "label": f"Alpha - {display_name}",
+                        "rate_limit": 60,
+                        "budget_limit": 20_000_000,
+                        "operations": operations,
+                    }
                 ),
             )
-            await bindings.update_binding(
-                administrator,
-                project.id,
-                binding.id,
-                BindingUpdate(enabled_operations=operations),
-            )
+            await session.commit()
+    async with repository.session() as session:
+        await materialize_pools(session, project_id=project.id)
+        await session.commit()
 
 
 async def seed_database(
@@ -182,6 +219,7 @@ async def seed_database(
         auth = AuthService(settings, repository=repository)
         users = await seed_users(auth, password)
         projects = await seed_projects(ProjectService(repository), users)
+        await seed_permissions(repository, users, projects)
         await seed_providers(repository, settings, users, projects, keys)
         return [project for project, _ in projects]
 

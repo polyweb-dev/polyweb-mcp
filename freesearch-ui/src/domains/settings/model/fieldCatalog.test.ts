@@ -12,10 +12,8 @@ describe("field catalog", () => {
       "execution.default_timeout_seconds": "Timeout (seconds)",
       "execution.max_fanout_concurrency": "Fan-out concurrency",
       "execution.cache_ttl_seconds": "Cache lifetime (seconds)",
-      "trace.sampling_rate": "Sampling rate",
       "trace.detail": "Payload detail",
-      "trace.payload_redaction": "Redaction",
-      "trace.retention_days": "Retention (days)",
+      "trace.retention_days": "Retention",
     })
     expect(fieldLabel("system.max_timeout_seconds")).toBe("system.max_timeout_seconds")
   })
@@ -26,6 +24,6 @@ describe("field catalog", () => {
     expect(formatSettingsValue("routing.preferred_providers", [])).toBe("None")
     expect(formatSettingsValue("routing.preferred_providers", ["tavily", "exa"])).toBe("tavily, exa")
     expect(formatSettingsValue("trace.retention_days", 30)).toBe("30")
-    expect(formatSettingsValue("trace.retention_days", null)).toBe("Inherited")
+    expect(formatSettingsValue("trace.retention_days", null)).toBe("Keep all traces")
   })
 })

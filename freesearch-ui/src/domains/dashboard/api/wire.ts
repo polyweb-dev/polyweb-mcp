@@ -40,6 +40,6 @@ export interface BackendDashboard {
    * so a partial payload never becomes a fabricated balance.
    */
   provider_limits?: unknown[]
-  crd_usage_totals?: unknown[]
+  spend_totals?: unknown[]
   generated_at: string
 }

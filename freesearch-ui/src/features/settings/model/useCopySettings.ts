@@ -8,9 +8,9 @@ export const COPY_PREVIEW_FAILED = "The preview could not be loaded."
 export const COPY_APPLY_FAILED = "The settings could not be copied."
 export const COPY_FORBIDDEN = "You do not have permission to copy these settings."
 
-/** "Copied 3 settings." */
+/** "Copied 1 setting." / "Copied 3 settings." */
 export function copiedNotice(count: number): string {
-  return `Copied ${count} settings.`
+  return `Copied ${count} ${count === 1 ? "setting" : "settings"}.`
 }
 
 export interface CopySettingsController {
@@ -22,7 +22,7 @@ export interface CopySettingsController {
   choices: readonly CopyBinding[]
   selected: ReadonlySet<string>
   toggleBinding: (bindingId: string, on: boolean) => void
-  /** The current preview; any change to source, mode or selection clears it. */
+  /** The current preview; a change to source or mode clears it. */
   preview: CopyPlan | null
   pending: boolean
   error: string | null
@@ -67,8 +67,10 @@ function failure(error: unknown, fallback: string): string {
  *
  * Preview reads the source and target revisions and sends them with the
  * selected binding versions; nothing is written. Apply echoes exactly the
- * preview's three revisions and the versions of the selected eligible
- * bindings. Unmount (dialog close, project switch) aborts a running preview.
+ * preview's three revisions and the versions of the currently selected
+ * eligible bindings; a binding toggle keeps the preview because the field
+ * plan does not depend on it and apply checks each selected version.
+ * Unmount (dialog close, project switch) aborts a running preview.
  */
 export function useCopySettings(targetProjectId: string): CopySettingsController {
   const [sourceId, setSource] = useState("")
@@ -102,7 +104,6 @@ export function useCopySettings(targetProjectId: string): CopySettingsController
   }
 
   const toggleBinding = (bindingId: string, on: boolean) => {
-    setPreview(null)
     setSelected((previous) => {
       const next = new Set(previous)
       if (on) next.add(bindingId)

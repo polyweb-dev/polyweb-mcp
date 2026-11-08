@@ -1,7 +1,7 @@
 """Load every SQLAlchemy row module so ``Base.metadata`` covers the whole schema.
 
 Alembic owns table creation; this metadata is the typed mirror that tests
-compare against a database migrated to ``0001_alpha_baseline``.
+compare against a database migrated to the current head.
 """
 
 from types import ModuleType
@@ -15,6 +15,7 @@ from freesearch.persistence import (
     bindings,
     credentials,
     execution_authority,
+    key_pools,
     limit_rows,
     oauth_grants,
     pools,
@@ -33,6 +34,7 @@ ROW_MODULES: tuple[ModuleType, ...] = (
     bindings,
     credentials,
     execution_authority,
+    key_pools,
     limit_rows,
     oauth_grants,
     pools,

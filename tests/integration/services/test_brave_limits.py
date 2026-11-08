@@ -180,7 +180,7 @@ async def test_zero_funds_deny_with_non_retryable_402(repository: SQLiteReposito
         raise AssertionError("admission must deny")
     except LimitDeniedError as exc:
         assert exc.status_code == 402
-        assert exc.error.code == "crd_exhausted"
+        assert exc.error.code == "budget_exhausted"
         assert exc.error.retryable is False
         assert exc.error.details.get("origin") == "local"
 

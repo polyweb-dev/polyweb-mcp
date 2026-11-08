@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter, useLocation } from "react-router"
+import { MemoryRouter, useLocation, useNavigate } from "react-router"
 import App from "@/App"
 import { deferred, err, installAuthStub, ok } from "@/test/fetchMock"
 import type { FetchHandler } from "@/test/fetchMock"
@@ -13,6 +13,7 @@ import {
   PROJECT_ALPHA_ID,
   PROJECT_BETA_ID,
   PROJECT_MEMBER_PERMISSIONS,
+  SYSTEM_ADMIN_PERMISSIONS,
   answerWorkspaceAccess,
   projectFixture,
   systemAccessFixture,
@@ -33,7 +34,13 @@ const ACCESS: WorkspaceAccessOptions = {
 }
 
 function LocationProbe() {
-  return <div data-testid="location">{useLocation().pathname}</div>
+  const { pathname, search } = useLocation()
+  return <div data-testid="location">{`${pathname}${search}`}</div>
+}
+
+function BackProbe() {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate(-1)}>Go back</button>
 }
 
 function controlRoutes(req: Parameters<FetchHandler>[0]): Response {
@@ -137,6 +144,57 @@ describe("DashboardShell project scope", () => {
 })
 
 describe("DashboardShell former global sections", () => {
+  it.each(["/routing", "/system/routing"])("redirects %s to the last readable project's Providers", async (path) => {
+    writeLastProject(adminAccountFixture().id, PROJECT_ALPHA_ID)
+    renderWithAccess(path)
+
+    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_ALPHA_ID}/providers`))
+    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Providers" })).toBeInTheDocument()
+    expect(within(screen.getByRole("navigation", { name: "Primary" })).queryByRole("link", { name: "Routing" })).toBeNull()
+  })
+
+  it.each(["/routing", "/system/routing"])("redirects %s to Projects without a remembered project", async (path) => {
+    renderWithAccess(path)
+    await waitFor(() => expect(location()).toBe("/projects"))
+  })
+
+  it("redirects Routing to Projects when the remembered project is no longer readable", async () => {
+    writeLastProject(adminAccountFixture().id, PROJECT_BETA_ID)
+    renderWithAccess("/routing", { ...ACCESS, projects: [ALPHA] })
+    await waitFor(() => expect(location()).toBe("/projects"))
+  })
+
+  it("replaces the retired Routing URL in browser history", async () => {
+    writeLastProject(adminAccountFixture().id, PROJECT_ALPHA_ID)
+    installImmediateLocks()
+    installFakeChannel()
+    installAuthStub({ account: adminAccountFixture() }, (req) => answerWorkspaceAccess(req, ACCESS) ?? controlRoutes(req))
+    render(
+      <MemoryRouter initialEntries={["/account", "/routing"]}>
+        <App />
+        <LocationProbe />
+        <BackProbe />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_ALPHA_ID}/providers`))
+    await userEvent.click(screen.getByRole("button", { name: "Go back" }))
+    await waitFor(() => expect(location()).toBe("/account"))
+  })
+
+  it("redirects the retired Accounts URL to the last readable project", async () => {
+    writeLastProject(adminAccountFixture().id, PROJECT_BETA_ID)
+    renderWithAccess("/admin/users")
+
+    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_BETA_ID}`))
+    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Beta" })).toBeInTheDocument()
+  })
+
+  it("redirects the retired Accounts URL to Projects without a remembered project", async () => {
+    renderWithAccess("/admin/users")
+    await waitFor(() => expect(location()).toBe("/projects"))
+  })
+
   it.each([
     ["/playground", "playground", "Playground"],
     ["/activity", "activity", "Activity"],
@@ -169,21 +227,21 @@ describe("DashboardShell former global sections", () => {
 describe("DashboardShell access states", () => {
   it("shows the loading status on a gated route while system access loads", async () => {
     const gate = deferred<Response>()
-    renderShell("/settings", adminAccountFixture(), (req) =>
+    renderShell("/system/providers", adminAccountFixture(), (req) =>
       req.url === "/api/v1/system/access" ? gate.promise : answerWorkspaceAccess(req, ACCESS) ?? controlRoutes(req)
     )
     const status = await screen.findByText("Loading workspace…")
     expect(status).toHaveAttribute("role", "status")
-    expect(location()).toBe("/settings")
+    expect(location()).toBe("/system/providers")
     gate.resolve(ok(systemAccessFixture()))
-    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Settings" })).toBeInTheDocument()
-    expect(location()).toBe("/settings")
+    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Providers" })).toBeInTheDocument()
+    expect(location()).toBe("/system/providers")
   })
 
   it("shows the failure alert with Retry and recovers on a successful retry", async () => {
     let fail = true
     const user = userEvent.setup()
-    renderShell("/routing", adminAccountFixture(), (req) => {
+    renderShell("/system/quotas", adminAccountFixture(), (req) => {
       if (req.url === "/api/v1/system/access" && fail) return err(503, null)
       return answerWorkspaceAccess(req, ACCESS) ?? controlRoutes(req)
     })
@@ -193,29 +251,34 @@ describe("DashboardShell access states", () => {
     expect(screen.getByRole("navigation", { name: "Primary" })).toBeInTheDocument()
     fail = false
     await user.click(screen.getByRole("button", { name: "Retry" }))
-    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Routing" })).toBeInTheDocument()
+    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Quotas" })).toBeInTheDocument()
   })
 
   it.each([
-    ["/system/credentials", "System credentials"],
-    ["/system/capacity", "Capacity"],
-  ])("opens %s for the system administrator", async (path, heading) => {
-    renderWithAccess(path)
+    ["/system/credentials", "Keys and pools", "/account/keys"],
+    ["/system/capacity", "Keys and pools", "/account/keys"],
+    ["/system/keys", "Keys and pools", "/account/keys"],
+    ["/settings?tab=keys", "Keys and pools", "/account/keys"],
+    ["/providers?tab=keys", "Keys and pools", "/account/keys"],
+    ["/system/providers?other=1&tab=keys", "Keys and pools", "/account/keys"],
+    ["/system/providers?tab=credentials", "Keys and pools", "/account/keys"],
+  ])("opens %s for the system administrator", async (path, heading, landed) => {
+    renderWithAccess(path, { ...ACCESS, systemPermissions: [...SYSTEM_ADMIN_PERMISSIONS, "vault.manage"] })
     expect(await within(await screen.findByRole("main")).findByRole("heading", { name: heading })).toBeInTheDocument()
-    expect(location()).toBe(path)
+    await waitFor(() => expect(location()).toBe(landed))
   })
 
-  it("opens Capacity with allocation management alone and denies System credentials", async () => {
+  it("denies the vault with allocation management alone", async () => {
     renderWithAccess("/system/credentials", { ...ACCESS, systemPermissions: ["system.allocations.manage"] }, agentAccountFixture())
     await waitFor(() => expect(location()).toBe("/projects"))
     const primary = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(primary).getByRole("link", { name: "Capacity" })).toHaveAttribute("href", "/system/capacity")
-    expect(within(primary).queryByRole("link", { name: "System credentials" })).toBeNull()
+    expect(within(primary).queryByRole("link", { name: "Capacity" })).toBeNull()
+    expect(within(primary).queryByRole("link", { name: "Providers" })).toBeNull()
   })
 
   it("redirects an unauthorized direct URL through the landing to the project list", async () => {
     renderWithAccess("/settings", { ...ACCESS, systemPermissions: [] }, agentAccountFixture())
     await waitFor(() => expect(location()).toBe("/projects"))
-    expect(within(screen.getByRole("navigation", { name: "Primary" })).queryByRole("link", { name: "Provider settings" })).toBeNull()
+    expect(within(screen.getByRole("navigation", { name: "Primary" })).queryByRole("link", { name: "Providers" })).toBeNull()
   })
 })

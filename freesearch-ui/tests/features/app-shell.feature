@@ -2,7 +2,8 @@ Feature: Dashboard application shell
   The dashboard keeps its primary workspaces reachable from the sidebar.
   C4 URL routing: every workspace is a router link (NavLink) and the URL
   tracks the active view. TabId is unchanged — the "quotas" tab renders at
-  the "/usage" path behind the "Provider usage" link. Playground, Activity
+  the "/system/quotas" path behind the "Quotas" link and System Providers at
+  "/system/providers" behind the "Providers" link. Playground, Activity
   and Usage are project sections (U2) behind the Project navigation.
 
   Background:
@@ -21,12 +22,9 @@ Feature: Dashboard application shell
     When I follow the "Usage" link of the Project navigation
     Then I should see the "Usage" heading
     And the page URL path should be the "usage" section of project Alpha
-    When I follow the "Routing" sidebar link
-    Then I should see the "Routing" heading
-    And the page URL path should be "/routing"
-    When I follow the "Provider usage" sidebar link
-    Then I should see the "Usage" heading
-    And the page URL path should be "/usage"
-    When I follow the "Provider settings" sidebar link
-    Then I should see the "Settings" heading
-    And the page URL path should be "/settings"
+    When I follow the "Quotas" sidebar link
+    Then I should see the "Quotas" heading
+    And the page URL path should be "/system/quotas"
+    When I follow the "Providers" sidebar link
+    Then I should see the "Providers" heading
+    And the page URL path should be "/system/providers"

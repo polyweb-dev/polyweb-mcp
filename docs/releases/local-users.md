@@ -215,7 +215,7 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 An absent, empty, or short value leaves every account route at HTTP 503. The
 browser then shows its configuration state message instead of a sign-in form, and
 it names this variable in that message. `POST /auth/register`,
-`POST /auth/jwt/login`, `POST /api/v1/users`, and the refresh route all answer
+`POST /auth/jwt/login`, and the refresh route all answer
 503 until the value is present and the API process restarts.
 
 Keep the real value in the local environment file and out of the commit, the
@@ -305,16 +305,13 @@ one origin. A `BroadcastChannel` carries a session-change hint only. A browser
 without Web Locks or `BroadcastChannel` receives a compatibility error before
 any cookie request.
 
-`POST /api/v1/users` creates one standalone account for an Admin caller and
-returns the safe projection of that new account. A Developer, an Agent, and an
-anonymous caller receive HTTP 403 or HTTP 401 before any creation. The legacy
-`GET /api/v1/users/{user_id}` and `PATCH /api/v1/users/{user_id}/role` paths stay
-registered as compatibility boundaries, and they deny every authenticated caller.
+Global account listing and creation are no longer exposed by this app. Public
+registration remains available. The legacy `GET /api/v1/users/{user_id}` path
+denies authenticated callers; the role-change path is removed.
 
 One permission helper serves the navigation filter and the route gate. An Agent
 sees the Playground, the Activity view, and the Account view. A Developer and an
-Admin also see the Routing, the Usage, and the Settings views. Only an Admin
-reaches the account-creation screen.
+Admin also see the Routing, the Usage, and the Settings views.
 
 The playground snapshot now uses one key per account:
 `freesearch:playground:v1:<account-uuid>`. The client discards the legacy

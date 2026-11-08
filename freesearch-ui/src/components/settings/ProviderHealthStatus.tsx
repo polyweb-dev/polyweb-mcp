@@ -1,61 +1,44 @@
-import React from "react"
+import type { ProviderHealthStatus as Health } from "@/domains/providers"
+import { StatusDot, type StatusTone } from "@/shared/ui/StatusDot"
+import { formatDateTime, formatLatency, formatRelativeTime } from "@/shared/lib/formatTime"
+import type { TimedTestResult } from "./providerDisplay"
 
-const HEALTH_CONFIG: Record<
-  string,
-  { label: string; dotClass: string; textClass: string; bgClass: string }
-> = {
-  healthy: {
-    label: "Healthy",
-    dotClass: "bg-[#22c55e]",
-    textClass: "text-[#22c55e]",
-    bgClass: "bg-[#22c55e]/15",
-  },
-  offline: {
-    label: "Offline",
-    dotClass: "bg-[#eab308]",
-    textClass: "text-[#eab308]",
-    bgClass: "bg-[#eab308]/15",
-  },
-  degraded: {
-    label: "Degraded",
-    dotClass: "bg-[#f59e0b]",
-    textClass: "text-[#f59e0b]",
-    bgClass: "bg-[#f59e0b]/15",
-  },
-  rate_limited: {
-    label: "Rate limited",
-    dotClass: "bg-[#f97316]",
-    textClass: "text-[#f97316]",
-    bgClass: "bg-[#f97316]/15",
-  },
-  circuit_broken: {
-    label: "Circuit broken",
-    dotClass: "bg-[#ef4444]",
-    textClass: "text-[#ef4444]",
-    bgClass: "bg-[#ef4444]/15",
-  },
-  open: {
-    label: "Open",
-    dotClass: "bg-[#ef4444]",
-    textClass: "text-[#ef4444]",
-    bgClass: "bg-[#ef4444]/15",
-  },
+interface ProviderHealthStatusProps {
+  result: TimedTestResult | undefined
+  testing: boolean
+  now: number
+  health: Health
+  checkedAt: string | null
 }
 
-export const HealthStatus: React.FC<{ status: string }> = ({ status }) => {
-  const config = HEALTH_CONFIG[status] ?? {
-    label: status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-    dotClass: "bg-[var(--muted)]",
-    textClass: "text-[var(--muted)]",
-    bgClass: "bg-white/[0.06]",
-  }
+const HEALTH: Record<Health, { label: string; tone: StatusTone }> = {
+  healthy: { label: "Healthy", tone: "positive" },
+  degraded: { label: "Degraded", tone: "warning" },
+  rate_limited: { label: "Rate limited", tone: "warning" },
+  circuit_broken: { label: "Temporarily paused", tone: "negative" },
+  offline: { label: "Unavailable", tone: "negative" },
+}
 
+/** Latest known call or newer session test, with its exact time on hover. */
+export function ProviderHealthStatus({ result, testing, now, health, checkedAt }: ProviderHealthStatusProps) {
+  if (testing) return <StatusDot tone="neutral" label="Testing" />
+  const callAt = checkedAt === null ? NaN : Date.parse(checkedAt)
+  if (result !== undefined && (!Number.isFinite(callAt) || result.checkedAt > callAt)) {
+    const time = formatDateTime(new Date(result.checkedAt).toISOString())
+    const detail = result.success ? formatLatency(result.latencyMs) : result.message
+    return (
+      <span title={`Last test: ${time} · ${detail}`}>
+        <StatusDot tone={result.success ? "positive" : "negative"} label={`${result.success ? "Healthy" : "Failing"} · ${formatRelativeTime(result.checkedAt, now)}`} />
+      </span>
+    )
+  }
+  if (!Number.isFinite(callAt) || checkedAt === null) {
+    return <span className="text-[var(--muted)]" title="No result yet">—</span>
+  }
+  const status = HEALTH[health]
   return (
-    <span
-      className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-medium ${config.bgClass} ${config.textClass}`}
-    >
-      <span aria-hidden="true" className={`size-2 rounded-full ${config.dotClass}`} />
-      <span>{config.label}</span>
+    <span title={`Last call: ${formatDateTime(checkedAt)}`}>
+      <StatusDot tone={status.tone} label={`${status.label} · ${formatRelativeTime(callAt, now)}`} />
     </span>
   )
 }

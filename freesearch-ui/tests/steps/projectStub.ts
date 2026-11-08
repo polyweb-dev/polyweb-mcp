@@ -17,6 +17,7 @@ import {
   resetProjectActivityStub,
 } from "./projectActivityStub"
 import { installProviderConfigRoutes, resetProviderConfigStub } from "./providerConfigStub"
+import { installVaultRoutes, resetVaultStub, vaultOwner } from "./vaultStub"
 
 /**
  * In-memory projects backend for project-shell and project API key scenarios.
@@ -67,6 +68,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "settings.copy",
     "providers.read",
     "providers.configure",
+    "providers.supply",
     "credentials.manage_private",
     "tokens.manage",
     "routing.write",
@@ -102,6 +104,7 @@ interface StubMember {
   status: "active" | "suspended"
   roles: string[]
   version: number
+  permissions?: number
 }
 
 interface StubApiKey {
@@ -169,6 +172,7 @@ export function resetProjectStub(): void {
   state.systemPermissions = []
   resetProjectActivityStub()
   resetProviderConfigStub()
+  resetVaultStub()
   projectReadTraffic.length = 0
   state.alphaMembersDelayMs = 0
   state.apiKeySeq = 0
@@ -208,7 +212,10 @@ export function setProjectStubAccount(
   state.systemPermissions = [...systemPermissions]
   for (const project of state.projects) {
     for (const member of project.members) {
-      if (member.email === "") member.email = email
+      if (member.email === "") {
+        member.email = email
+        member.user_id = accountId
+      }
     }
   }
 }
@@ -237,7 +244,7 @@ export function setProjectStubRoles(projectName: string, roles: string[]): void 
   const member = project.members.find((m) => m.email === state.userEmail)
   if (member === undefined) {
     project.members.push({
-      user_id: USER_ID,
+      user_id: state.accountId,
       email: state.userEmail,
       status: "active",
       roles,
@@ -356,7 +363,59 @@ function permissionsOf(member: StubMember | null): string[] {
   for (const role of member.roles) {
     for (const permission of ROLE_PERMISSIONS[role] ?? []) permissions.add(permission)
   }
+  if (member.permissions !== undefined && !member.roles.includes("project_admin")) {
+    for (const [bit, action] of MEMBER_BITS) {
+      if ((member.permissions & bit) !== 0) permissions.add(action)
+      else permissions.delete(action)
+    }
+  }
   return [...permissions].sort()
+}
+
+function defaultProjectOwner(project: StubProject): { user_id: string; email: string } | null {
+  const member = memberOf(project)
+  return member?.roles.includes("project_admin") ? { user_id: member.user_id, email: member.email } : null
+}
+
+function projectPermissions(project: StubProject, member: StubMember): string[] {
+  const permissions = new Set(permissionsOf(member))
+  const owner = vaultOwner(project.id, defaultProjectOwner(project))
+  if (member.user_id === owner?.user_id) permissions.add("providers.supply")
+  else permissions.delete("providers.supply")
+  return [...permissions].sort()
+}
+
+const MEMBER_BITS: ReadonlyArray<readonly [number, string]> = [
+  [1, "search.execute"], [2, "fetch.execute"], [4, "traces.read"], [8, "usage.read"],
+  [16, "settings.write"], [32, "settings.copy"], [64, "providers.configure"], [128, "tokens.manage"],
+]
+
+function memberWire(project: StubProject, member: StubMember): Record<string, unknown> {
+  const admin = member.roles.includes("project_admin")
+  const owner = vaultOwner(project.id, defaultProjectOwner(project))
+  return {
+    project_id: project.id, user_id: member.user_id, email: member.email, status: member.status,
+    roles: [...member.roles].sort(), version: member.version,
+    role: admin ? "admin" : "developer",
+    permissions: (member.permissions ?? (admin ? 255 : 15)) | (owner?.user_id === member.user_id ? 32768 : 0),
+    provider_owner: owner?.user_id === member.user_id,
+  }
+}
+
+function applyMemberChange(member: StubMember, change: Record<string, unknown>): void {
+  if (change.status === "active" || change.status === "suspended") member.status = change.status
+  if (change.role === "admin" || change.role === "project_admin") member.roles = ["project_admin"]
+  if (change.role === "developer" || change.role === "project_member") member.roles = ["project_member"]
+  if (typeof change.permissions === "number") member.permissions = change.permissions & 255
+  member.version += 1
+}
+
+function lastAdminConflict(project: StubProject, changes: Array<{ member: StubMember; change: Record<string, unknown> }>): boolean {
+  return !project.members.some((member) => {
+    const change = changes.find((entry) => entry.member === member)?.change
+    const role = change?.role ?? (member.roles.includes("project_admin") ? "admin" : "developer")
+    return (change?.status ?? member.status) === "active" && (role === "admin" || role === "project_admin")
+  })
 }
 
 async function json(route: Route, body: unknown, status = 200): Promise<void> {
@@ -625,6 +684,14 @@ export async function installProjectStub(
     )
   }
 
+  // Grants and capacity use the installation-wide list, including archived
+  // projects, rather than just the signed-in account's memberships.
+  await page.route((url) => url.pathname === "/api/v1/system/projects", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    const includeArchived = new URL(route.request().url()).searchParams.get("include_archived") === "true"
+    return json(route, state.projects.filter((project) => includeArchived || project.status !== "archived").map(projectWire))
+  })
+
   await page.route((url) => url.pathname === "/api/v1/projects", (route) => {
     const method = route.request().method()
     if (method === "GET") {
@@ -680,7 +747,7 @@ export async function installProjectStub(
       if (project === null || member === null) return empty(route, 404)
       return json(route, {
         project_id: project.id,
-        permissions: permissionsOf(member),
+        permissions: projectPermissions(project, member),
         roles: [...member.roles].sort(),
         policy_revision: member.version,
       })
@@ -694,8 +761,22 @@ export async function installProjectStub(
       const project = projectOf(url)
       const member = project === null ? null : memberOf(project)
       if (project === null || member === null) return empty(route, 404)
+      const method = route.request().method()
+      if (method === "POST") {
+        if (!permissionsOf(member).includes("members.manage")) return empty(route, 403)
+        const input = readBody(route) ?? {}
+        if (typeof input.email !== "string" || !input.email.includes("@")) return json(route, { detail: "Invalid email" }, 400)
+        if (project.members.some((entry) => entry.email === input.email)) return conflict(route, "MEMBER_EXISTS", "Member already exists")
+        const added: StubMember = {
+          user_id: `dddddddd-4444-4444-8444-${String(project.members.length + 1).padStart(12, "0")}`,
+          email: input.email, status: "active",
+          roles: [input.initial_role === "project_admin" ? "project_admin" : "project_member"], version: 1,
+        }
+        project.members.push(added)
+        return json(route, memberWire(project, added), 201)
+      }
+      if (method !== "GET") return route.fallback()
       if (!permissionsOf(member).includes("members.read")) return empty(route, 403)
-      if (route.request().method() !== "GET") return route.fallback()
       if (project.name === "Alpha" && state.alphaMembersDelayMs === -1) {
         await new Promise<void>((resolve) => {
           alphaMembersRelease = resolve
@@ -705,17 +786,78 @@ export async function installProjectStub(
       }
       return json(
         route,
-        project.members.map((m) => ({
-          project_id: project.id,
-          user_id: m.user_id,
-          email: m.email,
-          status: m.status,
-          roles: [...m.roles].sort(),
-          version: m.version,
-        }))
+        project.members.map((m) => memberWire(project, m))
       )
     }
   )
+
+  await page.route(
+    (url) => /^\/api\/v1\/projects\/[0-9a-f-]{36}\/members\/[^/]+(?:\/roles\/[^/]+)?$/.test(url.pathname),
+    (route) => {
+      const url = new URL(route.request().url())
+      const project = projectOf(url)
+      const actor = project === null ? null : memberOf(project)
+      if (project === null || actor === null) return empty(route, 404)
+      if (!permissionsOf(actor).includes("members.manage")) return empty(route, 403)
+      const parts = url.pathname.split("/")
+      const method = route.request().method()
+      const input = readBody(route) ?? {}
+      if (parts[6] === "bulk" && method === "PATCH") {
+        if (!Array.isArray(input.changes)) return empty(route, 400)
+        const changes = input.changes.map((change: Record<string, unknown>) => ({
+          member: project.members.find((entry) => entry.user_id === change.user_id), change,
+        }))
+        if (changes.some((entry) => entry.member === undefined)) return empty(route, 404)
+        const valid = changes as Array<{ member: StubMember; change: Record<string, unknown> }>
+        if (lastAdminConflict(project, valid)) return conflict(route, "LAST_ADMIN", "A project must keep an active admin")
+        for (const entry of valid) applyMemberChange(entry.member, entry.change)
+        return json(route, valid.map((entry) => memberWire(project, entry.member)))
+      }
+      const target = project.members.find((entry) => entry.user_id === parts[6])
+      if (!target) return empty(route, 404)
+      if (parts[7] === "roles" && (method === "PUT" || method === "DELETE")) {
+        if (!permissionsOf(actor).includes("roles.assign")) return empty(route, 403)
+        const role = parts[8]
+        if (method === "PUT" && !target.roles.includes(role)) target.roles.push(role)
+        if (method === "DELETE") target.roles = target.roles.filter((item) => item !== role)
+        target.version += 1
+        return empty(route, 204)
+      }
+      if (method === "PATCH" || method === "DELETE") {
+        const change = method === "DELETE" ? { status: "suspended" } : input
+        if (lastAdminConflict(project, [{ member: target, change }])) return conflict(route, "LAST_ADMIN", "A project must keep an active admin")
+        if (method === "DELETE") {
+          project.members.splice(project.members.indexOf(target), 1)
+          return empty(route, 204)
+        }
+        applyMemberChange(target, input)
+        return json(route, memberWire(project, target))
+      }
+      return empty(route, 404)
+    }
+  )
+
+  await page.route((url) => url.pathname === "/api/v1/permissions/project-catalog", (route) => {
+    if (route.request().method() !== "GET") return empty(route, 404)
+    return json(route, {
+      permissions: [
+        { key: "search", bit: 1, action: "search.execute", group: "Requests", developer_toggle: true, label: "Run searches", description: "Send search requests in the playground." },
+        { key: "fetch", bit: 2, action: "fetch.execute", group: "Requests", developer_toggle: true, label: "Fetch pages", description: "Fetch web pages in the playground." },
+        { key: "traces", bit: 4, action: "traces.read", group: "Insight", developer_toggle: true, label: "View activity", description: "Open request traces." },
+        { key: "usage", bit: 8, action: "usage.read", group: "Insight", developer_toggle: true, label: "View usage", description: "See request counts." },
+        { key: "settings_write", bit: 16, action: "settings.write", group: "Configuration", developer_toggle: true, label: "Edit project settings", description: "Change the trace and routing settings." },
+        { key: "settings_copy", bit: 32, action: "settings.copy", group: "Configuration", developer_toggle: true, label: "Copy settings", description: "Copy settings from another project." },
+        { key: "providers_configure", bit: 64, action: "providers.configure", group: "Configuration", developer_toggle: true, label: "Change provider order", description: "Change the Search order and the Fetch order. Turn operations on or off." },
+        { key: "tokens", bit: 128, action: "tokens.manage", group: "API keys", developer_toggle: true, label: "Manage API keys", description: "Create, rotate, and revoke project API keys." },
+        { key: "provider_owner", bit: 32768, action: "providers.supply", group: "Ownership", developer_toggle: false, label: "Provider owner", description: "Supply provider capacity for the project." },
+      ],
+      presets: [
+        { key: "read_only", label: "Read only", permissions: 12 },
+        { key: "standard", label: "Standard", permissions: 15 },
+        { key: "full_developer", label: "Full developer", permissions: 255 },
+      ],
+    })
+  })
 
   await page.route(
     (url) =>
@@ -824,9 +966,28 @@ export async function installProjectStub(
       const project = state.projects.find((p) => p.id === projectId) ?? null
       const member = project === null ? null : memberOf(project)
       if (project === null || member === null) return null
-      return { id: project.id, name: project.name, permissions: permissionsOf(member) }
+      return { id: project.id, name: project.name, permissions: projectPermissions(project, member) }
     },
     systemPermissions: () => [...state.systemPermissions],
+  })
+  await installVaultRoutes(page, {
+    projects: () => state.projects.filter((project) =>
+      memberOf(project) !== null &&
+      vaultOwner(project.id, defaultProjectOwner(project))?.user_id === state.accountId
+    ).map(({ id, name }) => ({ id, name })),
+    access: (id) => {
+      const project = state.projects.find((item) => item.id === id)
+      return project !== undefined && memberOf(project) !== null
+    },
+    account: () => ({ user_id: state.accountId, email: state.userEmail }),
+    owner: (projectId) => {
+      const project = state.projects.find((item) => item.id === projectId)
+      return project ? defaultProjectOwner(project) : null
+    },
+    member: (projectId, userId) => {
+      const member = state.projects.find((item) => item.id === projectId)?.members.find((item) => item.user_id === userId)
+      return member ? { user_id: member.user_id, email: member.email, activeAdmin: member.status === "active" && member.roles.includes("project_admin") } : null
+    },
   })
 }
 

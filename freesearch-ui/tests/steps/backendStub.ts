@@ -13,6 +13,7 @@ import {
   traceListFixture,
 } from "../../src/test/fixtures/activity"
 import { SYSTEM_ADMIN_PERMISSIONS, userAccountBody } from "./accountStub"
+import { installVaultRoutes } from "./vaultStub"
 
 /** Account id of the default stubbed session (a system administrator). */
 export const DEFAULT_ACCOUNT_ID = "11111111-1111-4111-8111-111111111111"
@@ -53,6 +54,7 @@ interface StubProvider {
   support_mask: number
   priority: number
   health: "healthy"
+  health_checked_at: null
   circuit_breaker: { state: "closed"; updated_at: string }
   latency_p95_ms: number
   secret_presence: SecretPresence
@@ -62,11 +64,6 @@ interface StubProvider {
   tavily_key_environment?: "dev" | "prod" | null
 }
 
-interface StubRouting {
-  fallback_policy: "chained" | "first_only"
-  cost_optimization_preset: "balanced" | "free_first"
-  max_attempts: number
-}
 
 /**
  * In-memory manual billing entries for manual-quota scenarios. Mutated (never
@@ -2383,6 +2380,7 @@ function initialProviders(): StubProvider[] {
       support_mask: supportMask,
       priority: index + 1,
       health: "healthy",
+      health_checked_at: null,
       circuit_breaker: { state: "closed", updated_at: FIXED_AT },
       latency_p95_ms: 110 + index * 10,
       secret_presence: stubbedSecretPresence[id] ?? SECRET_PRESENCE[id] ?? "missing",
@@ -2493,12 +2491,6 @@ export async function installBackendStub(page: Page): Promise<void> {
         ? { secret_presence: stubbedSecretPresence[row.provider_id] }
         : {}),
     }))
-  let routing: StubRouting = {
-    fallback_policy: "chained",
-    cost_optimization_preset: "balanced",
-    max_attempts: 3,
-  }
-
   // Manual billing entries: GET 404s while unconfigured, PUT stores the window,
   // DELETE clears it again. Writes persist per scenario via stubbedManualQuotas.
   await page.route("**/api/v1/providers/*/manual-quota", (route) => {
@@ -2662,23 +2654,6 @@ export async function installBackendStub(page: Page): Promise<void> {
         ? { tavily_key_environment: stubbedTavilyKeyEnvironment }
         : {}),
     })))
-  })
-
-  // Routing config: PUT updates the in-memory variable; later GETs see it.
-  await page.route("**/api/v1/routing/config", (route) => {
-    const method = route.request().method()
-    if (method === "GET") return json(route, routing)
-    if (method === "PUT") {
-      const patch = readJsonBody(route)
-      routing = {
-        fallback_policy: patch.fallback_policy === "first_only" ? "first_only" : "chained",
-        cost_optimization_preset:
-          patch.cost_optimization_preset === "free_first" ? "free_first" : "balanced",
-        max_attempts: typeof patch.max_attempts === "number" ? patch.max_attempts : 3,
-      }
-      return json(route, routing)
-    }
-    return route.fallback()
   })
 
   // Pathname-exact dashboard matcher: the legacy "**/dashboard*" glob also
@@ -2857,7 +2832,6 @@ export async function installBackendStub(page: Page): Promise<void> {
       userAccountBody(DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_EMAIL, { username: "admin" })
     )
   })
-
   // Projects surface. Navigation follows effective permissions, so system
   // access is always served (a failed read is an error state with Retry, not
   // a hidden UI). The default account holds no project membership: the list
@@ -2884,18 +2858,14 @@ export async function installBackendStub(page: Page): Promise<void> {
     }
   )
 
-  // System provider configuration (U3) is served by providerConfigStub.ts
-  // through installProjectStub. Without it, answer empty lists so a page that
-  // reads them never falls through the Vite proxy to the live backend.
-  await page.route(
-    (url) => /^\/api\/v1\/system\/(credentials|pools|projects)(\/|$)/.test(url.pathname),
-    (route) => {
-      if (route.request().method() === "GET" && !/\/[0-9a-f-]{36}$/.test(new URL(route.request().url()).pathname)) {
-        return json(route, [])
-      }
-      return route.fulfill({ status: 404, body: "" })
-    }
-  )
+  // Project scenarios install a bridge with project membership and ownership.
+  await installVaultRoutes(page, {
+    projects: () => [],
+    access: () => false,
+    account: () => ({ user_id: DEFAULT_ACCOUNT_ID, email: DEFAULT_ACCOUNT_EMAIL }),
+    owner: () => null,
+    member: () => null,
+  })
 }
 
 /**

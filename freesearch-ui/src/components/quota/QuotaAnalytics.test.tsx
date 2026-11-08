@@ -21,7 +21,6 @@ import {
 
 function braveCreditEntry(): Record<string, unknown> {
   const profile = {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: "1",
     cost_basis: "priced_native_use",
     price_version: "v2026-09",
@@ -85,13 +84,13 @@ function braveCreditEntry(): Record<string, unknown> {
           stale: false,
           manual_anchor: false,
         },
-        crd_views: [
+        usd_views: [
           {
             state: "finite",
             operation: "search",
-            remaining_crd: "4500",
-            local_remaining_crd: null,
-            request_cost_crd: "5",
+            remaining_usd: "4.5",
+            local_remaining_usd: null,
+            request_cost_usd: "0.005",
             shared_pool_id: "brave:keyed:usd",
             possible_standard_calls: "900",
             price_version: "v2026-09",
@@ -119,7 +118,7 @@ function renderShell(dashboard: Record<string, unknown>) {
     }
     if (req.url.startsWith("/dashboard")) return ok(dashboard)
     if (req.url.endsWith("/manual-quota") && req.method === "GET") {
-      return err(404, { detail: "no manual quota configured" })
+      return ok(null)
     }
     return err(404, { detail: "unhandled test route" })
   })
@@ -135,14 +134,61 @@ describe("QuotaAnalytics shell (UI7)", () => {
     vi.unstubAllGlobals()
   })
 
+  it.each(["connected", "disconnected", "empty", "api-only"] as const)(
+    "shows Parallel refresh only for a %s OAuth key",
+    async (status) => {
+      const entry = JSON.parse(JSON.stringify(braveCreditEntry()).replaceAll("brave", "parallel")) as {
+        auths: { aggregate_pool: null; usd_views: unknown[] }[]
+      }
+      const auth = entry.auths[0]
+      if (auth === undefined) throw new Error("Missing auth fixture")
+      auth.aggregate_pool = null
+      auth.usd_views = []
+      const stub = installFetchStub((req) => {
+        if (req.url === "/api/v1/providers") return ok(allProvidersFixture())
+        if (req.url === "/api/v1/routing/config") return ok(routingConfigFixture())
+        if (req.url.startsWith("/dashboard")) {
+          return ok({ ...dashboardFixture(), provider_limits: [entry], spend_totals: [] })
+        }
+        if (req.url === "/api/v1/providers/parallel/limits/keys") {
+          if (status === "empty") return ok([])
+          return ok([
+            { key_id: "api-key", label: "API key", owner_email: "admin@example.com", auth_mode: "api_key", oauth_connected: null, balance: null },
+            ...(status === "api-only" ? [] : [
+              { key_id: "other-key", label: "Team key", owner_email: "other@example.com", auth_mode: "oauth", oauth_connected: status === "connected", balance: null },
+            ]),
+          ])
+        }
+        return err(404, null)
+      })
+      render(
+        <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+          <QuotaAnalytics />
+        </FreeSearchProvider>,
+      )
+      await waitFor(() => expect(stub.requests.some((req) => req.url === "/api/v1/providers/parallel/limits/keys")).toBe(true))
+      if (status === "connected" || status === "disconnected") {
+        expect(await screen.findByText("Team key")).toBeInTheDocument()
+      }
+      if (status === "connected") {
+        expect(await screen.findByRole("button", { name: "Refresh Parallel balances" })).toBeInTheDocument()
+        expect(screen.queryByRole("link", { name: "Keys and pools" })).toBeNull()
+      } else {
+        expect(screen.queryByRole("button", { name: "Refresh Parallel balances" })).toBeNull()
+        expect(await screen.findByRole("link", { name: "Keys and pools" })).toHaveAttribute("href", "/account/keys")
+      }
+      expect(stub.requests.some((req) => req.url.includes("/account/vault/keys"))).toBe(false)
+    },
+  )
+
   it("renders the new page sections with no legacy grid and no action section (UI7-05, NUDGE-5)", async () => {
     renderShell(dashboardFixture() as unknown as Record<string, unknown>)
     await waitFor(() => {
-      expect(screen.getByText("Usage")).toBeInTheDocument()
+      expect(screen.getByRole("heading", { name: "Quotas" })).toBeInTheDocument()
     })
-    expect(screen.getByText("Provider credit units")).toBeInTheDocument()
+    expect(screen.getByText("Allowance left")).toBeInTheDocument()
     expect(screen.getByText("Usage totals")).toBeInTheDocument()
-    expect(screen.getByText("How credit units are priced")).toBeInTheDocument()
+    expect(screen.queryByText("How credit units are priced")).toBeNull()
     // NUDGE-5: the Provider actions section left the page in full.
     expect(screen.queryByText("Provider actions")).toBe(null)
     expect(screen.queryByText("Provider quota view")).toBe(null)
@@ -152,20 +198,20 @@ describe("QuotaAnalytics shell (UI7)", () => {
     renderShell({
       ...(dashboardFixture() as unknown as Record<string, unknown>),
       provider_limits: [braveCreditEntry()],
-      crd_usage_totals: [],
+      spend_totals: [],
     })
     await waitFor(() => {
       expect(
-        screen.getByRole("progressbar", { name: "Brave Search credit units remaining" }),
+        screen.getByRole("progressbar", { name: "Brave Search balance remaining" }),
       ).toBeInTheDocument()
     })
     // CARD-3: credit fraction "4500 / 5000 CRD" renders as split spans; no single "4500 CRD" node.
-    expect(screen.getByText("4500")).toBeInTheDocument()
-    expect(screen.getByText("/ 5000")).toBeInTheDocument()
-    expect(screen.getByText("CRD")).toBeInTheDocument()
+    expect(screen.getByText("$4.5")).toBeInTheDocument()
+    expect(screen.getByText("/ $5")).toBeInTheDocument()
+    expect(screen.getByText("USD")).toBeInTheDocument()
     expect(screen.queryByText("4500 CRD")).toBe(null)
     expect(screen.queryByText("CRD left")).toBe(null)
-    expect(screen.getByText("4500").closest("span")?.parentElement?.textContent?.replace(/\s+/g, "")).toBe("4500/5000CRD")
+    expect(screen.getByText("$4.5").closest("span")?.parentElement?.textContent?.replace(/\s+/g, "")).toBe("$4.5/$5USD")
     expect(screen.queryByText("n/a")).toBe(null)
     expect(document.body.textContent ?? "").not.toContain("∞")
   })
@@ -174,31 +220,32 @@ describe("QuotaAnalytics shell (UI7)", () => {
     renderShell({
       ...(dashboardFixture() as unknown as Record<string, unknown>),
       provider_limits: [braveCreditEntry()],
-      crd_usage_totals: [],
+      spend_totals: [],
     })
     await waitFor(() => {
       expect(
-        screen.getByRole("progressbar", { name: "Brave Search credit units remaining" }),
+        screen.getByRole("progressbar", { name: "Brave Search balance remaining" }),
       ).toBeInTheDocument()
     })
     const card = screen.getByRole("heading", { name: "Brave Search" }).closest("article") as HTMLElement
     expect(card.querySelector('[data-testid="provider-logo-brave"]')).not.toBeNull()
-    expect(screen.getByText("Observed from the vendor API")).toBeInTheDocument()
-    const buttons = Array.from(card.querySelectorAll("button")).map((button) => button.textContent)
-    expect(buttons.slice(0, 4)).toEqual(["Refresh Limits", "Provider Balance", "Budget Limit", "History"])
-    const creditRow = screen.getByText("4500").closest("span")?.parentElement?.parentElement
+    expect(screen.getByText("Reported by provider")).toBeInTheDocument()
+    expect(within(card).getByRole("button", { name: "Actions for Brave Search" })).toBeInTheDocument()
+    expect(within(card).queryByRole("button", { name: /Provider Balance/ })).toBeNull()
+    const creditRow = screen.getByText("$4.5").closest("span")?.parentElement?.parentElement
     const children = Array.from(creditRow?.children ?? [])
     expect(children.length).toBe(2)
-    expect(children[0]?.textContent).toContain("Refresh Limits")
-    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("4500/5000CRD")
-    const bar = screen.getByRole("progressbar", { name: "Brave Search credit units remaining" })
+    // This fixture names no usage API, so the leading slot holds no Refresh.
+    expect(children[0]?.textContent).toBe("")
+    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
+    const bar = screen.getByRole("progressbar", { name: "Brave Search balance remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
   })
 
   it("keeps an honest empty credit state with no invented rows (UI7-05)", async () => {
     renderShell(dashboardFixture() as unknown as Record<string, unknown>)
     await waitFor(() => {
-      expect(screen.getByText("No provider limit data reported by the backend.")).toBeInTheDocument()
+      expect(screen.getByText("No provider usage yet")).toBeInTheDocument()
     })
     expect(screen.queryByRole("progressbar")).toBe(null)
     expect(document.body.textContent ?? "").not.toContain("∞")
@@ -234,7 +281,7 @@ describe("QuotaAnalytics shell (UI7)", () => {
   it("exposes no invented cache numbers on the new page (UI7-05)", async () => {
     renderShell(dashboardFixture() as unknown as Record<string, unknown>)
     await waitFor(() => {
-      expect(screen.getByText("Usage")).toBeInTheDocument()
+      expect(screen.getByRole("heading", { name: "Quotas" })).toBeInTheDocument()
     })
     const body = document.body.textContent ?? ""
     for (const invented of ["248", "814", "342"]) {
@@ -243,22 +290,22 @@ describe("QuotaAnalytics shell (UI7)", () => {
     expect(body).not.toMatch(/\$[\d.]+ saved this cycle/)
   })
 
-  it("lists one Brave price row with no fetch row in the footer (UI7-04, UI7-06)", async () => {
+  it("shows recorded Brave spend in USD (UI7-04, UI7-06)", async () => {
     renderShell({
       ...(dashboardFixture() as unknown as Record<string, unknown>),
       provider_limits: [braveCreditEntry()],
-      crd_usage_totals: [],
+      spend_totals: [{ provider: "brave", operation: "search", spend_usd: "0.005", attempt_count: 1, volume_count: 1 }],
     })
     await waitFor(() => {
       expect(
-        screen.getByRole("progressbar", { name: "Brave Search credit units remaining" }),
+        screen.getByRole("progressbar", { name: "Brave Search balance remaining" }),
       ).toBeInTheDocument()
     })
-    const bravePriceRow = within(screen.getByRole("table")).getByRole("row", {
+    const table = await screen.findByRole("table", { name: "Usage totals" })
+    const bravePriceRow = within(table).getByRole("row", {
       name: /Brave Search/,
     })
-    expect(within(bravePriceRow).getByText("0.005 USD")).toBeInTheDocument()
-    expect(within(bravePriceRow).getByText("5 CRD")).toBeInTheDocument()
+    expect(within(bravePriceRow).getByText("$0.005")).toBeInTheDocument()
   })
 
   it("keeps dashboard fixture type compatibility", () => {
@@ -280,7 +327,6 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
 
   function tavilyCreditEntry(): Record<string, unknown> {
     const profile = {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -343,13 +389,13 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
             stale: false,
             manual_anchor: false,
           },
-          crd_views: [
+          usd_views: [
             {
               state: "finite",
               operation: "search",
-              remaining_crd: "7992",
-              local_remaining_crd: null,
-              request_cost_crd: "8",
+              remaining_usd: "7.992",
+              local_remaining_usd: null,
+              request_cost_usd: "0.008",
               shared_pool_id: "tavily:keyed:credits",
               possible_standard_calls: "999",
               price_version: "paygo-reference",
@@ -358,9 +404,9 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
             {
               state: "finite",
               operation: "fetch",
-              remaining_crd: "7992",
-              local_remaining_crd: null,
-              request_cost_crd: "8",
+              remaining_usd: "7.992",
+              local_remaining_usd: null,
+              request_cost_usd: "0.008",
               shared_pool_id: "tavily:keyed:credits",
               possible_standard_calls: "999",
               price_version: "paygo-reference",
@@ -384,7 +430,7 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
             last_sync_at: "2026-09-06T10:05:00Z",
             stale: false,
             price_version: "paygo-reference",
-            crd_split_note: null,
+            balance_split_note: null,
             rate_windows: [
               {
                 bucket_id: "tavily:keyed:search:requests",
@@ -441,7 +487,7 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
         return ok(next)
       }
       if (req.url.endsWith("/manual-quota") && req.method === "GET") {
-        return err(404, { detail: "no manual quota configured" })
+        return ok(null)
       }
       return err(404, { detail: "unhandled test route" })
     })
@@ -457,7 +503,7 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
     return {
       ...(dashboardFixture() as unknown as Record<string, unknown>),
       provider_limits: [braveCreditEntry(), tavilyCreditEntry()],
-      crd_usage_totals: [],
+      spend_totals: [],
     }
   }
 
@@ -468,6 +514,7 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
   }
 
   it("renders the compact tier control for the Tavily card only", async () => {
+    const user = userEvent.setup()
     renderTierShell(tierServer(), tierDashboard())
     await waitForTavilyCard()
     const tavilyArticle = screen.getByRole("heading", { name: "Tavily" }).closest("article") as HTMLElement
@@ -475,12 +522,12 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
       name: "Tavily rate tier (key environment)",
       exact: true,
     })
-    expect(select).toHaveValue("dev")
-    expect(Array.from(select.querySelectorAll("option")).map((o) => o.textContent)).toEqual([
-      "Development",
-      "Production",
-    ])
+    expect(select).toHaveTextContent("Development")
     expect(select.textContent).not.toContain("100")
+    await user.click(select)
+    const options = await screen.findAllByRole("option")
+    expect(options.map((o) => o.textContent)).toEqual(["Development", "Production"])
+    await user.keyboard("{Escape}")
     const braveArticle = screen.getByRole("heading", { name: "Brave Search" }).closest("article") as HTMLElement
     expect(
       within(braveArticle).queryByRole("combobox", {
@@ -496,13 +543,13 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
     const stub = renderTierShell(tierServer(), tierDashboard())
     await waitForTavilyCard()
     const tavilyArticle = screen.getByRole("heading", { name: "Tavily" }).closest("article") as HTMLElement
-    await user.selectOptions(
+    await user.click(
       within(tavilyArticle).getByRole("combobox", {
         name: "Tavily rate tier (key environment)",
         exact: true,
       }),
-      "prod",
     )
+    await user.click(await screen.findByRole("option", { name: "Production" }))
     await waitFor(() => {
       expect(stub.requestsTo("/api/v1/providers/tavily")).toHaveLength(1)
     })
@@ -515,7 +562,7 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
           name: "Tavily rate tier (key environment)",
           exact: true,
         }),
-      ).toHaveValue("prod")
+      ).toHaveTextContent("Production")
     })
     // Both current refresh callbacks run after the confirmed save.
     await waitFor(() => {
@@ -531,17 +578,17 @@ describe("QuotaAnalytics rate-tier slot (FIX)", () => {
     renderTierShell(tierServer(), tierDashboard())
     await waitForTavilyCard()
     const tavilyArticle = screen.getByRole("heading", { name: "Tavily" }).closest("article") as HTMLElement
-    await user.selectOptions(
+    await user.click(
       within(tavilyArticle).getByRole("combobox", {
         name: "Tavily rate tier (key environment)",
         exact: true,
       }),
-      "prod",
     )
+    await user.click(await screen.findByRole("option", { name: "Production" }))
     await user.click(
       within(tavilyArticle).getByRole("button", { name: "Credit details for Tavily" }),
     )
-    expect(await screen.findByText("unknown/1000 requests per minute")).not.toBeNull()
+    expect(await screen.findByText("Limit 1,000 requests per minute")).not.toBeNull()
   })
 
   it("shows read-only tier text with zero writes for reader roles", async () => {

@@ -27,7 +27,7 @@ function controllerStub(overrides: Partial<ProjectApiKeysController> = {}): Proj
 describe("IssueApiKeyForm", () => {
   it("is a region named by its heading with both permitted scopes checked", () => {
     render(<IssueApiKeyForm controller={controllerStub()} permittedScopes={["search.execute", "fetch.execute"]} />)
-    expect(screen.getByRole("region", { name: "Issue an API key" })).toBeInTheDocument()
+    expect(screen.getByRole("region", { name: "New API key" })).toBeInTheDocument()
     expect(screen.getByRole("checkbox", { name: "Search" })).toBeChecked()
     expect(screen.getByRole("checkbox", { name: "Fetch" })).toBeChecked()
   })
@@ -57,14 +57,14 @@ describe("IssueApiKeyForm", () => {
 
     await user.click(screen.getByRole("checkbox", { name: "Fetch" }))
     await user.type(screen.getByLabelText("Label"), "Search only")
-    await user.click(screen.getByRole("radio", { name: "Custom date" }))
+    await user.click(screen.getByRole("button", { name: "Custom date" }))
     await user.type(screen.getByLabelText("Expiration date"), "2099-06-30")
     await user.click(screen.getByRole("button", { name: "Issue key" }))
 
     expect(controller.issue).toHaveBeenCalledWith(expect.objectContaining({ scopes: ["search.execute"] }))
     expect(screen.getByRole("checkbox", { name: "Search" })).toBeChecked()
     expect(screen.getByRole("checkbox", { name: "Fetch" })).toBeChecked()
-    expect(screen.getByRole("radio", { name: "90 days (default)" })).toBeChecked()
+    expect(screen.getByRole("button", { name: "90 days" })).toHaveAttribute("aria-pressed", "true")
     expect(screen.queryByLabelText("Expiration date")).toBeNull()
   })
 
@@ -83,11 +83,11 @@ describe("IssueApiKeyForm", () => {
     const user = userEvent.setup()
     render(<IssueApiKeyForm controller={controller} permittedScopes={["search.execute"]} />)
     await user.type(screen.getByLabelText("Label"), "Keep me")
-    await user.click(screen.getByRole("radio", { name: "No expiration" }))
+    await user.click(screen.getByRole("button", { name: "No expiration" }))
     await user.click(screen.getByRole("button", { name: "Issue key" }))
     expect(controller.issue).toHaveBeenCalledWith({ label: "Keep me", scopes: ["search.execute"], expiry: { kind: "never" } })
     expect(screen.getByLabelText("Label")).toHaveValue("Keep me")
-    expect(screen.getByRole("radio", { name: "No expiration" })).toBeChecked()
+    expect(screen.getByRole("button", { name: "No expiration" })).toHaveAttribute("aria-pressed", "true")
   })
 
   it("disables a scope the caller lacks", () => {
@@ -97,15 +97,32 @@ describe("IssueApiKeyForm", () => {
     expect(screen.getByRole("checkbox", { name: "Fetch" })).toBeChecked()
   })
 
-  it("reports validation through the controller without issuing", async () => {
+  it("shows validation errors under their fields without issuing", async () => {
     const controller = controllerStub()
     const user = userEvent.setup()
     render(<IssueApiKeyForm controller={controller} permittedScopes={[]} />)
     await user.click(screen.getByRole("button", { name: "Issue key" }))
-    expect(controller.showMessage).toHaveBeenLastCalledWith("Enter a label for the key.")
+    expect(screen.getByLabelText("Label")).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByText("Enter a label for the key")).toBeInTheDocument()
+    expect(screen.getByText("Choose at least one scope")).toBeInTheDocument()
     await user.type(screen.getByLabelText("Label"), "x")
     await user.click(screen.getByRole("button", { name: "Issue key" }))
-    expect(controller.showMessage).toHaveBeenLastCalledWith("Choose at least one scope.")
+    expect(screen.queryByText("Enter a label for the key")).toBeNull()
+    expect(screen.getByRole("alert")).toHaveTextContent("Choose at least one scope")
+    expect(controller.showMessage).not.toHaveBeenCalled()
+    expect(controller.issue).not.toHaveBeenCalled()
+  })
+
+  it("rejects a past custom date under the date field", async () => {
+    const controller = controllerStub()
+    const user = userEvent.setup()
+    render(<IssueApiKeyForm controller={controller} permittedScopes={["search.execute"]} />)
+    await user.type(screen.getByLabelText("Label"), "Dated")
+    await user.click(screen.getByRole("button", { name: "Custom date" }))
+    await user.type(screen.getByLabelText("Expiration date"), "2000-01-01")
+    await user.click(screen.getByRole("button", { name: "Issue key" }))
+    expect(screen.getByLabelText("Expiration date")).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByRole("alert")).toHaveTextContent("Choose an expiration date in the future")
     expect(controller.issue).not.toHaveBeenCalled()
   })
 

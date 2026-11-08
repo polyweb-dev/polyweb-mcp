@@ -80,6 +80,15 @@ function nativeEvent() {
 }
 
 describe("LimitHistory", () => {
+  it.each(["CRD", "CREDIT"])("shows a stored %s unit as credits", (unit) => {
+    const event = { ...nativeEvent(), old_native: "1000", new_native: "900", detail: { native_unit: unit } }
+    render(<LimitHistory providerName="Provider" events={[event] as never} loading={false}
+      error={null} hasMore={false} onLoadMore={() => Promise.resolve()} />)
+    expect(screen.getByText(unit === "CRD" ? "$1" : "1,000 credits")).toBeInTheDocument()
+    expect(screen.getByText(unit === "CRD" ? "$0.9" : "900 credits")).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain("CRD")
+  })
+
   it("renders exact event facts with table headers and actor category (UI7-09)", () => {
     render(
       <LimitHistory
@@ -94,13 +103,17 @@ describe("LimitHistory", () => {
     for (const header of ["Time", "Old balance", "New balance", "Source", "Actor"]) {
       expect(screen.getByRole("columnheader", { name: header })).not.toBeNull()
     }
-    expect(screen.getByText("4500 CRD")).not.toBeNull()
-    expect(screen.getByText("4495 CRD")).not.toBeNull()
+    expect(screen.getAllByText("$4.50")).toHaveLength(2)
+    expect(screen.getAllByText("$4.50")).toHaveLength(2)
     expect(screen.getByText("System")).not.toBeNull()
     expect(screen.getByText("Operator")).not.toBeNull()
     expect(screen.getByText("Search · Local success")).not.toBeNull()
     // Polish Item 1: Source cells show human labels, not raw keys.
-    expect(screen.getByText("Local use")).not.toBeNull()
+    expect(screen.getByText("Local usage")).not.toBeNull()
+    expect(screen.getByRole("columnheader", { name: "Change" })).not.toBeNull()
+    expect(screen.getByText("−$0.005")).not.toBeNull()
+    expect(screen.getAllByText("Not recorded")).toHaveLength(3)
+    expect(screen.queryByRole("heading", { name: "Balance history" })).toBeNull()
     expect(screen.getByText("Operator action")).not.toBeNull()
     expect(screen.queryByText("local")).toBeNull()
     expect(screen.queryByText("operator")).toBeNull()
@@ -125,8 +138,8 @@ describe("LimitHistory", () => {
         onLoadMore={() => Promise.resolve()}
       />,
     )
-    expect(screen.getByText("4.500 USD")).not.toBeNull()
-    expect(screen.getByText("4.495 USD")).not.toBeNull()
+    expect(screen.getAllByText("$4.50")[0]).not.toBeNull()
+    expect(screen.getAllByText("$4.50")[1]).not.toBeNull()
   })
 
   it("leaves absent values empty without an Unknown row or fake zero (UI7-09)", () => {
@@ -162,7 +175,7 @@ describe("LimitHistory", () => {
     const { rerender } = render(
       <LimitHistory providerName="Brave" events={[]} loading={false} error={null} hasMore={false} onLoadMore={() => Promise.resolve()} />,
     )
-    expect(screen.getByText("No balance change recorded yet.")).not.toBeNull()
+    expect(screen.getByText("No balance change recorded yet")).not.toBeNull()
     rerender(
       <LimitHistory providerName="Brave" events={[]} loading error={null} hasMore={false} onLoadMore={() => Promise.resolve()} />,
     )
@@ -262,8 +275,8 @@ describe("LimitHistory Tavily native", () => {
         onLoadMore={() => Promise.resolve()}
       />,
     )
-    expect(screen.getByText("999 Credits")).not.toBeNull()
-    expect(screen.getByText("998 Credits")).not.toBeNull()
+    expect(screen.getByText("999 credits")).not.toBeNull()
+    expect(screen.getByText("998 credits")).not.toBeNull()
     expect(screen.queryByText("7992 CRD")).toBeNull()
   })
 
@@ -299,8 +312,8 @@ describe("LimitHistory Tavily native", () => {
         profile={tavilyProfile() as never}
       />,
     )
-    expect(screen.getByText("1 Credit")).not.toBeNull()
-    expect(screen.getByText("2 Credits")).not.toBeNull()
+    expect(screen.getByText("1 credit")).not.toBeNull()
+    expect(screen.getByText("2 credits")).not.toBeNull()
     expect(tavilyCrdOnlyEvent().event_id).toBe("evt-tavily-2")
   })
 
@@ -335,7 +348,7 @@ describe("LimitHistory Tavily native", () => {
         onLoadMore={() => Promise.resolve()}
       />,
     )
-    expect(screen.getByText("1 Credit")).not.toBeNull()
-    expect(screen.getByText("2 Credits")).not.toBeNull()
+    expect(screen.getByText("1 credit")).not.toBeNull()
+    expect(screen.getByText("2 credits")).not.toBeNull()
   })
 })

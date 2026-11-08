@@ -35,7 +35,7 @@ interface StubCredential {
   owner_scope: "system" | "project"
   owner_project_id: string | null
   label: string
-  auth_mode: "api_key" | "oauth"
+  auth_mode: "api_key" | "oauth" | "keyless"
   generation: number
   status: string
   health_status: string | null
@@ -145,13 +145,7 @@ const FIELD_CATALOG: Record<string, FieldSpec> = {
     limit: "max_fanout_concurrency",
   },
   "execution.cache_ttl_seconds": { section: "execution", attribute: "cache_ttl_seconds" },
-  "trace.sampling_rate": { section: "trace", attribute: "sampling_rate" },
   "trace.detail": { section: "trace", attribute: "detail", order: ["metadata", "full"] },
-  "trace.payload_redaction": {
-    section: "trace",
-    attribute: "payload_redaction",
-    order: ["strict", "standard"],
-  },
   "trace.retention_days": {
     section: "trace",
     attribute: "retention_days",
@@ -247,7 +241,7 @@ function cred(
   owner: "system" | "project",
   ownerProject: string | null,
   generation = 1,
-  authMode: "api_key" | "oauth" = "api_key"
+  authMode: "api_key" | "oauth" | "keyless" = "api_key"
 ): StubCredential {
   return {
     id,
@@ -268,6 +262,7 @@ export function resetProviderConfigStub(): void {
   state.seq = 100
   configTraffic.length = 0
   state.providerTypes = [
+    { provider_type: "keenable", capability: ["search", "fetch"], kill_switch: false, system_enabled_operations: ["search", "fetch"] },
     { provider_type: "brave", capability: ["search"], kill_switch: false, system_enabled_operations: ["search"] },
     {
       provider_type: "tavily",
@@ -288,6 +283,7 @@ export function resetProviderConfigStub(): void {
     cred(SEED.sharedBrave, "brave", "Shared Brave", "system", null, 2),
     cred(SEED.alphaTavilyKey, "tavily", "Alpha Tavily key", "project", ALPHA_PROJECT_ID, 1),
     cred(SEED.betaPrivateKey, "brave", "Beta private Brave", "project", BETA_PROJECT_ID, 1),
+    cred("9c000000-0000-4000-8000-000000000003", "keenable", "Keenable keyless", "project", ALPHA_PROJECT_ID, 1, "keyless"),
   ]
   state.grants = [
     { credential_id: SEED.sharedTavily, project_id: ALPHA_PROJECT_ID, permitted_operations: ["search", "fetch"], version: 1 },
@@ -295,6 +291,15 @@ export function resetProviderConfigStub(): void {
     { credential_id: SEED.sharedBrave, project_id: BETA_PROJECT_ID, permitted_operations: ["search"], version: 1 },
   ]
   state.bindings = [
+    {
+      id: "b3000000-0000-4000-8000-000000000004",
+      project_id: ALPHA_PROJECT_ID,
+      credential_id: "9c000000-0000-4000-8000-000000000003",
+      route_label: "keenable-keyless",
+      enabled_operations: ["search", "fetch"],
+      priority: 200,
+      version: 1,
+    },
     {
       id: SEED.alphaBraveBinding,
       project_id: ALPHA_PROJECT_ID,
@@ -328,7 +333,7 @@ export function resetProviderConfigStub(): void {
     revision: 4,
     routing: { fallback_policy: "chained", cost_optimization_preset: "balanced", max_attempts: 3, preferred_providers: [] },
     execution: { cache_enabled: true, default_timeout_seconds: 30, max_fanout_concurrency: 5, cache_ttl_seconds: 300 },
-    trace: { sampling_rate: 1, detail: "metadata", payload_redaction: "standard", retention_days: 30 },
+    trace: { detail: "full" },
     safety_limits: { max_timeout_seconds: 300, max_fanout_concurrency: 20, max_trace_retention_days: 90 },
   }
   state.projectSettings = {
@@ -490,8 +495,8 @@ export function projectOverrides(projectId: string): Record<string, unknown> {
   return out
 }
 
-/** Change one system trace default (detail or redaction) for the scenario. */
-export function setSystemTraceDefault(attribute: "detail" | "payload_redaction", value: string): void {
+/** Change the system detail ceiling for the scenario. */
+export function setSystemTraceDefault(attribute: "detail", value: string): void {
   state.systemSettings.trace[attribute] = value
 }
 
@@ -514,11 +519,6 @@ export function stubPools(): StubPool[] {
 /** All pool links, current state. */
 export function stubLinks(): StubLink[] {
   return state.links
-}
-
-/** Allocations of one project, current state. */
-function projectAllocations(projectId: string): StubAllocation[] {
-  return state.allocations.filter((a) => a.project_id === projectId)
 }
 
 /** Whether a credential with this label exists (deleted ones are gone). */
@@ -636,6 +636,7 @@ function providersView(projectId: string): Record<string, unknown> {
     const effective = type.capability.filter((op) => bindings.some((b) => b.effective_operations.includes(op)))
     return {
       provider_type: type.provider_type,
+      keyless: type.provider_type === "keenable",
       capability: [...type.capability],
       kill_switch: type.kill_switch,
       system_enabled_operations: [...type.system_enabled_operations],
@@ -691,7 +692,7 @@ function resolveSettings(projectId: string): Record<string, unknown> {
   const provenance: Record<string, string> = {}
   const overrides: Record<string, unknown> = {}
   for (const [fieldId, spec] of Object.entries(FIELD_CATALOG)) {
-    const systemValue = sectionValue(sys[spec.section], spec.attribute)
+    const systemValue = sectionValue(sys[spec.section], spec.attribute) ?? null
     const override = project.overrides[spec.section][spec.attribute]
     const hasOverride = override !== undefined && override !== null
     if (hasOverride) overrides[fieldId] = override
@@ -756,7 +757,7 @@ function resolveSettings(projectId: string): Record<string, unknown> {
     system_revision: sys.revision,
     project_revision: project.revision,
     project_id: projectId,
-    schema_version: 1,
+    schema_version: 2,
     overrides,
   }
 }
@@ -1188,232 +1189,6 @@ async function handleCopy(
   })
 }
 
-async function handleSystemCredentials(route: Route, req: ConfigRequest): Promise<void> {
-  const match = new RegExp(
-    `^/api/v1/system/credentials(?:/(${UUID}))?(/rotate|/grants(?:/(${UUID}))?|/oauth(?:/device|/poll)?)?$`
-  ).exec(req.path)
-  if (match === null) return empty(route, 404)
-  const [, credentialId, tail, grantProject] = match
-  if (credentialId === undefined) {
-    if (req.method === "GET") {
-      return json(route, state.credentials.filter((c) => c.owner_scope === "system").map(credentialRead))
-    }
-    if (req.method === "POST") return createCredential(route, req.body, "system", null, [])
-    return empty(route, 405)
-  }
-  const c = state.credentials.find((x) => x.id === credentialId && x.owner_scope === "system")
-  if (c === undefined) return empty(route, 404)
-  if (tail === undefined) {
-    if (req.method !== "DELETE") return empty(route, 405)
-    deleteCredential(c.id)
-    return empty(route, 204)
-  }
-  if (tail === "/rotate") return rotateCredential(route, req.body, c, credentialRead)
-  if (tail.startsWith("/grants")) {
-    if (grantProject === undefined) {
-      if (req.method !== "GET") return empty(route, 405)
-      return json(route, state.grants.filter((g) => g.credential_id === c.id))
-    }
-    if (req.method === "DELETE") {
-      const before = state.grants.length
-      state.grants = state.grants.filter((g) => !(g.credential_id === c.id && g.project_id === grantProject))
-      return empty(route, before === state.grants.length ? 404 : 204)
-    }
-    if (req.method !== "PUT") return empty(route, 405)
-    const ops = req.body?.permitted_operations
-    if (!isOps(ops)) return invalid(route, "invalid permitted_operations")
-    const supported = capabilityOf(c.provider_type)
-    if (ops.some((op) => !supported.includes(op))) return invalid(route, "operation not supported by the provider")
-    const existing = state.grants.find((g) => g.credential_id === c.id && g.project_id === grantProject)
-    if (existing !== undefined) {
-      existing.permitted_operations = [...new Set(ops)]
-      existing.version += 1
-      return json(route, existing)
-    }
-    const created: StubGrant = { credential_id: c.id, project_id: grantProject, permitted_operations: [...new Set(ops)], version: 1 }
-    state.grants.push(created)
-    return json(route, created)
-  }
-  return handleOAuth(route, req, c, tail)
-}
-
-const UPSTREAM_SCOPES = ["account", "credential", "ip", "installation"]
-
-function validConstraints(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (c) =>
-        c !== null &&
-        typeof c === "object" &&
-        ["fixed_window", "rolling_window", "token_bucket"].includes((c as Record<string, unknown>).algorithm as string) &&
-        typeof (c as Record<string, unknown>).window_seconds === "number" &&
-        ((c as Record<string, unknown>).window_seconds as number) >= 1 &&
-        typeof (c as Record<string, unknown>).limit === "number"
-    )
-  )
-}
-
-async function handlePools(route: Route, req: ConfigRequest): Promise<void> {
-  const match = new RegExp(`^/api/v1/system/pools(?:/(${UUID}))?(/links(?:/(${UUID}))?)?$`).exec(req.path)
-  if (match === null) return empty(route, 404)
-  const [, poolId, linksTail, linkCredential] = match
-  if (poolId === undefined) {
-    if (req.method === "GET") return json(route, state.pools)
-    if (req.method !== "POST") return empty(route, 405)
-    const body = req.body ?? {}
-    if (typeof body.provider_type !== "string" || !state.providerTypes.some((t) => t.provider_type === body.provider_type)) {
-      return invalid(route, "invalid provider_type")
-    }
-    if (!UPSTREAM_SCOPES.includes(body.upstream_scope as string)) return invalid(route, "invalid upstream_scope")
-    if (typeof body.pool_key !== "string" || body.pool_key === "") return invalid(route, "invalid pool_key")
-    if (typeof body.label !== "string" || body.label === "") return invalid(route, "invalid label")
-    if (body.constraints !== undefined && !validConstraints(body.constraints)) return invalid(route, "invalid constraints")
-    const created: StubPool = {
-      id: nextId("90010000"),
-      provider_type: body.provider_type,
-      upstream_scope: body.upstream_scope as StubPool["upstream_scope"],
-      pool_key: body.pool_key,
-      label: body.label,
-      constraints: (body.constraints as StubPool["constraints"]) ?? [],
-      max_concurrency: (body.max_concurrency as number | null) ?? null,
-      max_queued_requests: (body.max_queued_requests as number | null) ?? null,
-      status: "active",
-      version: 1,
-    }
-    state.pools.push(created)
-    return json(route, created, 201)
-  }
-  const pool = state.pools.find((p) => p.id === poolId)
-  if (pool === undefined) return empty(route, 404)
-  if (linksTail === undefined) {
-    if (req.method === "GET") return json(route, pool)
-    if (req.method !== "PATCH") return empty(route, 405)
-    const body = req.body ?? {}
-    if (body.constraints !== undefined && body.constraints !== null && !validConstraints(body.constraints)) {
-      return invalid(route, "invalid constraints")
-    }
-    for (const key of ["upstream_scope", "pool_key", "label", "status"] as const) {
-      if (typeof body[key] === "string") (pool as unknown as Record<string, unknown>)[key] = body[key]
-    }
-    if ("constraints" in body) pool.constraints = (body.constraints as StubPool["constraints"]) ?? []
-    if ("max_concurrency" in body) pool.max_concurrency = (body.max_concurrency as number | null) ?? null
-    if ("max_queued_requests" in body) pool.max_queued_requests = (body.max_queued_requests as number | null) ?? null
-    pool.version += 1
-    return json(route, pool)
-  }
-  if (linkCredential === undefined) {
-    if (req.method !== "GET") return empty(route, 405)
-    return json(route, state.links.filter((l) => l.pool_id === pool.id))
-  }
-  const op = new URLSearchParams(req.search).get("operation_scope")
-  if (op !== "search" && op !== "fetch") return invalid(route, "operation_scope required")
-  const credential = state.credentials.find((c) => c.id === linkCredential && c.owner_scope === "system")
-  if (credential === undefined) return empty(route, 404)
-  if (req.method === "DELETE") {
-    const before = state.links.length
-    state.links = state.links.filter(
-      (l) => !(l.pool_id === pool.id && l.credential_id === credential.id && l.operation_scope === op)
-    )
-    return empty(route, before === state.links.length ? 404 : 204)
-  }
-  if (req.method !== "PUT") return empty(route, 405)
-  if (credential.provider_type !== pool.provider_type) {
-    return conflict(route, "POOL_PROVIDER_MISMATCH", "The credential belongs to another provider.")
-  }
-  const existing = state.links.find(
-    (l) => l.pool_id === pool.id && l.credential_id === credential.id && l.operation_scope === op
-  )
-  if (existing !== undefined) return json(route, existing)
-  const created: StubLink = {
-    credential_id: credential.id,
-    pool_id: pool.id,
-    operation_scope: op,
-    provider_type: pool.provider_type,
-    version: 1,
-  }
-  state.links.push(created)
-  return json(route, created)
-}
-
-/** Guaranteed requests per second of one allocation. */
-function perSecond(base: number, window: number): number {
-  return base / window
-}
-
-async function handleAllocations(route: Route, req: ConfigRequest, bridge: ProjectAccessBridge): Promise<void> {
-  const match = new RegExp(`^/api/v1/system/projects/(${UUID})/allocations(?:/(${UUID}))?$`).exec(req.path)
-  if (match === null) return empty(route, 404)
-  const [, projectId, poolId] = match
-  const projectExists = projectId === ALPHA_PROJECT_ID || projectId === BETA_PROJECT_ID || bridge.access(projectId) !== null
-  if (!projectExists) return empty(route, 404)
-  if (poolId === undefined) {
-    if (req.method !== "GET") return empty(route, 405)
-    return json(route, projectAllocations(projectId).map(allocationRead))
-  }
-  const pool = state.pools.find((p) => p.id === poolId)
-  if (pool === undefined) return empty(route, 404)
-  const op = new URLSearchParams(req.search).get("operation_scope")
-  if (op !== "search" && op !== "fetch") return invalid(route, "operation_scope required")
-  const existing = state.allocations.find(
-    (a) => a.project_id === projectId && a.pool_id === pool.id && a.operation_scope === op
-  )
-  if (req.method === "GET") return existing === undefined ? empty(route, 404) : json(route, allocationRead(existing))
-  if (req.method === "DELETE") {
-    if (existing === undefined) return empty(route, 404)
-    state.allocations = state.allocations.filter((a) => a !== existing)
-    return empty(route, 204)
-  }
-  if (req.method !== "PUT") return empty(route, 405)
-  const body = req.body ?? {}
-  const base = body.base_rate
-  const window = body.rate_window_seconds
-  const borrow = body.borrow_enabled === true
-  const maxRate = body.max_rate === undefined ? null : body.max_rate
-  const weight = body.weight === undefined ? 1 : body.weight
-  const bestEffort = body.best_effort === true
-  if (typeof base !== "number" || base < 0) return invalid(route, "invalid base_rate")
-  if (typeof window !== "number" || window < 1) return invalid(route, "invalid rate_window_seconds")
-  if (typeof weight !== "number" || weight < 1) return invalid(route, "weight must be at least 1")
-  if (maxRate !== null && typeof maxRate !== "number") return invalid(route, "invalid max_rate")
-  if (!borrow && maxRate !== null && maxRate !== base) return invalid(route, "strict allocations have no max_rate")
-  if (borrow && (maxRate === null || maxRate < base)) return invalid(route, "max_rate must be at least base_rate")
-  if (base === 0 && !bestEffort) return invalid(route, "a zero base_rate needs best_effort")
-  const others = state.allocations.filter(
-    (a) => a.pool_id === pool.id && a.operation_scope === op && a !== existing
-  )
-  const guaranteed = others.reduce((sum, a) => sum + perSecond(a.base_rate, a.rate_window_seconds), perSecond(base, window))
-  for (const c of pool.constraints) {
-    if (guaranteed > c.limit / c.window_seconds) {
-      return conflict(
-        route,
-        "ALLOCATION_INFEASIBLE",
-        `Guaranteed rates of all projects exceed the pool limit of ${c.limit} per ${c.window_seconds} seconds.`
-      )
-    }
-  }
-  const values: Partial<StubAllocation> = {
-    base_rate: base,
-    rate_window_seconds: window,
-    borrow_enabled: borrow,
-    max_rate: borrow ? (maxRate as number) : null,
-    weight,
-    best_effort: bestEffort,
-    max_concurrency: (body.max_concurrency as number | null) ?? null,
-    max_queued_requests: (body.max_queued_requests as number | null) ?? null,
-    max_queued_bytes: (body.max_queued_bytes as number | null) ?? null,
-    max_queue_wait_ms: (body.max_queue_wait_ms as number | null) ?? null,
-  }
-  if (existing !== undefined) {
-    Object.assign(existing, values)
-    existing.version += 1
-    return json(route, allocationRead(existing))
-  }
-  const created = allocation(projectId, pool.id, op, values)
-  state.allocations.push(created)
-  return json(route, allocationRead(created))
-}
-
 /**
  * Register the U3 routes. Call after the project catch-all route so these
  * take precedence (Playwright prefers the most recently registered handler).
@@ -1439,8 +1214,14 @@ export async function installProviderConfigRoutes(page: Page, bridge: ProjectAcc
         if (!access.permissions.includes("providers.read")) return empty(route, 403)
         return json(route, providersView(projectId))
       }
-      if (resource === "bindings") return handleBindings(route, req, projectId, access.permissions)
-      if (resource === "credentials") return handleProjectCredentials(route, req, projectId, access.permissions)
+      if (resource === "bindings") {
+        if (req.method !== "GET" || req.path !== `/api/v1/projects/${projectId}/bindings`) return empty(route, 404)
+        return handleBindings(route, req, projectId, access.permissions)
+      }
+      if (resource === "credentials") {
+        if (req.method !== "GET" || req.path !== `/api/v1/projects/${projectId}/credentials`) return empty(route, 404)
+        return handleProjectCredentials(route, req, projectId, access.permissions)
+      }
       if (req.path.endsWith("/settings")) return handleSettings(route, req, projectId, access.permissions)
       if (/\/settings\/copy(\/preview)?$/.test(req.path)) {
         return handleCopy(route, req, projectId, access.permissions, bridge)
@@ -1449,22 +1230,5 @@ export async function installProviderConfigRoutes(page: Page, bridge: ProjectAcc
     }
   )
 
-  const systemPattern = /^\/api\/v1\/system\/(credentials|pools|projects\/[0-9a-f-]{36}\/allocations)(\/.*)?$/
-  await page.route(
-    (url) => systemPattern.test(url.pathname),
-    async (route) => {
-      const req = record(route)
-      const held = bridge.systemPermissions()
-      if (req.path.startsWith("/api/v1/system/credentials")) {
-        if (!held.includes("system.credentials.manage")) return empty(route, 403)
-        return handleSystemCredentials(route, req)
-      }
-      if (req.path.startsWith("/api/v1/system/pools")) {
-        if (!held.includes("system.pools.manage")) return empty(route, 403)
-        return handlePools(route, req)
-      }
-      if (!held.includes("system.allocations.manage")) return empty(route, 403)
-      return handleAllocations(route, req, bridge)
-    }
-  )
+
 }

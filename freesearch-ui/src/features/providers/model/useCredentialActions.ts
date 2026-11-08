@@ -2,7 +2,7 @@ import { useCallback, useState } from "react"
 import { useActionStatus } from "./useActionStatus"
 import type { ActionStatus } from "./useActionStatus"
 import { useCredentialForms } from "./useCredentialForms"
-import type { CredentialForms } from "./useCredentialForms"
+import type { AddKeyFormControl, CredentialForms } from "./useCredentialForms"
 import {
   DELETE_FAILED_MESSAGE,
   DISCONNECT_FAILED_MESSAGE,
@@ -19,17 +19,23 @@ export interface CredentialActions extends CredentialForms {
   connectBase: string | null
   openConnect: (credential: CredentialRef | null) => void
   disconnect: (credential: CredentialRef) => Promise<void>
+  /** OAuth credential awaiting the Disconnect confirmation, or `null`. */
+  disconnecting: CredentialRef | null
+  requestDisconnect: (credential: CredentialRef | null) => void
+  confirmDisconnect: () => Promise<void>
 }
 
 /**
  * Add, rotate, delete and OAuth connect of one credential list. Every
- * success reloads the owning list.
+ * success reloads the owning list. Delete and Disconnect go through a
+ * request/confirm pair so the page can ask before acting.
  */
-export function useCredentialActions(routes: CredentialRoutes, reload: () => void): CredentialActions {
+export function useCredentialActions(routes: CredentialRoutes, reload: () => void, addForm?: AddKeyFormControl): CredentialActions {
   const status = useActionStatus()
   const { begin, finish } = status
-  const forms = useCredentialForms(routes, reload, status)
+  const forms = useCredentialForms(routes, reload, status, addForm)
   const [deleting, setDeleting] = useState<CredentialRef | null>(null)
+  const [disconnecting, setDisconnecting] = useState<CredentialRef | null>(null)
   const [connectBase, setConnectBase] = useState<string | null>(null)
 
   const runPageAction = useCallback(
@@ -58,6 +64,12 @@ export function useCredentialActions(routes: CredentialRoutes, reload: () => voi
     [routes, runPageAction]
   )
 
+  const confirmDisconnect = useCallback(async () => {
+    const target = disconnecting
+    setDisconnecting(null)
+    if (target !== null) await disconnect(target)
+  }, [disconnecting, disconnect])
+
   const openConnect = useCallback(
     (credential: CredentialRef | null) =>
       setConnectBase(credential === null ? null : routes.oauthBase(credential.id)),
@@ -73,5 +85,8 @@ export function useCredentialActions(routes: CredentialRoutes, reload: () => voi
     connectBase,
     openConnect,
     disconnect,
+    disconnecting,
+    requestDisconnect: setDisconnecting,
+    confirmDisconnect,
   }
 }

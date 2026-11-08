@@ -11,6 +11,8 @@ export interface TraceResultsProps {
   /** Decoded results of the scoped search output (empty for other shapes). */
   results: readonly TraceSearchResult[]
   selectedIndex: number | null
+  /** The one sentence shown when no output was recorded. */
+  emptyMessage: string
   onSelect: (index: number) => void
 }
 
@@ -26,14 +28,11 @@ export function TraceResults({
   providerId,
   results,
   selectedIndex,
+  emptyMessage,
   onSelect,
 }: TraceResultsProps) {
   if (output === null) {
-    return (
-      <p className="text-[13px] text-[var(--muted)]">
-        No results were recorded for this trace.
-      </p>
-    )
+    return <p className="text-[13px] text-[var(--muted)]">{emptyMessage}</p>
   }
   if (output.kind === "search_results") {
     return (

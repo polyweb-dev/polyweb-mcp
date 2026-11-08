@@ -183,9 +183,9 @@ describe("ProviderInfoPopover order", () => {
     renderPopover()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
-    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(await screen.findByText("Quota details")).not.toBeNull()
     const labels = ["Search cost", "Extract cost", "Searches left", "Fetches left",
-      "Search CRD cost", "Fetch CRD cost", "Search and Fetch Rate Limit", "Retry-After"]
+      "Search cost (USD)", "Extract cost (USD)", "Search and fetch rate limit", "Retry after"]
     const elements = labels.map((label) => screen.getByText(label))
     for (let index = 1; index < elements.length; index += 1) {
       const position = elements[index - 1].compareDocumentPosition(elements[index])
@@ -201,7 +201,7 @@ describe("ProviderInfoPopover order", () => {
     renderPopover()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
-    expect(await screen.findByText("Monthly Tavily Credits")).not.toBeNull()
+    expect(await screen.findByText("Monthly Tavily credits")).not.toBeNull()
   })
 })
 
@@ -210,19 +210,17 @@ describe("ProviderInfoPopover precision", () => {
     renderPopover()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
-    expect(await screen.findByText("1 Tavily Credit per 5 URLs")).not.toBeNull()
-    expect(screen.getByText("1.6 CRD")).not.toBeNull()
-    expect(screen.getByText("(≈ $0.0016)")).not.toBeNull()
-    expect(screen.getByText("8 CRD")).not.toBeNull()
-    expect(screen.getByText("(≈ $0.008)")).not.toBeNull()
+    expect(await screen.findByText("1 Tavily credit per 5 URLs")).not.toBeNull()
+    expect(screen.getByText("$0.0016")).not.toBeNull()
+    expect(screen.getByText("$0.008")).not.toBeNull()
   })
 
   it("shows native integer tier vocab with trimmed USD spend", async () => {
     renderPopover()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
-    expect(await screen.findByText("600 Tavily Credits of 1000 Tavily Credits")).not.toBeNull()
-    expect(screen.getByText("1 Tavily Credit set, 0 Tavily Credits used")).not.toBeNull()
+    expect(await screen.findByText("600 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
+    expect(screen.getByText("$0.008 set, $0 used")).not.toBeNull()
     expect(screen.getByText("0.05")).not.toBeNull()
   })
 })
@@ -230,19 +228,19 @@ describe("ProviderInfoPopover precision", () => {
 describe("ProviderInfoPopover disclosure", () => {
   it("keeps USD and detail text absent while closed and shows them when open", async () => {
     renderPopover()
-    expect(screen.queryByText("Quota Details")).toBe(null)
-    expect(screen.queryByText("(≈ $0.008)")).toBe(null)
-    expect(screen.queryByText("600 Tavily Credits of 1000 Tavily Credits")).toBe(null)
+    expect(screen.queryByText("Quota details")).toBe(null)
+    expect(screen.queryByText("$0.008")).toBe(null)
+    expect(screen.queryByText("600 Tavily credits of 1,000 Tavily credits")).toBe(null)
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
-    expect(await screen.findByText("Quota Details")).not.toBeNull()
-    expect(screen.getByText("(≈ $0.008)")).not.toBeNull()
-    expect(screen.getByText("600 Tavily Credits of 1000 Tavily Credits")).not.toBeNull()
+    expect(await screen.findByText("Quota details")).not.toBeNull()
+    expect(screen.getByText("$0.008")).not.toBeNull()
+    expect(screen.getByText("600 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
   })
 
   it("renders no popover element while closed", () => {
     renderPopover()
-    expect(screen.queryByText("Quota Details")).toBe(null)
+    expect(screen.queryByText("Quota details")).toBe(null)
     expect(screen.queryByText("Search cost")).toBe(null)
   })
 })
@@ -254,7 +252,7 @@ describe("ProviderInfoPopover keyboard", () => {
     const trigger = screen.getByRole("button", { name: "Credit details for Tavily" })
     trigger.focus()
     await user.keyboard("{Enter}")
-    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(await screen.findByText("Quota details")).not.toBeNull()
   })
 
   it("closes with Escape and returns focus to the trigger", async () => {
@@ -262,9 +260,9 @@ describe("ProviderInfoPopover keyboard", () => {
     const user = userEvent.setup()
     const trigger = screen.getByRole("button", { name: "Credit details for Tavily" })
     await user.click(trigger)
-    expect(await screen.findByText("Quota Details")).not.toBeNull()
+    expect(await screen.findByText("Quota details")).not.toBeNull()
     await user.keyboard("{Escape}")
-    expect(screen.queryByText("Quota Details")).toBe(null)
+    expect(screen.queryByText("Quota details")).toBe(null)
     expect(document.activeElement).toBe(trigger)
   })
 })
@@ -278,11 +276,11 @@ describe("ProviderInfoPopover viewport", () => {
       renderPopover()
       const user = userEvent.setup()
       await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
-      expect(await screen.findByText("Quota Details")).not.toBeNull()
-      const dialog = screen.getByText("Quota Details").closest("div")?.parentElement
+      expect(await screen.findByText("Quota details")).not.toBeNull()
+      const dialog = screen.getByText("Quota details").closest("div")?.parentElement
       expect(dialog).not.toBe(null)
-      expect(within(dialog as HTMLElement).getByText("1 Tavily Credit per 5 URLs")).not.toBeNull()
-      expect(within(dialog as HTMLElement).getByText("600 Tavily Credits of 1000 Tavily Credits")).not.toBeNull()
+      expect(within(dialog as HTMLElement).getByText("1 Tavily credit per 5 URLs")).not.toBeNull()
+      expect(within(dialog as HTMLElement).getByText("600 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
     } finally {
       Object.defineProperty(window, "innerWidth", { value: previousWidth, configurable: true })
       window.dispatchEvent(new Event("resize"))

@@ -2,10 +2,10 @@ import freesearchLogo from "@/assets/freesearch.webp"
 
 /** Primary call-to-action classes of the current auth surface. */
 export const AUTH_SUBMIT_CLASSES =
-  "w-full flex items-center justify-center gap-2 text-[13px] font-medium bg-[var(--signal)] hover:bg-[var(--signal)]/90 text-white h-10 shadow-sm transition-all"
+  "w-full flex items-center justify-center gap-2 text-[13px] font-medium bg-[var(--signal)] hover:bg-[var(--signal)]/90 text-white h-10 shadow-sm transition-colors"
 
 /** Auth page footer wrapper: the distance sits on the wrapper, not on the text. */
-export const AUTH_FOOTER_CLASSES = "mt-5 pt-3 border-t border-[var(--border-subtle)]"
+export const AUTH_FOOTER_CLASSES = "mt-6"
 
 /** Auth page footer text and anchor classes of the current surface. */
 export const AUTH_FOOTER_TEXT_CLASSES =
@@ -28,7 +28,7 @@ export const AUTH_BRAND_NAME_CLASSES =
 
 interface AuthPanelProps {
   title: string
-  subtitle: string
+  subtitle?: string
   children: React.ReactNode
 }
 
@@ -37,9 +37,9 @@ interface AuthPanelProps {
  *
  * The brand row carries the repository logo and the product name above the card,
  * with the same tile, surface, and tracking style as the sidebar brand. The card
- * reuses the elevated surface, the shared title size, and the shared header
- * divider of the current dialog surface, with no portal, no overlay, and no
- * focus trap: this is a page, not a dialog. The exported class strings keep the
+ * reuses the elevated surface and shared title size, with 24px between groups
+ * and no internal dividers. There is no portal, overlay, or focus trap.
+ * The exported class strings keep the
  * two auth pages identical without an import between features.
  */
 export function AuthPanel({ title, subtitle, children }: AuthPanelProps) {
@@ -62,21 +62,20 @@ export function AuthPanel({ title, subtitle, children }: AuthPanelProps) {
           color: "var(--text)",
         }}
       >
-        <div
-          className="flex flex-col gap-1 pb-4"
-          style={{ borderBottom: "1px solid var(--border-subtle)" }}
-        >
+        <div className="flex flex-col gap-1">
           <h1
             className="text-[15px] font-medium"
             style={{ color: "var(--text-strong)", fontSize: "15px" }}
           >
             {title}
           </h1>
-          <p className="text-[13px] mt-0.5" style={{ color: "var(--muted)" }}>
-            {subtitle}
-          </p>
+          {subtitle && (
+            <p className="text-[13px]" style={{ color: "var(--muted)" }}>
+              {subtitle}
+            </p>
+          )}
         </div>
-        <div className="pt-4">{children}</div>
+        <div className="mt-6">{children}</div>
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import type { TraceDetail } from "@/domains/activity"
+import { formatDateTime, formatLatency } from "@/shared/lib/formatTime"
 import { JsonViewer } from "@/shared/ui/JsonViewer"
 
 function field(label: string, value: ReactNode) {
@@ -31,8 +32,8 @@ export function TraceScopeDetails({ trace }: { trace: TraceDetail }) {
           {field("Trace ID", trace.traceId)}
           {field("Operation", trace.operation ?? "Not recorded")}
           {field("Summary provider ID", trace.provider ?? "Not recorded")}
-          {field("Started at", trace.startedAt)}
-          {field("Timeline duration", `${trace.totalMs}ms`)}
+          {field("Started at", <span title={trace.startedAt}>{formatDateTime(trace.startedAt)}</span>)}
+          {field("Timeline duration", formatLatency(trace.totalMs))}
         </dl>
       </details>
       {trace.output !== null && (
@@ -45,7 +46,6 @@ export function TraceScopeDetails({ trace }: { trace: TraceDetail }) {
               ›
             </span>
             Recorded output
-            <span className="text-[10px]">{trace.output.kind}</span>
           </summary>
           <div className="mt-2 min-w-0">
             <JsonViewer

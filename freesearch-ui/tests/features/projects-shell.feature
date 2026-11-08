@@ -25,6 +25,20 @@ Feature: Project shell and membership UX
     Then the members table shows "member@example.com"
 
   @stub
+  Scenario: An admin grants a developer access to Activity
+    Given I am a member of project Alpha with role project_admin
+    When I open the workspace page "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/members"
+    Then the member roles and provider owner are shown
+    When I open the provider ownership transfer dialog
+    Then the transfer dialog requires another project admin
+    When I cancel the provider ownership transfer
+    When I change the developer's activity permission to off
+    And I change the developer's activity permission to on
+    And I sign in as the developer
+    Then I see the heading "Activity"
+    And the page URL path should be "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/activity"
+
+  @stub
   Scenario: A rapid project switch drops the late Alpha members response
     Given I am a member of project Alpha with role project_admin
     And I am a member of project Beta with role project_admin
@@ -105,9 +119,9 @@ Feature: Project shell and membership UX
     And I select project "Customer Research — Shared Workspace" from the project selector
     Then the project selector shows "Customer Research — Shared Workspace" without clipping
     And the heading "Customer Research — Shared Workspace" is within the viewport
-    When I open the workspace page "/routing" at <width> by <height>
+    When I open the workspace page "/system/quotas" at <width> by <height>
     Then the project selector shows "Customer Research — Shared Workspace" without clipping
-    And the Back link "Customer Research — Shared Workspace" is visible
+    And the Back link "Customer Research — Shared Workspace" is absent
 
     Examples:
       | width | height |

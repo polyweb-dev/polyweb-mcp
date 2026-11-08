@@ -21,6 +21,7 @@ Feature: Activity trace detail presentation parity with Playground
     Then the playground inspector should show the shared result presentation
     And the playground inspector link should carry the Open target URL tooltip
     And the playground waterfall should be non-selectable with latency and result counts
+    And the playground raw JSON inspector should start collapsed
     When I expand the playground raw JSON inspector
     Then the playground raw JSON inspector should offer a copy action
     When I copy the playground raw JSON

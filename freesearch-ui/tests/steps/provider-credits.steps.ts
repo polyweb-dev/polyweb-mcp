@@ -1,5 +1,6 @@
 import { expect } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
+import { providerQuotaSurface } from "./providerQuotaUi"
 import {
   braveCreditLimits,
   braveCreditLimitsAfterDebit,
@@ -302,24 +303,50 @@ Given("the stubbed credit history shows {string}", async ({}, kind: string) => {
   throw new Error(`Unknown credit history kind: ${kind}`)
 })
 
+/** Open one dialog of a provider card through its `…` menu. */
+async function openCardMenuItem(
+  page: import("@playwright/test").Page,
+  provider: string,
+  label: string,
+): Promise<void> {
+  await page.getByRole("button", { name: new RegExp("Actions for " + provider, "i") }).first().click()
+  await page.getByRole("button", { name: label, exact: true }).click()
+}
+
+/** A card action is either a visible button or an item of the card `…` menu. */
+async function expectCardAction(
+  page: import("@playwright/test").Page,
+  card: import("@playwright/test").Locator,
+  label: string,
+): Promise<void> {
+  const direct = card.getByRole("button", { name: new RegExp(label, "i") })
+  if ((await direct.count()) > 0) {
+    await expect(direct.first()).toBeVisible()
+    return
+  }
+  await card.getByRole("button", { name: /^Actions for /i }).click()
+  await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible()
+  await page.keyboard.press("Escape")
+}
+
 When("I open the credit manual entry for {string}", async ({ page }, provider: string) => {
-  await page.getByRole("button", { name: new RegExp("Provider Balance for " + provider, "i") }).click()
+  await openCardMenuItem(page, provider, "Set balance")
   await expect(page.getByText("Allowance (USD)")).toBeVisible()
 })
 
 When("I open the credit grant for {string}", async ({ page }, provider: string) => {
-  await page.getByRole("button", { name: new RegExp("Budget Limit for " + provider, "i") }).click()
-  await expect(page.getByText("Search credit units (CRD)")).toBeVisible()
+  await openCardMenuItem(page, provider, "Budget limit")
+  await expect(page.getByText("Search budget (CRD)")).toBeVisible()
 })
 
 When("I open the credit history for {string}", async ({ page }, provider: string) => {
-  await page.getByRole("button", { name: new RegExp("Balance history for " + provider, "i") }).click()
+  await openCardMenuItem(page, provider, "Balance history")
   await expect(page.getByRole("heading", { name: "Balance history", exact: true })).toBeVisible()
 })
 
 When("I open the credit details for {string}", async ({ page }, provider: string) => {
   await page.getByRole("button", { name: new RegExp("Credit details for " + provider, "i") }).click()
-  await expect(page.getByText("Quota Details")).toBeVisible()
+  await expect(page.getByText("Quota details")).toBeVisible()
 })
 
 When("I cancel the credit dialog", async ({ page }) => {
@@ -334,8 +361,8 @@ Then("the Brave credit bar should show {string} percent", async ({ page }, value
 })
 
 Then("the Brave card should show {string}", async ({ page }, value: string) => {
-  const card = page.locator("article", { hasText: "Brave" }).first()
-  const fraction = value.match(/(\d[\d.]*)\s*\/\s*(\d[\d.]*)\s*CRD/)
+  const card = providerQuotaSurface(page, "Brave")
+  const fraction = value.match(/(\d[\d.,]*)\s*\/\s*(\d[\d.,]*)\s*CRD/)
   if (fraction !== null) {
     const remaining = fraction[1] as string
     const total = fraction[2] as string
@@ -350,20 +377,19 @@ Then("the Brave card should show {string}", async ({ page }, value: string) => {
 })
 
 Then("the Brave card should show {string} with no total", async ({ page }, remaining: string) => {
-  const card = page.locator("article", { hasText: "Brave" }).first()
-  await expect(card.getByText(remaining, { exact: true })).toBeVisible()
-  await expect(card.getByText("CRD", { exact: true }).first()).toBeVisible()
-  await expect(card.getByText(/^\/ \d/)).toHaveCount(0)
-  await expect(card).not.toContainText("CRD left")
+  const surface = providerQuotaSurface(page, "Brave")
+  await expect(surface).toBeVisible()
+  await expect(surface).toContainText(remaining)
+  await expect(surface.getByRole("progressbar")).toHaveCount(0)
+  await expect(surface.getByText(/^\/ \d/)).toHaveCount(0)
 })
 
 Then("the Brave card should show the {string} action", async ({ page }, label: string) => {
-  const card = page.locator("article", { hasText: "Brave" }).first()
-  await expect(card.getByRole("button", { name: new RegExp(label, "i") })).toBeVisible()
+  await expectCardAction(page, providerQuotaSurface(page, "Brave"), label)
 })
 
 Then("the Brave card subtitle should contain {string}", async ({ page }, text: string) => {
-  const card = page.locator("article", { hasText: "Brave" }).first()
+  const card = providerQuotaSurface(page, "Brave")
   await expect(card).toContainText(text)
 })
 
@@ -372,7 +398,7 @@ Then("the credit details should show {string}", async ({ page }, text: string) =
 })
 
 Then("the Brave CRD value should carry {string} hover text", async ({ page }, text: string) => {
-  const card = page.locator("article", { hasText: "Brave" }).first()
+  const card = providerQuotaSurface(page, "Brave")
   const value = card.locator('span[title="' + text + '"]')
   await expect(value.first()).toBeVisible()
   await expect(value.first()).toHaveAttribute("title", text)
@@ -380,12 +406,13 @@ Then("the Brave CRD value should carry {string} hover text", async ({ page }, te
 })
 
 Then("the Brave card should show one credit bar", async ({ page }) => {
-  const card = page.locator("article", { hasText: "Brave" }).first()
+  const card = providerQuotaSurface(page, "Brave")
   await expect(card.getByRole("progressbar", { name: barName("Brave") })).toHaveCount(1)
 })
 
 Then("the Brave card should show no credit bar", async ({ page }) => {
-  const card = page.locator("article", { hasText: "Brave" }).first()
+  const card = providerQuotaSurface(page, "Brave")
+  await expect(card).toBeVisible()
   await expect(card.getByRole("progressbar", { name: barName("Brave") })).toHaveCount(0)
 })
 
@@ -413,7 +440,7 @@ Then("the grant form should show {string}", async ({ page }, text: string) => {
 })
 
 Then("the grant form should have no fetch field", async ({ page }) => {
-  await expect(page.getByLabel(/Fetch credit units/i)).toHaveCount(0)
+  await expect(page.getByLabel(/Fetch budget/i)).toHaveCount(0)
 })
 
 Then("the history modal should show {string}", async ({ page }, text: string) => {
@@ -434,7 +461,7 @@ function tavilyBarName(): string {
 }
 
 function tavilyCard(page: import("@playwright/test").Page) {
-  return page.locator("article", { hasText: "Tavily" }).first()
+  return providerQuotaSurface(page, "Tavily")
 }
 
 Then("the Tavily credit bar should show {string} percent", async ({ page }, value: string) => {
@@ -446,15 +473,15 @@ Then("the Tavily credit bar should show {string} percent", async ({ page }, valu
 
 Then("the Tavily card should show {string}", async ({ page }, value: string) => {
   const card = tavilyCard(page)
-  const fraction = value.match(/(\d[\d.]*)\s*\/\s*(\d[\d.]*)\s*Credits/)
+  const fraction = value.match(/(\d[\d.,]*)\s*\/\s*(\d[\d.,]*)\s*Tavily credits/)
   if (fraction !== null) {
     const remaining = fraction[1] as string
     const total = fraction[2] as string
     await expect(card.getByText(remaining, { exact: true })).toBeVisible()
     await expect(card.getByText(`/ ${total}`, { exact: true })).toBeVisible()
-    await expect(card.getByText("Credits", { exact: true }).first()).toBeVisible()
+    await expect(card.getByText("Tavily credits", { exact: true }).first()).toBeVisible()
     const normalized = ((await card.textContent()) ?? "").replace(/\s+/g, "")
-    expect(normalized).toContain(remaining + "/" + total + "Credits")
+    expect(normalized).toContain(remaining + "/" + total + "Tavilycredits")
     return
   }
   await expect(card).toContainText(value)
@@ -463,12 +490,12 @@ Then("the Tavily card should show {string}", async ({ page }, value: string) => 
 Then("the Tavily card should show {string} with no total", async ({ page }, remaining: string) => {
   const card = tavilyCard(page)
   await expect(card.getByText(remaining, { exact: true })).toBeVisible()
-  await expect(card.getByText("Credits", { exact: true }).first()).toBeVisible()
+  await expect(card.getByText("Tavily credits", { exact: true }).first()).toBeVisible()
   await expect(card.getByText(/^\/ \d/)).toHaveCount(0)
 })
 
 Then("the Tavily card should show the {string} action", async ({ page }, label: string) => {
-  await expect(tavilyCard(page).getByRole("button", { name: new RegExp(label, "i") })).toBeVisible()
+  await expectCardAction(page, tavilyCard(page), label)
 })
 
 Then("the Tavily card subtitle should contain {string}", async ({ page }, text: string) => {
@@ -483,6 +510,7 @@ Then("the Tavily card should show one credit bar", async ({ page }) => {
 
 Then("the Tavily card should show no credit bar", async ({ page }) => {
   const card = tavilyCard(page)
+  await expect(card).toBeVisible()
   await expect(card.getByRole("progressbar", { name: tavilyBarName() })).toHaveCount(0)
   await expect(card.getByRole("progressbar")).toHaveCount(0)
 })
@@ -539,8 +567,8 @@ Then("the credit details should not show {string}", async ({ page }, text: strin
 })
 
 When("I open the Tavily credit grant", async ({ page }) => {
-  await page.getByRole("button", { name: /Budget Limit for Tavily/i }).click()
-  await expect(page.getByText("Search Credits")).toBeVisible()
+  await openCardMenuItem(page, "Tavily", "Budget limit")
+  await expect(page.getByText("Search budget (credits)")).toBeVisible()
 })
 
 Then("the {string} grant field should show {string}", async ({ page }, label: string, value: string) => {
@@ -575,18 +603,25 @@ function tavilyCardTierSelect(page: import("@playwright/test").Page) {
   return tavilyCard(page).getByRole("combobox", { name: "Tavily rate tier (key environment)", exact: true })
 }
 
-When("I choose the Tavily card rate tier {string}", async ({ page }, env: string) => {
+/** The compact option label of one key environment in the shared select. */
+function tierLabel(env: string): string {
+  return env === "prod" ? "Production" : "Development"
+}
+
+async function chooseCardTier(page: import("@playwright/test").Page, env: string): Promise<void> {
   const select = tavilyCardTierSelect(page)
   await expect(select).toBeVisible()
   await expect(select).toBeEnabled()
-  await select.selectOption(env)
+  await select.click()
+  await page.getByRole("option", { name: tierLabel(env), exact: true }).click()
+}
+
+When("I choose the Tavily card rate tier {string}", async ({ page }, env: string) => {
+  await chooseCardTier(page, env)
 })
 
 When("I choose the Tavily card rate tier {string} without waiting", async ({ page }, env: string) => {
-  const select = tavilyCardTierSelect(page)
-  await expect(select).toBeVisible()
-  await expect(select).toBeEnabled()
-  await select.selectOption(env)
+  await chooseCardTier(page, env)
 })
 
 When("I replace the Tavily credential while the PATCH is pending", async ({ page }) => {
@@ -601,7 +636,7 @@ Then("the Tavily card rate tier should be disabled while pending", async ({ page
 Then("the Tavily card rate tier should show {string}", async ({ page }, env: string) => {
   const select = tavilyCardTierSelect(page)
   await expect(select).toBeVisible()
-  await expect(select).toHaveValue(env)
+  await expect(select).toContainText(tierLabel(env))
   await expect(tavilyCard(page)).not.toContainText("1000 requests/min")
   await expect(tavilyCard(page)).not.toContainText("100 requests/min")
 })
@@ -632,7 +667,7 @@ When("I focus the Tavily credit details control with the keyboard", async ({ pag
 
 When("I activate the focused Tavily credit details control", async ({ page }) => {
   await page.keyboard.press("Enter")
-  await expect(page.getByText("Quota Details")).toBeVisible()
+  await expect(page.getByText("Quota details")).toBeVisible()
 })
 
 Then("the Tavily details control regains focus", async ({ page }) => {

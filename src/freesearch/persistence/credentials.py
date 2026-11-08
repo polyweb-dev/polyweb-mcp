@@ -14,17 +14,18 @@ creation. The composite grant key ``(credential_id, owner_scope)`` references
 ``provider_credentials(id, owner_scope)`` with a ``system`` check, so a
 project-private credential can never be granted at the database level.
 
-Every repository method takes mandatory scope parameters. There is no query
-that selects credentials across owners, and no optional project selector that
-widens a read beyond one account or one project.
+Owner-facing queries are scoped to one owner or project. The installation-wide
+usage polling query is an internal exception and never returns secret material.
 """
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import (
     CHAR,
     CheckConstraint,
@@ -33,10 +34,12 @@ from sqlalchemy import (
     Index,
     Integer,
     PrimaryKeyConstraint,
+    Select,
     String,
     Text,
     delete,
     func,
+    literal_column,
     select,
     text,
     update,
@@ -52,10 +55,30 @@ from freesearch.models.projects import (
 )
 from freesearch.persistence.storage import Base, ProviderHealthRow
 from freesearch.persistence.timestamps import parse_timestamp
+from freesearch.persistence.users import UserRow
 
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+class StoredVaultCredential(BaseModel):
+    """A credential and its vault policy, without secret material."""
+
+    model_config = ConfigDict(frozen=True)
+
+    credential: CredentialInstanceRead
+    owner_user_id: UUID
+    overcommit: bool
+    contention_mode: str
+
+
+class UsagePollingCredential(BaseModel):
+    """Internal, secret-free identity for an active vault credential."""
+
+    credential: CredentialInstanceRead
+    owner_user_id: UUID
+    owner_email: str
 
 
 def _encode_operations(operations: frozenset[CredentialOperation]) -> str:
@@ -129,6 +152,32 @@ class ProviderCredentialRow(Base):
             name="provider_credentials_created_by_fkey",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["owner_user_id"],
+            ["user.id"],
+            name="provider_credentials_owner_user_id_fkey",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("overcommit IN (0, 1)", name="provider_credentials_overcommit_allowed"),
+        CheckConstraint(
+            "contention_mode IN ('equal', 'ratio')",
+            name="provider_credentials_contention_mode_allowed",
+        ),
+        CheckConstraint(
+            "capacity_rate >= 0", name="provider_credentials_capacity_rate_nonnegative"
+        ),
+        CheckConstraint(
+            "capacity_rate_window_seconds > 0",
+            name="provider_credentials_capacity_rate_window_positive",
+        ),
+        CheckConstraint(
+            "capacity_budget_micros >= 0",
+            name="provider_credentials_capacity_budget_nonnegative",
+        ),
+        CheckConstraint(
+            "capacity_budget_window IN ('day', 'week', 'month')",
+            name="provider_credentials_capacity_budget_window_allowed",
+        ),
         CheckConstraint(
             "owner_scope IN ('system', 'project')",
             name="provider_credentials_owner_scope_allowed",
@@ -139,8 +188,13 @@ class ProviderCredentialRow(Base):
             name="provider_credentials_owner_scope_consistent",
         ),
         CheckConstraint(
-            "auth_mode IN ('api_key', 'oauth')",
+            "auth_mode IN ('api_key', 'oauth', 'keyless')",
             name="provider_credentials_auth_mode_allowed",
+        ),
+        CheckConstraint(
+            "(auth_mode = 'keyless' AND owner_scope = 'system' AND owner_user_id IS NULL "
+            "AND created_by IS NULL) OR (auth_mode != 'keyless' AND created_by IS NOT NULL)",
+            name="provider_credentials_keyless_system",
         ),
         CheckConstraint(
             "status IN ('active', 'deleted')",
@@ -166,13 +220,18 @@ class ProviderCredentialRow(Base):
         Index("provider_credentials_id_auth_mode_key", "id", "auth_mode", unique=True),
         Index(
             "provider_credentials_live_label_key",
-            "account_id",
-            "owner_scope",
-            text("coalesce(owner_project_id, '')"),
+            "owner_user_id",
             "provider_type",
             "label",
             unique=True,
             sqlite_where=text("status = 'active'"),
+        ),
+        Index(
+            "provider_credentials_keyless_provider_key",
+            "account_id",
+            "provider_type",
+            unique=True,
+            sqlite_where=text("auth_mode = 'keyless'"),
         ),
         Index("ix_provider_credentials_owner_project_id", "owner_project_id"),
     )
@@ -186,10 +245,17 @@ class ProviderCredentialRow(Base):
     auth_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
-    created_by: Mapped[str] = mapped_column(CHAR(36), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(CHAR(36), nullable=True)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+    owner_user_id: Mapped[str | None] = mapped_column(CHAR(36))
+    overcommit: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    contention_mode: Mapped[str] = mapped_column(Text, nullable=False, server_default="equal")
+    capacity_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    capacity_rate_window_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    capacity_budget_micros: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    capacity_budget_window: Mapped[str | None] = mapped_column(String(5), nullable=True)
 
 
 class CredentialProjectGrantRow(Base):
@@ -279,10 +345,13 @@ class CredentialRepository:
         label: str,
         auth_mode: str,
         created_by: UUID,
+        owner_user_id: UUID | None = None,
         now: str | None = None,
     ) -> CredentialInstanceRead:
         """Insert one generation-1 active credential and return its read model."""
 
+        if owner_user_id is not None and owner_scope != CredentialOwnerScope.SYSTEM:
+            raise ValueError("vault credentials must be system scoped")
         timestamp = now or _now_iso()
         row = ProviderCredentialRow(
             id=str(uuid4()),
@@ -301,7 +370,140 @@ class CredentialRepository:
         )
         self._session.add(row)
         await self._session.flush()
+        if owner_user_id is not None:
+            await self._session.execute(
+                text("UPDATE provider_credentials SET owner_user_id=:owner WHERE id=:id"),
+                {"owner": str(owner_user_id), "id": row.id},
+            )
         return _credential_read(row)
+
+    async def list_for_owner(self, user_id: UUID) -> list[StoredVaultCredential]:
+        """Return active credentials owned by this user only."""
+        result = await self._session.execute(
+            self._vault_select()
+            .where(
+                literal_column("provider_credentials.owner_user_id") == str(user_id),
+                ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
+            )
+            .order_by(ProviderCredentialRow.id)
+        )
+        return [
+            StoredVaultCredential(
+                credential=_credential_read(row),
+                owner_user_id=UUID(owner),
+                overcommit=bool(overcommit),
+                contention_mode=mode,
+            )
+            for row, owner, overcommit, mode in result
+        ]
+
+    async def list_vault_credentials_for_usage_polling(
+        self, *, account_id: UUID, provider: str
+    ) -> list[UsagePollingCredential]:
+        """List active vault identities for internal installation-wide polling only."""
+
+        owner: ColumnElement[str] = literal_column("provider_credentials.owner_user_id")
+        email: ColumnElement[str] = literal_column('"user".email')
+        user_id: ColumnElement[str] = literal_column('"user".id')
+        result = await self._session.execute(
+            select(ProviderCredentialRow, owner, email)
+            .join(UserRow, owner == user_id)
+            .where(
+                ProviderCredentialRow.account_id == str(account_id),
+                ProviderCredentialRow.provider_type == provider,
+                ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
+                owner.is_not(None),
+            )
+            .order_by(ProviderCredentialRow.created_at, ProviderCredentialRow.id)
+        )
+        return [
+            UsagePollingCredential(
+                credential=_credential_read(row), owner_user_id=UUID(owner_id), owner_email=address
+            )
+            for row, owner_id, address in result
+        ]
+
+    async def get_owned(self, user_id: UUID, credential_id: UUID) -> StoredVaultCredential | None:
+        result = await self._session.execute(
+            self._vault_select().where(
+                ProviderCredentialRow.id == str(credential_id),
+                literal_column("provider_credentials.owner_user_id") == str(user_id),
+                ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
+            )
+        )
+        found = result.one_or_none()
+        if found is None:
+            return None
+        row, owner, overcommit, mode = found
+        return StoredVaultCredential(
+            credential=_credential_read(row),
+            owner_user_id=UUID(owner),
+            overcommit=bool(overcommit),
+            contention_mode=mode,
+        )
+
+    async def update_policy(
+        self, user_id: UUID, credential_id: UUID, *, overcommit: bool, contention_mode: str
+    ) -> StoredVaultCredential | None:
+        if contention_mode not in {"equal", "ratio"}:
+            raise ValueError("invalid contention mode")
+        result = await self._session.execute(
+            text(
+                "UPDATE provider_credentials SET overcommit=:overcommit, contention_mode=:mode, "
+                "updated_at=:now, version=version+1 "
+                "WHERE id=:id AND owner_user_id=:owner AND status='active' RETURNING id"
+            ),
+            {
+                "overcommit": int(overcommit),
+                "mode": contention_mode,
+                "now": _now_iso(),
+                "id": str(credential_id),
+                "owner": str(user_id),
+            },
+        )
+        if result.scalar_one_or_none() is None:
+            return None
+        return await self.get_owned(user_id, credential_id)
+
+    async def update_capacity(
+        self,
+        user_id: UUID,
+        credential_id: UUID,
+        *,
+        rate: int | None,
+        rate_window_seconds: int | None,
+        budget_micros: int | None,
+        window: str | None,
+    ) -> bool:
+        """Store capacity only for the active credential's owner."""
+
+        result = await self._session.execute(
+            update(ProviderCredentialRow)
+            .where(
+                ProviderCredentialRow.id == str(credential_id),
+                literal_column("provider_credentials.owner_user_id") == str(user_id),
+                ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
+            )
+            .values(
+                capacity_rate=rate,
+                capacity_rate_window_seconds=rate_window_seconds,
+                capacity_budget_micros=budget_micros,
+                capacity_budget_window=window,
+                updated_at=_now_iso(),
+                version=ProviderCredentialRow.version + 1,
+            )
+            .returning(ProviderCredentialRow.id)
+        )
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    def _vault_select() -> Select[tuple[ProviderCredentialRow, Any, Any, Any]]:
+        return select(
+            ProviderCredentialRow,
+            literal_column("provider_credentials.owner_user_id"),
+            literal_column("provider_credentials.overcommit"),
+            literal_column("provider_credentials.contention_mode"),
+        )
 
     async def get_system_credential(
         self,
@@ -309,12 +511,16 @@ class CredentialRepository:
         account_id: UUID,
         credential_id: UUID,
     ) -> CredentialInstanceRead | None:
-        """Return one active system-owned credential or ``None``."""
+        """Return a legacy system credential, never a user-owned vault key."""
 
-        row = await self._select_active(
-            account_id=account_id,
-            credential_id=credential_id,
-            owner_scope=CredentialOwnerScope.SYSTEM,
+        row = await self._session.scalar(
+            select(ProviderCredentialRow).where(
+                ProviderCredentialRow.id == str(credential_id),
+                ProviderCredentialRow.account_id == str(account_id),
+                ProviderCredentialRow.owner_scope == CredentialOwnerScope.SYSTEM.value,
+                ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
+                literal_column("provider_credentials.owner_user_id").is_(None),
+            )
         )
         return None if row is None else _credential_read(row)
 
@@ -357,7 +563,7 @@ class CredentialRepository:
         return None if row is None else _credential_read(row)
 
     async def list_system_credentials(self, *, account_id: UUID) -> list[CredentialInstanceRead]:
-        """List active system-owned credentials only, never project-private."""
+        """List legacy system credentials, excluding user-owned vault keys."""
 
         result = await self._session.execute(
             select(ProviderCredentialRow)
@@ -365,6 +571,7 @@ class CredentialRepository:
                 ProviderCredentialRow.account_id == str(account_id),
                 ProviderCredentialRow.owner_scope == CredentialOwnerScope.SYSTEM.value,
                 ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
+                literal_column("provider_credentials.owner_user_id").is_(None),
             )
             .order_by(ProviderCredentialRow.created_at, ProviderCredentialRow.id)
         )

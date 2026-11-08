@@ -1,9 +1,12 @@
 import type { ReactNode } from "react"
 import { RemainingBar, percentLabel } from "@/shared/ui/RemainingBar"
-import { dollarText, formatCRDAmount, percentRemaining } from "../model/crdDisplay"
+import { dollarText, percentRemaining } from "../model/crdDisplay"
 import type { CreditCardModel } from "../model/crdCardModel"
+import type { NativePool } from "@/domains/dashboard"
+import { groupDigits, nativeLeftText } from "../model/numberText"
 import { formatCreditValue, type TavilyCreditsDisplay } from "../model/tavilyCredits"
 import { Footnote } from "./Footnote"
+import { multiplyDecimal } from "../model/manualQuotaMath"
 
 export interface ProviderCreditSummaryProps {
   providerName: string
@@ -14,342 +17,200 @@ export interface ProviderCreditSummaryProps {
    * current CRD fraction unchanged.
    */
   credits?: TavilyCreditsDisplay
-  /** The action row that sits at the leading edge of the credit row. */
+  nativePool?: NativePool | null
+  /** The footer controls that sit at the leading edge of the credit row. */
   actions?: ReactNode
   /** The info control that sits beside the credit fraction. */
   info?: ReactNode
-  /** Optional explanatory notes rendered before the credit actions. */
+  /** Optional notes rendered before the footer row. */
   bodyNotes?: ReactNode
-  /** Draw the funds bar of a finite rail through the shared bar. */
-  useSharedBar?: boolean
-  /** Optional control row rendered before a native credit progress bar. */
+  /** Optional control row rendered before the funds bar. */
   fundsControl?: ReactNode
-  /** Rate progress bars rendered above the action row. */
+  /** Rate progress bars rendered below the funds bar. */
   rateBars?: ReactNode
+  /** The one quiet line of a card that knows no funds, no rate, and no balance. */
+  emptyText?: string | null
   /**
    * Authoritative OAuth balance fallback (raw USD decimal, e.g. Parallel
    * Account-API remaining or You.com cents-balance remaining). Shown
    * amount-only when the limits model holds no funds; with a display-only
-   * allowance it shows a fraction, bar, and capped percent instead. Only
-   * Parallel and You.com produce this shape today (aggregate_pool null +
-   * remaining-only latestQuota), so other cards leave it absent.
+   * allowance it shows a fraction and bar instead.
    */
   balanceFallbackUSD?: string | null
-  /**
-   * CRD equivalent of the fallback balance (exact decimal, e.g. "24870" for
-   * USD 24.87 at the USD 0.001 reference). Computed by the card from the
-   * rail profile through `usdBalanceToCRD`; the summary only formats it.
-   * Absent when the conversion is unavailable, and the dollar amount still
-   * shows alone.
-   */
+  /** CRD equivalent of the fallback balance, shown as hover text. */
   balanceFallbackCRD?: string | null
-  /**
-   * Display-only allowance of the fallback balance (exact CRD decimal, e.g.
-   * Parallel "$5/mo free credit" as "5000" or You.com "$100 signup" as
-   * "100000"). Frontend-only; never a backend allowance. With both CRD
-   * amounts known, the card shows the "remaining / allowance CRD" fraction
-   * with a capped bar and percent; otherwise the fallback stays amount-only.
-   */
-  balanceFallbackAllowanceCRD?: string | null
+  /** Amount-only headline when no fraction is honest: "$192.33 left", "1,320 credits left". */
+  amountText?: string | null
+  /** A quiet note beside the amount, such as credits above the plan allowance. */
+  amountNote?: string | null
 }
 
-const AMOUNT = "tnum text-[18px] font-semibold text-[var(--text-strong)]"
-const TOTAL = "tnum text-[18px] font-semibold text-[var(--muted)]"
+const AMOUNT = "tnum text-[16px] font-medium text-[var(--text-strong)]"
+const TOTAL = "tnum text-[16px] font-medium text-[var(--muted)]"
 /** The unit keeps the size of the two amounts, with the quiet color. */
-const UNIT = "text-[18px] font-semibold text-[var(--muted)]"
-const CRD_SUFFIX = " CRD"
-const CREDIT_ROW = "flex w-full flex-wrap items-center justify-between gap-3"
+const UNIT = "text-[16px] font-medium text-[var(--muted)]"
+const CREDIT_ROW = "mt-auto flex w-full flex-wrap items-center justify-between gap-3"
 const CREDIT_VALUE = "ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 leading-none"
-/** The quiet state text of one native Credits rail. */
-const VALUE = "text-[13px] text-[var(--muted)]"
+const BODY = "flex flex-1 flex-col gap-4"
+const EMPTY = "text-[13px] text-[var(--muted)]"
 
-/** The number part of one shown credit amount: "4500 CRD" becomes "4500". */
-function amountNumber(amount: string): string {
-  const text = formatCRDAmount(amount)
-  return text.endsWith(CRD_SUFFIX) ? text.slice(0, -CRD_SUFFIX.length) : text
+interface FractionInput {
+  remaining: string
+  total: string | null
+  unit: string
+  hover: string | null
 }
 
-/** The credit amount of one rail: the fraction, the plain amount, or Free. */
-function creditValue(model: CreditCardModel, usdLeft: string | null): ReactNode {
-  if (model.state === "unmetered") {
-    return <span className={AMOUNT + " leading-none"}>Free</span>
-  }
-  if (model.state !== "finite" || model.remainingCRD === null) return null
-  const total = model.allowanceCRD === null ? null : amountNumber(model.allowanceCRD)
+/** The remaining amount, the total once, and the unit once: "4500 / 5000 CRD". */
+function fraction({ remaining, total, unit, hover }: FractionInput): ReactNode {
   return (
     <>
-      <span
-        className={AMOUNT}
-        {...(usdLeft === null ? {} : { title: usdLeft, "aria-label": usdLeft })}
-      >
-        {amountNumber(model.remainingCRD)}
+      <span className={AMOUNT} {...(hover === null ? {} : { title: hover, "aria-label": hover })}>
+        {remaining}
       </span>
       {total !== null && <span className={TOTAL}>/ {total}</span>}
-      <span className={UNIT}>CRD</span>
+      <span className={UNIT}>{unit}</span>
     </>
   )
 }
 
+/**
+ * The credit amount of one rail: the fraction, an amount-only headline when
+ * no fraction is honest, or Free for an unmetered rail.
+ */
+function nativePoolValue(pool: NativePool | null): ReactNode {
+  if (pool !== null && pool.remaining !== null && ["CREDIT", "REQUEST"].includes(pool.native_unit.toUpperCase())) {
+    const unit = pool.native_unit.toUpperCase() === "CREDIT" ? "credits" : "requests"
+    return fraction({
+      remaining: groupDigits(pool.remaining.replace(/\.0+$/, "")),
+      total: pool.allowance === null ? null : groupDigits(pool.allowance.replace(/\.0+$/, "")),
+      unit,
+      hover: null,
+    })
+  }
+  return null
+}
+
+function creditValue(model: CreditCardModel, usdLeft: string | null, amountText: string | null, pool: NativePool | null): ReactNode {
+  if (model.state !== "finite" || model.remainingCRD === null) return null
+  if (amountText !== null) {
+    return (
+      <span className={AMOUNT} {...(usdLeft === null ? {} : { title: usdLeft })}>
+        {amountText}
+      </span>
+    )
+  }
+  const native = nativePoolValue(pool)
+  if (native !== null) return native
+  const remaining = model.remainingUSD ?? multiplyDecimal(model.remainingCRD, "0.001")
+  const total = model.allowanceCRD === null ? null : multiplyDecimal(model.allowanceCRD, "0.001")
+  if (remaining === null) return null
+  return fraction({ remaining: dollarText(remaining), total: total === null ? null : dollarText(total), unit: "USD", hover: usdLeft })
+}
+
 interface FundsBarInput {
-  providerName: string
-  model: CreditCardModel
+  label: string
   percent: number | null
-  label: string | null
-  useSharedBar: boolean
+  valueText: string
 }
 
 /**
- * The funds bar line of one rail; a finite percent is required.
- *
- * With the shared flag, the bar takes one full-width line through the shared
- * bar, and the percentage text sits below the bar in its own line. Without the
- * flag, a small Credits title sits above the shared bar with the percentage
- * at its right.
+ * The one funds bar of every card: a "Credits left" title, the shared bar,
+ * and a quiet percent at its right, so the fraction stays the one prominent
+ * figure of the card.
  */
-function fundsBar(input: FundsBarInput): ReactNode {
-  const { providerName, model, percent, label, useSharedBar } = input
-  const remaining = model.remainingCRD
-  if (percent === null || label === null || remaining === null) return null
-  const valueText = label + " remaining, " + formatCRDAmount(remaining) + " left"
-  if (useSharedBar) {
-    return (
-      <>
-        <RemainingBar
-          percentRemaining={percent}
-          label={providerName + " credit units remaining"}
-          valueText={valueText}
-        />
-        <div className="flex justify-end">
-          <span className="tnum text-[18px] font-semibold text-[var(--text-strong)]">
-            {label}
-          </span>
+function fundsBar({ label, percent, valueText }: FundsBarInput): ReactNode {
+  if (percent === null) return null
+  return (
+    <div className="space-y-1">
+      <div className="text-[12px] text-[var(--text-strong)]">Balance left</div>
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <RemainingBar percentRemaining={percent} label={label} valueText={valueText} />
         </div>
-      </>
-    )
-  }
-  return (
-    <div className="space-y-0.5">
-      <div className="text-[12px] text-[var(--text-strong)]">Credits</div>
-      <RemainingBar
-        percentRemaining={percent}
-        label={providerName + " credit units remaining"}
-        valueText={valueText}
-        showPercent
-      />
+        <span className="tnum shrink-0 text-[12px] text-[var(--muted)]">{percentLabel(percent)}</span>
+      </div>
     </div>
   )
 }
 
-/**
- * The funds bar of one native Credits rail through the shared bar.
- *
- * The fraction carries the native Credit values, so the accessible name and
- * the value text state the Credits amount itself. The percentages come from
- * the exact native strings through the shared helper. The bar keeps one
- * titled line with the percentage at its right through showPercent.
- */
-function nativeFundsBar(
-  providerName: string,
-  credits: TavilyCreditsDisplay,
-  percent: number,
-): ReactNode {
-  if (credits.remaining === null) return null
-  const valueNumber = formatCreditValue(credits.remaining)
-  if (valueNumber === null) return null
-  const label = providerName + " native Credits remaining"
-  const valueText =
-    valueNumber +
-    (credits.allowance === null
-      ? " Tavily Credits left"
-      : " of " + formatCreditValue(credits.allowance) + " Tavily Credits left")
-  return (
-    <div className="space-y-0.5">
-      <div className="text-[12px] text-[var(--text-strong)]">Credits</div>
-      <RemainingBar
-        percentRemaining={percent}
-        label={label}
-        valueText={valueText}
-        showPercent
-      />
-    </div>
-  )
+/** The value text of one CRD funds bar. */
+function crdValueText(percent: number | null, remaining: string | null): string {
+  if (percent === null || remaining === null) return ""
+  const usd = multiplyDecimal(remaining, "0.001")
+  return usd === null ? "" : percentLabel(percent) + " remaining, " + dollarText(usd) + " left"
 }
 
-/** Amount-only fallback of one authoritative OAuth balance: "$24.87 (24870 CRD)", no bar, no percent. */
-function balanceFallbackValue(
-  usd: string,
-  crd: string | null,
-  allowance: string | null,
-  usdLeft: string | null,
-): ReactNode {
-  if (crd !== null && allowance !== null) {
-    const total = amountNumber(allowance)
-    return (
-      <>
-        <span
-          className={AMOUNT}
-          {...(usdLeft === null ? {} : { title: usdLeft, "aria-label": usdLeft })}
-        >
-          {amountNumber(crd)}
-        </span>
-        <span className={TOTAL}>/ {total}</span>
-        <span className={UNIT}>CRD</span>
-      </>
-    )
-  }
-  if (crd === null) return <span className={AMOUNT}>{dollarText(usd)}</span>
-  return <span className={AMOUNT}>{dollarText(usd) + " (" + formatCRDAmount(crd) + ")"}</span>
+function fundsValueText(model: CreditCardModel, pool: NativePool | null): string {
+  if (model.percentRemaining === null) return ""
+  const native = pool?.remaining == null ? null : nativeLeftText(pool.remaining, pool.native_unit)
+  return native === null
+    ? crdValueText(model.percentRemaining, model.remainingCRD)
+    : percentLabel(model.percentRemaining) + " remaining, " + native
 }
 
-/** A usable fallback balance: a finite non-empty decimal string. */
-function usableFallbackBalance(value: string | null | undefined): string | null {
-  if (value === null || value === undefined) return null
-  const text = value.trim()
-  if (text === "") return null
-  return Number.isFinite(Number(text)) ? value : null
-}
-
-interface FallbackBalance { usd: string; crd: string | null; allowance: string | null }
-
-/**
- * Amount-only OAuth balance of one card: the limits model holds no funds, so
- * the authoritative remaining shows with its CRD equivalent. An unmetered rail
- * keeps Free; the fallback never overrides it. Null when unusable. A
- * display-only allowance (Parallel $5/mo free credit, You.com $100 signup
- * 100000 CRD total) rides along for the fraction, bar, and capped percent;
- * it never invents backend funds.
- */
-function fallbackBalanceOf(
-  model: CreditCardModel,
-  usd: string | null | undefined,
-  crd: string | null | undefined,
-  allowance: string | null | undefined,
-): FallbackBalance | null {
-  if (model.remainingCRD !== null || model.state === "unmetered") return null
-  const fallbackUSD = usableFallbackBalance(usd)
-  if (fallbackUSD === null) return null
-  return { usd: fallbackUSD, crd: usableFallbackBalance(crd), allowance: usableFallbackBalance(allowance) }
-}
-
-/**
- * The funds bar of one fallback balance with a display-only allowance (e.g.
- * Parallel 24870/5000 CRD, You.com 4750/100000 CRD). Mirrors the finite funds
- * bar: a finite percent is required, and the bar caps at 100 when remaining
- * exceeds the allowance (Firecrawl 4761.4/3800 pattern). Null without both
- * CRD amounts or a finite percent.
- */
-interface FallbackFundsBarInput {
-  providerName: string
-  fallback: FallbackBalance
-  percent: number | null
-  label: string | null
-  useSharedBar: boolean
-}
-
-function fallbackFundsBar(input: FallbackFundsBarInput): ReactNode {
-  const { providerName, fallback, percent, label, useSharedBar } = input
-  if (percent === null || label === null || fallback.crd === null || fallback.allowance === null) {
-    return null
-  }
-  const valueText = label + " remaining, " + formatCRDAmount(fallback.crd) + " left"
-  if (useSharedBar) {
-    return (
-      <>
-        <RemainingBar
-          percentRemaining={percent}
-          label={providerName + " credit units remaining"}
-          valueText={valueText}
-        />
-        <div className="flex justify-end">
-          <span className="tnum text-[18px] font-semibold text-[var(--text-strong)]">
-            {label}
-          </span>
-        </div>
-      </>
-    )
-  }
-  return (
-    <div className="space-y-0.5">
-      <div className="text-[12px] text-[var(--text-strong)]">Credits</div>
-      <RemainingBar
-        percentRemaining={percent}
-        label={providerName + " credit units remaining"}
-        valueText={valueText}
-        showPercent
-      />
-    </div>
-  )
-}
-
-/** The visible value line of one native Credits rail: the fraction or its honest state. */
+/** The visible value line of one native Credits rail. */
 function nativeCreditValue(credits: TavilyCreditsDisplay): ReactNode {
-  if (credits.state === "keyless") {
-    return <span className={VALUE}>Keyless access (no Credits quota is reported)</span>
-  }
+  if (credits.state === "keyless") return null
   if (credits.state === "unavailable") {
-    return <span className={VALUE}>Transport unavailable</span>
+    return <span className="text-[13px] text-[var(--muted)]">Provider unavailable right now</span>
   }
-  const total = credits.allowance === null ? null : formatCreditValue(credits.allowance)
+  const totalRaw = credits.allowance === null ? null : formatCreditValue(credits.allowance)
+  const total = totalRaw === null ? null : groupDigits(totalRaw)
   if (credits.remaining === null) {
     if (total === null) return null
     return (
       <>
         <span className={TOTAL}>{"/ " + total}</span>
-        <span className={UNIT}>Tavily Credits</span>
+        <span className={UNIT}>Tavily credits</span>
       </>
     )
   }
-  return (
-    <>
-      <span className={AMOUNT}>{formatCreditValue(credits.remaining)}</span>
-      {total !== null && <span className={TOTAL}>{"/ " + total}</span>}
-      <span className={UNIT}>Tavily Credits</span>
-    </>
-  )
+  const remaining = groupDigits(formatCreditValue(credits.remaining) ?? credits.remaining)
+  return fraction({ remaining, total, unit: "Tavily credits", hover: null })
 }
 
-/** The footnote facts of one native Credits rail, in the shown order. */
+/** The quiet facts of one native Credits rail, in the shown order. */
 function nativeFootnotes(credits: TavilyCreditsDisplay): ReactNode[] {
   const notes: ReactNode[] = []
   if (credits.state === "paygo") {
-    notes.push(
-      <Footnote key="paygo">
-        Free Credits are spent; further use continues under pay-as-you-go.
-      </Footnote>
-    )
+    notes.push(<Footnote key="paygo">Free credits are used up, so further use is billed as you go</Footnote>)
   }
-  if (credits.stale) {
-    notes.push(<Footnote key="stale">The last vendor read is stale.</Footnote>)
-  }
+  if (credits.stale) notes.push(<Footnote key="stale">The last provider reading is out of date</Footnote>)
   if (credits.localCap !== null) {
-    notes.push(
-      <Footnote key="cap">Local grant ceiling {formatCRDAmount(credits.localCap)}.</Footnote>
-    )
-  }
-  if (credits.remaining !== null && credits.allowance === null) {
-    notes.push(
-      <Footnote key="allowance">No allowance is reported, so this card shows no percentage.</Footnote>
-    )
+    notes.push(<Footnote key="cap">Budget limit {dollarText(multiplyDecimal(credits.localCap, "0.001") ?? "0")}</Footnote>)
   }
   return notes
 }
 
-/** The whole summary of one rail with native display facts. */
-function nativeSummary(
-  input: ProviderCreditSummaryProps & { credits: TavilyCreditsDisplay },
-): ReactNode {
-  const { providerName, credits, actions, info, bodyNotes, fundsControl, rateBars } = input
+/** The native Credits bar of one Tavily rail. */
+function nativeFundsBar(providerName: string, credits: TavilyCreditsDisplay): ReactNode {
   const percent = percentRemaining(credits.remaining, credits.allowance)
+  if (percent === null || credits.remaining === null) return null
+  const valueNumber = formatCreditValue(credits.remaining)
+  if (valueNumber === null) return null
+  const valueText =
+    valueNumber +
+    (credits.allowance === null
+      ? " Tavily credits left"
+      : " of " + groupDigits(formatCreditValue(credits.allowance) ?? credits.allowance) + " Tavily credits left")
+  return fundsBar({ label: providerName + " native Credits remaining", percent, valueText })
+}
+
+/** The whole summary of one rail with native display facts. */
+function nativeSummary(input: ProviderCreditSummaryProps & { credits: TavilyCreditsDisplay }): ReactNode {
+  const { providerName, credits, actions, info, bodyNotes, fundsControl, rateBars, emptyText } = input
   return (
-    <div className="flex flex-1 flex-col justify-between gap-3">
-      <div className="space-y-2">
+    <div className={BODY}>
+      <div className="space-y-3">
         {fundsControl}
-        {percent !== null && nativeFundsBar(providerName, credits, percent)}
+        {nativeFundsBar(providerName, credits)}
         {rateBars}
+        {emptyText != null && <p className={EMPTY}>{emptyText}</p>}
       </div>
       {bodyNotes}
       {nativeFootnotes(credits)}
-      <div className={`${CREDIT_ROW} mt-auto`}>
+      <div className={CREDIT_ROW}>
         {actions}
         <span className={CREDIT_VALUE}>
           {nativeCreditValue(credits)}
@@ -360,84 +221,71 @@ function nativeSummary(
   )
 }
 
+/** A usable fallback balance: a finite non-empty decimal string. */
+function usable(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  const text = value.trim()
+  if (text === "") return null
+  return Number.isFinite(Number(text)) ? value : null
+}
+
+interface FallbackBalance { usd: string; crd: string | null }
+
 /**
- * One credit bar with the percent at its right, then the credit row.
- *
- * With `useSharedBar`, the funds bar of a finite rail moves to its own
- * full-width line through the shared bar, and the percentage text sits below
- * that bar in its own line. Without the flag, a Credits title sits above the
- * shared bar with the percentage at its right.
- *
- * The credit row holds the actions at the leading edge and the credit fraction
- * at the trailing edge. The fraction states the remaining amount over the total
- * amount in credit units, and it carries the USD value of the remaining amount
- * as hover text. Only the funds left appear here; the priced use stays a model
- * fact without a row, and the call cost, the call count, the rate limit, the
- * last sync time, and the usage page sit in the info control.
- *
- * The bar appears only with a known positive allowance. A known balance without
- * a denominator keeps its amount and shows no percentage, an unmetered rail
- * shows Free without a fake funds bar. The credit row stays for every state,
- * so the actions of the card always hold one home.
- *
- * A rail with native display facts shows its Credits fraction instead: the bar
- * rides the shared bar with the native percent, the USD hover stays outside the
- * card, and the unknown, keyless, stale, PAYGO, and local-cap facts state
- * themselves in quiet footnotes. Card behavior without the facts stays
- * unchanged.
+ * Amount-only OAuth balance of one card: the limits model holds no funds, so
+ * the authoritative remaining shows with its CRD equivalent. An unmetered rail
+ * keeps Free; the fallback never overrides it.
  */
-export function ProviderCreditSummary({
-  providerName,
-  model,
-  credits,
-  actions,
-  info,
-  bodyNotes,
-  useSharedBar = false,
-  fundsControl,
-  rateBars,
-  balanceFallbackUSD,
-  balanceFallbackCRD,
-  balanceFallbackAllowanceCRD,
-}: ProviderCreditSummaryProps): ReactNode {
-  if (credits !== undefined) {
-    return nativeSummary({ providerName, model, credits, actions, info, bodyNotes, fundsControl, rateBars })
-  }
-  const percent = model.state === "finite" ? model.percentRemaining : null
-  const label = percent === null ? null : percentLabel(percent)
-  const usdLeft = model.remainingUSD === null ? null : dollarText(model.remainingUSD) + " left"
-  // OAuth balance fallback: amount-only without an allowance, or the fraction
-  // with a capped bar and percent against a display-only allowance (Parallel
-  // $5/mo free credit, You.com $100 signup 100000 CRD total). The allowance
-  // is frontend-only, never backend funds.
-  const fallback = fallbackBalanceOf(model, balanceFallbackUSD, balanceFallbackCRD, balanceFallbackAllowanceCRD)
-  const fallbackPercent =
-    fallback?.crd == null || fallback?.allowance == null
-      ? null
-      : percentRemaining(fallback.crd, fallback.allowance)
-  const fallbackLabel = fallbackPercent === null ? null : percentLabel(fallbackPercent)
-  const fallbackUsdLeft = fallback === null ? null : dollarText(fallback.usd) + " left"
+function fallbackBalanceOf(model: CreditCardModel, input: ProviderCreditSummaryProps): FallbackBalance | null {
+  if (model.remainingCRD !== null || model.state === "unmetered") return null
+  const usd = usable(input.balanceFallbackUSD)
+  if (usd === null) return null
+  return { usd, crd: usable(input.balanceFallbackCRD) }
+}
+
+/** The value of one fallback balance: the dollar amount left, with its CRD value as hover text. */
+function fallbackValue(fallback: FallbackBalance): ReactNode {
+  const amount = nativeLeftText(fallback.usd, "USD") ?? dollarText(fallback.usd) + " left"
+  const hover = fallback.crd === null ? null : dollarText(multiplyDecimal(fallback.crd, "0.001") ?? "0")
   return (
-    <div className="flex flex-1 flex-col justify-between gap-3">
-      <div className="space-y-2">
-        {fundsBar({ providerName, model, percent, label, useSharedBar })}
-        {fallback !== null &&
-          fallbackFundsBar({ providerName, fallback, percent: fallbackPercent, label: fallbackLabel, useSharedBar })}
+    <span className={AMOUNT} {...(hover === null ? {} : { title: hover })}>
+      {amount}
+    </span>
+  )
+}
+
+/**
+ * The funds block of one card: the funds bar, the rate bars, and the footer
+ * row with the card controls at the leading edge and the credit fraction at
+ * the trailing edge.
+ *
+ * Every card draws the same bar block: a Credits title, the shared bar, and
+ * the percent at its right. The bar appears only with a known positive
+ * allowance. A known balance without an allowance keeps its amount with no
+ * bar, and an unmetered rail shows Free. A card that knows nothing shows one
+ * quiet line instead. The fraction carries the USD value as hover text.
+ */
+export function ProviderCreditSummary(props: ProviderCreditSummaryProps): ReactNode {
+  const { providerName, model, credits, actions, info, bodyNotes, fundsControl, rateBars, emptyText } = props
+  if (credits !== undefined) return nativeSummary({ ...props, credits })
+  const percent = model.state === "finite" ? model.percentRemaining : null
+  const usdLeft = model.remainingUSD === null ? null : dollarText(model.remainingUSD) + " left"
+  const fallback = fallbackBalanceOf(model, props)
+  const barLabel = providerName + " balance remaining"
+  return (
+    <div className={BODY}>
+      <div className="space-y-3">
+        {fundsControl}
+        {fundsBar({ label: barLabel, percent, valueText: fundsValueText(model, props.nativePool ?? null) })}
         {rateBars}
+        {emptyText != null && <p className={EMPTY}>{emptyText}</p>}
       </div>
-      {model.state === "finite" && model.allowanceCRD === null && (
-        <Footnote>No allowance is reported, so this card shows no percentage.</Footnote>
-      )}
-      {fallback !== null && fallback.allowance === null && (
-        <Footnote>No allowance is reported, so this card shows no percentage.</Footnote>
-      )}
+      {props.amountNote != null && <Footnote>{props.amountNote}</Footnote>}
       {bodyNotes}
-      <div className={`${CREDIT_ROW} mt-auto`}>
+      <div className={CREDIT_ROW}>
         {actions}
         <span className={CREDIT_VALUE}>
-          {fallback !== null
-            ? balanceFallbackValue(fallback.usd, fallback.crd, fallback.allowance, fallbackUsdLeft)
-            : creditValue(model, usdLeft)}
+          {fallback !== null ? fallbackValue(fallback) : creditValue(model, usdLeft, props.amountText ?? null, props.nativePool ?? null)}
           {info}
         </span>
       </div>

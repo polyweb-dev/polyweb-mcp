@@ -110,7 +110,16 @@ export function mapSearchResponse(
     waterfall,
     executionTimeMs: latency,
     costEstimateCredits: cost,
+    ...usageUnit(wire.usage),
     timestamp: wire.usage?.observed_at ?? new Date().toISOString(),
+  }
+}
+
+/** Unit kind and display unit of a response's usage event, so the UI can label its cost. */
+function usageUnit(usage: BackendSearchResponse["usage"]) {
+  return {
+    costUnitKind: normalizeUnitKind(usage?.unit_kind ?? null),
+    costDisplayUnit: usage?.display_unit ?? null,
   }
 }
 
@@ -170,7 +179,6 @@ export function mergeProviderStatus(
     globalEnabled: access.globalEnabled,
     searchEnabled: access.searchEnabled,
     fetchEnabled: access.fetchEnabled,
-    priority: wire.priority,
     healthStatus:
       wire.circuit_breaker.state === "open"
         ? "circuit_broken"

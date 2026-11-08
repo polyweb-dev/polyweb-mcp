@@ -7,32 +7,36 @@
  */
 
 /** The credit control that records the balance of the vendor dashboard. */
-export const BALANCE_ENTRY = "Provider Balance"
+export const BALANCE_ENTRY = "Provider balance"
 /** One sentence that states what the provider balance control records. */
-export const BALANCE_ENTRY_NOTE = "Records the balance the vendor dashboard shows, as an estimate."
+export const BALANCE_ENTRY_NOTE = "Enter the current balance from the provider dashboard"
+/** The card menu item that opens the provider balance dialog. */
+export const BALANCE_ENTRY_ACTION = "Set balance"
 /** The credit control that sets the local spend ceiling. */
-export const SPEND_CAP = "Budget Limit"
+export const SPEND_CAP = "Budget limit"
 /** One sentence that states what the budget limit control does. */
-export const SPEND_CAP_NOTE = "Sets a local credit-unit ceiling that adds no vendor funds."
+export const SPEND_CAP_NOTE = "Stop routing to this provider after this budget is used in the period"
+/** The card menu item that opens the balance history dialog. */
+export const HISTORY_ACTION = "Balance history"
 /** One visible sentence that states the difference between the two controls. */
 export const CONTROL_SPLIT_NOTE =
   BALANCE_ENTRY +
   " records the vendor dashboard balance as an estimate. " +
   SPEND_CAP +
-  " sets a local credit-unit ceiling."
+  " sets a local USD ceiling"
 
 /** The credit tier of one rail: the free facts, the paid facts, or both. */
 export type CreditMode = "free" | "paid" | "both"
 /** The option label of one credit mode, for the mode combo. */
 export const CREDIT_MODE_LABEL: Record<CreditMode, string> = {
   free: "Free credits",
-  paid: "Paid credits",
-  both: "Free + Paid",
+  paid: "Paid balance",
+  both: "Free credits and paid balance",
 }
 /** The mode options in the shown order. */
 export const CREDIT_MODES: CreditMode[] = ["free", "paid", "both"]
 /** The label of the mode combo. */
-export const CREDIT_MODE_FIELD = "Credit mode"
+export const CREDIT_MODE_FIELD = "Balance type"
 
 /** Source keys that mean "no source reported"; they yield no text. */
 const ABSENT_KEYS = ["", "unknown", "n/a", "none"]
@@ -65,6 +69,7 @@ const REASON_TEXT: Record<string, string> = {
 /** One text per native unit of a pool id. */
 const UNIT_TEXT: Record<string, string> = {
   credit: "credits",
+  crd: "USD",
   free: "free",
   request: "requests",
   token: "tokens",

@@ -4,6 +4,7 @@ export {
   PROJECT_UNAVAILABLE_MESSAGE,
   UNKNOWN_ACCOUNT_EMAIL_MESSAGE,
   addProjectMember,
+  bulkUpdateProjectMembers,
   assignProjectRole,
   createProject,
   getProjectAccess,
@@ -12,11 +13,19 @@ export {
   isProjectUnavailableError,
   listProjectMembers,
   listProjects,
+  listSystemProjects,
   projectMutationMessage,
   removeProjectMember,
   removeProjectRole,
   setProjectMemberStatus,
+  updateProjectMember,
 } from "./api/projectsApi"
+export { getProjectPermissionCatalog } from "./api/permissionCatalogApi"
+export type { PermissionCatalog, PermissionCatalogEntry } from "./api/permissionCatalogApi"
+export { getProviderOwner, transferProviderOwner } from "./api/providerOwnerApi"
+export type { ProviderOwner, OwnershipTransfer } from "./api/providerOwnerApi"
+export { attachProjectPool, detachProjectPool, listProjectPools } from "./api/projectPoolsApi"
+export type { ProjectPool } from "./api/projectPoolsApi"
 export {
   apiKeyMutationMessage,
   issueProjectApiKey,
@@ -39,6 +48,7 @@ export {
   SYSTEM_PERMISSIONS,
   canCreateProjects,
 } from "./model/permissions"
+export { BASE_ACCESS, DEVELOPER_BITS, PERMISSION_GROUPS, PERMISSION_PRESETS, memberPermissionSummary } from "./model/permissionCatalog"
 export {
   clearProjectDraft,
   projectStorageKey,
@@ -53,8 +63,6 @@ export {
   writeLastProject,
 } from "./model/lastProject"
 export {
-  PROJECT_ROLE_KEYS,
-  PROJECT_ROLE_LABELS,
   hasPermission,
   isProjectRoleKey,
 } from "./model/types"

@@ -737,11 +737,55 @@ class CredentialService:
             token_generation=token_generation,
         )
 
+    async def system_materials(
+        self, provider_type: str, *, credential_id: UUID | None = None
+    ) -> list[ResolvedCredential]:
+        """Load active vault credentials of one provider for internal usage polling.
+
+        This internal seam grants no actor authority and resolves no project
+        scope. Callers must authorize any HTTP request before using it. Keys
+        without loadable material are skipped; secrets stay inside ``SecretStr``.
+        """
+
+        self._rollout.require_management()
+        resolved: list[ResolvedCredential] = []
+        try:
+            async with self._repository.session() as session:
+                await begin_read_snapshot(session)
+                repository = CredentialRepository(session)
+                credentials = await repository.list_vault_credentials_for_usage_polling(
+                    account_id=self._account_id, provider=provider_type
+                )
+                for entry in credentials:
+                    credential = entry.credential
+                    if credential_id is not None and credential.id != credential_id:
+                        continue
+                    material = await self._load_material(session, credential)
+                    if material is None:
+                        continue
+                    plaintext, token_generation = material
+                    resolved.append(
+                        ResolvedCredential(
+                            credential_id=credential.id,
+                            provider_type=credential.provider_type,
+                            generation=credential.generation,
+                            permitted_operations=ALL_CREDENTIAL_OPERATIONS,
+                            secret=SecretStr(plaintext),
+                            auth_mode=credential.auth_mode,
+                            token_generation=token_generation,
+                        )
+                    )
+        except OperationalError as error:
+            raise CredentialStorageUnavailable("the credential store is unavailable") from error
+        return resolved
+
     async def _load_material(
         self, session: AsyncSession, credential: CredentialInstanceRead
     ) -> tuple[str, int | None] | None:
         """Return the plaintext secret and OAuth token generation, or ``None``."""
 
+        if credential.auth_mode == "keyless":
+            return "", None
         if credential.auth_mode != CredentialAuthMode.OAUTH.value:
             plaintext = await self._secret_store.get_in_session(
                 session, credential_secret_slot(credential.id, credential.generation)
@@ -1064,10 +1108,10 @@ class CredentialService:
     ) -> tuple[CredentialInstanceRead, frozenset[CredentialOperation]] | None:
         """Return an active system credential and its grant ops, or ``None``."""
 
-        system = await credentials.get_system_credential(
+        system = await credentials.get_active_credential(
             account_id=self._account_id, credential_id=credential_id
         )
-        if system is None:
+        if system is None or system.owner_scope is not CredentialOwnerScope.SYSTEM:
             return None
         grant = await credentials.get_grant(credential_id=credential_id, project_id=project_id)
         if grant is None:

@@ -315,7 +315,7 @@ async def test_funds_denial_on_zero_balance(repository: SQLiteRepository) -> Non
             )
         )
     assert excinfo.value.status_code == 402
-    assert excinfo.value.error.code == "crd_exhausted"
+    assert excinfo.value.error.code == "budget_exhausted"
     assert excinfo.value.error.retryable is False
     assert "funds_exhausted" in excinfo.value.reasons
 
@@ -354,7 +354,7 @@ async def test_terminal_402_records_zero_and_blocks_locally(
             )
         )
     assert excinfo.value.status_code == 402
-    assert excinfo.value.error.code == "crd_exhausted"
+    assert excinfo.value.error.code == "budget_exhausted"
     assert excinfo.value.error.retryable is False
 
 

@@ -53,10 +53,10 @@ describe("manualQuotaMath (Decimal-safe, no float math)", () => {
     expect(
       validateManualQuotaFields({ billingStart: "", billingEnd: "", allowance: "", used: "" })
     ).toEqual({
-      billingStart: "Required.",
-      billingEnd: "Required.",
-      allowance: "Required.",
-      used: "Required.",
+      billingStart: "Enter a value",
+      billingEnd: "Enter a value",
+      allowance: "Enter a value",
+      used: "Enter a value",
     })
     expect(
       validateManualQuotaFields({
@@ -65,7 +65,7 @@ describe("manualQuotaMath (Decimal-safe, no float math)", () => {
         allowance: "5.00",
         used: "0.88",
       }).billingEnd
-    ).toBe("Billing end must be after billing start.")
+    ).toBe("Billing end must be after billing start")
     expect(
       validateManualQuotaFields({
         billingStart: "2026-09-01",

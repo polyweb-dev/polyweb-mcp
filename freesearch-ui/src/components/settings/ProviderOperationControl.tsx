@@ -18,6 +18,11 @@ interface OperationControlProps {
   onToggle: (enabled: boolean) => void
 }
 
+/**
+ * One operation cell of a registry row. An operation the provider cannot run
+ * reads as unavailable (a dash with a "Not supported" tooltip), never as a
+ * disabled switch; a role without edit access sees On or Off.
+ */
 export const OperationControl: React.FC<OperationControlProps> = ({
   label,
   providerName,
@@ -28,22 +33,15 @@ export const OperationControl: React.FC<OperationControlProps> = ({
   pending,
   onToggle,
 }) => {
+  const operation = label.toLowerCase()
   if (!supported) {
     return (
       <Tooltip>
-        <TooltipTrigger
-          render={<span className="inline-flex cursor-not-allowed" />}
-        >
-          <Switch
-            checked={false}
-            onChange={() => {}}
-            disabled
-            ariaLabel={`${providerName} ${label.toLowerCase()} routing (not supported)`}
-          />
+        <TooltipTrigger render={<span className="inline-flex h-5 w-9 items-center text-[var(--muted)]" />}>
+          <span aria-hidden="true">—</span>
+          <span className="sr-only">{`${providerName} does not support ${operation}`}</span>
         </TooltipTrigger>
-        <TooltipContent>
-          {providerName} does not support {label.toLowerCase()}
-        </TooltipContent>
+        <TooltipContent>Not supported</TooltipContent>
       </Tooltip>
     )
   }
@@ -60,13 +58,11 @@ export const OperationControl: React.FC<OperationControlProps> = ({
   }
 
   return (
-    <div>
-      <Switch
-        checked={enabled}
-        onChange={onToggle}
-        disabled={globallyDisabled || pending}
-        ariaLabel={`${providerName} ${label.toLowerCase()} routing`}
-      />
-    </div>
+    <Switch
+      checked={enabled}
+      onChange={onToggle}
+      disabled={globallyDisabled || pending}
+      ariaLabel={`${providerName} ${operation} routing`}
+    />
   )
 }

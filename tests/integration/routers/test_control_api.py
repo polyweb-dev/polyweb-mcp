@@ -83,6 +83,29 @@ def _execution_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
     return EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
 
 
+def _create_bound_provider(client, project_id, provider, secret, headers):
+    key = client.post(
+        "/api/v1/account/vault/keys",
+        headers=headers,
+        json={"provider_type": provider, "label": "control key", "secret": secret},
+    )
+    assert key.status_code == 201, key.text
+    assert secret not in key.text
+    pool = client.post(
+        f"/api/v1/account/vault/keys/{key.json()['id']}/pools",
+        headers=headers,
+        json={
+            "label": "control pool",
+            "project_id": project_id,
+            "rate": {"limit": None, "window_seconds": 60},
+            "operations": ["search"],
+        },
+    )
+    assert pool.status_code == 201, pool.text
+    assert secret not in pool.text
+    return key
+
+
 class ControlAdapter(ProviderAdapter):
     """Offline adapter double with observable health, failures, and calls."""
 
@@ -247,8 +270,10 @@ async def test_get_providers_enumerates_canonical_status_contract(
             "enabled",
             "enable_mask",
             "support_mask",
-            "priority",
+            "call_cost_usd",
+            "keyless_call_cost_usd",
             "health",
+            "health_checked_at",
             "circuit_breaker",
             "latency_p95_ms",
             "secret_presence",
@@ -266,9 +291,20 @@ async def test_get_providers_enumerates_canonical_status_contract(
         assert item["support_mask"] == expected_support
         assert item["enabled"] is bool(item["enable_mask"] & item["support_mask"] & 1)
         assert item["enabled"] is True
-        assert isinstance(item["priority"], int)
-        assert item["priority"] >= 1
+        assert "priority" not in item
+        assert isinstance(item["call_cost_usd"], dict)
+        keyless_prices = item["keyless_call_cost_usd"]
+        if item["provider_id"] in {"keenable", "tavily"}:
+            assert set(keyless_prices) == {"search", "fetch"}
+            assert all(_json_decimal(price) == 0 for price in keyless_prices.values())
+        else:
+            assert keyless_prices == {}
+        if item["provider_id"] in {"keenable", "tinyfish"}:
+            assert _json_decimal(item["call_cost_usd"]["search"]) == 0
+        if item["provider_id"] == "brave":
+            assert "fetch" not in item["call_cost_usd"]
         assert item["health"] is None
+        assert item["health_checked_at"] is None
         assert item["circuit_breaker"]["state"] == "closed"
         assert item["latency_p95_ms"] is None
         assert item["secret_presence"] in {"configured", "missing", "keyless_public"}
@@ -278,6 +314,71 @@ async def test_get_providers_enumerates_canonical_status_contract(
             assert item["tavily_key_environment"] == "dev"
         else:
             assert item["tavily_key_environment"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_providers_reports_the_newest_credential_scoped_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A call through a live credential is the last real result; an unbacked wide fact is not."""
+    from freesearch.models.projects import CredentialOwnerScope
+    from freesearch.persistence.credentials import CredentialRepository
+    from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+    from freesearch.services.pool_materializer import materialize_pools
+    from tests.fixtures.a2_execution import PoolSpec, build_execution_world
+
+    world = await build_execution_world(
+        tmp_path, monkeypatch, labels=("a1",), pool=PoolSpec(constraints=[]), limits=False
+    )
+    repository = world.repository
+    earlier = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
+    later = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    try:
+        async with repository.session() as session:
+            credential = await CredentialRepository(session).insert_credential(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                provider_type="exa",
+                owner_scope=CredentialOwnerScope.SYSTEM,
+                owner_project_id=None,
+                owner_user_id=world.project.actor_id,
+                label="vault-key",
+                auth_mode="api_key",
+                created_by=world.project.actor_id,
+            )
+            await KeyPoolRepository(session).create(
+                credential_id=credential.id,
+                project_id=world.project.project_id,
+                provider_type="exa",
+                created_by=world.project.actor_id,
+                values=KeyPoolValues(label="pool", operations=frozenset({"search"})),
+            )
+            await materialize_pools(session, project_id=world.project.project_id)
+            await session.commit()
+        await repository.record_health(
+            ProviderHealth(provider="exa", status=HealthStatus.HEALTHY, checked_at=later),
+            credential_id=credential.id,
+        )
+        await repository.record_health(
+            ProviderHealth(provider="firecrawl", status=HealthStatus.DEGRADED, checked_at=earlier)
+        )
+        app = create_app([], repository=repository)
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(
+                client, repository, temp_email("control-health")
+            )
+            body = client.get(
+                "/api/v1/providers", headers=raw_auth_headers(pair["access_token"])
+            ).json()
+    finally:
+        await world.aclose()
+
+    exa = _provider(body, "exa")
+    assert exa["health"] == "healthy"
+    assert datetime.fromisoformat(exa["health_checked_at"].replace("Z", "+00:00")) == later
+    # No key backs a provider-wide Firecrawl observation, so it stays hidden.
+    firecrawl = _provider(body, "firecrawl")
+    assert firecrawl["health"] is None
+    assert firecrawl["health_checked_at"] is None
 
 
 @pytest.mark.parametrize(
@@ -397,28 +498,34 @@ async def test_provider_patch_merges_estimates_and_returns_updated_status(
         pair = await register_system_admin_login(client, repository, temp_email("control-patch"))
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
+        rejected_priority = client.patch(
+            "/api/v1/providers/exa", json={"priority": 7}, headers=headers
+        )
+        schema = client.get("/openapi.json").json()
         response = client.patch(
             "/api/v1/providers/exa",
-            json={"enabled": False, "priority": 7, "free_tier_estimates": {"search": "2"}},
+            json={"enabled": False, "free_tier_estimates": {"search": "2"}},
             headers=headers,
         )
         after = client.get("/api/v1/providers/exa", headers=headers)
 
     assert before.status_code == 200
+    assert rejected_priority.status_code == 422
+    assert "priority" not in schema["components"]["schemas"]["CatalogProviderUpdate"]["properties"]
     assert response.status_code == 200
     updated = response.json()
     assert updated["provider_id"] == "exa"
     assert updated["enabled"] is False
     assert updated["enable_mask"] == 6
     assert updated["support_mask"] == 7
-    assert updated["priority"] == 7
+    assert "priority" not in updated
     assert _json_decimal(updated["free_tier_estimates"]["search"]) == Decimal("2")
     assert "fetch" in updated["free_tier_estimates"]
     assert "cost_estimate" in updated["free_tier_estimates"]
     assert after.json()["enabled"] is False
     assert after.json()["enable_mask"] == 6
     assert after.json()["support_mask"] == 7
-    assert after.json()["priority"] == 7
+    assert "priority" not in after.json()
     assert _json_decimal(after.json()["free_tier_estimates"]["fetch"]) == _json_decimal(
         before.json()["free_tier_estimates"]["fetch"]
     )
@@ -546,7 +653,7 @@ async def test_provider_patch_empty_body_is_allowed(
     assert updated["enabled"] == previous["enabled"]
     assert updated["enable_mask"] == previous["enable_mask"]
     assert updated["support_mask"] == previous["support_mask"]
-    assert updated["priority"] == previous["priority"]
+    assert updated["call_cost_usd"] == previous["call_cost_usd"]
     assert updated["free_tier_estimates"] == previous["free_tier_estimates"]
     assert updated["reset_schedule"] == previous["reset_schedule"]
 
@@ -566,7 +673,7 @@ async def test_provider_patch_persists_across_repository_reopen(
             headers = raw_auth_headers(pair["access_token"])
             response = client.patch(
                 "/api/v1/providers/exa",
-                json={"enabled": False, "priority": 9},
+                json={"enabled": False},
                 headers=headers,
             )
         assert response.status_code == 200
@@ -584,7 +691,7 @@ async def test_provider_patch_persists_across_repository_reopen(
         assert reopened.json()["enabled"] is False
         assert reopened.json()["enable_mask"] == 6
         assert reopened.json()["support_mask"] == 7
-        assert reopened.json()["priority"] == 9
+        assert "priority" not in reopened.json()
     finally:
         await second.close()
 
@@ -739,7 +846,7 @@ async def test_secret_put_writes_vault_and_never_exposes_raw_key(
     auth_secret,
 ):
     """Original singleton security case now covers the actual A4 credential endpoint."""
-    from freesearch.models.projects import CredentialInstanceRead
+    from freesearch.models.vault import VaultKeyDetails
     from freesearch.services.credentials import credential_secret_slot
 
     raw_key = "secret-value-that-must-not-leak"
@@ -747,14 +854,14 @@ async def test_secret_put_writes_vault_and_never_exposes_raw_key(
         pair = await register_system_admin_login(client, repository, temp_email("control-put"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.post(
-            "/api/v1/system/credentials",
+            "/api/v1/account/vault/keys",
             headers=headers,
             json={"provider_type": "exa", "label": "vault proof", "secret": raw_key},
         )
         assert response.status_code == 201, response.text
         body = response.json()
-        model = CredentialInstanceRead.model_validate(body)
-        assert set(body) == set(CredentialInstanceRead.model_fields)
+        model = VaultKeyDetails.model_validate(body)
+        assert set(body) == set(VaultKeyDetails.model_fields)
         assert model.provider_type == "exa" and model.status == "active"
         assert raw_key not in response.text and raw_key not in caplog.text
         assert raw_key not in repr(model.model_dump())
@@ -777,7 +884,7 @@ async def test_secret_put_rejects_empty_key(repository, auth_secret):
     with TestClient(create_app([], repository=repository)) as client:
         pair = await register_system_admin_login(client, repository, temp_email("control-empty"))
         response = client.post(
-            "/api/v1/system/credentials",
+            "/api/v1/account/vault/keys",
             headers=raw_auth_headers(pair["access_token"]),
             json={"provider_type": "exa", "label": "empty", "secret": ""},
         )
@@ -810,7 +917,7 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
         pair = await register_system_admin_login(client, repository, temp_email("control-delete"))
         headers = raw_auth_headers(pair["access_token"])
         write = client.post(
-            "/api/v1/system/credentials",
+            "/api/v1/account/vault/keys",
             headers=headers,
             json={"provider_type": "exa", "label": "delete", "secret": "vault-only-value"},
         )
@@ -818,12 +925,12 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
         body = write.json()
         slot = credential_secret_slot(UUID(body["id"]), body["generation"])
         assert await app.state.secret_store.get(slot) == "vault-only-value"
-        for expected in (204, 404):
-            response = client.delete(f"/api/v1/system/credentials/{body['id']}", headers=headers)
+        for expected in (200, 404):
+            response = client.delete(f"/api/v1/account/vault/keys/{body['id']}", headers=headers)
             assert response.status_code == expected
         assert await app.state.secret_store.get(slot) is None
         assert await repository.get_runtime_setting("secret.enc:" + slot) is None
-        listed = client.get("/api/v1/system/credentials", headers=headers)
+        listed = client.get("/api/v1/account/vault/keys", headers=headers)
         assert listed.status_code == 200 and listed.json() == []
 
 
@@ -834,23 +941,21 @@ async def test_secret_delete_ejects_global_adapter_and_keeps_project_credential(
     tmp_path: Path,
     auth_secret: str,
 ) -> None:
-    """Origin: global deletion isolation; A4 deletes only the selected credential."""
+    """Deleting one vault key leaves another key's project pool usable."""
     from freesearch.services.credentials import credential_secret_slot
-    from tests.fixtures.execution import bound_credential_id, seed_app_bound_project
 
     adapter = ControlAdapter("exa")
+    install_adapter_map(monkeypatch, [adapter], secrets={"exa": "project-only-key"})
     app = create_app([adapter], repository=repository)
     with TestClient(app) as client:
         pair = await register_system_admin_login(client, repository, temp_email("control-eject"))
         headers = raw_auth_headers(pair["access_token"])
-        project = await seed_app_bound_project(
-            repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
-        )
-        private_id = await bound_credential_id(
-            repository, project_id=project.project_id, provider="exa"
-        )
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        project_key = _create_bound_provider(
+            client, str(project.project_id), "exa", "project-only-key", headers
+        ).json()
         system = client.post(
-            "/api/v1/system/credentials",
+            "/api/v1/account/vault/keys",
             headers=headers,
             json={"provider_type": "exa", "label": "independent", "secret": "system-only-key"},
         )
@@ -864,16 +969,21 @@ async def test_secret_delete_ejects_global_adapter_and_keeps_project_credential(
         }
         assert client.post("/search", json=payload, headers=headers).status_code == 200
         assert (
-            client.delete(f"/api/v1/system/credentials/{body['id']}", headers=headers).status_code
-            == 204
+            client.delete(f"/api/v1/account/vault/keys/{body['id']}", headers=headers).status_code
+            == 200
         )
         assert await app.state.secret_store.get(system_slot) is None
-        assert await app.state.secret_store.get(credential_secret_slot(private_id, 1)) is not None
+        assert (
+            await app.state.secret_store.get(
+                credential_secret_slot(UUID(project_key["id"]), project_key["generation"])
+            )
+            == "project-only-key"
+        )
         assert client.post("/search", json=payload, headers=headers).status_code == 200
         assert adapter.search_calls == 2
         assert client.delete("/api/v1/providers/exa/secret", headers=headers).status_code == 404
         assert (
-            "system-only-key" not in client.get("/api/v1/system/credentials", headers=headers).text
+            "system-only-key" not in client.get("/api/v1/account/vault/keys", headers=headers).text
         )
 
 
@@ -888,11 +998,6 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
     import httpx
 
     from freesearch.adapters.keenable import KeenableAdapter
-    from tests.fixtures.execution import (
-        bound_credential_id,
-        create_bound_provider,
-        seed_app_bound_project,
-    )
 
     async with httpx.AsyncClient() as http:
         assert KeenableAdapter(http, api_key=SecretStr("keyed-capability")).capabilities.quota
@@ -902,13 +1007,10 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
     with TestClient(app) as client:
         pair = await register_system_admin_login(client, repository, temp_email("control-keen"))
         headers = raw_auth_headers(pair["access_token"])
-        project = await seed_app_bound_project(
-            repository, user_id=account_id_from_pair(pair), app=app, monkeypatch=monkeypatch
-        )
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
         pid = str(project.project_id)
-        credential = await bound_credential_id(
-            repository, project_id=project.project_id, provider="keenable"
-        )
+        credential = _create_bound_provider(client, pid, "keenable", "keenable-key", headers).json()
+        install_adapter_map(monkeypatch, [adapter], secrets={"keenable": "keenable-key"})
         payload = {
             "project_id": pid,
             "query": "bound",
@@ -917,16 +1019,28 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
         assert client.post("/search", headers=headers, json=payload).status_code == 200
         assert (
             client.delete(
-                f"/api/v1/projects/{pid}/credentials/{credential}", headers=headers
+                f"/api/v1/account/vault/keys/{credential['id']}", headers=headers
             ).status_code
-            == 204
+            == 200
         )
-        assert client.post("/search", headers=headers, json=payload).status_code == 503
-        assert adapter.search_calls == 1
-        create_bound_provider(client, pid, "keenable", "keenable-key-rotated", headers)
-        install_adapter_map(monkeypatch, [adapter], secrets={"keenable": "keenable-key-rotated"})
+
+        def keyless_factory(name):
+            if name != "keenable":
+                return None
+
+            def build(client, api_key=None):
+                assert api_key is None
+                return adapter
+
+            return build
+
+        monkeypatch.setattr("freesearch.services.execution.adapter_factory", keyless_factory)
         assert client.post("/search", headers=headers, json=payload).status_code == 200
         assert adapter.search_calls == 2
+        _create_bound_provider(client, pid, "keenable", "keenable-key-rotated", headers)
+        install_adapter_map(monkeypatch, [adapter], secrets={"keenable": "keenable-key-rotated"})
+        assert client.post("/search", headers=headers, json=payload).status_code == 200
+        assert adapter.search_calls == 3
 
 
 @pytest.mark.asyncio
@@ -977,8 +1091,6 @@ async def test_secret_write_constructs_missing_adapter_on_demand(
     auth_secret: str,
 ) -> None:
     """Origin: lazy construction now requires an enabled A4 credential binding."""
-    from tests.fixtures.execution import create_bound_provider
-
     replacement = ControlAdapter("exa", health_status=HealthStatus.UNKNOWN)
     install_adapter_map(monkeypatch, [replacement], secrets={"exa": "on-demand-key"})
     app = create_app([], repository=repository)
@@ -992,7 +1104,7 @@ async def test_secret_write_constructs_missing_adapter_on_demand(
             "routing": {"mode": "require", "providers": ["exa"]},
         }
         assert client.post("/search", json=payload, headers=headers).status_code == 503
-        write = create_bound_provider(
+        write = _create_bound_provider(
             client, str(project.project_id), "exa", "on-demand-key", headers
         )
         assert "on-demand-key" not in write.text
@@ -1022,11 +1134,15 @@ async def test_routing_config_defaults_validate_and_persist(
             json={"fallback_policy": "chained", "unknown": True},
             headers=headers,
         )
+        invalid_preset = client.put(
+            "/api/v1/routing/config",
+            json={"cost_optimization_preset": "free_first"},
+            headers=headers,
+        )
         invalid_attempts = client.put(
             "/api/v1/routing/config",
             json={
                 "fallback_policy": "chained",
-                "cost_optimization_preset": "balanced",
                 "max_attempts": 0,
             },
             headers=headers,
@@ -1035,7 +1151,6 @@ async def test_routing_config_defaults_validate_and_persist(
             "/api/v1/routing/config",
             json={
                 "fallback_policy": "first_only",
-                "cost_optimization_preset": "free_first",
                 "max_attempts": 2,
             },
             headers=headers,
@@ -1045,27 +1160,28 @@ async def test_routing_config_defaults_validate_and_persist(
     assert initial.status_code == 200
     assert initial.json() == {
         "fallback_policy": "chained",
-        "cost_optimization_preset": "balanced",
         "max_attempts": 3,
     }
     assert invalid_extra.status_code == 422
+    assert invalid_preset.status_code == 422
     assert invalid_attempts.status_code == 422
     assert updated.status_code == 200
     assert updated.json() == {
         "fallback_policy": "first_only",
-        "cost_optimization_preset": "free_first",
         "max_attempts": 2,
     }
     assert reread.json() == updated.json()
 
 
 @pytest.mark.asyncio
-async def test_free_first_pins_keenable_in_status_and_search_order(
+async def test_project_free_first_orders_search_without_system_pin(
     repository: SQLiteRepository,
     monkeypatch: pytest.MonkeyPatch,
     auth_secret: str,
 ) -> None:
-    """AC-7: free-first affects both the visible list and candidate selection."""
+    """Free-first is project-scoped and does not reorder the system catalog."""
+    from tests.fixtures.project_order import seed_order_pools
+
     # Use one Admin account for all calls. Admin also reads and searches.
     brave = ControlAdapter("brave", health_status=HealthStatus.HEALTHY)
     keenable = ControlAdapter("keenable", health_status=HealthStatus.HEALTHY)
@@ -1079,7 +1195,7 @@ async def test_free_first_pins_keenable_in_status_and_search_order(
         headers = raw_auth_headers(pair["access_token"])
         project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
         pid = str(project.project_id)
-        await seed_provider_bindings(
+        await seed_order_pools(
             repository,
             project_id=project.project_id,
             actor_id=project.actor_id,
@@ -1088,12 +1204,8 @@ async def test_free_first_pins_keenable_in_status_and_search_order(
             secrets=fixture_secrets,
         )
         configured = client.put(
-            "/api/v1/routing/config",
-            json={
-                "fallback_policy": "chained",
-                "cost_optimization_preset": "free_first",
-                "max_attempts": 3,
-            },
+            f"/api/v1/projects/{pid}/routing/order/search",
+            json={"strategy": "free_first"},
             headers=headers,
         )
         providers = client.get("/api/v1/providers", headers=headers)
@@ -1103,7 +1215,8 @@ async def test_free_first_pins_keenable_in_status_and_search_order(
 
     assert configured.status_code == 200
     assert providers.status_code == 200
-    assert providers.json()[0]["provider_id"] == "keenable"
+    assert providers.json()[0]["provider_id"] == "brave"
+    assert configured.json()["search"]["providers"][0]["provider"] == "keenable"
     assert search.status_code == 200
     assert search.json()["provider"] == "keenable"
     assert keenable.search_calls == 1
@@ -1142,7 +1255,6 @@ async def test_first_only_does_not_fallback_after_primary_failure(
             "/api/v1/routing/config",
             json={
                 "fallback_policy": "first_only",
-                "cost_optimization_preset": "balanced",
                 "max_attempts": 3,
             },
             headers=headers,
@@ -1472,7 +1584,6 @@ async def test_provider_status_response_model_requires_both_masks() -> None:
     base = {
         "provider_id": "exa",
         "enabled": True,
-        "priority": 100,
         "health": None,
         "circuit_breaker": {"state": "closed", "updated_at": "2026-01-01T00:00:00Z"},
         "latency_p95_ms": None,
@@ -1497,7 +1608,6 @@ async def test_provider_status_response_model_rejects_non_strict_masks() -> None
     base = {
         "provider_id": "exa",
         "enabled": True,
-        "priority": 100,
         "health": None,
         "circuit_breaker": {"state": "closed", "updated_at": "2026-01-01T00:00:00Z"},
         "latency_p95_ms": None,
@@ -1644,22 +1754,21 @@ async def test_supported_admin_writes_invalidate_warm_cache(
         assert id(repository) in _POLICY_CACHE
 
         patched = await patch_provider_config(
-            repository, ProviderName.EXA, ProviderConfigUpdate(priority=11)
+            repository, ProviderName.EXA, ProviderConfigUpdate(search_enabled=False)
         )
-        assert patched.priority == 11
-        assert (await effective_config_for_name(repository, "exa")).priority == 11
+        assert patched.enable_mask == 5
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 5
 
         full = (await effective_config_for_name(repository, "exa")).model_copy(
-            update={"priority": 21}
+            update={"enable_mask": 7}
         )
         await persist_provider_config(repository, ProviderName.EXA, full)
-        assert (await effective_config_for_name(repository, "exa")).priority == 21
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 7
 
         await persist_routing_config(
             repository,
             RoutingConfigResponse(
                 fallback_policy="first_only",  # type: ignore[arg-type]
-                cost_optimization_preset="balanced",  # type: ignore[arg-type]
                 max_attempts=3,
             ),
         )
@@ -1667,32 +1776,32 @@ async def test_supported_admin_writes_invalidate_warm_cache(
 
         await repository.set_runtime_setting(
             "provider.exa",
-            {"config": {"enable_mask": 7, "support_mask": 7, "priority": 31}},
+            {"config": {"enable_mask": 6, "support_mask": 7}},
         )
-        assert (await effective_config_for_name(repository, "exa")).priority == 31
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 6
 
         def _to_41(current: Any) -> Any:
             payload = dict(current)
             config = dict(payload["config"])
-            config["priority"] = 41
+            config["enable_mask"] = 5
             payload["config"] = config
             return payload
 
         await repository.update_runtime_setting("provider.exa", _to_41)
-        assert (await effective_config_for_name(repository, "exa")).priority == 41
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 5
 
         await _reconcile_provider_config(repository, ProviderName.EXA)
-        assert (await effective_config_for_name(repository, "exa")).priority == 41
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 5
 
         app = create_app([ControlAdapter("exa")], repository=repository)
         with TestClient(app) as client:
             pair = await register_system_admin_login(client, repository, temp_email("control-warm"))
             headers = raw_auth_headers(pair["access_token"])
             patched_rest = client.patch(
-                "/api/v1/providers/exa", json={"priority": 51}, headers=headers
+                "/api/v1/providers/exa", json={"enabled": False}, headers=headers
             )
             assert patched_rest.status_code == 200
-        assert (await effective_config_for_name(repository, "exa")).priority == 51
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 4
 
         committed = await effective_config_for_name(repository, "exa")
         original_update = repository.update_runtime_setting
@@ -1704,12 +1813,12 @@ async def test_supported_admin_writes_invalidate_warm_cache(
         try:
             with pytest.raises(RuntimeError, match="storage unavailable"):
                 await patch_provider_config(
-                    repository, ProviderName.EXA, ProviderConfigUpdate(priority=99)
+                    repository, ProviderName.EXA, ProviderConfigUpdate(enabled=True)
                 )
         finally:
             repository.update_runtime_setting = original_update  # type: ignore[method-assign]
         preserved = await effective_config_for_name(repository, "exa")
-        assert preserved.priority == committed.priority == 51
+        assert preserved.enable_mask == committed.enable_mask == 4
 
         original_set = repository.set_runtime_setting
 
@@ -1723,7 +1832,6 @@ async def test_supported_admin_writes_invalidate_warm_cache(
                     repository,
                     RoutingConfigResponse(
                         fallback_policy="chained",  # type: ignore[arg-type]
-                        cost_optimization_preset="balanced",  # type: ignore[arg-type]
                         max_attempts=3,
                     ),
                 )
@@ -2258,7 +2366,6 @@ async def test_secret_delete_ejects_adapter_and_disables_routing(
 ) -> None:
     """HEAD origin: deleting the execution credential blocks subsequent search and probing."""
     from freesearch.services.credentials import credential_secret_slot
-    from tests.fixtures.execution import create_bound_provider
 
     adapter = ControlAdapter("exa")
     install_adapter_map(monkeypatch, [adapter], secrets={"exa": "private-delete-proof"})
@@ -2270,7 +2377,7 @@ async def test_secret_delete_ejects_adapter_and_disables_routing(
         headers = raw_auth_headers(pair["access_token"])
         project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
         pid = str(project.project_id)
-        written = create_bound_provider(client, pid, "exa", "private-delete-proof", headers).json()
+        written = _create_bound_provider(client, pid, "exa", "private-delete-proof", headers).json()
         payload = {
             "project_id": pid,
             "query": "test query",
@@ -2279,9 +2386,9 @@ async def test_secret_delete_ejects_adapter_and_disables_routing(
         assert client.post("/search", json=payload, headers=headers).status_code == 200
         assert (
             client.delete(
-                f"/api/v1/projects/{pid}/credentials/{written['id']}", headers=headers
+                f"/api/v1/account/vault/keys/{written['id']}", headers=headers
             ).status_code
-            == 204
+            == 200
         )
         rejected = client.post("/search", json=payload, headers=headers)
         assert rejected.status_code == 503 and "required provider" in rejected.text

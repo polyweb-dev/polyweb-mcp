@@ -17,12 +17,14 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 
+from freesearch.models.project_permissions import ProjectPermission
 from freesearch.models.projects import (
     DEFAULT_API_KEY_LIFETIME_DAYS,
     BuiltinRole,
     ProjectApiKeyCreate,
     ProjectApiKeyRotate,
     ProjectMemberAdd,
+    ProjectMemberUpdate,
 )
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.api_keys import ProjectApiKeyRepository, StoredApiKey
@@ -366,7 +368,7 @@ async def test_key_management_needs_tokens_manage_in_that_project(
     await projects.add_member(
         key.owner,
         key.project_id,
-        ProjectMemberAdd(user_id=manager.id, initial_role=BuiltinRole.TOKEN_MANAGER.value),
+        ProjectMemberAdd(user_id=manager.id, permissions=int(ProjectPermission.TOKENS)),
     )
     service = ApiKeyService(repository)
 
@@ -385,8 +387,15 @@ async def test_key_management_needs_tokens_manage_in_that_project(
     with pytest.raises(ProjectNotFound):
         await service.revoke(stranger, key.project_id, key.api_key_id)
     # R1: the token manager also needs the execution scopes it delegates.
-    await projects.assign_role(
-        key.owner, key.project_id, manager.id, BuiltinRole.PROJECT_MEMBER.value
+    await projects.update_member(
+        key.owner,
+        key.project_id,
+        manager.id,
+        ProjectMemberUpdate(
+            permissions=int(
+                ProjectPermission.TOKENS | ProjectPermission.SEARCH | ProjectPermission.FETCH
+            )
+        ),
     )
     issued = await service.issue(manager, key.project_id, ProjectApiKeyCreate(label="mgr"))
     assert issued.created_by == manager.id
@@ -423,6 +432,7 @@ async def test_creator_changes_never_change_the_key(repository: SQLiteRepository
         key.project_id,
         ProjectMemberAdd(user_id=successor.id, initial_role=BuiltinRole.PROJECT_ADMIN.value),
     )
+    await projects.transfer_provider_owner(key.owner, key.project_id, successor.id)
     await projects.remove_member(successor, key.project_id, key.owner.id)
     await grant_system_admin(repository, key.owner.id)
 
@@ -624,7 +634,7 @@ async def _with_token_manager(
     await ProjectService(repository).add_member(
         key.owner,
         key.project_id,
-        ProjectMemberAdd(user_id=manager.id, initial_role=BuiltinRole.TOKEN_MANAGER.value),
+        ProjectMemberAdd(user_id=manager.id, permissions=int(ProjectPermission.TOKENS)),
     )
     return manager
 
@@ -652,8 +662,7 @@ async def test_rotator_must_hold_every_scope_of_the_old_key(
 ) -> None:
     """A human holding tokens.manage but not search.execute cannot rotate a search key.
 
-    No builtin role grants fetch.execute without search.execute, so the
-    "holds only some scopes" case is the token manager holding neither.
+    The manager initially has only the tokens bit, and gains search later.
     """
 
     key = await issue_project_key(repository, scopes={"search.execute"})
@@ -672,8 +681,11 @@ async def test_rotator_must_hold_every_scope_of_the_old_key(
 
     # Once the manager also holds the execution permissions, rotation works,
     # and a full project administrator can always rotate.
-    await ProjectService(repository).assign_role(
-        key.owner, key.project_id, manager.id, BuiltinRole.PROJECT_MEMBER.value
+    await ProjectService(repository).update_member(
+        key.owner,
+        key.project_id,
+        manager.id,
+        ProjectMemberUpdate(permissions=int(ProjectPermission.TOKENS | ProjectPermission.SEARCH)),
     )
     rotated = await service.rotate(
         manager, key.project_id, key.api_key_id, ProjectApiKeyRotate(overlap_seconds=0)
@@ -687,13 +699,23 @@ async def test_delegation_limit_is_live_after_a_demotion(repository: SQLiteRepos
     key = await issue_project_key(repository)
     manager = await _with_token_manager(repository, key, "r1-live")
     projects = ProjectService(repository)
-    await projects.assign_role(
-        key.owner, key.project_id, manager.id, BuiltinRole.PROJECT_MEMBER.value
+    await projects.update_member(
+        key.owner,
+        key.project_id,
+        manager.id,
+        ProjectMemberUpdate(
+            permissions=int(
+                ProjectPermission.TOKENS | ProjectPermission.SEARCH | ProjectPermission.FETCH
+            )
+        ),
     )
     service = ApiKeyService(repository)
     first = await service.issue(manager, key.project_id, ProjectApiKeyCreate(label="ok"))
-    await projects.remove_role(
-        key.owner, key.project_id, manager.id, BuiltinRole.PROJECT_MEMBER.value
+    await projects.update_member(
+        key.owner,
+        key.project_id,
+        manager.id,
+        ProjectMemberUpdate(permissions=int(ProjectPermission.TOKENS)),
     )
 
     with pytest.raises(AuthorizationDenied):
@@ -742,7 +764,10 @@ async def test_rapid_failures_of_one_key_write_one_event_per_reason_and_window(
     clock.now += 59
     assert await verifier.verify(tampered) is None
     await recorder.drain()
-    assert len(await audit_rows(repository, scope="system")) == 2
+    assert (
+        len(await audit_rows(repository, scope="system", action="api_key.authentication_denied"))
+        == 2
+    )
     clock.now += 2
     assert await verifier.verify(tampered) is None
     assert await verifier.verify(tampered) is None

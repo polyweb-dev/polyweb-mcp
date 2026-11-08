@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import { installFetchStub, ok } from "@/test/fetchMock"
 import { OAuthConnectDialog } from "./OAuthConnectDialog"
 
-const BASE = "/api/v1/system/credentials/c1"
+const BASE = "/api/v1/account/vault/keys/c1"
 const DEVICE = {
   user_code: "WDJB-MJHT",
   verification_uri: "https://auth.example.test/device",
@@ -31,7 +31,7 @@ describe("OAuthConnectDialog", () => {
       req.url.endsWith("/device") ? ok(DEVICE, 201) : ok({ credential_id: "c1", status: "connected", access_token: "fake-access-token" })
     )
     const onConnected = vi.fn()
-    render(<OAuthConnectDialog base={BASE} onClose={() => {}} onConnected={onConnected} />)
+    render(<OAuthConnectDialog base="c1" onClose={() => {}} onConnected={onConnected} />)
     await advance(0)
     const dialog = screen.getByRole("dialog", { name: "Connect Parallel" })
     expect(within(dialog).getByTestId("oauth-user-code")).toHaveTextContent("WDJB-MJHT")
@@ -40,6 +40,9 @@ describe("OAuthConnectDialog", () => {
     expect(link).toHaveAttribute("target", "_blank")
     expect(link).toHaveAttribute("rel", "noopener noreferrer")
     expect(within(dialog).getByText("Waiting for approval…")).toBeInTheDocument()
+    expect(within(dialog).getByText("Enter this code")).toBeInTheDocument()
+    expect(within(dialog).getByText("Approve access. This dialog updates on its own.")).toBeInTheDocument()
+    expect(within(dialog).getAllByRole("link")).toHaveLength(1)
 
     await advance(5000)
     expect(within(dialog).getByText("Connected")).toBeInTheDocument()
@@ -52,7 +55,7 @@ describe("OAuthConnectDialog", () => {
 
   it("shows refresh_failed and disconnected states", async () => {
     installFetchStub((req) => (req.url.endsWith("/device") ? ok(DEVICE, 201) : ok({ credential_id: "c1", status: "refresh_failed" })))
-    render(<OAuthConnectDialog base={BASE} onClose={() => {}} onConnected={() => {}} />)
+    render(<OAuthConnectDialog base="c1" onClose={() => {}} onConnected={() => {}} />)
     await advance(5000)
     expect(screen.getByText("Connection needs attention")).toBeInTheDocument()
   })
@@ -62,7 +65,7 @@ describe("OAuthConnectDialog", () => {
       req.url.endsWith("/device") ? ok(DEVICE, 201) : ok({ credential_id: "c1", status: "pending", interval: 5 })
     )
     const onClose = vi.fn()
-    const { rerender } = render(<OAuthConnectDialog base={BASE} onClose={onClose} onConnected={() => {}} />)
+    const { rerender } = render(<OAuthConnectDialog base="c1" onClose={onClose} onConnected={() => {}} />)
     await advance(5000)
     expect(stub.requestsTo(`${BASE}/oauth/poll`)).toHaveLength(1)
     fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0] as HTMLElement)

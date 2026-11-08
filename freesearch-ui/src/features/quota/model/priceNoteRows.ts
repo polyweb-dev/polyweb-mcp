@@ -122,6 +122,12 @@ function isZero(value: string | null | undefined): boolean {
   return amount !== null && amount.int === 0n
 }
 
+function freeRecord(record: LimitRecord | null): boolean {
+  if (record === null) return false
+  return ["unbilled_free", "unbilled_keyless"].includes(record.conversion_profile.source)
+    || isZero(record.budget?.usd_per_call)
+}
+
 /** Only explicit zero or noncharging limit facts make a runtime rail free. */
 function runtimeFreeOperation(
   auth: ProviderAuthLimits | undefined,
@@ -130,7 +136,7 @@ function runtimeFreeOperation(
   if (auth === undefined) return false
   const record = recordFor(auth, operation)
   const view = auth.crd_views.find((entry) => entry.operation === operation)
-  if (isZero(view?.request_cost_crd) || isZero(record?.budget?.usd_per_call)) return true
+  if (freeRecord(record) || isZero(view?.request_cost_crd)) return true
   return view?.state === "unmetered" && view.priced === false && record?.budget?.model === "none"
 }
 

@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest"
 import { PROJECT_PERMISSIONS, SYSTEM_PERMISSIONS, canCreateProjects } from "./permissions"
 
 describe("permission names", () => {
-  it("mirror the backend action catalog", () => {
+  it("mirror backend actions and effective vault capability", () => {
     expect(SYSTEM_PERMISSIONS).toEqual({
+      vaultManage: "vault.manage",
       settingsRead: "system.settings.read",
       settingsWrite: "system.settings.write",
       projectCreate: "project.create",
@@ -23,6 +24,7 @@ describe("permission names", () => {
       usageRead: "usage.read",
       providersRead: "providers.read",
       providersConfigure: "providers.configure",
+      providersSupply: "providers.supply",
       credentialsManagePrivate: "credentials.manage_private",
       settingsRead: "settings.read",
       settingsWrite: "settings.write",

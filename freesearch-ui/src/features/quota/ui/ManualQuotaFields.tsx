@@ -1,4 +1,6 @@
 import type { ReactNode } from "react"
+import { Select, type SelectOption } from "@/shared/ui/select"
+import { formatPercent1dp } from "../model/manualQuotaMath"
 import type { ManualAmountMode, ManualQuotaFieldErrors, ManualQuotaFields } from "../model/manualQuotaMath"
 import {
   CREDIT_MODE_FIELD,
@@ -7,6 +9,18 @@ import {
   type CreditMode,
 } from "../model/quotaLabels"
 import { ManualQuotaField } from "./ManualQuotaField"
+import { QuotaDateField } from "./QuotaDateField"
+
+const INPUT_CLASS = "fs-input tnum"
+const BALANCE_MODE_LABEL: Record<CreditMode, string> = {
+  free: "Free balance",
+  paid: "Paid balance",
+  both: "Free and paid balances",
+}
+
+function usesNativeCredits(providerId: string): boolean {
+  return providerId === "firecrawl" || providerId === "tavily"
+}
 
 export interface ManualQuotaFieldsProps {
   providerId: string
@@ -23,6 +37,7 @@ export interface ManualQuotaFieldsProps {
   providerField?: ReactNode
   /** `balance` labels the second amount as the remaining balance. */
   amountMode?: ManualAmountMode
+  preview?: number | null
 }
 
 /** The mode combo of one manual entry. */
@@ -32,6 +47,11 @@ function modeField(
   pending: boolean,
   onModeChange: (mode: CreditMode) => void,
 ) {
+  const labels = usesNativeCredits(providerId) ? CREDIT_MODE_LABEL : BALANCE_MODE_LABEL
+  const options: SelectOption[] = CREDIT_MODES.map((option) => ({
+    value: option,
+    label: labels[option],
+  }))
   return (
     <ManualQuotaField
       id={"manual-quota-mode-" + providerId}
@@ -40,17 +60,17 @@ function modeField(
       error={undefined}
       disabled={pending}
       render={(inputProps) => (
-        <select
+        <Select
+          id={inputProps.id}
+          testId={inputProps["data-testid"]}
           value={mode}
-          onChange={(event) => onModeChange(event.target.value as CreditMode)}
-          {...inputProps}
-        >
-          {CREDIT_MODES.map((option) => (
-            <option key={option} value={option}>
-              {CREDIT_MODE_LABEL[option]}
-            </option>
-          ))}
-        </select>
+          options={options}
+          disabled={inputProps.disabled}
+          onValueChange={(next) => {
+            const chosen = CREDIT_MODES.find((option) => option === next)
+            if (chosen !== undefined) onModeChange(chosen)
+          }}
+        />
       )}
     />
   )
@@ -60,7 +80,6 @@ function modeField(
 export function ManualQuotaFields({
   providerId,
   noun,
-  placeholders,
   fields,
   fieldErrors,
   pending,
@@ -69,45 +88,34 @@ export function ManualQuotaFields({
   onChange,
   providerField,
   amountMode = "usage",
+  preview = null,
 }: ManualQuotaFieldsProps) {
+  const nativeCredits = mode === "free" && usesNativeCredits(providerId)
+  const unit = nativeCredits ? "credits" : usesNativeCredits(providerId) ? "USD" : noun
   return (
     <div className="grid grid-cols-1 gap-3">
       {providerField}
       {modeField(providerId, mode, pending, onModeChange)}
-      <ManualQuotaField
+      <QuotaDateField
         id={"manual-quota-start-" + providerId}
-        testId="manual-quota-start"
         label="Billing start"
+        value={fields.billingStart}
         error={fieldErrors.billingStart}
         disabled={pending}
-        render={(inputProps) => (
-          <input
-            type="date"
-            value={fields.billingStart}
-            onChange={(event) => onChange("billingStart", event.target.value)}
-            {...inputProps}
-          />
-        )}
+        onChange={(value) => onChange("billingStart", value)}
       />
-      <ManualQuotaField
+      <QuotaDateField
         id={"manual-quota-end-" + providerId}
-        testId="manual-quota-end"
         label="Billing end"
+        value={fields.billingEnd}
         error={fieldErrors.billingEnd}
         disabled={pending}
-        render={(inputProps) => (
-          <input
-            type="date"
-            value={fields.billingEnd}
-            onChange={(event) => onChange("billingEnd", event.target.value)}
-            {...inputProps}
-          />
-        )}
+        onChange={(value) => onChange("billingEnd", value)}
       />
       <ManualQuotaField
         id={"manual-quota-allowance-" + providerId}
         testId="manual-quota-allowance"
-        label={"Allowance (" + noun + ")"}
+        label={"Allowance (" + unit + ")"}
         error={fieldErrors.allowance}
         disabled={pending}
         render={(inputProps) => (
@@ -115,10 +123,10 @@ export function ManualQuotaFields({
             type="text"
             inputMode="decimal"
             autoComplete="off"
-            placeholder={placeholders.allowance}
             value={fields.allowance}
             onChange={(event) => onChange("allowance", event.target.value)}
             {...inputProps}
+            className={INPUT_CLASS}
           />
         )}
       />
@@ -127,20 +135,21 @@ export function ManualQuotaFields({
         testId="manual-quota-usage"
         label={
           amountMode === "balance"
-            ? "Balance remaining (" + noun + ")"
-            : "Current usage (" + noun + ")"
+            ? nativeCredits ? "Credits left" : "Balance remaining (" + unit + ")"
+            : "Current usage (" + unit + ")"
         }
         error={fieldErrors.used}
+        meta={preview === null ? null : <span data-testid="manual-quota-preview" aria-live="polite" className="tnum text-[12px] text-[var(--muted)]">{formatPercent1dp(preview)}% remaining</span>}
         disabled={pending}
         render={(inputProps) => (
           <input
             type="text"
             inputMode="decimal"
             autoComplete="off"
-            placeholder={placeholders.used}
             value={fields.used}
             onChange={(event) => onChange("used", event.target.value)}
             {...inputProps}
+            className={INPUT_CLASS}
           />
         )}
       />

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { OperationControl } from "./ProviderOperationControl"
 
 describe("ProviderOperationControl", () => {
-  it("shows an unsupported tool as OFF and unavailable with a support label", async () => {
+  it("shows an unsupported tool as an unavailable dash with a Not supported tooltip", async () => {
     const user = userEvent.setup()
     render(
       <OperationControl
@@ -19,18 +19,15 @@ describe("ProviderOperationControl", () => {
       />,
     )
 
-    const control = screen.getByRole("switch", {
-      name: "Brave Search fetch routing (not supported)",
-    })
-    expect(control).toBeInTheDocument()
-    expect(control).toHaveAttribute("aria-checked", "false")
-    expect(control).toBeDisabled()
-    await user.hover(control)
-    expect(await screen.findByText("Brave Search does not support fetch")).toBeInTheDocument()
+    expect(screen.queryByRole("switch")).toBeNull()
+    expect(screen.getByText("Brave Search does not support fetch")).toBeInTheDocument()
+    const dash = screen.getByText("—")
+    await user.hover(dash)
+    expect(await screen.findByText("Not supported")).toBeInTheDocument()
   })
 
-  it("keeps the unsupported OFF state while global access stays OFF", () => {
-    render(
+  it("keeps the unsupported dash while global access stays OFF and for read-only roles", () => {
+    const { rerender } = render(
       <OperationControl
         label="Fetch"
         providerName="Brave Search"
@@ -43,11 +40,23 @@ describe("ProviderOperationControl", () => {
       />,
     )
 
-    const control = screen.getByRole("switch", {
-      name: "Brave Search fetch routing (not supported)",
-    })
-    expect(control).toHaveAttribute("aria-checked", "false")
-    expect(control).toBeDisabled()
+    expect(screen.queryByRole("switch")).toBeNull()
+    expect(screen.getByText("—")).toBeInTheDocument()
+
+    rerender(
+      <OperationControl
+        label="Fetch"
+        providerName="Brave Search"
+        supported={false}
+        enabled={false}
+        globallyDisabled={false}
+        canEdit={false}
+        pending={false}
+        onToggle={() => {}}
+      />,
+    )
+    expect(screen.getByText("—")).toBeInTheDocument()
+    expect(screen.queryByText("Off")).toBeNull()
   })
 
   it("disables every access control while its row request stays pending", async () => {

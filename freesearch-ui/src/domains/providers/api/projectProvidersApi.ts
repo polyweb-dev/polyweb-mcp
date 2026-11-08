@@ -4,7 +4,6 @@
  * The payload is decoded from `unknown`; only the fields the client gates on
  * are kept. Credential and binding details never leave this decoder.
  */
-import { requestJson } from "@/shared/api/client"
 import { toUiId } from "./idMapping"
 import { projectProviderName } from "../model/projectProviders"
 import type { ProjectProvider, ProviderOperation } from "../model/projectProviders"
@@ -46,16 +45,4 @@ export function decodeProjectProviders(payload: unknown): ProjectProvider[] {
     if (provider !== null) providers.push(provider)
   }
   return providers
-}
-
-/** Read the provider view of one project. */
-export async function getProjectProviders(
-  projectId: string,
-  signal?: AbortSignal
-): Promise<ProjectProvider[]> {
-  const payload = await requestJson<unknown>(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/providers`,
-    signal === undefined ? {} : { signal }
-  )
-  return decodeProjectProviders(payload)
 }

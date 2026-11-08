@@ -4,6 +4,7 @@ import {
   resetExecutionTraffic,
   resetStubbedSystemPermissions,
 } from "./backendStub"
+import { resetVaultStub } from "./vaultStub"
 
 /**
  * Keep the BDD fixture surface in one place so every generated scenario uses
@@ -30,6 +31,7 @@ export const { Given, When, Then, Before, After } = createBdd(test)
  */
 Before({ tags: "@visual or @stub" }, async ({ page }) => {
   resetStubbedSystemPermissions()
+  resetVaultStub()
   // Per scenario, not per tab: a second tab's installBackendStub must keep
   // the search and fetch log of the first tab.
   resetExecutionTraffic()

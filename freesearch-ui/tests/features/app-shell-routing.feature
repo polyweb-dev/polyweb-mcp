@@ -2,9 +2,10 @@
 Feature: App-shell URL routing (C4)
   Sidebar workspaces are router links (NavLink) over a real BrowserRouter
   history: the URL tracks the view, deep-links render, back/forward/refresh
-  restore the view, and pill tabs never touch the URL. TabId is unchanged —
-  the "quotas" tab renders at the "/usage" path behind the "Provider usage"
-  link. The workspace is project first (U1): the root and unknown paths land
+  restore the view, and pill tabs never change the URL path. TabId is
+  unchanged — the "quotas" tab renders at the "/system/quotas" path behind the
+  "Quotas" link, and System Providers renders at "/system/providers" behind the
+  "Providers" link. The workspace is project first (U1): the root and unknown paths land
   on the last valid project, else on the projects list. Playground and
   Activity are project sections (U2): their former global paths redirect to
   the last project's section, else to the projects list. The stubbed session
@@ -15,17 +16,14 @@ Feature: App-shell URL routing (C4)
 
   @smoke
   Scenario: C4-1 sidebar links change the URL on navigation
-    When I follow the "Routing" sidebar link
-    Then I should see the "Routing" heading
-    And the page URL path should be "/routing"
-    When I follow the "Provider usage" sidebar link
-    Then I should see the "Usage" heading
-    And the page URL path should be "/usage"
+    When I follow the "Quotas" sidebar link
+    Then I should see the "Quotas" heading
+    And the page URL path should be "/system/quotas"
 
-  Scenario: P1-FINAL legacy providers path redirects to settings
+  Scenario: P1-FINAL legacy providers path redirects to System Providers
     When I navigate directly to "/providers"
-    Then the page URL path should be "/settings"
-    And I should see the "Settings" heading
+    Then the page URL path should be "/system/providers"
+    And I should see the "Providers" heading
 
   Scenario: C4-2 root path without a stored project redirects to the projects list
     When I navigate directly to "/"
@@ -44,10 +42,9 @@ Feature: App-shell URL routing (C4)
     And the "<link>" sidebar link should be marked current
 
     Examples:
-      | path      | heading  | link              |
-      | /routing  | Routing  | Routing           |
-      | /usage    | Usage    | Provider usage    |
-      | /settings | Settings | Provider settings |
+      | path              | heading   | link      |
+      | /system/quotas    | Quotas    | Quotas    |
+      | /system/providers | Providers | Providers |
 
   Scenario Outline: C4-3 former global <path> without a stored project lands on the projects list
     When I navigate directly to "<path>"
@@ -58,56 +55,64 @@ Feature: App-shell URL routing (C4)
       | path        |
       | /playground |
       | /activity   |
+      | /routing    |
+      | /system/routing |
 
   @smoke
   Scenario: C4-4 back and forward restore the view and the current marker
-    When I navigate directly to "/settings"
-    Then I should see the "Settings" heading
-    When I follow the "Routing" sidebar link
-    Then the page URL path should be "/routing"
-    And I should see the "Routing" heading
+    When I navigate directly to "/system/providers"
+    Then I should see the "Providers" heading
+    When I follow the "Quotas" sidebar link
+    Then the page URL path should be "/system/quotas"
+    And I should see the "Quotas" heading
     When I go back in history
-    Then the page URL path should be "/settings"
-    And I should see the "Settings" heading
-    And the "Provider settings" sidebar link should be marked current
+    Then the page URL path should be "/system/providers"
+    And I should see the "Providers" heading
+    And the "Providers" sidebar link should be marked current
     When I go forward in history
-    Then the page URL path should be "/routing"
-    And I should see the "Routing" heading
-    And the "Routing" sidebar link should be marked current
+    Then the page URL path should be "/system/quotas"
+    And I should see the "Quotas" heading
+    And the "Quotas" sidebar link should be marked current
 
   Scenario: C4-4 refresh keeps the deep-linked view
-    When I navigate directly to "/routing"
-    Then I should see the "Routing" heading
+    When I navigate directly to "/system/quotas"
+    Then I should see the "Quotas" heading
     When I reload the page
-    Then I should see the "Routing" heading
-    And the page URL path should be "/routing"
-    And the "Routing" sidebar link should be marked current
+    Then I should see the "Quotas" heading
+    And the page URL path should be "/system/quotas"
+    And the "Quotas" sidebar link should be marked current
 
-  Scenario: C4-5 quotas tab maps to the usage path with router-driven active state
-    When I follow the "Provider usage" sidebar link
-    Then the page URL path should be "/usage"
-    And I should see the "Usage" heading
-    And the "Provider usage" sidebar link should be marked current
-    And the "Provider usage" sidebar link should point to "/usage"
+  Scenario: C4-5 quotas tab maps to the system quotas path with router-driven active state
+    When I follow the "Quotas" sidebar link
+    Then the page URL path should be "/system/quotas"
+    And I should see the "Quotas" heading
+    And the "Quotas" sidebar link should be marked current
+    And the "Quotas" sidebar link should point to "/system/quotas"
     And the sidebar navigation should expose the system administrator links
 
-  Scenario: C4-6 routing pill tabs leave the URL unchanged
-    When I navigate directly to "/routing"
-    Then I should see the "Routing" heading
-    When I open the "Simulator" routing tab
-    Then the page URL path should still be "/routing"
-    When I open the "Ranks" routing tab
-    Then the page URL path should still be "/routing"
-    When I open the "Resilience" routing tab
-    Then the page URL path should still be "/routing"
+  Scenario Outline: Retired system key and capacity paths redirect to the vault
+    When I navigate directly to "<path>"
+    Then the page URL path should be "/account/keys"
+    And I should see the "Keys and pools" heading
 
-  Scenario: C4-6 settings pill tabs leave the URL unchanged
-    When I navigate directly to "/settings"
-    Then I should see the "Settings" heading
-    When I open the "Failover" settings tab
-    Then the page URL path should still be "/settings"
-    When I open the "Providers" settings tab
-    Then the page URL path should still be "/settings"
+    Examples:
+      | path                |
+      | /system/credentials |
+      | /system/capacity    |
+
+  Scenario Outline: Retired paths reopen the last selected project
+    Given the projects backend is stubbed
+    And I am a member of project Alpha with role project_admin
+    When I open the workspace page "/projects"
+    And I select project Alpha from the project selector
+    And I navigate directly to "<path>"
+    Then the page URL path should be the "<section>" section of project Alpha
+
+    Examples:
+      | path            | section   |
+      | /admin/users    | overview  |
+      | /routing        | providers |
+      | /system/routing | providers |
 
   Scenario: C4-7 shell keeps the sidebar shell with no legacy header topbar
     Given the stubbed session works in project Alpha

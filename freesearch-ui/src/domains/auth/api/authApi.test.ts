@@ -10,7 +10,6 @@ import {
   accessResponseFixture,
   adminAccountFixture,
   agentAccountFixture,
-  developerAccountFixture,
 } from "@/test/authFixtures"
 
 const CREDENTIALS = { email: "ada@example.com", password: "s3cret-pw" }
@@ -160,41 +159,6 @@ describe("registerAccount", () => {
     installFetchStub(() => ok(partial))
 
     await expect(authApi.registerAccount({ ...CREDENTIALS })).rejects.toMatchObject({
-      status: 0,
-      detail: INVALID_RESPONSE,
-    })
-  })
-})
-
-describe("provisionAccount", () => {
-  it("posts exactly the email and the password to /api/v1/users in access mode", async () => {
-    const { authApi } = await loadAuth()
-    const account = developerAccountFixture()
-    const stub = installFetchStub((req) => {
-      if (req.url === "/api/v1/users" && req.method === "POST") return ok(account)
-      return err(404, { detail: "unhandled test route" })
-    })
-
-    const result = await authApi.provisionAccount({
-      email: "new@example.com",
-      password: "correct-horse-battery-99",
-    })
-
-    expect(result).toEqual(account)
-    expect(stub.requests).toHaveLength(1)
-    expect(stub.requests[0]).toMatchObject({ url: "/api/v1/users", method: "POST" })
-    expect(stub.requests[0]?.headers["content-type"]).toContain("application/json")
-    expect(stub.requests[0]?.body).toEqual({
-      email: "new@example.com",
-      password: "correct-horse-battery-99",
-    })
-  })
-
-  it("rejects a provisioned body with a bad auth provider", async () => {
-    const { authApi } = await loadAuth()
-    installFetchStub(() => ok({ ...adminAccountFixture(), auth_provider: "ldap" }))
-
-    await expect(authApi.provisionAccount({ ...CREDENTIALS })).rejects.toMatchObject({
       status: 0,
       detail: INVALID_RESPONSE,
     })

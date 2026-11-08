@@ -6,6 +6,7 @@
  */
 import { PROVIDER_CATALOG, catalogNameOf } from "./catalog"
 import type { ProviderOperation } from "./projectProviders"
+import type { ProviderPricing } from "./providerPricing"
 
 export const CREDENTIAL_OPERATIONS: readonly ProviderOperation[] = ["search", "fetch"]
 
@@ -32,6 +33,7 @@ export interface AvailableCredential {
   authMode: string
   status: string
   health: string | null
+  healthCheckedAt?: string | null
   grantedOperations: ProviderOperation[]
   supportedOperations: ProviderOperation[]
   pools: CredentialPoolRef[]
@@ -48,10 +50,11 @@ export interface ProviderBinding {
 }
 
 /** Full project view of one provider type. */
-export interface ProviderTypeView {
+export interface ProviderTypeView extends ProviderPricing {
   /** Wire provider type (`you`, not `youcom`). */
   providerType: string
   name: string
+  keyless: boolean
   capability: ProviderOperation[]
   killSwitch: boolean
   systemEnabledOperations: ProviderOperation[]
@@ -60,6 +63,9 @@ export interface ProviderTypeView {
   credentials: AvailableCredential[]
   bindings: ProviderBinding[]
   effectiveOperations: ProviderOperation[]
+  /** Latest project-scoped provider observation, shared by all members. */
+  healthStatus?: string | null
+  healthCheckedAt?: string | null
 }
 
 /** Project-facing projection of one credential instance. */
@@ -73,24 +79,6 @@ export interface ProjectCredential {
   permittedOperations: ProviderOperation[]
   canManage: boolean
   generation: number | null
-}
-
-/** System view of one system-owned credential instance. */
-export interface SystemCredential {
-  id: string
-  providerType: string
-  label: string
-  authMode: string
-  generation: number
-  status: string
-}
-
-/** One project's grant of a system credential. */
-export interface CredentialGrant {
-  credentialId: string
-  projectId: string
-  permittedOperations: ProviderOperation[]
-  version: number
 }
 
 /** Input of one credential creation; `secret` only for `api_key`. */
@@ -141,11 +129,6 @@ const OAUTH_STATUS_TEXT: Record<OAuthGrantStatus, string> = {
 /** User-facing text of one OAuth grant status. */
 export function oauthStatusText(status: OAuthGrantStatus): string {
   return OAUTH_STATUS_TEXT[status]
-}
-
-/** User-facing auth mode label. */
-export function authModeLabel(authMode: string): string {
-  return authMode === "oauth" ? "OAuth" : "API key"
 }
 
 /** Display name of one wire provider type. */

@@ -13,6 +13,7 @@ import {
   isProjectUnavailableError,
   listProjectMembers,
   listProjects,
+  listSystemProjects,
   projectMutationMessage,
   removeProjectMember,
   removeProjectRole,
@@ -35,6 +36,9 @@ const MEMBER_BODY = {
   status: "active",
   roles: ["project_member"],
   version: 1,
+  role: "developer",
+  permissions: 15,
+  provider_owner: false,
 }
 
 describe("projectsApi", () => {
@@ -53,6 +57,12 @@ describe("projectsApi", () => {
     const stub = installFetchStub(() => ok([]))
     expect(await listProjects(new AbortController().signal)).toEqual([])
     expect(stub.requests[0]?.url).toBe("/api/v1/projects?include_archived=true")
+  })
+
+  it("requests every installation project from the system list", async () => {
+    const stub = installFetchStub(() => ok([]))
+    expect(await listSystemProjects(new AbortController().signal)).toEqual([])
+    expect(stub.requests[0]?.url).toBe("/api/v1/system/projects?include_archived=true")
   })
 
   it("creates a project by first-admin email", async () => {

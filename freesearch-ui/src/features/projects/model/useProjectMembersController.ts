@@ -4,7 +4,6 @@ import { useScopedResource } from "@/shared/lib/useScopedResource"
 import type { ScopedResource } from "@/shared/lib/useScopedResource"
 import {
   addProjectMember,
-  assignProjectRole,
   clearProjectDraft,
   isProjectRoleKey,
   listProjectMembers,
@@ -12,8 +11,8 @@ import {
   projectStorageKey,
   readProjectDraft,
   removeProjectMember,
-  removeProjectRole,
   setProjectMemberStatus,
+  updateProjectMember,
   writeProjectDraft,
 } from "@/domains/projects"
 import type {
@@ -41,7 +40,7 @@ function readMemberDraft(key: string): MemberDraft {
   if (!isRecord(value) || typeof value.email !== "string") return { ...EMPTY_DRAFT }
   return {
     email: value.email,
-    role: isProjectRoleKey(value.role) ? value.role : EMPTY_DRAFT.role,
+    role: isProjectRoleKey(value.role) && (value.role === "project_admin" || value.role === "project_member") ? value.role : EMPTY_DRAFT.role,
   }
 }
 
@@ -123,7 +122,9 @@ export function useProjectMembersController(
         reloadMembers()
         refreshAccess()
       } catch (error) {
-        setMessage(projectMutationMessage(error, fallback, { emailLookup }))
+        setMessage(error instanceof ApiError && error.status === 404 && !emailLookup
+          ? "This action is not available yet."
+          : projectMutationMessage(error, fallback, { emailLookup }))
         if (error instanceof ApiError && error.status === 403) refreshAccess()
       } finally {
         setPending(false)
@@ -135,7 +136,7 @@ export function useProjectMembersController(
   const add = useCallback(async () => {
     const email = draft.email.trim()
     if (!email) {
-      setMessage("Enter the email address of the account to add.")
+      setMessage("Enter the email address of the account to add")
       return
     }
     await mutate(async () => {
@@ -161,13 +162,13 @@ export function useProjectMembersController(
 
   const assign = useCallback(
     (member: ProjectMember, role: ProjectRoleKey) =>
-      mutate(() => assignProjectRole(projectId, member.user_id, role)),
+      mutate(() => updateProjectMember(projectId, member.user_id, { role: role === "project_admin" ? "admin" : "developer" })),
     [mutate, projectId]
   )
 
   const unassign = useCallback(
-    (member: ProjectMember, role: ProjectRoleKey) =>
-      mutate(() => removeProjectRole(projectId, member.user_id, role)),
+    (member: ProjectMember, _role: ProjectRoleKey) =>
+      mutate(() => updateProjectMember(projectId, member.user_id, { role: "developer" })),
     [mutate, projectId]
   )
 

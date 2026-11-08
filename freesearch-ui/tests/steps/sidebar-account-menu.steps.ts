@@ -42,8 +42,8 @@ interface SidebarAccount {
 }
 
 const SIDEBAR_ACCOUNTS: Record<string, SidebarAccount> = {
-  // Every system permission: Routing, Provider usage, System credentials,
-  // Capacity, Provider settings, edits and Admin.
+  // Every system permission: Providers (with its Keys tab), Quotas,
+  // Capacity and edits.
   "system administrator": {
     body: userAccountBody("11111111-1111-4111-8111-111111111111", "admin@example.com", {
       username: "admin",
@@ -51,8 +51,8 @@ const SIDEBAR_ACCOUNTS: Record<string, SidebarAccount> = {
     name: "admin",
     systemPermissions: SYSTEM_ADMIN_PERMISSIONS,
   },
-  // Read-only control access: Routing, Provider usage and Provider settings,
-  // no edits, no Admin.
+  // Read-only control access: Providers and Quotas, no edits, no
+  // Accounts link.
   "settings reader": {
     body: userAccountBody("22222222-2222-4222-8222-222222222222", "reader@example.com", {
       username: "reader",
@@ -227,7 +227,7 @@ When("I dismiss the account popup with Escape", async ({ page }) => {
 })
 
 When("I dismiss the account popup with an outside click", async ({ page }) => {
-  await page.getByRole("link", { name: "Routing", exact: true }).click()
+  await page.getByRole("link", { name: "Quotas", exact: true }).click()
 })
 
 When("I toggle the account popup with the trigger", async ({ page }) => {
@@ -254,8 +254,8 @@ When("I press Escape again for the drawer", async ({ page }) => {
   await page.keyboard.press("Escape")
 })
 
-When("I follow the Routing link with an open popup", async ({ page }) => {
-  await page.getByRole("link", { name: "Routing", exact: true }).click()
+When("I follow the Quotas link with an open popup", async ({ page }) => {
+  await page.getByRole("link", { name: "Quotas", exact: true }).click()
 })
 
 When("I toggle sidebar mode with an open popup", async ({ page }) => {
@@ -279,18 +279,14 @@ When("I choose Sign out for the outcome check", async ({ page }) => {
 })
 
 /**
- * Every Primary link of a system administrator, in the U3 contract order:
- * System credentials and Capacity follow Provider usage, and the global
- * settings link is "Provider settings" (never the project "Settings" name).
+ * Every Primary link of a system administrator, in contract order: the
+ * System group (Providers, Quotas), then Projects, Keys and pools, and Account.
  */
 const ALL_PRIMARY_LINKS: Array<[string, string]> = [
-  ["Routing", "/routing"],
-  ["Provider usage", "/usage"],
-  ["System credentials", "/system/credentials"],
-  ["Capacity", "/system/capacity"],
-  ["Provider settings", "/settings"],
-  ["Admin", "/admin/users"],
+  ["Providers", "/system/providers"],
+  ["Quotas", "/system/quotas"],
   ["Projects", "/projects"],
+  ["Keys and pools", "/account/keys"],
   ["Account", "/account"],
 ]
 
@@ -302,7 +298,7 @@ async function expectPrimaryLinks(page: Page, labels: string[]): Promise<void> {
   }
 }
 
-Then("the sidebar shows eight links in order with exact hrefs", async ({ page }) => {
+Then("the sidebar shows five links in order with exact hrefs", async ({ page }) => {
   const nav = page.getByRole("navigation", { name: "Primary" })
   await expectPrimaryLinks(
     page,
@@ -323,20 +319,19 @@ Then("the Primary navigation lists exactly {string}", async ({ page }, list: str
   )
 })
 
-Then("the sidebar shows the Account and Admin links", async ({ page }) => {
+Then("the sidebar shows the Account link", async ({ page }) => {
   const nav = page.getByRole("navigation", { name: "Primary" })
   await expect(nav.getByRole("link", { name: "Account", exact: true })).toBeVisible()
-  await expect(nav.getByRole("link", { name: "Admin", exact: true })).toBeVisible()
 })
 
-Then("the sidebar shows {int} links without Admin", async ({ page }, count: number) => {
+Then("the sidebar shows {int} links without an Accounts link", async ({ page }, count: number) => {
   const nav = page.getByRole("navigation", { name: "Primary" })
   await expect(nav.getByRole("link")).toHaveCount(count)
 })
 
-Then("the sidebar shows no Admin link", async ({ page }) => {
+Then("the sidebar shows no Accounts link", async ({ page }) => {
   await expect(
-    page.getByRole("link", { name: "Admin", exact: true })
+    page.getByRole("link", { name: "Accounts", exact: true })
   ).toHaveCount(0)
 })
 
@@ -346,8 +341,11 @@ Then(
     const { name, body } = await currentAccount(page)
     const dialog = accountDialog(page)
     await expect(dialog).toBeVisible()
-    await expect(dialog.getByText(name, { exact: true }).first()).toBeVisible()
-    await expect(dialog.getByText(body.email, { exact: true }).first()).toBeVisible()
+    const trigger = userMenuTrigger(page)
+    const identity = (await trigger.getAttribute("title")) === null ? trigger : dialog
+    await expect(identity.getByText(name, { exact: true }).first()).toBeVisible()
+    await expect(identity.getByText(body.email, { exact: true }).first()).toBeVisible()
+    await expect(dialog.getByRole("link", { name: "Account", exact: true })).toHaveAttribute("href", "/account")
     // No role or account-type label: authority is never a property of the account.
     expect((await dialog.textContent()) ?? "").not.toMatch(ROLE_LABEL_PATTERN)
     await expect(
@@ -380,7 +378,7 @@ Then("the account popup closes and trigger focus returns", async ({ page }) => {
 
 Then("the account popup closes and destination focus stays", async ({ page }) => {
   await expect(accountDialog(page)).toHaveCount(0)
-  await expect(page.getByRole("link", { name: "Routing", exact: true })).toBeFocused()
+  await expect(page.getByRole("link", { name: "Quotas", exact: true })).toBeFocused()
 })
 
 Then("the account popup closes", async ({ page }) => {
@@ -419,12 +417,10 @@ Then("the drawer closes and Open navigation keeps focus", async ({ page }) => {
 
 Then("each permitted sidebar link keeps its route and view", async ({ page }) => {
   const expected: Array<{ link: string; heading: string; path: string }> = [
-    { link: "Routing", heading: "Routing", path: "/routing" },
-    { link: "Provider usage", heading: "Usage", path: "/usage" },
-    { link: "System credentials", heading: "System credentials", path: "/system/credentials" },
-    { link: "Capacity", heading: "Capacity", path: "/system/capacity" },
-    { link: "Provider settings", heading: "Settings", path: "/settings" },
+    { link: "Providers", heading: "Providers", path: "/system/providers" },
+    { link: "Quotas", heading: "Quotas", path: "/system/quotas" },
     { link: "Projects", heading: "Projects", path: "/projects" },
+    { link: "Keys and pools", heading: "Keys and pools", path: "/account/keys" },
     { link: "Account", heading: "Account", path: "/account" },
   ]
   for (const { link, heading, path } of expected) {
@@ -432,12 +428,6 @@ Then("each permitted sidebar link keeps its route and view", async ({ page }) =>
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible()
     expect(new URL(page.url()).pathname).toBe(path)
   }
-  // Admin: the account-creation view renders with its "Accounts" heading and
-  // its creation form.
-  await page.getByRole("link", { name: "Admin", exact: true }).click()
-  await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toBeVisible()
-  await expect(page.getByRole("button", { name: "Create account", exact: true })).toBeVisible()
-  expect(new URL(page.url()).pathname).toBe("/admin/users")
 })
 
 /**
@@ -472,10 +462,16 @@ Then("each Project link of a project member keeps its route and view", async ({ 
     await nav.getByRole("link", { name: link, exact: true }).click()
     await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible()
     expect(new URL(page.url()).pathname).toBe(`${projectRoot}${segment}`)
-    // A project link never shares its name with a Primary link.
-    await expect(
-      page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: link, exact: true })
-    ).toHaveCount(0)
+    // A project link never shares its target with a Primary link. Only the
+    // System "Providers" link shares a name, and it points at System Providers.
+    const primaryTwin = page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("link", { name: link, exact: true })
+    if (link === "Providers") {
+      await expect(primaryTwin).toHaveAttribute("href", "/system/providers")
+    } else {
+      await expect(primaryTwin).toHaveCount(0)
+    }
   }
 })
 
@@ -484,9 +480,9 @@ Then("mobile navigation still closes the drawer on follow", async ({ page }) => 
   await page.getByRole("button", { name: "Open navigation", exact: true }).click()
   const drawer = page.getByRole("dialog", { name: "Navigation" })
   await expect(drawer).toBeVisible()
-  await drawer.getByRole("link", { name: "Routing", exact: true }).click()
+  await drawer.getByRole("link", { name: "Quotas", exact: true }).click()
   await expect(page.getByRole("dialog", { name: "Navigation" })).toHaveCount(0)
-  expect(new URL(page.url()).pathname).toBe("/routing")
+  expect(new URL(page.url()).pathname).toBe("/system/quotas")
 })
 
 Then("the sidebar sends one logout operation", async ({ page }) => {
@@ -566,15 +562,10 @@ Then("the account page shows no role", async ({ page }) => {
 })
 
 Then(
-  "the account creation link follows system.settings.write for the {string} account",
-  async ({ page }, kind: string) => {
-    const link = page.getByRole("link", { name: "Create accounts" })
-    if (sidebarAccount(kind).systemPermissions.includes("system.settings.write")) {
-      await expect(link).toBeVisible()
-      await expect(link).toHaveAttribute("href", "/admin/users")
-      return
-    }
-    await expect(link).toHaveCount(0)
+  "the account page has no account creation link",
+  async ({ page }) => {
+    // The Account page is personal; global provisioning is not available.
+    await expect(page.getByRole("link", { name: "Create accounts", exact: true })).toHaveCount(0)
   }
 )
 
@@ -590,7 +581,7 @@ Then("the gated page redirects home to the projects list", async ({ page }) => {
     timeout: 15_000,
   })
   expect(new URL(page.url()).pathname).toBe("/projects")
-  await expect(page.getByRole("button", { name: "Create account", exact: true })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "New account", exact: true })).toHaveCount(0)
   await expect(page.getByRole("heading", { name: "Accounts", exact: true })).toHaveCount(0)
 })
 

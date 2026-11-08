@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 import {
-  authModeLabel,
   credentialProviderTypes,
   oauthStatusText,
   providerTypeName,
@@ -15,11 +14,6 @@ describe("credential model helpers", () => {
     expect(oauthStatusText("connected")).toBe("Connected")
     expect(oauthStatusText("refresh_failed")).toBe("Connection needs attention")
     expect(oauthStatusText("disconnected")).toBe("Not connected")
-  })
-
-  it("labels auth modes", () => {
-    expect(authModeLabel("oauth")).toBe("OAuth")
-    expect(authModeLabel("api_key")).toBe("API key")
   })
 
   it("derives supported operations from the catalog", () => {

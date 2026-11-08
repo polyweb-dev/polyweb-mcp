@@ -20,7 +20,7 @@ Feature: C2 tab unification
     And the playground tabs should be linked to their panels
     And the playground should show the "Search" panel
 
-  Scenario: Fetch tab swaps the playground hero input (pill switcher)
+  Scenario: Fetch tab swaps the playground composer (pill switcher)
     When I open the "playground" section of project Alpha
     And I open the playground tab "Fetch"
     Then the playground tab "Fetch" should be selected
@@ -80,11 +80,9 @@ Feature: C2 tab unification
     Then the activity list should contain provider "Keenable"
     And the activity list should not contain provider "Brave Search"
 
-  Scenario: Routing and Settings tabs stay canonical pill tabs
-    When I select the "Routing" header tab
-    Then the routing tabs should remain canonical pill tabs "Strategy", "Simulator", "Ranks" and "Resilience"
-    When I select the "Provider settings" header tab
-    Then the settings tabs should remain canonical pill tabs "Providers" and "Failover"
+  Scenario: The provider catalog has no retired Keys tab
+    When I select the "Providers" header tab
+    Then the settings page should not expose a "Keys" tab
 
   Scenario: No hand-rolled mimics in tab and filter slots
     When I open the "playground" section of project Alpha

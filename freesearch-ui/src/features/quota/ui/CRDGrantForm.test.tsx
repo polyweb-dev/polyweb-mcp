@@ -51,23 +51,35 @@ function renderForm(fetchAvailable: boolean, overrides: Record<string, unknown> 
 describe("CRDGrantForm", () => {
   it("shows search only with no fetch field for Brave (UI7-04, UI7-08)", () => {
     renderForm(false)
-    expect(screen.getByLabelText("Search credit units (CRD)")).not.toBeNull()
-    expect(screen.queryByLabelText(/Fetch credit units/i)).toBeNull()
+    expect(screen.getByLabelText("Search budget (USD)")).not.toBeNull()
+    expect(screen.queryByLabelText(/Fetch budget/i)).toBeNull()
     expect(screen.queryByText(/fetch grant/i)).toBeNull()
   })
 
   it("keeps exact stored 4.500 until the user changes it (precision rule)", () => {
     renderForm(false)
-    expect(screen.getByLabelText("Search credit units (CRD)")).toHaveValue("4.500")
+    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue("0.004500")
+  })
+
+  it("updates the provider list-price equivalent while editing a CRD budget", async () => {
+    renderForm(false)
+    const input = screen.getByLabelText("Search budget (USD)")
+    const user = userEvent.setup()
+    await user.clear(input)
+    await user.type(input, "5000")
+    expect(input).toHaveValue("5000")
+    await user.clear(input)
+    await user.type(input, "2500")
+    expect(input).toHaveValue("2500")
   })
 
   it("rejects a changed amount with two decimal digits (UI7-08)", async () => {
     renderForm(false)
     const user = userEvent.setup()
-    await user.clear(screen.getByLabelText("Search credit units (CRD)"))
-    await user.type(screen.getByLabelText("Search credit units (CRD)"), "4.55")
+    await user.clear(screen.getByLabelText("Search budget (USD)"))
+    await user.type(screen.getByLabelText("Search budget (USD)"), "4.1234567")
     await user.click(screen.getByRole("button", { name: "Save budget limit" }))
-    expect(await screen.findByText("Use at most one decimal digit (for example 3.8).")).not.toBeNull()
+    expect(await screen.findByText("Use up to six decimal places")).not.toBeNull()
   })
 
   it("preserves the stored fetch amount when the input stays absent (UI7-08)", async () => {
@@ -109,16 +121,16 @@ describe("CRDGrantForm", () => {
   it("shows the reload action after HTTP 409 and keeps the draft (UI7-08)", () => {
     renderForm(false, { staleVersion: true, saveError: "The server holds a newer version of this record. Reload the limits and try again." })
     expect(screen.getByRole("button", { name: "Reload limits" })).not.toBeNull()
-    expect(screen.getByLabelText("Search credit units (CRD)")).toHaveValue("4.500")
+    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue("0.004500")
   })
 
   it("labels every input explicitly with error descriptions (a11y)", async () => {
     renderForm(false)
     const user = userEvent.setup()
-    await user.clear(screen.getByLabelText("Search credit units (CRD)"))
+    await user.clear(screen.getByLabelText("Search budget (USD)"))
     await user.click(screen.getByRole("button", { name: "Save budget limit" }))
-    expect(await screen.findByText("Required.")).not.toBeNull()
-    expect(screen.getByLabelText("Search credit units (CRD)").getAttribute("aria-invalid")).toBe("true")
+    expect(await screen.findByText("Enter an amount")).not.toBeNull()
+    expect(screen.getByLabelText("Search budget (USD)").getAttribute("aria-invalid")).toBe("true")
   })
 
   it("uses one column with three full-width rows in amount-period order (final-polish 2)", () => {
@@ -128,13 +140,31 @@ describe("CRDGrantForm", () => {
     expect(grid?.className ?? "").toContain("grid-cols-1")
     expect(grid?.className ?? "").not.toContain("sm:grid-cols-2")
     const labels = Array.from(document.querySelectorAll("label")).map((entry) => entry.textContent)
-    expect(labels).toEqual(["Search credit units (CRD)", "Period start", "Period end"])
+    expect(labels).toEqual(["Search budget (USD)", "Period start", "Period end"])
   })
 
-  it("shows stored facts without a helper paragraph (CARD-4)", () => {
+  it("shows stored facts as a Set, Used, Reserved table without a helper paragraph (CARD-4)", () => {
     renderForm(false)
-    expect(screen.getByText(/Stored budget limit/)).not.toBeNull()
+    const table = screen.getByRole("table", { name: "Current budget limit" })
+    expect(Array.from(table.querySelectorAll("th")).map((th) => th.textContent)).toEqual([
+      "Operation",
+      "Set (USD)",
+      "Used (USD)",
+      "Reserved (USD)",
+    ])
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(1)
+    expect(screen.queryByText(/Stored budget limit/)).toBe(null)
     expect(screen.queryByText(SPEND_CAP_NOTE)).toBe(null)
+  })
+
+  it("puts Cancel before the primary Save on the right and closes on Cancel", async () => {
+    const { onClose, onSave } = renderForm(false)
+    const user = userEvent.setup()
+    const labels = screen.getAllByRole("button").map((button) => button.textContent)
+    expect(labels).toEqual(["Cancel", "Save budget limit"])
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onSave).not.toHaveBeenCalled()
   })
 })
 
@@ -191,18 +221,18 @@ describe("CRDGrantForm Tavily native", () => {
 
   it("displays native Credits while keeping stored CRD text convertible", () => {
     renderTavily()
-    expect(screen.getByLabelText("Search Credits")).toHaveValue("1")
-    expect(screen.getByLabelText("Fetch Credits")).toHaveValue("2")
-    expect(screen.getByText(/1 Credit/)).not.toBeNull()
-    expect(screen.getByText(/2 Credits/)).not.toBeNull()
+    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue("0.008")
+    expect(screen.getByLabelText("Fetch budget (USD)")).toHaveValue("0.016")
+    expect(screen.queryByText(/1 credit/)).toBeNull()
+    expect(screen.queryByText(/2 credits/)).toBeNull()
     expect(screen.queryByText("8 CRD")).toBeNull()
   })
 
   it("wires CRD on submit after a typed Credits amount", async () => {
     const { onSave } = renderTavily()
     const user = userEvent.setup()
-    await user.clear(screen.getByLabelText("Search Credits"))
-    await user.type(screen.getByLabelText("Search Credits"), "3")
+    await user.clear(screen.getByLabelText("Search budget (USD)"))
+    await user.type(screen.getByLabelText("Search budget (USD)"), "3")
     await user.click(screen.getByRole("button", { name: "Save budget limit" }))
     expect(onSave).toHaveBeenCalledTimes(1)
     expect(onSave).toHaveBeenCalledWith({
@@ -210,7 +240,7 @@ describe("CRDGrantForm Tavily native", () => {
       version: 3,
       period_start: "2026-09-01",
       period_end: "2026-09-30",
-      search_crd: "24",
+      search_crd: "3000",
       fetch_crd: "16",
     })
   })
@@ -232,8 +262,24 @@ describe("CRDGrantForm Tavily native", () => {
         onReload={() => {}}
       />,
     )
-    expect(screen.getByLabelText("Search credit units (CRD)")).toHaveValue("8")
-    expect(screen.getByLabelText("Fetch credit units (CRD)")).toHaveValue("16")
-    expect(screen.getByText(/8 CRD/)).not.toBeNull()
+    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue("0.008")
+    expect(screen.getByLabelText("Fetch budget (USD)")).toHaveValue("0.016")
+    expect(screen.queryByText(/8 credits/)).toBeNull()
+  })
+})
+
+
+describe("USD budget dates and precision", () => {
+  it("uses the shared text date fields and sends ISO bounds with exact edited USD", async () => {
+    const { onSave } = renderForm(false)
+    const user = userEvent.setup()
+    expect(screen.getByLabelText("Period start")).toHaveAttribute("type", "text")
+    expect(screen.getByLabelText("Period end")).toHaveAttribute("type", "text")
+    await user.clear(screen.getByLabelText("Period start"))
+    await user.type(screen.getByLabelText("Period start"), "Sep 2, 2026")
+    await user.clear(screen.getByLabelText("Search budget (USD)"))
+    await user.type(screen.getByLabelText("Search budget (USD)"), "1.234567")
+    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ period_start: "2026-09-02", search_crd: "1234.567000" }))
   })
 })
