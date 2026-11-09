@@ -146,7 +146,7 @@ def test_legacy_account_routes_are_removed_for_authenticated_callers(
             ).status_code in {404, 405}
 
     paths = client.get("/openapi.json").json()["paths"]
-    assert "/api/v1/users/me" in paths
+    assert "/api/v1/users/me" not in paths
     assert "/api/v1/users/{user_id}" not in paths
     assert "/api/v1/users/{user_id}/deactivate" not in paths
     assert "/api/v1/users/{user_id}/role" not in paths
@@ -159,8 +159,8 @@ def test_legacy_account_routes_are_removed_for_authenticated_callers(
         headers = _headers(pairs[role]["access"])
         me = client.get("/users/me", headers=headers)
         versioned_me = client.get("/api/v1/users/me", headers=headers)
-        assert me.status_code == versioned_me.status_code == 200
-        assert me.json() == versioned_me.json()
+        assert me.status_code == 200
+        assert versioned_me.status_code in {404, 405}
         assert (
             client.post(
                 "/auth/jwt/refresh", headers=_headers(str(pairs[role]["refresh"]))

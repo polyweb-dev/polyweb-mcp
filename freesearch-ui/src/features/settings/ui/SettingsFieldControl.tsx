@@ -2,7 +2,6 @@ import { FIELD_SPECS, numericMax } from "@/domains/settings"
 import type { SettingsField, SettingsValue } from "@/domains/settings"
 import { Switch } from "@/shared/ui/Switch"
 import { EnumSettingControl } from "./EnumSettingControl"
-import { ListSettingControl } from "./ListSettingControl"
 import { NumberSettingControl } from "./NumberSettingControl"
 
 interface SettingsFieldControlProps {
@@ -36,17 +35,6 @@ export function SettingsFieldControl({ field, value, disabled, onChange, onValid
         field={field}
         options={control.options}
         value={typeof value === "string" ? value : ""}
-        disabled={disabled}
-        onChange={onChange}
-      />
-    )
-  }
-  if (control.kind === "list") {
-    return (
-      <ListSettingControl
-        id={id}
-        label={label}
-        value={Array.isArray(value) ? value : []}
         disabled={disabled}
         onChange={onChange}
       />

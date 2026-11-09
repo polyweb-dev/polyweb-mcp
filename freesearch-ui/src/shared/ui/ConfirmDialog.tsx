@@ -5,7 +5,7 @@ import { Modal } from "./Modal"
 
 export interface ConfirmDialogProps {
   open: boolean
-  title: string
+  title: ReactNode
   message: ReactNode
   confirmLabel: string
   pending: boolean

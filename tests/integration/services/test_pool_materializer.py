@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import text
 
 from freesearch.models.contracts import UsageEvent, UsageOperation
-from freesearch.models.credentials import CredentialOperation
+from freesearch.models.credentials import CredentialOperation, CredentialRotate
 from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
 from freesearch.models.schema_enums import UpstreamScope
 from freesearch.models.users import UserPrincipal
@@ -24,7 +24,12 @@ from freesearch.services.pool_materializer import (
 )
 from freesearch.services.provider_runtime import initialize_provider_configs
 from freesearch.services.vault_keys import VaultKeyService
-from tests.fixtures.a2_execution import ExecutionWorld, build_execution_world, search_request
+from tests.fixtures.a2_execution import (
+    ExecutionWorld,
+    RecordingAdapter,
+    build_execution_world,
+    search_request,
+)
 from tests.fixtures.execution import seed_execution_project
 
 SEARCH = CredentialOperation.SEARCH
@@ -242,6 +247,42 @@ async def test_operation_limits_budget_and_strict_zero(tmp_path: Path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_migrated_operation_windows_materialize_without_normalizing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    world = await build_execution_world(tmp_path, monkeypatch, limits=False)
+    try:
+        _, pool_id = await _seed_pool(world)
+        async with world.repository.session() as session:
+            await KeyPoolRepository(session).update(
+                pool_id,
+                KeyPoolValues(
+                    label="migrated",
+                    operations=frozenset({"search", "fetch"}),
+                    rate_limit=20,
+                    operation_limits={
+                        "search": {"rate_limit": 20, "rate_window_seconds": 60},
+                        "fetch": {"rate_limit": None, "rate_window_seconds": 3600},
+                    },
+                ),
+            )
+            await materialize_pools(session, project_id=world.project.project_id)
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT operation_scope,base_rate,rate_window_seconds "
+                        "FROM project_pool_allocations WHERE key_pool_id=:pool "
+                        "ORDER BY operation_scope"
+                    ),
+                    {"pool": str(pool_id)},
+                )
+            ).all()
+            assert rows == [("fetch", None, 3600), ("search", 20, 60)]
+    finally:
+        await world.aclose()
+
+
+@pytest.mark.asyncio
 async def test_other_project_retains_shared_credential_link(tmp_path: Path, monkeypatch) -> None:
     world = await build_execution_world(tmp_path, monkeypatch, limits=False)
     try:
@@ -337,6 +378,50 @@ async def test_startup_replaces_legacy_project_binding(tmp_path: Path, monkeypat
         await initialize_provider_configs(world.repository)
         bindings = await _bindings(world)
         assert len(bindings) == 1 and bindings[0].credential_id == credential
+    finally:
+        await world.aclose()
+
+
+@pytest.mark.asyncio
+async def test_rotation_rebuilds_capacity_and_routes_to_new_generation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    world = await build_execution_world(tmp_path, monkeypatch, limits=False)
+    try:
+        credential, pool_id = await _seed_pool(world)
+        await initialize_provider_configs(world.repository)
+        async with world.repository.session() as session:
+            await session.execute(
+                text("UPDATE project_pool_allocations SET base_rate=123 WHERE key_pool_id=:pool"),
+                {"pool": str(pool_id)},
+            )
+            await session.commit()
+        actor = UserPrincipal(
+            id=world.project.actor_id,
+            email="admin@example.test",
+            session_id=uuid4(),
+            is_active=True,
+            is_verified=True,
+        )
+        new_adapter = RecordingAdapter("exa")
+        world.adapters_by_secret["rotated-secret"] = new_adapter
+        rotated = await VaultKeyService(world.repository, world.store).rotate(
+            actor, credential, CredentialRotate(expected_generation=1, secret="rotated-secret")
+        )
+        assert rotated.generation == 2
+        async with world.repository.session() as session:
+            allocations = await PoolAllocationRepository(session).list_for_project(
+                project_id=world.project.project_id
+            )
+            assert allocations and all(
+                allocation.key_pool_id == pool_id and allocation.base_rate is None
+                for allocation in allocations
+            )
+        response = await world.service.search(
+            search_request(world), attribution=world.project, context=world.context
+        )
+        assert response.provider == "exa"
+        assert new_adapter.search_calls == 1
     finally:
         await world.aclose()
 

@@ -223,7 +223,7 @@ describe("ManualQuotaModal provider target", () => {
     expect(screen.queryByRole("option", { name: "Exa" })).toBeNull()
     expect(within(trigger as HTMLElement).getByTestId("provider-logo-brave")).toBeInTheDocument()
     expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(5.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(4.995)
     await user.click(trigger)
     expect(trigger.getAttribute("aria-expanded")).toBe("true")
     const popup = await screen.findByRole("listbox")
@@ -346,9 +346,9 @@ describe("ManualQuotaModal balance prefill", () => {
       />,
     )
     expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(5.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(4.995)
     expect(screen.queryByTestId("manual-quota-prefill")).toBeNull()
-    expect(screen.getByTestId("manual-quota-preview")).toHaveTextContent("100.0% remaining")
+    expect(screen.getByTestId("manual-quota-preview")).toHaveTextContent("99.9% remaining")
   })
 
   it("lets a saved entry win over the observed pool with no estimate note", () => {

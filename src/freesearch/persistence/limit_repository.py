@@ -75,6 +75,7 @@ from freesearch.persistence.limit_rows import (
     RateAttemptRow,
     RateWindowObservationRow,
 )
+from freesearch.persistence.pools import CredentialPoolLinkRow
 
 _WINDOW_SECONDS: dict[RateWindowName, int] = {
     RateWindowName.SECOND: 1,
@@ -510,6 +511,41 @@ class LimitRepository:
         async with self._session_factory() as session:
             rows = (await session.scalars(statement)).all()
         return [_pool_from_row(row) for row in rows]
+
+    async def observation_identities(self, provider: str) -> dict[str, tuple[str, set[int]]]:
+        """Map current observation scopes to funds identities and generations."""
+
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        ProviderCredentialRow.id,
+                        ProviderCredentialRow.generation,
+                        CredentialPoolLinkRow.pool_id,
+                        CredentialPoolLinkRow.operation_scope,
+                    )
+                    .outerjoin(
+                        CredentialPoolLinkRow,
+                        CredentialPoolLinkRow.credential_id == ProviderCredentialRow.id,
+                    )
+                    .where(
+                        ProviderCredentialRow.provider_type == provider,
+                        ProviderCredentialRow.status == "active",
+                    )
+                )
+            ).all()
+        credentials: dict[str, tuple[int, str | None, str | None]] = {}
+        for credential_id, generation, pool_id, operation in rows:
+            prior = credentials.get(credential_id)
+            if prior is None or operation == "search":
+                credentials[credential_id] = (generation, pool_id, operation)
+        identities: dict[str, tuple[str, set[int]]] = {}
+        for credential_id, (generation, pool_id, _) in credentials.items():
+            identity = f"pool:{pool_id}" if pool_id is not None else f"cred:{credential_id}"
+            identities[f"cred:{credential_id}"] = (identity, {generation})
+            if pool_id is not None:
+                identities.setdefault(identity, (identity, set()))[1].add(generation)
+        return identities
 
     async def get_pool(
         self, pool_id: str, *, session: AsyncSession | None = None

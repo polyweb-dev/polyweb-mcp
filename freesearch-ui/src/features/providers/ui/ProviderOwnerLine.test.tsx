@@ -7,7 +7,7 @@ import type { ScopedResource } from "@/shared/lib/useScopedResource"
 import { ProviderOwnerLine } from "./ProviderOwnerLine"
 
 const transfer = vi.hoisted(() => vi.fn())
-vi.mock("@/domains/projects", () => ({ transferProviderOwner: transfer }))
+vi.mock("@/domains/projects/api/providerOwnerApi", () => ({ transferProviderOwner: transfer }))
 
 function owner(data: ProviderOwner | null): ScopedResource<ProviderOwner | null> {
   return { status: "ready", data, reload: vi.fn() }
@@ -21,10 +21,10 @@ describe("ProviderOwnerLine", () => {
     const onClaimed = vi.fn()
     render(<ProviderOwnerLine owner={owner(null)} projectId="p1" accountId="me" isAdmin canConfigure onClaimed={onClaimed} />)
     const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Become provider owner" }))
+    await user.click(screen.getByRole("button", { name: "Claim provider ownership" }))
     expect(transfer).not.toHaveBeenCalled()
-    const dialog = screen.getByRole("dialog", { name: "Become provider owner" })
-    await user.click(within(dialog).getByRole("button", { name: "Become provider owner" }))
+    const dialog = screen.getByRole("dialog", { name: "Claim provider ownership" })
+    await user.click(within(dialog).getByRole("button", { name: "Claim provider ownership" }))
     expect(transfer).toHaveBeenCalledExactlyOnceWith("p1", "me")
     expect(onClaimed).toHaveBeenCalledOnce()
   })
@@ -32,7 +32,7 @@ describe("ProviderOwnerLine", () => {
   it("tells a developer to ask an admin when there is no owner", () => {
     render(<ProviderOwnerLine owner={owner(null)} projectId="p1" accountId="me" isAdmin={false} canConfigure={false} onClaimed={vi.fn()} />)
     expect(screen.getByText(/This project has no provider owner/)).toHaveTextContent("Ask a project admin")
-    expect(screen.queryByRole("button", { name: "Become provider owner" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Claim provider ownership" })).toBeNull()
   })
 
   it("offers project admins a transfer action", () => {

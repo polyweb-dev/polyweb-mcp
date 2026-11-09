@@ -103,8 +103,8 @@ describe("LimitHistory", () => {
     for (const header of ["Time", "Old balance", "New balance", "Source", "Actor"]) {
       expect(screen.getByRole("columnheader", { name: header })).not.toBeNull()
     }
-    expect(screen.getAllByText("$4.50")).toHaveLength(2)
-    expect(screen.getAllByText("$4.50")).toHaveLength(2)
+    expect(screen.getByText("$4.50")).toBeInTheDocument()
+    expect(screen.getByText("$4.495")).toBeInTheDocument()
     expect(screen.getByText("System")).not.toBeNull()
     expect(screen.getByText("Operator")).not.toBeNull()
     expect(screen.getByText("Search · Local success")).not.toBeNull()

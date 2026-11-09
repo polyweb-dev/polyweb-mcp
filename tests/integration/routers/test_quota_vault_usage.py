@@ -1,10 +1,11 @@
-"""Quota polling across vault owners without exposing credential material."""
+"""Quota polling keeps vault identities private to their owners."""
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import delete
 
 from freesearch.configuration.config import get_settings
 from freesearch.models.contracts import UnitKind
@@ -14,6 +15,7 @@ from freesearch.models.provider_limits import (
     UsageSyncRequest,
     native_pool_id,
 )
+from freesearch.persistence.projects import SystemRoleAssignmentRow
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
@@ -23,7 +25,7 @@ from tests.fixtures.auth import (
     register_system_admin_login,
     temp_email,
 )
-from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.execution import add_execution_member, seed_execution_project
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
     TOKEN_SENTINELS,
@@ -33,9 +35,7 @@ from tests.integration.services.oauth.oauth_stubs import (
 
 
 @pytest.mark.asyncio
-async def test_admin_polls_other_vault_and_key_refresh_is_authorized(
-    tmp_path, monkeypatch, auth_secret
-) -> None:
+async def test_key_reads_and_refresh_are_owner_scoped(tmp_path, monkeypatch, auth_secret) -> None:
     import freesearch.routers.limits as limits_router
     import freesearch.services.execution as execution_module
 
@@ -78,9 +78,15 @@ async def test_admin_polls_other_vault_and_key_refresh_is_authorized(
     try:
         with TestClient(create_app([], repository=repository)) as client:
             email = temp_email("quota-owner")
-            owner = register_and_login(client, email)
-            await seed_execution_project(repository, user_id=account_id_from_pair(owner))
+            owner = await register_system_admin_login(client, repository, email)
+            project = await seed_execution_project(repository, user_id=account_id_from_pair(owner))
             admin = await register_system_admin_login(client, repository, temp_email("quota-admin"))
+            await add_execution_member(
+                repository,
+                project_id=project.project_id,
+                user_id=account_id_from_pair(admin),
+                granted_by=account_id_from_pair(owner),
+            )
             member = register_and_login(client, temp_email("quota-member"))
             owner_headers = raw_auth_headers(owner["access_token"])
             admin_headers = raw_auth_headers(admin["access_token"])
@@ -111,7 +117,7 @@ async def test_admin_polls_other_vault_and_key_refresh_is_authorized(
             denied = client.post(sync_url, headers=member_headers)
             assert denied.status_code in (403, 404)
             assert (
-                client.post("/api/v1/providers/firecrawl/limits/sync", headers=owner_headers)
+                client.post("/api/v1/providers/firecrawl/limits/sync", headers=member_headers)
             ).status_code == 403
             assert calls == []
             sync = client.post("/api/v1/providers/firecrawl/limits/sync", headers=admin_headers)
@@ -123,14 +129,16 @@ async def test_admin_polls_other_vault_and_key_refresh_is_authorized(
             keys = client.get("/api/v1/providers/firecrawl/limits/keys", headers=admin_headers)
             assert view.status_code == 200
             assert keys.status_code == 200, keys.text
-            assert keys.json()[0]["key_id"] == key_id
-            assert keys.json()[0]["label"] == "Owner key"
-            assert keys.json()[0]["owner_email"] == email
+            assert len(keys.json()) == 1
+            assert keys.json()[0]["key_id"] == second.json()["id"]
+            assert keys.json()[0]["label"] == "Admin key"
+            assert "owner_email" not in keys.json()[0]
+            assert (
+                key_id not in keys.text and "Owner key" not in keys.text and email not in keys.text
+            )
             assert keys.json()[0]["auth_mode"] == "api_key"
             assert keys.json()[0]["oauth_connected"] is None
             assert Decimal(keys.json()[0]["balance"]["remaining"]) == 640
-            assert keys.json()[1]["key_id"] == second.json()["id"]
-            assert Decimal(keys.json()[1]["balance"]["remaining"]) == 640
             keyed = next(item for item in view.json()["auths"] if item["auth_mode"] == "keyed")
             assert Decimal(keyed["aggregate_pool"]["remaining"]) == 1280
             assert "crd" not in (view.text + keys.text).lower()
@@ -149,12 +157,65 @@ async def test_admin_polls_other_vault_and_key_refresh_is_authorized(
                     return now
 
             monkeypatch.setattr(limits_router, "datetime", FutureDatetime)
-            for headers in (owner_headers, admin_headers):
-                now += timedelta(minutes=2)
-                response = client.post(sync_url, headers=headers)
-                assert response.status_code == 200, response.text
-                assert secret not in response.text
-                assert response.json()["status"] == "synced", response.text
+            assert client.post(sync_url, headers=admin_headers).status_code == 404
+            now += timedelta(minutes=2)
+            response = client.post(sync_url, headers=owner_headers)
+            assert response.status_code == 200, response.text
+            assert secret not in response.text
+            assert response.json()["status"] == "synced", response.text
+            assert calls == [secret, second_secret, secret]
+
+            pool = client.post(
+                f"/api/v1/account/vault/keys/{key_id}/pools",
+                headers=owner_headers,
+                json={"label": "Assigned"},
+            )
+            assert pool.status_code == 201, pool.text
+            assigned = client.post(
+                f"/api/v1/account/vault/pools/{pool.json()['id']}/assign",
+                headers=owner_headers,
+                json={"project_id": str(project.project_id)},
+            )
+            assert assigned.status_code == 200, assigned.text
+            now += timedelta(minutes=2)
+            assert client.post(sync_url, headers=owner_headers).status_code == 200
+            view = client.get("/api/v1/providers/firecrawl/limits", headers=admin_headers)
+            keyed = next(item for item in view.json()["auths"] if item["auth_mode"] == "keyed")
+            assert Decimal(keyed["aggregate_pool"]["remaining"]) == 1280
+            rotated = client.post(
+                f"/api/v1/account/vault/keys/{key_id}/rotate",
+                headers=owner_headers,
+                json={"expected_generation": 1, "secret": "replacement-secret"},
+            )
+            assert rotated.status_code == 200, rotated.text
+            view = client.get("/api/v1/providers/firecrawl/limits", headers=admin_headers)
+            keyed = next(item for item in view.json()["auths"] if item["auth_mode"] == "keyed")
+            assert Decimal(keyed["aggregate_pool"]["remaining"]) == 640
+            assert (
+                client.delete(
+                    f"/api/v1/account/vault/keys/{key_id}", headers=owner_headers
+                ).status_code
+                == 200
+            )
+            view = client.get("/api/v1/providers/firecrawl/limits", headers=admin_headers)
+            keyed = next(item for item in view.json()["auths"] if item["auth_mode"] == "keyed")
+            assert Decimal(keyed["aggregate_pool"]["remaining"]) == 640
+
+            async with repository.session() as session:
+                await session.execute(
+                    delete(SystemRoleAssignmentRow).where(
+                        SystemRoleAssignmentRow.user_id == str(account_id_from_pair(admin))
+                    )
+                )
+                await session.commit()
+            own_sync = f"/api/v1/providers/firecrawl/limits/keys/{second.json()['id']}/sync"
+            assert client.post(own_sync, headers=admin_headers).status_code == 403
+            assert (
+                client.get(
+                    "/api/v1/providers/firecrawl/limits/keys", headers=admin_headers
+                ).status_code
+                == 403
+            )
             assert calls == [secret, second_secret, secret, secret]
     finally:
         await repository.close()
@@ -162,7 +223,7 @@ async def test_admin_polls_other_vault_and_key_refresh_is_authorized(
 
 
 @pytest.mark.asyncio
-async def test_admin_syncs_other_owners_parallel_oauth_balance(
+async def test_parallel_oauth_state_is_only_visible_to_owner(
     tmp_path, monkeypatch, auth_secret
 ) -> None:
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "quota-oauth-test-encryption-key")
@@ -191,10 +252,12 @@ async def test_admin_syncs_other_owners_parallel_oauth_balance(
                 oauth = f"/api/v1/account/vault/keys/{created.json()['id']}/oauth"
                 url = "/api/v1/providers/parallel/limits/keys"
                 keys = client.get(url, headers=admin_headers)
+                assert keys.json() == []
+                keys = client.get(url, headers=owner_headers)
                 assert keys.json()[0]["auth_mode"] == "oauth"
                 assert keys.json()[0]["oauth_connected"] is False
                 assert client.post(f"{oauth}/device", headers=owner_headers).status_code == 200
-                keys = client.get(url, headers=admin_headers)
+                keys = client.get(url, headers=owner_headers)
                 assert keys.json()[0]["oauth_connected"] is False
                 assert client.post(f"{oauth}/poll", headers=owner_headers).status_code == 200
                 sync = client.post("/api/v1/providers/parallel/limits/sync", headers=admin_headers)
@@ -202,16 +265,23 @@ async def test_admin_syncs_other_owners_parallel_oauth_balance(
                 assert sync.json()["status"] == "synced", sync.text
                 assert server.balance_calls == 1
                 assert server.seen_requests[-1]["auth"] == f"Bearer {ACCESS_TOKEN_VALUE}"
-                keys = client.get("/api/v1/providers/parallel/limits/keys", headers=admin_headers)
+                keys = client.get("/api/v1/providers/parallel/limits/keys", headers=owner_headers)
                 assert keys.status_code == 200, keys.text
-                assert keys.json()[0]["owner_email"] == email
+                assert "owner_email" not in keys.json()[0]
                 assert keys.json()[0]["auth_mode"] == "oauth"
                 assert keys.json()[0]["oauth_connected"] is True
                 assert Decimal(keys.json()[0]["balance"]["remaining"]) == 10
                 assert all(token not in sync.text + keys.text for token in TOKEN_SENTINELS)
-                assert client.get(url, headers=owner_headers).status_code == 403
+                assert client.get(url, headers=admin_headers).json() == []
+                assert (
+                    client.post(
+                        f"{url}/{created.json()['id']}/sync", headers=admin_headers
+                    ).status_code
+                    == 404
+                )
                 assert client.delete(oauth, headers=owner_headers).status_code == 204
-                keys = client.get(url, headers=admin_headers)
+                assert client.get(url, headers=admin_headers).json() == []
+                keys = client.get(url, headers=owner_headers)
                 assert keys.json()[0]["oauth_connected"] is False
                 assert all(token not in keys.text for token in TOKEN_SENTINELS)
     finally:

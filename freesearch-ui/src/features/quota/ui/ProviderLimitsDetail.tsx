@@ -9,7 +9,7 @@ import { operationAvailable } from "../model/usdCardModel"
 import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { formatTavilyPopoverAmount } from "../model/tavilyCredits"
 import { SPEND_CAP } from "../model/quotaLabels"
-import { formatBudgetUsage } from "@/shared/lib/budget"
+import { formatUsdBudgetUsage } from "../model/usdDisplay"
 
 export interface ProviderLimitsDetailProps {
   providerName: string
@@ -17,8 +17,8 @@ export interface ProviderLimitsDetailProps {
   /** The popover keeps each detail row on its own line at narrow widths. */
   layout?: "default" | "popover"
   /**
-   * The native display inputs of one Tavily rail: with a price profile, the
-   * local grant caps state themselves in Credits. Other providers keep Usd.
+   * The native display inputs of one Tavily rail. Local grant caps remain USD
+   * regardless of whether a conversion profile is available.
    */
   nativeDisplay?: TavilyDisplayAdapter
 }
@@ -75,14 +75,13 @@ function detailRows(detail: ProviderLimitDetail | null, native: boolean = false)
 
 /** The local budget always states USD, including providers with native credits. */
 function grantText(granted: string, consumed: string, period: string): string {
-  return formatBudgetUsage({ limit: Number(granted), period }, Number(consumed))
+  return formatUsdBudgetUsage(granted, consumed, period)
 }
 
 /** Spend cap facts of the supported operations only. */
 function grantRows(
   grants: UsdGrantsSummary | null,
   auth: ProviderAuthLimits,
-  native: boolean,
 ): DetailRow[] {
   const rows: DetailRow[] = []
   if (grants === null) return rows
@@ -90,8 +89,7 @@ function grantRows(
     push(rows, "usd", "Search " + SPEND_CAP.toLowerCase(), grantText(grants.search_granted_usd, grants.search_consumed_usd, grants.period))
   }
   if (operationAvailable(auth, "fetch")) {
-    const operation = native ? "Extract" : "Fetch"
-    push(rows, "usd", operation + " " + SPEND_CAP.toLowerCase(), grantText(grants.fetch_granted_usd, grants.fetch_consumed_usd, grants.period))
+    push(rows, "usd", "Fetch " + SPEND_CAP.toLowerCase(), grantText(grants.fetch_granted_usd, grants.fetch_consumed_usd, grants.period))
   }
   return rows
 }
@@ -113,7 +111,7 @@ export function ProviderLimitsDetail(props: ProviderLimitsDetailProps): ReactNod
   const { providerName, auth, nativeDisplay, layout = "default" } = props
   const native = nativeDisplay !== undefined
   const detail = auth.detail
-  const rows = groupRows([...detailRows(detail, native), ...grantRows(auth.grants, auth, native)])
+  const rows = groupRows([...detailRows(detail, native), ...grantRows(auth.grants, auth)])
   const splitNote = detail === null ? null : known(detail.balance_split_note)
   if (rows.length === 0 && splitNote === null) return null
 

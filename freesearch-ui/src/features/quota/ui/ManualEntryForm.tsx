@@ -62,7 +62,7 @@ export function ManualEntryForm(props: ManualEntryFormProps): ReactNode {
   const saved = defaults !== null && defaults.allowance !== "" ? defaults : null
   const estimate = saved === null ? prefillDefaults(observed) : null
   const form = useQuotaForm(
-    currencyDefaults(saved ?? estimate, noun, entryAmountMode),
+    saved ?? estimate,
     {
       onSave: (payload) => onSave(payload, providerId),
       ...(onDelete !== undefined ? { onDelete } : {}),
@@ -108,14 +108,4 @@ export function ManualEntryForm(props: ManualEntryFormProps): ReactNode {
       />
     </form>
   )
-}
-
-function currencyDefaults(defaults: ManualQuotaDefaults | null, noun: string, amountMode: ManualAmountMode): ManualQuotaDefaults | null {
-  if (defaults === null || noun !== "USD") return defaults
-  const fixed = (value: string) => value.trim() !== "" && Number.isFinite(Number(value))
-    ? Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false }) : value
-  const allowance = fixed(defaults.allowance)
-  const remaining = subtractDecimal(defaults.allowance, defaults.used)
-  const used = amountMode === "balance" && remaining !== null ? subtractDecimal(allowance, fixed(remaining)) ?? defaults.used : fixed(defaults.used)
-  return { ...defaults, allowance, used }
 }

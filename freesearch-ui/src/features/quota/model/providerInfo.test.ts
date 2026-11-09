@@ -265,11 +265,11 @@ describe("providerInfo Tavily native", () => {
 
   it("states 1 to 2 Tavily Credits per five URLs extract costs with the Extract label", () => {
     const info = providerInfo(tavilyAuth(), "tavily")
-    const extract = info.facts.find((fact) => fact.label === "Extract cost")
+    const extract = info.facts.find((fact) => fact.label === "Fetch cost")
     expect(extract?.value).toBe("1 Tavily credit per 5 URLs")
     expect(extract?.note).toBe("(advanced: 2 Tavily credits)")
-    expect(info.facts.some((fact) => fact.label === "Fetch cost")).toBe(false)
-    expect(info.facts.some((fact) => fact.label === "Extract cost (USD)")).toBe(true)
+    expect(info.facts.some((fact) => fact.label === "Extract cost")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Fetch cost (USD)")).toBe(true)
     expect(info.facts.some((fact) => fact.label === "Fetch cost in Usd")).toBe(false)
   })
 
@@ -382,11 +382,11 @@ describe("providerInfo Tavily row order", () => {
     const info = providerInfo(orderedAuth(), "tavily")
     expect(info.facts.map((fact) => fact.label)).toEqual([
       "Search cost",
-      "Extract cost",
+      "Fetch cost",
       "Searches left",
       "Fetches left",
       "Search cost (USD)",
-      "Extract cost (USD)",
+      "Fetch cost (USD)",
       "Search and fetch rate limit",
       "Retry after",
       "Last sync",
@@ -561,7 +561,7 @@ describe("providerInfo Tavily precision", () => {
 
   it("keeps the 1.6 Usd extract fraction with its USD fraction", () => {
     const info = providerInfo(preciseAuth("1", "0.2"), "tavily")
-    const fetchUsd = info.facts.find((fact) => fact.label === "Extract cost (USD)")
+    const fetchUsd = info.facts.find((fact) => fact.label === "Fetch cost (USD)")
     expect(fetchUsd?.value).toBe("$0.0016")
     expect(fetchUsd?.note).toBe(null)
   })

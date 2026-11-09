@@ -11,7 +11,6 @@ import {
   allProvidersFixture,
   routingConfigFixture,
   dashboardFixture,
-  type WireDashboard,
 } from "@/test/fixtures"
 
 import {
@@ -187,8 +186,9 @@ describe("QuotaAnalytics shell (UI7)", () => {
         expect(screen.queryByRole("link", { name: "Connect in Keys and pools" })).toBeNull()
       } else {
         expect(screen.queryByRole("button", { name: "Refresh Parallel balances" })).toBeNull()
-        if (status === "api-only") {
+        if (status === "api-only" || status === "empty") {
           expect(screen.queryByRole("link", { name: "Connect in Keys and pools" })).toBeNull()
+          if (status === "empty") expect(await screen.findByText("No keys")).toBeInTheDocument()
         } else {
           expect(await screen.findByRole("link", { name: "Connect in Keys and pools" })).toHaveAttribute("href", "/account/keys")
         }
@@ -319,13 +319,9 @@ describe("QuotaAnalytics shell (UI7)", () => {
     const bravePriceRow = within(table).getByRole("row", {
       name: /Brave Search/,
     })
-    expect(within(bravePriceRow).getByText("$0.01")).toBeInTheDocument()
+    expect(within(bravePriceRow).getByText("$0.005")).toBeInTheDocument()
   })
 
-  it("keeps dashboard fixture type compatibility", () => {
-    const wire: WireDashboard = dashboardFixture()
-    expect(wire.latest_quota).toEqual([])
-  })
 })
 
 /**
@@ -802,8 +798,8 @@ type User = ReturnType<typeof userEvent.setup>
 /** The labels of one card's `…` menu; the menu closes again afterwards. */
 async function menuLabels(user: User, providerName: string): Promise<string[]> {
   await user.click(screen.getByRole("button", { name: "Actions for " + providerName }))
-  await screen.findByRole("button", { name: "Set budget limit" })
-  const labels = ["Set balance", "Set budget limit", "View balance history"].filter(
+  await screen.findByRole("button", { name: "Set budget" })
+  const labels = ["Set balance", "Set budget", "View balance history"].filter(
     (label) => screen.queryByRole("button", { name: label }) !== null,
   )
   await user.keyboard("{Escape}")
@@ -943,7 +939,7 @@ describe("QuotaAnalytics manual billing entry (UI7)", () => {
     const user = userEvent.setup()
     renderWithManualStub()
     await waitForCard("Tinyfish")
-    expect(await menuLabels(user, "Tinyfish")).toEqual(["Set balance", "Set budget limit", "View balance history"])
+    expect(await menuLabels(user, "Tinyfish")).toEqual(["Set balance", "Set budget", "View balance history"])
     expect(screen.queryByText("Provider Balance")).toBe(null)
     expect(screen.queryByText("Balance entry")).toBe(null)
     expect(screen.queryByText("Manual entry")).toBe(null)
@@ -1017,7 +1013,7 @@ describe("QuotaAnalytics Developer read-only", () => {
 
     // Controls stay visible for Developer reads.
     await waitForCard("Tinyfish")
-    expect(await menuLabels(user, "Tinyfish")).toEqual(["Set balance", "Set budget limit", "View balance history"])
+    expect(await menuLabels(user, "Tinyfish")).toEqual(["Set balance", "Set budget", "View balance history"])
 
     // Manual save attempt rejects with 403, keeps the alert and the open modal.
     await openCardAction(user, "Tinyfish", "Set balance")
@@ -1049,11 +1045,11 @@ describe("QuotaAnalytics Developer read-only", () => {
     })
 
     // Grant save attempt rejects with 403, keeps the alert and the open modal.
-    await openCardAction(user, "Tinyfish", "Set budget limit")
+    await openCardAction(user, "Tinyfish", "Set budget")
     await screen.findByRole("dialog")
     await user.clear(screen.getByLabelText("Search budget (USD)"))
     await user.type(screen.getByLabelText("Search budget (USD)"), "5")
-    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    await user.click(screen.getByRole("button", { name: "Save budget" }))
     const grantAlert = await screen.findByRole("alert")
     expect(grantAlert).toHaveTextContent("insufficient role")
     expect(screen.getByRole("dialog")).toBeInTheDocument()

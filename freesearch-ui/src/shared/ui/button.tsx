@@ -41,14 +41,20 @@ function Button({
   className,
   variant = "default",
   size = "default",
+  pending = false,
+  pendingLabel = "Saving…",
+  disabled,
+  children,
   ...props
-}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants> & { pending?: boolean; pendingLabel?: string }) {
   return (
     <ButtonPrimitive
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
+      disabled={disabled || pending}
+      aria-busy={pending || undefined}
       {...props}
-    />
+    >{pending ? pendingLabel : children}</ButtonPrimitive>
   )
 }
 

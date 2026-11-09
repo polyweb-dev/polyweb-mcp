@@ -1,10 +1,9 @@
 import type { ReactNode } from "react"
 import { catalogNameOf } from "@/services/api/providerCatalog"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
-import { formatBudgetUsd } from "@/shared/lib/budget"
 import type { UsdUsageTotal } from "@/domains/dashboard"
 import type { ProviderConfig } from "@/domains/providers"
-import { sumAmounts } from "../model/usdDisplay"
+import { formatUsdTotal, sumAmounts } from "../model/usdDisplay"
 import { latencyText } from "../model/numberText"
 import { catalogFree } from "../model/catalogQuota"
 import { useQuotaPrices, quotaPricedProvider } from "../model/useQuotaPrices"
@@ -42,8 +41,7 @@ function usageRows(totals: UsdUsageTotal[]): UsageRow[] {
 
 /** The USD reference value of one normalized usage amount. */
 function costText(usd: string | null): string {
-  if (usd === null || !Number.isFinite(Number(usd))) return "—"
-  return formatBudgetUsd(Number(usd))
+  return usd === null ? "—" : formatUsdTotal(usd)
 }
 
 /**

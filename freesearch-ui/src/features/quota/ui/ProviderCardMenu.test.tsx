@@ -20,12 +20,12 @@ describe("ProviderCardMenu", () => {
       .getAllByRole("button")
       .map((button) => button.textContent)
       .filter((label) => label !== "")
-    expect(labels).toEqual(["Set balance", "Set budget limit", "View balance history"])
+    expect(labels).toEqual(["Set balance", "Set budget", "View balance history"])
   })
 
   it("leaves Set balance out when the provider is not eligible", async () => {
     await openMenu(false)
-    expect(await screen.findByRole("button", { name: "Set budget limit" })).not.toBeNull()
+    expect(await screen.findByRole("button", { name: "Set budget" })).not.toBeNull()
     expect(screen.queryByRole("button", { name: "Set balance" })).toBeNull()
     expect(screen.getByRole("button", { name: "View balance history" })).not.toBeNull()
   })
@@ -35,7 +35,7 @@ describe("ProviderCardMenu", () => {
     await user.click(await screen.findByRole("button", { name: "Set balance" }))
     expect(onOpenModal).toHaveBeenLastCalledWith("manual")
     await user.click(screen.getByRole("button", { name: "Actions for Brave" }))
-    await user.click(await screen.findByRole("button", { name: "Set budget limit" }))
+    await user.click(await screen.findByRole("button", { name: "Set budget" }))
     expect(onOpenModal).toHaveBeenLastCalledWith("grant")
     await user.click(screen.getByRole("button", { name: "Actions for Brave" }))
     await user.click(await screen.findByRole("button", { name: "View balance history" }))
@@ -49,7 +49,7 @@ describe("ProviderCardMenu", () => {
     expect(screen.getByRole("button", { name: "View balance history" })).toBeInTheDocument()
     await userEvent.click(screen.getByRole("button", { name: "View balance history" }))
     expect(onOpenModal).toHaveBeenCalledWith("history")
-    expect(screen.queryByRole("button", { name: "Set budget limit" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Set budget" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Set balance" })).toBeNull()
   })
 

@@ -14,7 +14,6 @@ export type FieldControl =
   | { kind: "enum"; options: readonly EnumOption[] }
   | { kind: "boolean" }
   | { kind: "number"; integer: boolean; min: number; max: number; step: number }
-  | { kind: "list" }
 
 export interface FieldSpec {
   label: string
@@ -46,18 +45,7 @@ export const FIELD_SPECS: Readonly<Record<string, FieldSpec>> = {
       ],
     },
   },
-  "routing.cost_optimization_preset": {
-    label: "Cost preset",
-    control: {
-      kind: "enum",
-      options: [
-        { value: "balanced", label: "Balanced" },
-        { value: "free_first", label: "Free first" },
-      ],
-    },
-  },
   "routing.max_attempts": { label: "Max attempts", control: int(1, 10) },
-  "routing.preferred_providers": { label: "Preferred providers", control: { kind: "list" } },
   "execution.cache_enabled": { label: "Cache", control: { kind: "boolean" } },
   "execution.default_timeout_seconds": {
     label: "Timeout (seconds)",

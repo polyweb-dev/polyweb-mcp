@@ -363,7 +363,7 @@ def write_trace_spans(database: Path, records: Sequence[TraceSpanRecord]) -> Non
     """Upsert span rows in one short transaction (also the fixture seed path).
 
     This is the raw storage path: the caller supplies the rows to persist.
-    Project trace policy (sampling, detail, redaction) is applied by
+    Project trace detail policy is applied by
     :class:`SQLiteSpanExporter` before it reaches this function, so fixture
     seeds can intentionally write rows of a project whose current policy is
     narrower.

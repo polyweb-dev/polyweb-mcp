@@ -69,7 +69,7 @@ export function MemberPermissionsDialog({ projectId, member, onClose, onSaved }:
         <p className="text-[var(--muted)]">Project admins also manage members and provider capacity. They can archive the project</p>
       </div>
       {error && <p role="alert" className="shrink-0 pt-3 text-[var(--status-danger)]">{error}</p>}
-      <FormActions className="border-t border-[var(--border-subtle)] pt-4"
+      <FormActions
         start={<p role="status">{pending ? "Saving permissions…" : memberPermissionSummary(bits)}</p>}>
         <Button variant="outline" size="form" onClick={onClose}>Cancel</Button>
         {!admin && <Button size="form" aria-busy={pending} onClick={() => void save()}>Save permissions</Button>}

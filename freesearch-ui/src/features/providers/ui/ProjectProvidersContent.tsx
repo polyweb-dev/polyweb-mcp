@@ -44,11 +44,11 @@ function renderPoolMenu({ pool, name, isOwner, edit, unassign }: {
 }
 
 function renderReadyContent(props: Omit<Props, "pools"> & { pools: ProjectPool[]; providers: ProviderTypeView[] }) {
-  const { projectId, revision, providers, pools, controller, owner, isOwner, canConfigure, missing } = props
+  const { projectId, revision, providers, pools, owner, isOwner, canConfigure, missing } = props
   const ownerEmail = owner.status === "ready" ? owner.data?.email : null
   return <>
     <ProviderOrderSection key={projectId} context={{
-      projectId, revision, providers, controller, canConfigure, canManagePrivate: false, owner: ownerEmail, isOwner,
+      projectId, revision, providers, canConfigure, owner: ownerEmail, isOwner,
       canEditSystem: props.canEditSystem, addCapacity: missing.length > 0 ? () => props.add() : undefined,
       poolOperations: (provider) => pools.find((pool) => pool.provider_type === provider)?.operations,
       changePoolOperation: (provider, operation, enabled) => {

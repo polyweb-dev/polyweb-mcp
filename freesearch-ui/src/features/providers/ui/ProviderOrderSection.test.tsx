@@ -5,7 +5,6 @@ import { Link, MemoryRouter, useLocation } from "react-router"
 import userEvent from "@testing-library/user-event"
 import type { ProjectOrder } from "@/domains/routing"
 import { ApiError } from "@/shared/api/http"
-import type { ProjectProvidersController } from "../model/useProjectProvidersController"
 import { ProviderOrderSection } from "./ProviderOrderSection"
 import type { ProviderOrderContext } from "./ProviderOrderSection"
 
@@ -44,8 +43,7 @@ function context(overrides: Partial<ProviderOrderContext> = {}): ProviderOrderCo
       keylessCallCostUsd: providerType === "tavily" ? { search: 0, fetch: 0 } : {},
       killSwitch: false, systemEnabledOperations: ["search", "fetch"], available: true, enabled: true,
       credentials: [], bindings: [], effectiveOperations: ["search", "fetch"],
-    })), canConfigure: true, canManagePrivate: false,
-    controller: { bindingStatus: { pending: false }, credentialsById: new Map() } as unknown as ProjectProvidersController,
+    })), canConfigure: true,
     ...overrides,
   }
 }
@@ -266,16 +264,4 @@ describe("Provider order section", () => {
     expect(within(table).queryByText(/99/)).toBeNull()
   })
 
-  it("keeps the same column widths and minimum row height across Search and Fetch", async () => {
-    render(<ProviderOrderSection context={context()} />)
-    const search = await screen.findByRole("table", { name: "Search provider order" })
-    expect(search).toHaveClass("table-fixed")
-    const widths = Array.from(search.querySelectorAll("col")).map((col) => col.className)
-    expect(search.querySelector("tbody tr")).toHaveClass("h-[46px]")
-    await userEvent.click(screen.getByRole("tab", { name: "Fetch 1" }))
-    const fetch = screen.getByRole("table", { name: "Fetch provider order" })
-    expect(fetch).toHaveClass("table-fixed")
-    expect(Array.from(fetch.querySelectorAll("col")).map((col) => col.className)).toEqual(widths)
-    expect(fetch.querySelector("tbody tr")).toHaveClass("h-[46px]")
-  })
 })

@@ -4,7 +4,6 @@ import { requestJson } from "@/shared/api/client"
 export interface KeyBalance {
   keyId: string
   label: string
-  ownerEmail: string
   authMode: "api_key" | "oauth"
   oauthConnected: boolean | null
   balance: { remaining: string | null; unit: string; observedAt: string | null } | null
@@ -43,7 +42,6 @@ export function decodeKeyBalances(value: unknown): KeyBalance[] {
     return {
       keyId: text(row.key_id),
       label: text(row.label),
-      ownerEmail: text(row.owner_email),
       authMode,
       oauthConnected,
       balance: pool === null ? null : {
@@ -65,8 +63,4 @@ export async function listKeyBalances(providerId: string, signal: AbortSignal): 
 
 export async function syncKeyBalance(providerId: string, keyId: string): Promise<unknown> {
   return requestJson<unknown>(`${providerPath(providerId)}/${encodeURIComponent(keyId)}/sync`, { method: "POST" })
-}
-
-export function canRefreshKey(key: KeyBalance, isAdmin: boolean, email: string | null): boolean {
-  return isAdmin || (email !== null && key.ownerEmail.toLowerCase() === email.toLowerCase())
 }

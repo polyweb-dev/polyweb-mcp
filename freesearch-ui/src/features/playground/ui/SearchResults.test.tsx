@@ -1,7 +1,16 @@
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, within } from "@testing-library/react"
 import { SearchResults } from "./SearchResults"
 import type { SearchResponse } from "@/domains/execution"
+
+const prices = vi.hoisted(() => vi.fn())
+vi.mock("@/domains/providers", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/domains/providers")>(),
+  getProviderPrices: prices,
+}))
+beforeEach(() => {
+  prices.mockReset().mockImplementation(() => new Promise(() => {}))
+})
 
 function controller() {
   return {
@@ -89,9 +98,21 @@ describe("SearchResults usage label", () => {
     expect(screen.getByText("Free")).not.toBeNull()
   })
 
-  it("keeps a recorded zero dollar charge distinct from a free provider", () => {
+  it("shows a recorded zero dollar charge as free", () => {
     render(<SearchResults controller={controller() as never} result={{ ...result("exa"), costEstimateCredits: 0, costUnitKind: "USD" }} />)
-    expect(screen.getByText("$0.0000")).toBeInTheDocument()
+    expect(screen.getByText("Free")).toBeInTheDocument()
+  })
+
+  it("uses the catalog price when the call did not record dollars", async () => {
+    prices.mockResolvedValue([{ providerType: "tavily", free: false, callCostUsd: { search: "0.008" } }])
+    render(<SearchResults controller={controller() as never} result={result("tavily")} />)
+    expect(await screen.findByText("$0.0080")).toBeInTheDocument()
+  })
+
+  it("uses Free for a free catalog provider without recorded dollars", async () => {
+    prices.mockResolvedValue([{ providerType: "keenable", free: true, callCostUsd: {} }])
+    render(<SearchResults controller={controller() as never} result={result("keenable")} />)
+    expect(await screen.findByText("Free")).toBeInTheDocument()
   })
 
   it("uses shared buttons for the raw JSON toggle and no list-level selection hint", () => {

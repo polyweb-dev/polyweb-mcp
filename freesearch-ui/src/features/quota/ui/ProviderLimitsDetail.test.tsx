@@ -247,7 +247,7 @@ describe("ProviderLimitsDetail", () => {
     expect(container.firstChild).toBe(null)
   })
 
-  it("shows Tavily local caps in Credits through the conversion context", () => {
+  it("shows Tavily local caps in USD with a conversion context", () => {
     const grants = {
       provider: "tavily",
       auth_mode: "keyed",
@@ -276,9 +276,9 @@ describe("ProviderLimitsDetail", () => {
       />,
     )
     expect(screen.getByText("Search budget limit")).not.toBeNull()
-    expect(screen.getByText("Extract budget limit")).not.toBeNull()
-    expect(screen.getByText("$0.00 of $0.01 this month")).not.toBeNull()
-    expect(screen.getByText("$0.00 of $0.02 this month")).not.toBeNull()
+    expect(screen.getByText("Fetch budget limit")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.008 this month")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.016 this month")).not.toBeNull()
     expect(screen.queryByText("8 Usd")).toBeNull()
   })
 
@@ -298,13 +298,14 @@ describe("ProviderLimitsDetail", () => {
     const auth = withGrants(withFetchSupport(authFixture()), grants)
     render(<ProviderLimitsDetail providerName="Tavily" auth={auth} />)
     expect(screen.getByText("Fetch budget limit")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.016 this month")).not.toBeNull()
     expect(screen.queryByText("Extract budget limit")).toBeNull()
   })
 })
 
 /**
- * Tavily native vendor detail: integer Credits caps, trimmed USD spend,
- * Extract vocab, unknown facts stay absent, generic output unchanged.
+ * Tavily vendor detail: exact USD caps, trimmed USD spend, consistent fetch
+ * labels, unknown facts stay absent, generic output unchanged.
  */
 
 function tavilyProfile() {
@@ -333,7 +334,7 @@ function tavilyGrants(searchGranted: string, fetchGranted: string) {
 }
 
 describe("ProviderLimitsDetail nativeDisplay", () => {
-  it("floors fractional grant caps to whole Tavily Credits", () => {
+  it("preserves fractional USD grant caps with native display", () => {
     const auth = withGrants(withFetchSupport(authFixture()), tavilyGrants("0.0099", "0.0179"))
     render(
       <ProviderLimitsDetail
@@ -342,8 +343,8 @@ describe("ProviderLimitsDetail nativeDisplay", () => {
         nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
       />,
     )
-    expect(screen.getByText("$0.00 of $0.01 this month")).not.toBeNull()
-    expect(screen.getByText("$0.00 of $0.02 this month")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.0099 this month")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.0179 this month")).not.toBeNull()
   })
 
   it("trims USD spend zeros for the native rail", () => {
@@ -363,7 +364,7 @@ describe("ProviderLimitsDetail nativeDisplay", () => {
     expect(screen.getByText("1.230000000")).not.toBeNull()
   })
 
-  it("names the Tavily fetch cap Extract with native input and Fetch without it", () => {
+  it("names the Tavily fetch cap consistently with and without native input", () => {
     const grants = tavilyGrants("8", "16")
     const native = withGrants(withFetchSupport(authFixture()), grants)
     const { unmount } = render(
@@ -373,7 +374,7 @@ describe("ProviderLimitsDetail nativeDisplay", () => {
         nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
       />,
     )
-    expect(screen.getByText("Extract budget limit")).not.toBeNull()
+    expect(screen.getByText("Fetch budget limit")).not.toBeNull()
     unmount()
     render(<ProviderLimitsDetail providerName="Tavily" auth={withGrants(withFetchSupport(authFixture()), grants)} />)
     expect(screen.getByText("Fetch budget limit")).not.toBeNull()
@@ -389,6 +390,6 @@ describe("ProviderLimitsDetail nativeDisplay", () => {
       />,
     )
     expect(screen.queryByText("Search budget limit")).toBe(null)
-    expect(screen.queryByText("Extract budget limit")).toBe(null)
+    expect(screen.queryByText("Fetch budget limit")).toBe(null)
   })
 })

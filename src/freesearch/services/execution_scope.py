@@ -308,10 +308,9 @@ async def resolve_trace_capture(
     """Resolve the project's immutable trace policy at the execution boundary.
 
     Called once per provider-executing request, next to the ownership bind, so
-    sampling and detail are decided before any span exists and propagated to
-    every child. A read failure is not a request failure, but it also must not
-    become permissive capture: the fail-closed policy samples every optional
-    trace out while execution and mandatory audit events continue.
+    detail is decided before any span exists and propagated to every child.
+    On read failure, metadata-only capture applies while execution and
+    mandatory audit events continue.
     """
 
     try:

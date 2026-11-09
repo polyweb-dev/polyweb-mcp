@@ -17,7 +17,7 @@ describe("ProjectPoolCell", () => {
     expect(screen.getByText(/\$2.00 of \$20.00 this month/)).toBeInTheDocument()
     rerender(<ProjectPoolCell pool={pool} operation="search" />)
     expect(screen.queryByText(/\$/)).toBeNull()
-    expect(screen.getByText("60/min · Free")).toBeInTheDocument()
+    expect(screen.getByText("60/min")).toBeInTheDocument()
   })
 
   it("shows a single-operation restriction only in the other operation", () => {
@@ -28,5 +28,13 @@ describe("ProjectPoolCell", () => {
     expect(screen.queryByText(/Search only/)).toBeNull()
     rerender(<ProjectPoolCell pool={searchOnly} operation="fetch" />)
     expect(screen.getByText(/Search only/)).toBeInTheDocument()
+  })
+
+  it("shows the effective operation rate and its own window", () => {
+    const separate = { ...pool, operation_limits: { search: 10, fetch: { rate_limit: 20, rate_window_seconds: 3600 } } }
+    const { rerender } = render(<ProjectPoolCell pool={separate} operation="search" />)
+    expect(screen.getByText("10/min")).toBeInTheDocument()
+    rerender(<ProjectPoolCell pool={separate} operation="fetch" />)
+    expect(screen.getByText("20/h")).toBeInTheDocument()
   })
 })

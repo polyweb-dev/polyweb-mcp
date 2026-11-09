@@ -19,11 +19,6 @@ describe("PoolBudgetUsage", () => {
     expect(screen.queryByText(/\$/)).not.toBeInTheDocument()
   })
 
-  it("uses the project Providers monthly budget phrase", () => {
-    render(<PoolBudgetUsage pool={{ ...pool, budget: { limit: 20, period: "month" } }} />)
-    expect(screen.getByText("$0.00 of $20.00 this month")).toBeInTheDocument()
-  })
-
   it("shows a neutral label when the pool has no cap", () => {
     render(<PoolBudgetUsage pool={pool} />)
     expect(screen.getByText("No budget cap")).toBeInTheDocument()

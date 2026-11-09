@@ -60,31 +60,19 @@ describe("UsdGrantForm", () => {
     expect(screen.getByLabelText("Search budget (USD)")).toHaveValue(0.0045)
   })
 
-  it("updates the provider list-price equivalent while editing a Usd budget", async () => {
-    renderForm(false)
-    const input = screen.getByLabelText("Search budget (USD)")
-    const user = userEvent.setup()
-    await user.clear(input)
-    await user.type(input, "5000")
-    expect(input).toHaveValue(5000)
-    await user.clear(input)
-    await user.type(input, "2500")
-    expect(input).toHaveValue(2500)
-  })
-
   it("rejects a changed amount with two decimal digits (UI7-08)", async () => {
     renderForm(false)
     const user = userEvent.setup()
     await user.clear(screen.getByLabelText("Search budget (USD)"))
     await user.type(screen.getByLabelText("Search budget (USD)"), "4.1234567")
-    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    await user.click(screen.getByRole("button", { name: "Save budget" }))
     expect(await screen.findByText("Use up to six decimal places")).not.toBeNull()
   })
 
   it("preserves the stored fetch amount when the input stays absent (UI7-08)", async () => {
     const { onSave } = renderForm(false)
     const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    await user.click(screen.getByRole("button", { name: "Save budget" }))
     expect(onSave).toHaveBeenCalledTimes(1)
     expect(onSave).toHaveBeenCalledWith({
       auth_mode: "keyed",
@@ -112,7 +100,7 @@ describe("UsdGrantForm", () => {
         onReload={() => {}}
       />,
     )
-    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    await user.click(screen.getByRole("button", { name: "Save budget" }))
     expect(onClose).not.toHaveBeenCalled()
   })
 
@@ -126,7 +114,7 @@ describe("UsdGrantForm", () => {
     renderForm(false)
     const user = userEvent.setup()
     await user.clear(screen.getByLabelText("Search budget (USD)"))
-    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    await user.click(screen.getByRole("button", { name: "Save budget" }))
     expect(await screen.findByText("Enter an amount")).not.toBeNull()
     expect(screen.getByLabelText("Search budget (USD)").getAttribute("aria-invalid")).toBe("true")
   })
@@ -139,7 +127,7 @@ describe("UsdGrantForm", () => {
   })
 
   it("shows stored facts as a Set, Used, Reserved table without a helper paragraph (CARD-4)", () => {
-    renderForm(false)
+    renderForm(false, { grants: { ...grants(), search_consumed_usd: "0.0016", search_reserved_usd: "0.000001" } })
     const table = screen.getByRole("table", { name: "Current budget limit" })
     expect(Array.from(table.querySelectorAll("th")).map((th) => th.textContent)).toEqual([
       "Operation",
@@ -147,6 +135,8 @@ describe("UsdGrantForm", () => {
       "Reserved (USD)",
     ])
     expect(table.querySelectorAll("tbody tr")).toHaveLength(1)
+    expect(screen.getByText("$0.0016 of $0.0045 this month")).toBeInTheDocument()
+    expect(screen.getByText("$0.000001")).toBeInTheDocument()
     expect(screen.queryByText(/Stored budget limit/)).toBe(null)
     expect(screen.queryByText(SPEND_CAP_NOTE)).toBe(null)
   })
@@ -155,7 +145,7 @@ describe("UsdGrantForm", () => {
     const { onClose, onSave } = renderForm(false)
     const user = userEvent.setup()
     const labels = screen.getAllByRole("button").map((button) => button.textContent)
-    expect(labels).toEqual(["Cancel", "Save budget limit"])
+    expect(labels).toEqual(["Cancel", "Save budget"])
     await user.click(screen.getByRole("button", { name: "Cancel" }))
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(onSave).not.toHaveBeenCalled()
@@ -163,16 +153,6 @@ describe("UsdGrantForm", () => {
 })
 
 describe("UsdGrantForm Tavily native", () => {
-  function tavilyProfile() {
-    return {
-      native_usd_per_unit: "0.008",
-      cost_basis: "paygo_reference",
-      price_version: "paygo-reference",
-      source: "documented",
-      estimated: true,
-    }
-  }
-
   function tavilyGrants() {
     return {
       provider: "tavily",
@@ -201,7 +181,6 @@ describe("UsdGrantForm Tavily native", () => {
         saving={false}
         saveError={null}
         staleVersion={false}
-        nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
         onSave={onSave}
         onClose={onClose}
         onReload={onReload}
@@ -211,7 +190,7 @@ describe("UsdGrantForm Tavily native", () => {
     return { onSave, onClose }
   }
 
-  it("displays native Credits while keeping stored Usd text convertible", () => {
+  it("displays and edits budgets in USD only", () => {
     renderTavily()
     expect(screen.getByLabelText("Search budget (USD)")).toHaveValue(0.008)
     expect(screen.getByLabelText("Fetch budget (USD)")).toHaveValue(0.016)
@@ -225,7 +204,7 @@ describe("UsdGrantForm Tavily native", () => {
     const user = userEvent.setup()
     await user.clear(screen.getByLabelText("Search budget (USD)"))
     await user.type(screen.getByLabelText("Search budget (USD)"), "3")
-    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    await user.click(screen.getByRole("button", { name: "Save budget" }))
     expect(onSave).toHaveBeenCalledTimes(1)
     expect(onSave).toHaveBeenCalledWith({
       auth_mode: "keyed",
@@ -236,27 +215,6 @@ describe("UsdGrantForm Tavily native", () => {
     })
   })
 
-  it("disables conversion on an unknown profile and keeps Usd behavior", () => {
-    const onSave = vi.fn(() => Promise.resolve(true))
-    render(
-      <UsdGrantForm
-        providerName="Tavily"
-        authMode="keyed"
-        grants={tavilyGrants()}
-        fetchAvailable
-        saving={false}
-        saveError={null}
-        staleVersion={false}
-        nativeDisplay={{ credits: {} as never, profile: null } as never}
-        onSave={onSave}
-        onClose={() => {}}
-        onReload={() => {}}
-      />,
-    )
-    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue(0.008)
-    expect(screen.getByLabelText("Fetch budget (USD)")).toHaveValue(0.016)
-    expect(screen.queryByText(/8 credits/)).toBeNull()
-  })
 })
 
 
@@ -268,7 +226,7 @@ describe("USD budget period and precision", () => {
     await user.click(screen.getByRole("option", { name: "Per week" }))
     await user.clear(screen.getByLabelText("Search budget (USD)"))
     await user.type(screen.getByLabelText("Search budget (USD)"), "1.234567")
-    await user.click(screen.getByRole("button", { name: "Save budget limit" }))
+    await user.click(screen.getByRole("button", { name: "Save budget" }))
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ period: "week", search_usd: "1.234567" }))
   })
 })

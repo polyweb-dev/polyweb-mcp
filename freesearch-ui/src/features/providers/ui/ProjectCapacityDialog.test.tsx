@@ -30,6 +30,20 @@ beforeEach(() => {
 
 describe("ProjectProvidersPage.test.tsx", () => {
 describe("ProjectProvidersPage private keys", () => {
+  it("opens an existing pool using its credential ID after the key is renamed", async () => {
+    api.listVaultKeys.mockResolvedValue([{ ...key, label: "Renamed" }])
+    api.getKeyPool.mockResolvedValue({
+      id: "pool", credential_id: key.id, provider_type: "tavily", project_id: "p1",
+      label: "Alpha", rate: { limit: 60, window_seconds: 60 }, budget: null,
+      budget_used_usd: 0, operations: ["search", "fetch"], operation_limits: null,
+    })
+    render(<ProjectCapacityDialog projectId="p1" projectName="Alpha" providers={[]} onClose={vi.fn()} onSaved={vi.fn()}
+      pool={{ pool_id: "pool", label: "Alpha", provider_type: "tavily", key_label: "Old name",
+        owner: { user_id: "u1", email: "admin@example.com" }, rate: { limit: 60, window_seconds: 60 },
+        budget: null, budget_used: 0, operations: ["search", "fetch"] }} />)
+    expect(await screen.findByText("Renamed")).toBeInTheDocument()
+  })
+
   it("uses shared provider and key pickers with provider logos", async () => {
     api.listVaultKeys.mockResolvedValue([{ ...key, label: "First" }, { ...key, id: "key-2", label: "Second" }])
     const providers = [

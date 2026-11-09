@@ -121,8 +121,8 @@ export function ProviderLimitsCards({
   }
   const byName = (a: ViewEntry, b: ViewEntry) => a.provider.name.localeCompare(b.provider.name)
   const reporting = viewed.filter((entry) => entry.view.measurable).sort(byName)
-  const keyed = viewed.filter((entry) =>
-    renderKeyBalances !== undefined || (!entry.view.keyless && !entry.view.measurable)).sort(byName)
+  const keyed = viewed.filter((entry) => entry.provider.id !== "keenable" &&
+    (renderKeyBalances !== undefined || (!entry.view.keyless && !entry.view.measurable))).sort(byName)
   return (
     <section aria-labelledby="usd-cards-heading" className="space-y-4">
       <h3 id="usd-cards-heading" className="fs-section-title">

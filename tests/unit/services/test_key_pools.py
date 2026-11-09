@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from freesearch.models.credentials import CredentialOperation
-from freesearch.models.vault import KeyPoolCreate, PoolBudget
+from freesearch.models.vault import KeyPoolCreate, KeyPoolRead, PoolBudget
 from freesearch.services.control_errors import ResourceInvalid
 from freesearch.services.key_pools import pool_budget, pool_values, validate_operations
 
@@ -50,3 +50,32 @@ def test_budget_defaults_to_month_and_rejects_sub_microdollars() -> None:
     assert PoolBudget(limit=Decimal("1")).period == "month"
     with pytest.raises(ValidationError):
         PoolBudget(limit=Decimal("0.0000001"))
+
+
+def test_migrated_operation_limits_round_trip() -> None:
+    from uuid import uuid4
+
+    limits = {
+        "search": {"rate_limit": 20, "rate_window_seconds": 60},
+        "fetch": {"rate_limit": None, "rate_window_seconds": 3600},
+    }
+    body = KeyPoolCreate.model_validate(
+        {"label": "legacy", "operations": ["search", "fetch"], "operation_limits": limits}
+    )
+    values = pool_values("example", body, supported=_BOTH)
+    assert values.operation_limits == limits
+    view = KeyPoolRead.model_validate(
+        {
+            "id": uuid4(),
+            "credential_id": uuid4(),
+            "project_id": None,
+            "provider_type": "example",
+            "label": "legacy",
+            "rate": {"limit": 20, "window_seconds": 60},
+            "budget": None,
+            "budget_used_usd": 0,
+            "operations": ["search", "fetch"],
+            "operation_limits": values.operation_limits,
+        }
+    )
+    assert view.model_dump(mode="json")["operation_limits"] == limits

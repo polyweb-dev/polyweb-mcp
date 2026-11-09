@@ -36,6 +36,21 @@ function fillValidBrave() {
 }
 
 describe("ManualQuotaModal", () => {
+  it.each([
+    ["5", "4.9955", "0.0045", "4.9955"],
+    ["0.000001", "0", "0.000001", "0.000000"],
+  ])("preserves exact USD values on a date-only edit", async (allowance, used, balance, currentUsage) => {
+    const onSave = vi.fn(() => Promise.resolve())
+    render(<ManualQuotaModal {...braveProps} onSave={onSave}
+      defaults={{ billingStart: "2026-09-01", billingEnd: "2026-09-30", allowance, used }} />)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(Number(balance))
+    fireEvent.change(screen.getByLabelText("Billing end"), { target: { value: "2026-10-01" } })
+    await userEvent.click(screen.getByTestId("manual-quota-save"))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      allowance, current_usage: currentUsage,
+      billing_end: "2026-10-01",
+    }))
+  })
   it("selects billing dates from the calendar inside the dialog", async () => {
     const user = userEvent.setup()
     render(<ManualQuotaModal {...braveProps}

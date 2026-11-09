@@ -1,10 +1,6 @@
-import { routeOrder } from "@/domains/providers"
-import type { RouteEntry } from "@/domains/providers"
 import type { OrderOperation, OrderProvider, OperationOrder } from "@/domains/routing"
 import { useDragReorder } from "@/shared/lib/useDragReorder"
-import { RowActionsMenu } from "@/shared/ui/RowActionsMenu"
 import { useFlipReorder } from "@/shared/ui/useFlipReorder"
-import { keyMenuActions } from "./keyMenuActions"
 import { ProviderOrderRow } from "./ProviderOrderRow"
 import type { ProviderOrderContext } from "../model/providerOrderContext"
 
@@ -26,8 +22,6 @@ export function ProviderOrderRows(props: {
   const disabled = order.providers.filter((item) => !isEnabled(item))
   const displayed = [...enabled, ...disabled]
   const tbody = useFlipReorder(displayed.map((item) => item.provider).join("|"))
-  const routes = routeOrder(context.providers)
-  const entryFor = (item: OrderProvider): RouteEntry | undefined => routes.find((route) => route.provider.providerType === item.provider)
   return (
     <div className="fs-panel overflow-x-auto" onDragLeave={drag.leaveList}>
       <table aria-label={`${operation === "search" ? "Search" : "Fetch"} provider order`} className="fs-table table-fixed min-w-[1080px]">
@@ -43,12 +37,9 @@ export function ProviderOrderRows(props: {
         </tr></thead>
         <tbody ref={tbody}>
           {displayed.map((item, index) => {
-            const entry = entryFor(item)
-            const actions = entry?.credential ? keyMenuActions({ provider: entry.provider, credential: entry.credential, controller: context.controller, canManagePrivate: context.canManagePrivate }) : []
-            const menu = context.renderMenu ? context.renderMenu(item) : <RowActionsMenu label={`Actions for ${item.name}`} actions={actions} />
             return <ProviderOrderRow key={item.provider} item={item} provider={context.providers.find((provider) => provider.providerType === item.provider)} operation={operation} index={index}
-              count={enabled.length} ranked={index < enabled.length} canConfigure={context.canConfigure} pending={pending || context.controller.bindingStatus.pending || Boolean(context.operationPending)}
-              target={drag.targetId === item.provider} dragging={drag.draggingId === item.provider} canEditSystem={context.canEditSystem} pool={context.renderPool?.(item, operation)} menu={menu}
+              count={enabled.length} ranked={index < enabled.length} canConfigure={context.canConfigure} pending={pending || Boolean(context.operationPending)}
+              target={drag.targetId === item.provider} dragging={drag.draggingId === item.provider} canEditSystem={context.canEditSystem} pool={context.renderPool?.(item, operation)} menu={context.renderMenu?.(item)}
               poolOperations={context.poolOperations?.(item.provider)} isOwner={context.isOwner} showOperation={showOperation}
               onToggle={(enabled) => context.changePoolOperation?.(item.provider, operation, enabled)}
               onMove={(direction) => { const target = enabled[index + (direction === "up" ? -1 : 1)]; if (target) void move(item.provider, target.provider) }}

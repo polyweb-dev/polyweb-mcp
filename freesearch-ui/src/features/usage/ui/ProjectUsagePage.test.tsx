@@ -101,7 +101,7 @@ describe("ProjectUsagePage", () => {
     const totals = await screen.findByRole("table", { name: "Usage totals" })
     expect(await within(totals).findByText("Free")).toBeInTheDocument()
     const tavily = within(totals).getByText("Tavily").closest("tr")!
-    expect(within(tavily).getByText("Not reported")).toBeInTheDocument()
+    expect(within(tavily).getAllByText("—").length).toBeGreaterThan(0)
   })
 
   it("links to Activity from the page header instead of repeating the recent call ledger", async () => {
@@ -142,7 +142,7 @@ describe("ProjectUsagePage", () => {
     const totalRow = within(totals).getByText("Total").closest("tr")!
     expect(within(totalRow).queryByText("Known cost")).not.toBeInTheDocument()
     const brave = within(totals).getByText("Brave Search").closest("tr")!
-    expect(within(brave).getByText("Not reported")).toHaveClass("text-[var(--muted)]")
+    expect(within(brave).getAllByText("—").some((cell) => cell.className.includes("text-[var(--muted)]"))).toBe(true)
     expect(within(totalRow).getByText("15")).toBeInTheDocument()
     expect(within(totalRow).getByText("$0.035")).toBeInTheDocument()
   })

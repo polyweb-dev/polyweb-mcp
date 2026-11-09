@@ -5,7 +5,7 @@ import type { ProviderConfig } from "@/domains/providers"
 import type { ManualUnit } from "../model/manualQuotaUnit"
 import type { BalancePrefill } from "../model/providerInfo"
 import type { CreditMode } from "../model/quotaLabels"
-import { profileOf, type TavilyDisplayAdapter } from "../model/tavilyCredits"
+import { profileOf } from "../model/tavilyCredits"
 import { saveManualQuotaFor, type ManualQuotaOverlay } from "../model/useManualQuota"
 import type { ProviderLimitsController } from "../model/useProviderLimits"
 import type { ManualQuotaDefaults } from "../model/useQuotaForm"
@@ -26,8 +26,6 @@ export interface ProviderCardModalsProps {
   auth: ProviderAuthLimits
   fetchAvailable: boolean
   creditMode: CreditMode | null
-  /** The native display inputs of one Tavily rail; null on every other card. */
-  nativeDisplay: TavilyDisplayAdapter | null
   providers: ProviderConfig[] | undefined
   providerUnits: Readonly<Record<string, ManualUnit>> | undefined
   observed: Record<string, BalancePrefill> | undefined
@@ -94,7 +92,6 @@ function grantModal(input: ProviderCardModalsProps): ReactNode {
         saving={controller.saving}
         saveError={controller.saveError}
         staleVersion={controller.staleVersion}
-        {...(input.nativeDisplay !== null ? { nativeDisplay: input.nativeDisplay } : {})}
         onSave={controller.saveGrant}
         onClose={input.onClose}
         onReload={() => void controller.reload()}

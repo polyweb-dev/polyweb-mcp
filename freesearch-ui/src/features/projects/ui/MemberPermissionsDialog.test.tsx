@@ -6,7 +6,7 @@ import { MemberPermissionsDialog } from "./MemberPermissionsDialog"
 
 const member = {
   project_id: "p1", user_id: "u1", email: "dev@example.com", status: "active" as const,
-  roles: ["project_member"], role: "developer" as const, permissions: 15, provider_owner: false, version: 1,
+  roles: ["project_member"], role: "developer" as const, permissions: 15, provider_owner: false, account_active: true, version: 1,
 }
 afterEach(() => vi.unstubAllGlobals())
 
@@ -37,15 +37,6 @@ it("keeps all admin permission switches on and disabled", () => {
     expect(control).toBeChecked()
     expect(control).toBeDisabled()
   }
-})
-
-it("keeps the permission count with the actions outside the permission list", () => {
-  render(<MemberPermissionsDialog projectId="p1" member={member} onClose={vi.fn()} onSaved={vi.fn()} />)
-  const body = screen.getByTestId("permissions-scroll")
-  expect(body).toHaveTextContent("Change the trace policy")
-  expect(body).not.toContainElement(screen.getByRole("button", { name: "Save permissions" }))
-  const footer = screen.getByRole("button", { name: "Cancel" }).parentElement?.parentElement
-  expect(footer).toContainElement(screen.getByRole("status"))
 })
 
 it("counts the same enabled switches as the table, including Base access", async () => {

@@ -96,6 +96,7 @@ async def test_project_pools_member_access_and_secret_isolation(
                     "budget": body["budget"],
                     "budget_used": 1.234567 if budgeted else 0,
                     "operations": ["search"],
+                    "operation_limits": None,
                     "overcommit": False,
                 }
             ]

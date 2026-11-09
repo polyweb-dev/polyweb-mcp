@@ -29,6 +29,7 @@ single redaction hook.
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
@@ -71,6 +72,8 @@ type AttributeValue = str | bool | int | float | list[AttributeValue] | None
 """Serializable span/event attribute value accepted by the facade."""
 
 DEFAULT_FLUSH_TIMEOUT_MILLIS: int = 5_000
+_MAX_JSON_TEXT_CHARS = 3_000_000
+_OMITTED_JSON = "[JSON content omitted: capture limit exceeded]"
 
 # Credential-shaped keys that must never reach a span, an event, or the trace
 # table. Matched against the canonical (lowercased, alphanumeric) key.
@@ -116,7 +119,27 @@ def is_sensitive_key(key: str) -> bool:
     return any(fragment in canonical for fragment in _SENSITIVE_KEY_FRAGMENTS)
 
 
-def _redact(value: object) -> AttributeValue:
+def _scrub_json_text(value: str) -> str:
+    """Scrub JSON containers in text; never buffer oversized JSON candidates."""
+
+    if not value.lstrip().startswith(("{", "[")):
+        return value
+    if len(value) > _MAX_JSON_TEXT_CHARS:
+        return _OMITTED_JSON
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    except (RecursionError, ValueError):
+        return _OMITTED_JSON
+    try:
+        cleaned = _redact(decoded, json_mode=True)
+        return json.dumps(cleaned) if cleaned != decoded else value
+    except (RecursionError, ValueError):
+        return _OMITTED_JSON
+
+
+def _redact(value: object, *, json_mode: bool = False) -> AttributeValue:
     """Coerce one value into a serializable, credential-free attribute value.
 
     Mappings and sequences are filtered recursively with the same
@@ -126,16 +149,21 @@ def _redact(value: object) -> AttributeValue:
     a keyed credential, because only its scalar form survives.
     """
 
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if isinstance(value, str):
+        return _scrub_json_text(value)
+    if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, Mapping):
-        return cast(AttributeValue, trace_content_attributes(value))
+        return cast(AttributeValue, trace_content_attributes(value, json_mode=json_mode))
     if isinstance(value, (list, tuple)):
-        return [item for item in (_redact(entry) for entry in value) if item is not None]
+        entries = [_redact(entry, json_mode=json_mode) for entry in value]
+        return entries if json_mode else [item for item in entries if item is not None]
     return str(value)
 
 
-def trace_content_attributes(payload: Mapping[str, object]) -> dict[str, AttributeValue]:
+def trace_content_attributes(
+    payload: Mapping[str, object], *, json_mode: bool = False
+) -> dict[str, AttributeValue]:
     """Allowlist request/response content into span attributes.
 
     This is the single redaction hook for trace content: credential-, header-,
@@ -150,17 +178,33 @@ def trace_content_attributes(payload: Mapping[str, object]) -> dict[str, Attribu
         if is_sensitive_key(name):
             continue
         if isinstance(value, Mapping):
-            nested = trace_content_attributes(value)
-            if nested:
+            nested = trace_content_attributes(value, json_mode=json_mode)
+            if nested or json_mode:
                 attributes[name] = cast(AttributeValue, nested)
             continue
         if isinstance(value, (list, tuple)):
-            attributes[name] = [_redact(item) for item in value]
+            attributes[name] = [_redact(item, json_mode=json_mode) for item in value]
             continue
-        redacted = _redact(value)
-        if redacted is not None:
+        redacted = _redact(value, json_mode=json_mode)
+        if redacted is not None or json_mode:
             attributes[name] = redacted
     return attributes
+
+
+def _otel_attributes(attributes: dict[str, AttributeValue]) -> dict[str, AttributeValue]:
+    """Encode nested values because the OTel SDK only accepts scalar arrays."""
+
+    return {
+        key: (
+            json.dumps(value, ensure_ascii=False)
+            if isinstance(value, Mapping)
+            or (
+                isinstance(value, list) and any(isinstance(item, (Mapping, list)) for item in value)
+            )
+            else value
+        )
+        for key, value in attributes.items()
+    }
 
 
 def _payload_capture_allowed() -> bool:
@@ -187,14 +231,16 @@ def _span_attributes(attributes: Mapping[str, object] | None) -> dict[str, Attri
     if attributes is None:
         return {}
     capture = _payload_capture_allowed()
-    return trace_content_attributes(
-        {
-            key: value
-            for key, value in attributes.items()
-            if value is not None
-            and key not in INTERNAL_ATTRIBUTES
-            and (capture or key not in TRACE_CONTENT_ATTRIBUTES)
-        }
+    return _otel_attributes(
+        trace_content_attributes(
+            {
+                key: value
+                for key, value in attributes.items()
+                if value is not None
+                and key not in INTERNAL_ATTRIBUTES
+                and (capture or key not in TRACE_CONTENT_ATTRIBUTES)
+            }
+        )
     )
 
 
@@ -212,14 +258,16 @@ def _event_attributes(attributes: Mapping[str, object] | None) -> dict[str, Attr
     if attributes is None:
         return {}
     capture = _payload_capture_allowed()
-    return trace_content_attributes(
-        {
-            key: value
-            for key, value in attributes.items()
-            if value is not None
-            and key not in INTERNAL_ATTRIBUTES
-            and (capture or key in TRACE_SAFE_EVENT_ATTRIBUTES)
-        }
+    return _otel_attributes(
+        trace_content_attributes(
+            {
+                key: value
+                for key, value in attributes.items()
+                if value is not None
+                and key not in INTERNAL_ATTRIBUTES
+                and (capture or key in TRACE_SAFE_EVENT_ATTRIBUTES)
+            }
+        )
     )
 
 

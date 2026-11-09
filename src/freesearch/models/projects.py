@@ -725,6 +725,7 @@ class ProjectMemberRead(ContractModel):
     role: Literal["admin", "developer"] = "developer"
     permissions: int = 0
     provider_owner: bool = False
+    account_active: bool = True
 
     @field_validator("email")
     @classmethod

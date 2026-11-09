@@ -24,7 +24,7 @@ function amountCells(amounts: UsageAmounts, columns: readonly UsageAmountColumn[
   return columns.map((column) => {
     const text = usageAmountText(amounts, column)
     return (
-      <td key={column} className={text === "—" || text === "Not reported" ? `${className} text-[var(--muted)]` : className}>
+      <td key={column} className={text === "—" ? `${className} text-[var(--muted)]` : className}>
         {text}
       </td>
     )

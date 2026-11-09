@@ -20,6 +20,8 @@ from freesearch.models.vault import (
     KeyPoolCreate,
     KeyPoolRead,
     KeyPoolUpdate,
+    OperationLimit,
+    OperationRate,
     PoolBudget,
     PoolRate,
     VaultProject,
@@ -53,7 +55,7 @@ _SECONDS_PERIOD: dict[int, Literal["day", "week", "month"]] = {
 def validate_operations(
     provider_type: str,
     operations: frozenset[str] | None,
-    operation_limits: dict[str, int] | None = None,
+    operation_limits: dict[str, OperationLimit] | None = None,
     *,
     supported: frozenset[CredentialOperation] | None = None,
 ) -> frozenset[Literal["search", "fetch"]]:
@@ -70,7 +72,10 @@ def validate_operations(
         )
     if operation_limits is not None and (
         not operation_limits.keys() <= requested
-        or any(isinstance(limit, bool) or limit < 0 for limit in operation_limits.values())
+        or any(
+            isinstance(limit, bool) or (isinstance(limit, int) and limit < 0)
+            for limit in operation_limits.values()
+        )
     ):
         raise ResourceInvalid("OPERATION_NOT_SUPPORTED", "operation limits must match the pool")
     return frozenset(CredentialOperation(item).value for item in requested)
@@ -94,7 +99,14 @@ def pool_values(
         budget_limit=int(body.budget.limit * _MICRODOLLARS) if body.budget else None,
         budget_window_seconds=_PERIOD_SECONDS[body.budget.period] if body.budget else None,
         operations=operations,
-        operation_limits=body.operation_limits,
+        operation_limits=(
+            None
+            if body.operation_limits is None
+            else {
+                key: value.model_dump() if isinstance(value, OperationRate) else value
+                for key, value in body.operation_limits.items()
+            }
+        ),
     )
 
 

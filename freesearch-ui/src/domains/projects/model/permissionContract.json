@@ -1,0 +1,14 @@
+{
+  "permissions": [
+    {"key": "search", "bit": 1, "action": "search.execute"},
+    {"key": "fetch", "bit": 2, "action": "fetch.execute"},
+    {"key": "traces", "bit": 4, "action": "traces.read"},
+    {"key": "usage", "bit": 8, "action": "usage.read"},
+    {"key": "settings_write", "bit": 16, "action": "settings.write"},
+    {"key": "settings_copy", "bit": 32, "action": "settings.copy"},
+    {"key": "providers_configure", "bit": 64, "action": "providers.configure"},
+    {"key": "tokens", "bit": 128, "action": "tokens.manage"},
+    {"key": "provider_owner", "bit": 32768, "action": "providers.supply"}
+  ],
+  "presets": {"Read only": 12, "Standard": 15, "Full developer": 255}
+}

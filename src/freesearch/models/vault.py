@@ -21,6 +21,14 @@ class PoolRate(VaultModel):
     window_seconds: int = Field(default=60, gt=0)
 
 
+class OperationRate(VaultModel):
+    rate_limit: int | None = Field(ge=0)
+    rate_window_seconds: int = Field(gt=0)
+
+
+OperationLimit = int | None | OperationRate
+
+
 class PoolBudget(VaultModel):
     limit: Decimal = Field(
         ge=0,
@@ -68,7 +76,7 @@ class KeyPoolCreate(VaultModel):
     rate: PoolRate = Field(default_factory=PoolRate)
     budget: PoolBudget | None = None
     operations: frozenset[str] | None = None
-    operation_limits: dict[str, int] | None = None
+    operation_limits: dict[str, OperationLimit] | None = None
 
 
 class KeyPoolUpdate(VaultModel):
@@ -76,7 +84,7 @@ class KeyPoolUpdate(VaultModel):
     rate: PoolRate | None = None
     budget: PoolBudget | None = None
     operations: frozenset[str] | None = None
-    operation_limits: dict[str, int] | None = None
+    operation_limits: dict[str, OperationLimit] | None = None
 
 
 class KeyPoolRead(VaultModel):
@@ -89,7 +97,7 @@ class KeyPoolRead(VaultModel):
     budget: PoolBudget | None
     budget_used_usd: Decimal
     operations: frozenset[str]
-    operation_limits: dict[str, int] | None
+    operation_limits: dict[str, OperationLimit] | None
 
     @field_serializer("budget_used_usd", when_used="json")
     def serialize_used(self, value: Decimal) -> float:

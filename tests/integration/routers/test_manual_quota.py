@@ -26,11 +26,13 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.monitoring import effective_quota
 from tests.fixtures.auth import (
+    account_id_from_pair,
     raw_auth_headers,
     register_and_login,
     register_system_admin_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_execution_project
 
 
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
@@ -273,6 +275,25 @@ async def test_manual_quota_get_missing_is_empty_for_admin_only(
         assert client.get(
             "/api/v1/providers/brave/manual-quota", headers=developer_headers
         ).status_code in (403, 404)
+        project_admin = register_and_login(client, temp_email("quota-project-admin"))
+        await seed_execution_project(repository, user_id=account_id_from_pair(project_admin))
+        project_headers = raw_auth_headers(project_admin["access_token"])
+        assert (
+            client.get("/api/v1/providers/brave/manual-quota", headers=project_headers).status_code
+            == 403
+        )
+        assert (
+            client.put(
+                "/api/v1/providers/brave/manual-quota", json=_payload(), headers=project_headers
+            ).status_code
+            == 403
+        )
+        assert (
+            client.delete(
+                "/api/v1/providers/brave/manual-quota", headers=project_headers
+            ).status_code
+            == 403
+        )
         assert client.put(
             "/api/v1/providers/brave/manual-quota", json=_payload(), headers=developer_headers
         ).status_code in (403, 404)

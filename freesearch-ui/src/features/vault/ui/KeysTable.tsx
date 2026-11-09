@@ -19,7 +19,7 @@ export function KeysTable({ rows, projects, onKey, onPool }: {
       const actions = [
         { key: "create", label: "Create pool", onSelect: () => onKey("create", row) },
         ...(item.auth_mode === "oauth" ? [] : [{ key: "rotate", label: "Rotate key", onSelect: () => onKey("rotate", row) }]),
-        { key: "settings", label: "Key settings", onSelect: () => onKey("settings", row) },
+        { key: "settings", label: "Edit key", onSelect: () => onKey("settings", row) },
         ...(item.auth_mode === "oauth" ? [{ key: "oauth", label: row.oauth === "connected" ? "Disconnect" : "Connect", onSelect: () => onKey(row.oauth === "connected" ? "disconnect" : "connect", row) }] : []),
         { key: "delete", label: "Delete key", danger: true, onSelect: () => onKey("delete", row) },
       ]

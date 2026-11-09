@@ -8,7 +8,7 @@ from uuid import UUID
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from freesearch.configuration.config import get_settings
 from freesearch.models.credentials import CredentialOperation
@@ -35,6 +35,63 @@ from tests.fixtures.auth import (
 from tests.fixtures.execution import seed_execution_project
 
 BASE = "/api/v1/account/vault"
+
+
+@pytest.mark.asyncio
+async def test_migrated_pool_is_readable_editable_and_preserves_windows(
+    repository, vault_env, auth_secret
+):
+    with TestClient(create_app([], repository=repository)) as client:
+        owner = await register_system_admin_login(client, repository, temp_email("migrated-pool"))
+        headers = raw_auth_headers(owner["access_token"])
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(owner))
+        key = client.post(
+            f"{BASE}/keys",
+            headers=headers,
+            json={"provider_type": "exa", "label": "key", "secret": "private"},
+        ).json()
+        created = client.post(
+            f"{BASE}/keys/{key['id']}/pools",
+            headers=headers,
+            json={"label": "pool", "project_id": str(project.project_id)},
+        )
+        assert created.status_code == 201
+        pool_id = created.json()["id"]
+        limits = {
+            "search": {"rate_limit": 20, "rate_window_seconds": 60},
+            "fetch": {"rate_limit": None, "rate_window_seconds": 3600},
+        }
+        import json
+
+        async with repository.session() as session:
+            await session.execute(
+                text("UPDATE key_pools SET operation_limits=:limits WHERE id=:pool"),
+                {"limits": json.dumps(limits), "pool": pool_id},
+            )
+            await session.commit()
+        path = f"{BASE}/pools/{pool_id}"
+        assert client.get(path, headers=headers).json()["operation_limits"] == limits
+        assert (
+            client.get(f"{BASE}/keys/{key['id']}/pools", headers=headers).json()[0][
+                "operation_limits"
+            ]
+            == limits
+        )
+        updated = client.patch(path, headers=headers, json={"label": "renamed"})
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["operation_limits"] == limits
+        async with repository.session() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT operation_scope,base_rate,rate_window_seconds "
+                        "FROM project_pool_allocations WHERE key_pool_id=:pool "
+                        "ORDER BY operation_scope"
+                    ),
+                    {"pool": pool_id},
+                )
+            ).all()
+            assert rows == [("fetch", None, 3600), ("search", 20, 60)]
 
 
 @pytest_asyncio.fixture

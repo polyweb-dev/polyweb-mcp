@@ -14,8 +14,6 @@ import type { PermissionAccess } from "@/domains/projects"
 export type TabId =
   | "quotas"
   | "settings"
-  | "systemCredentials"
-  | "systemCapacity"
   | "projects"
   | "account"
   | "accountKeys"
@@ -23,15 +21,10 @@ export type TabId =
 export const TAB_PATHS: Record<TabId, string> = {
   quotas: "/system/quotas",
   settings: "/system/providers",
-  systemCredentials: "/system/credentials",
-  systemCapacity: "/system/capacity",
   projects: "/projects",
   account: "/account",
   accountKeys: "/account/keys",
 }
-
-/** Former System Providers URL for the credentials tab. */
-export const SYSTEM_CREDENTIALS_TAB_PATH = `${TAB_PATHS.settings}?tab=keys`
 
 /**
  * Former global paths that moved. Each one redirects to its new page.
@@ -43,6 +36,8 @@ export const LEGACY_GLOBAL_REDIRECTS: Readonly<Record<string, string>> = {
   "/system/credentials": TAB_PATHS.accountKeys,
   "/system/capacity": TAB_PATHS.accountKeys,
   "/system/keys": TAB_PATHS.accountKeys,
+  "/system/accounts": TAB_PATHS.projects,
+  "/admin/users": TAB_PATHS.projects,
 }
 
 /** Resolve former provider credentials tabs before their query strings are dropped. */
@@ -83,10 +78,8 @@ export const workspaceRoutes: WorkspaceRoute[] = [
  * means always open.
  *
  * Quotas and providers read the global control plane, which the
- * backend gates on `system.settings.read`. System credentials need
- * `system.credentials.manage`; they live as a tab of System Providers, so that
- * page also opens with that permission alone. Capacity opens with either pool
- * or allocation management. Playground and activity live under projects.
+ * backend gates on `system.settings.read`. System Providers also opens with
+ * `system.credentials.manage`. Playground and activity live under projects.
  */
 const ROUTE_PERMISSIONS: Record<TabId, readonly string[] | null> = {
   projects: null,
@@ -94,8 +87,6 @@ const ROUTE_PERMISSIONS: Record<TabId, readonly string[] | null> = {
   accountKeys: [SYSTEM_PERMISSIONS.vaultManage],
   quotas: [SYSTEM_PERMISSIONS.settingsRead],
   settings: [SYSTEM_PERMISSIONS.settingsRead, SYSTEM_PERMISSIONS.credentialsManage],
-  systemCredentials: [SYSTEM_PERMISSIONS.credentialsManage],
-  systemCapacity: [SYSTEM_PERMISSIONS.poolsManage, SYSTEM_PERMISSIONS.allocationsManage],
 }
 
 /** Return whether one global route waits for the system access descriptor. */

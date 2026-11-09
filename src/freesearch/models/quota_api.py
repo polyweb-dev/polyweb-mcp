@@ -109,7 +109,6 @@ class USDNativePool(USDContract):
 class USDVaultKeyUsage(USDContract):
     key_id: UUID
     label: str
-    owner_email: str
     auth_mode: CredentialAuthMode = CredentialAuthMode.API_KEY
     oauth_connected: bool | None = None
     balance: USDNativePool | None = None

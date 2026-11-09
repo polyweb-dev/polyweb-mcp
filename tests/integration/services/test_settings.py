@@ -1196,6 +1196,58 @@ async def test_copy_effective_snapshot_pins_inherited_values_as_overrides(
 
 
 @pytest.mark.asyncio
+async def test_copy_keep_all_clears_finite_retention_before_retention_run(tmp_path: Path) -> None:
+    boot = await bootstrap_fresh_alpha(tmp_path / "copy-keep-all.db")
+    try:
+        service = SettingsService(boot.repository)
+        admin = temp_principal(boot.admin_user)
+        source_id = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source_id, admin, "copy-keep-all")
+        await service.update_project_settings(
+            copier,
+            target.id,
+            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(retention_days=7)),
+        )
+        now = datetime.now(UTC)
+        old = TraceSpanRecord(
+            project_id=target.id,
+            actor_type=ActorType.HUMAN,
+            actor_id=copier.id,
+            span_id="old-copy",
+            trace_id="d" * 32,
+            name="POST /search",
+            kind=TraceSpanKind.SERVER,
+            started_at=now - timedelta(days=30),
+            ended_at=now - timedelta(days=30),
+            duration_ms=5,
+            operation=TraceOperation.SEARCH,
+            outcome=TraceOutcome.SUCCESS,
+            user_id=str(copier.id),
+        )
+        write_trace_spans(boot.repository.database_path, [old])
+        request = SettingsCopyRequest(
+            source_project_id=source_id,
+            expected_source_revision=0,
+            expected_target_revision=1,
+            expected_system_revision=0,
+            mode=SettingsCopyMode.EFFECTIVE_SNAPSHOT,
+        )
+        preview = await service.preview_copy(copier, target.id, request)
+        assert preview.effective_snapshot["trace.retention_days"] is None
+        await service.apply_copy(copier, target.id, request)
+        reread = await service.get_project_settings(copier, target.id)
+        assert reread.effective_settings["trace.retention_days"] is None
+        assert "trace.retention_days" not in reread.overrides
+        result = await ProjectRetentionService(boot.repository).run(
+            copier, target.id, RetentionRunRequest(data_class=RetentionDataClass.TRACES)
+        )
+        assert result.deleted_rows == 0
+        assert await get_project_trace(boot.repository, copier, target.id, "d" * 32) is not None
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
 async def test_copy_reports_system_only_and_unset_overrides_as_rejections(
     tmp_path: Path,
 ) -> None:

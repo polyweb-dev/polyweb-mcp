@@ -17,7 +17,6 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from freesearch.configuration.provider_limits import PROVIDER_IDS
-from freesearch.models.projects import PermissionAction
 from freesearch.models.provider_limits import (
     MAX_HISTORY_PAGE_SIZE,
     AuthMode,
@@ -39,9 +38,9 @@ from freesearch.models.quota_api import (
     USDVaultKeyUsage,
 )
 from freesearch.models.users import UserPrincipal
+from freesearch.persistence.projects import ProjectRepository
 from freesearch.routers.auth import current_principal, require_admin, require_control_reader
 from freesearch.routers.control_errors import control_repository
-from freesearch.services.authorization import ScopedAuthorizationService, system_query
 from freesearch.services.execution import ExecutionService
 from freesearch.services.limits_sync import add_vault_key_auth_status
 from freesearch.services.provider_limits import ProviderLimitsService
@@ -142,12 +141,13 @@ def register_limit_routes(app: FastAPI) -> None:
 
     @app.get("/api/v1/providers/{provider_id}/limits/keys", response_model=list[USDVaultKeyUsage])
     async def get_key_usage(
-        _principal: _AdminPrincipal, provider_id: str, request: Request
+        actor: _Principal, provider_id: str, request: Request
     ) -> list[VaultKeyUsage]:
-        """Return only quota observations and labels, never vault credentials."""
+        """Return quota observations for the caller's vault keys only."""
 
         _require_provider(provider_id)
-        keys = await _execution(request).vault_key_usage(provider_id)
+        await _require_vault_access(request, actor)
+        keys = await _execution(request).vault_key_usage(provider_id, actor.id)
         return await add_vault_key_auth_status(control_repository(request), keys)
 
     @app.post(
@@ -156,20 +156,14 @@ def register_limit_routes(app: FastAPI) -> None:
     async def sync_key_usage(
         actor: _Principal, provider_id: str, key_id: UUID, request: Request
     ) -> SyncResult:
-        """Poll one key only for its owner or a system administrator."""
+        """Poll one key only for its eligible owner."""
 
         _require_provider(provider_id)
+        await _require_vault_access(request, actor)
         execution = _execution(request)
         owner = await execution.vault_key_usage_owner(provider_id, key_id)
-        if owner is None:
-            raise HTTPException(status_code=404, detail="key not found")
         if owner != actor.id:
-            authorization = ScopedAuthorizationService(control_repository(request))
-            decision = await authorization.authorize(
-                system_query(actor, PermissionAction.SYSTEM_SETTINGS_WRITE)
-            )
-            if not decision.allowed:
-                raise HTTPException(status_code=404, detail="key not found")
+            raise HTTPException(status_code=404, detail="key not found")
         return await execution.sync_vault_key_limits(provider_id, key_id, datetime.now(UTC))
 
 
@@ -198,6 +192,12 @@ def _execution(request: Request) -> ExecutionService:
     if execution is None:
         raise HTTPException(status_code=503, detail="no execution service is available")
     return cast(ExecutionService, execution)
+
+
+async def _require_vault_access(request: Request, actor: UserPrincipal) -> None:
+    async with control_repository(request).session() as session:
+        if not await ProjectRepository(session).user_can_use_vault(actor.id):
+            raise HTTPException(status_code=403, detail="vault access required")
 
 
 async def _guard[ResultT](provider_id: str, action: Callable[[], Awaitable[ResultT]]) -> ResultT:

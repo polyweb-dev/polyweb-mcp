@@ -54,7 +54,7 @@ export function AddMemberForm({ controller }: { controller: ProjectMembersContro
           autoComplete="off"
           error={fieldError}
         />
-        <Field id="member-add-role" label="Role" hint={controller.draft.role === "project_member" ? `Starts with ${memberPermissionSummary(PERMISSION_PRESETS.Standard)}. Change them from the row menu` : undefined}>
+        <Field id="member-add-role" label="Role" hint={controller.draft.role === "project_member" ? `Starts with ${memberPermissionSummary(PERMISSION_PRESETS.Standard)}. Change them in the menu` : undefined}>
           <Select
             id="member-add-role"
             value={controller.draft.role}

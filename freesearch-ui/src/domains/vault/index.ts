@@ -4,6 +4,7 @@ export {
   updateKeyPool, updateVaultKey,
   disconnectVaultOAuth, getVaultOAuth, pollVaultOAuth, startVaultOAuth,
 } from "./api/vaultApi"
-export type { KeyPool, KeyPoolInput, PoolBudget, PoolOperation, RateLimit, VaultKey, VaultKeyDeleteResult, VaultKeyInput, VaultOAuthDevice, VaultOAuthStatus, VaultProject } from "./model/types"
-export { defaultPoolOperations, formatPoolRate, hasAllowedOperations } from "./model/poolLimits"
+export type { KeyPool, KeyPoolInput, OperationLimit, OperationLimits, PoolBudget, PoolOperation, RateLimit, VaultKey, VaultKeyDeleteResult, VaultKeyInput, VaultOAuthDevice, VaultOAuthStatus, VaultProject } from "./model/types"
+export { decodeOperationLimits } from "./api/vaultWire"
+export { defaultPoolOperations, formatPoolRate, hasAllowedOperations, operationRate } from "./model/poolLimits"
 export { formatPoolBudget, POOL_BUDGET_HELP } from "./model/poolBudget"

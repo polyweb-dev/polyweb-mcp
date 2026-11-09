@@ -67,6 +67,7 @@ export interface ProjectMember {
   role: "admin" | "developer"
   permissions: number
   provider_owner: boolean
+  account_active: boolean
   version: number
 }
 

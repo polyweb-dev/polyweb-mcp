@@ -1,12 +1,11 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
-import { providerIdentity, providerTypeName, supportedOperationsOf } from "@/domains/providers"
+import { providerIdentity, providerTypeName, StopOperationConfirm, supportedOperationsOf } from "@/domains/providers"
 import { createKeyPool, updateKeyPool } from "@/domains/vault"
 import type { KeyPool, KeyPoolInput, PoolOperation, VaultKey, VaultProject } from "@/domains/vault"
 import { ApiError } from "@/shared/api/http"
 import { Button } from "@/shared/ui/button"
 import { Checkbox } from "@/shared/ui/Checkbox"
-import { ConfirmDialog } from "@/shared/ui/ConfirmDialog"
 import { Field } from "@/shared/ui/Field"
 import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
@@ -24,15 +23,20 @@ const operationName = (operation: PoolOperation) => operation === "search" ? "Se
 
 function initialPoolRate(item: VaultKey, pool?: KeyPool) {
   return {
-    rate: pool?.rate.limit?.toString() ?? item.capacity?.limit?.toString() ?? "60",
+    rate: pool ? pool.rate.limit?.toString() ?? "" : item.capacity?.limit?.toString() ?? "60",
     windowSeconds: pool?.rate.window_seconds ?? item.capacity?.window_seconds ?? 60,
   }
 }
 
 function initialOperationRates(pool?: KeyPool) {
+  const value = (operation: PoolOperation) => {
+    const limit = pool?.operation_limits?.[operation]
+    if (limit === undefined) return pool?.rate.limit?.toString() ?? (pool ? "" : "60")
+    return (typeof limit === "object" && limit !== null ? limit.rate_limit : limit)?.toString() ?? ""
+  }
   return {
-    searchRate: pool?.operation_limits?.search?.toString() ?? "60",
-    fetchRate: pool?.operation_limits?.fetch?.toString() ?? "60",
+    searchRate: value("search"),
+    fetchRate: value("fetch"),
   }
 }
 
@@ -46,7 +50,28 @@ function initialPoolBudget(pool?: KeyPool) {
 }
 
 function invalidBudget(enabled: boolean, budget: string): boolean {
-  return enabled && (!budget || !Number.isFinite(Number(budget)) || Number(budget) <= 0)
+  return enabled && (!budget || !Number.isFinite(Number(budget)) || Number(budget) < 0)
+}
+
+function operationLimit(prior: NonNullable<KeyPoolInput["operation_limits"]>[PoolOperation], limit: number | null, windowSeconds: number, poolWindow?: number) {
+  if (typeof prior !== "object" || prior === null) return limit
+  return { rate_limit: limit, rate_window_seconds: windowSeconds === poolWindow ? prior.rate_window_seconds : windowSeconds }
+}
+
+function hasSeparateWindows(pool: KeyPool | undefined): boolean {
+  return Object.values(pool?.operation_limits ?? {}).some((value) => typeof value === "object" && value !== null)
+}
+
+function operationLimits(pool: KeyPool | undefined, selected: PoolOperation[], rates: Record<PoolOperation, string>, windowSeconds: number) {
+  const limits: NonNullable<KeyPoolInput["operation_limits"]> = {}
+  for (const operation of selected) {
+    const value = rates[operation]
+    const prior = pool?.operation_limits?.[operation]
+    const limit = value === "" ? null : Number(value)
+    if (pool?.operation_limits && prior === undefined && limit === pool.rate.limit) continue
+    limits[operation] = operationLimit(prior, limit, windowSeconds, pool?.rate.window_seconds)
+  }
+  return limits
 }
 
 function initialPoolSelection(item: VaultKey, pool: KeyPool | undefined, eligible: readonly VaultProject[]) {
@@ -86,8 +111,9 @@ function renderConfirmation({ confirm, item, projects, pool, selected, pending, 
 }) {
   if (!confirm) return null
   const remaining = selected.find((operation) => pool?.operations.includes(operation))
-  const stays = remaining ? `. ${operationName(remaining)} stays on` : ""
-  return <ConfirmDialog open title={`Stop ${operationName(confirm)} in pool ${pool?.label ?? "—"}`} message={`${providerTypeName(item.provider_type)} leaves the ${operationName(confirm)} order of ${projects.find((entry) => entry.id === pool?.project_id)?.name ?? "this project"}${stays}`} confirmLabel={`Stop ${operationName(confirm)}`} pending={pending} onClose={close} onConfirm={save} />
+  return <StopOperationConfirm provider={item.provider_type} operation={confirm} remaining={remaining}
+    projectName={projects.find((entry) => entry.id === pool?.project_id)?.name ?? "this project"}
+    pending={pending} onClose={close} onConfirm={save} />
 }
 
 function renderActions({ pool, pending, selected, projectId, onClose }: {
@@ -97,7 +123,7 @@ function renderActions({ pool, pending, selected, projectId, onClose }: {
   projectId: string
   onClose: () => void
 }) {
-  return <FormActions><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button><Button type="submit" size="form" disabled={pending || selected.length === 0 || (!pool && !projectId)}>{pool ? "Save pool" : "Create pool"}</Button></FormActions>
+  return <FormActions className="!mt-6"><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button><Button type="submit" size="form" pending={pending} disabled={selected.length === 0 || (!pool && !projectId)}>{pool ? "Save pool" : "Create pool"}</Button></FormActions>
 }
 
 function renderOperations(item: VaultKey, selected: PoolOperation[], setSelected: (value: PoolOperation[]) => void) {
@@ -122,8 +148,8 @@ function renderOperationRates({ separate, setSeparate, selected, searchRate, set
 }) {
   return <div className="space-y-3">
     <Switch checked={separate} onChange={setSeparate} label="Limit Search and Fetch separately" />
-    {separate && selected.includes("search") && <NumericField id="search-rate" label="Search requests" min="1" value={searchRate} onChange={setSearchRate} />}
-    {separate && selected.includes("fetch") && <NumericField id="fetch-rate" label="Fetch requests" min="1" value={fetchRate} onChange={setFetchRate} />}
+    {separate && selected.includes("search") && <NumericField id="search-rate" label="Search requests" min="0" value={searchRate} onChange={setSearchRate} />}
+    {separate && selected.includes("fetch") && <NumericField id="fetch-rate" label="Fetch requests" min="0" value={fetchRate} onChange={setFetchRate} />}
   </div>
 }
 
@@ -160,14 +186,11 @@ export function PoolCapacityDialog({ item, pool, projects, project: fixedProject
   const name = poolName(label, project)
 
   function input(): KeyPoolInput {
-    const limits: Partial<Record<PoolOperation, number>> = {}
-    if (separate && selected.includes("search")) limits.search = Number(searchRate)
-    if (separate && selected.includes("fetch")) limits.fetch = Number(fetchRate)
     return {
       label: name.trim(), ...(pool ? {} : { project_id: projectId }),
       rate: { limit: rate === "" ? null : Number(rate), window_seconds: windowSeconds },
       budget: !hasBudget || budget === "" ? null : { limit: Number(budget), period },
-      operations: selected, operation_limits: separate ? limits : null,
+      operations: selected, operation_limits: separate ? operationLimits(pool, selected, { search: searchRate, fetch: fetchRate }, windowSeconds) : null,
     }
   }
 
@@ -191,7 +214,7 @@ export function PoolCapacityDialog({ item, pool, projects, project: fixedProject
   function submit(event: FormEvent) {
     event.preventDefault()
     const rates = [rate, ...(separate ? selected.map((op) => op === "search" ? searchRate : fetchRate) : [])]
-    if (!name.trim() || invalidBudget(hasBudget, budget) || (separate && selected.some((op) => !(op === "search" ? searchRate : fetchRate))) || rates.some((value) => value !== "" && (!Number.isInteger(Number(value)) || Number(value) <= 0))) {
+    if (!name.trim() || invalidBudget(hasBudget, budget) || rates.some((value) => value !== "" && (!Number.isInteger(Number(value)) || Number(value) < 0))) {
       setError("Enter a pool name and valid limits")
       return
     }
@@ -214,10 +237,12 @@ export function PoolCapacityDialog({ item, pool, projects, project: fixedProject
           <TextField id="pool-label" label="Pool name" type="text" value={name} onChange={setLabel} />
           {renderOperations(item, selected, setSelected)}
           <div className="grid grid-cols-2 gap-3">
-            {!separate && <NumericField id="pool-rate" label="Request rate" min="1" value={rate} onChange={setRate} />}
+            {!separate && <NumericField id="pool-rate" label="Request rate" min="0" value={rate} onChange={setRate} />}
             <Field id="pool-window" label="Rate unit"><Select id="pool-window" value={String(windowSeconds)} onValueChange={(value) => setWindowSeconds(Number(value))}
               options={[{ value: "1", label: "Per second" }, { value: "60", label: "Per minute" }, { value: "3600", label: "Per hour" }]} /></Field>
           </div>
+          {separate && hasSeparateWindows(pool) &&
+            <p className="fs-hint">Existing operation limits can have different rate units. Changing the rate unit sets both</p>}
           {supportedOperationsOf(item.provider_type).length > 1 && renderOperationRates({ separate, setSeparate, selected, searchRate, setSearchRate, fetchRate, setFetchRate })}
           {!free && <PoolBudgetFields enabled={hasBudget} setEnabled={setBudgetEnabled} budget={budget} setBudget={setBudget} period={period} setPeriod={setPeriod} pool={pool} />}
           {error && <p role="alert" className="fs-field-error">{error}</p>}

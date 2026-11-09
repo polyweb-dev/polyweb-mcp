@@ -22,21 +22,18 @@ import {
 import { WorkspaceAccessGate } from "./WorkspaceAccessGate"
 import { WorkspaceLanding } from "./WorkspaceLanding"
 import { WorkspaceRouteGate } from "./WorkspaceRouteGate"
-import { AccountTabs } from "./AccountTabs"
 
 function routeElements(adminEmail: string, accountId: string): Record<TabId, ReactNode> {
   return {
     quotas: <QuotaAnalytics />,
     settings: <SettingsView />,
-    systemCredentials: <Navigate to="/account/keys" replace />,
-    systemCapacity: <Navigate to="/account/keys" replace />,
     projects: (
       <WorkspaceAccessGate>
         <ProjectsPage defaultAdminEmail={adminEmail} />
       </WorkspaceAccessGate>
     ),
-    account: <AccountTabs page="profile"><AccountPage /></AccountTabs>,
-    accountKeys: <AccountTabs page="keys"><KeysPoolsPage key={accountId} /></AccountTabs>,
+    account: <AccountPage />,
+    accountKeys: <KeysPoolsPage key={accountId} />,
   }
 }
 

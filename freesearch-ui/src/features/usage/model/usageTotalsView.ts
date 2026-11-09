@@ -1,5 +1,5 @@
 import type { ProjectUsageTotal } from "@/domains/usage"
-import { providerIdentity } from "@/domains/providers"
+import { formatCostTotal, providerIdentity } from "@/domains/providers"
 import type { ProjectOrder } from "@/domains/routing"
 
 /** Metered amounts of one row, one field per unit kind; null when none was recorded. */
@@ -103,23 +103,15 @@ export function usageTotalsView(totals: readonly ProjectUsageTotal[], order?: Pr
 }
 
 const AMOUNT_FORMAT: Intl.NumberFormatOptions = { maximumFractionDigits: 4 }
-/** Dollars like Overview: `$0.035`, `$12.50`. */
-const USD_FORMAT: Intl.NumberFormatOptions = {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 4,
-}
-
 /** The cell text of one unit column; a dash when the row recorded none. */
 export function usageAmountText(amounts: UsageAmounts, column: UsageAmountColumn): string {
   const value = amounts[column]
   if (column === "usd" && (value === null || value === 0)) {
     if (amounts.free && !amounts.unreportedCost) return "Free"
-    if (value === null) return "Not reported"
+    if (value === null) return "—"
   }
   if (value === null) return "—"
-  return value.toLocaleString("en-US", column === "usd" ? USD_FORMAT : AMOUNT_FORMAT)
+  return column === "usd" ? formatCostTotal(value) : value.toLocaleString("en-US", AMOUNT_FORMAT)
 }
 
 export const USAGE_COLUMN_LABELS: Readonly<Record<UsageAmountColumn, string>> = {

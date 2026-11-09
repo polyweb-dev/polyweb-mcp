@@ -131,7 +131,6 @@ def test_provider_projection_converts_views_and_local_tiers_once() -> None:
         VaultKeyUsage(
             key_id=uuid4(),
             label="Key",
-            owner_email="owner@example.test",
             balance=stored.auths[0].aggregate_pool,
         )
     )

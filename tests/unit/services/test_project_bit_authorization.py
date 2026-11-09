@@ -1,16 +1,19 @@
 """Project authorization derives developer actions from stored bits."""
 
+from uuid import uuid4
+
 import pytest
 
-from freesearch.models.project_permissions import (
-    DEVELOPER_BITS,
-    PROVIDER_OWNER_BIT,
-    effective_project_permissions,
-    legacy_roles_to_bits,
+from freesearch.models.project_permissions import PROVIDER_OWNER_BIT
+from freesearch.models.projects import (
+    MembershipStatus,
+    PermissionAction,
+    ProjectMemberRead,
+    ProjectMemberUpdate,
 )
-from freesearch.models.projects import PermissionAction
 from freesearch.persistence.projects import ProjectRoleAssignmentRow
 from freesearch.services.authorization import ScopedAuthorizationService
+from freesearch.services.projects import _member_expands_access
 
 
 @pytest.mark.parametrize(
@@ -48,9 +51,27 @@ def test_admin_permissions_and_owner_are_separate() -> None:
     )
 
 
-def test_legacy_roles_fold_without_adding_standard_for_extra_roles() -> None:
-    assert legacy_roles_to_bits(["provider_editor", "token_manager"]) == 64 | 128
-    assert legacy_roles_to_bits(["project_member", "provider_editor"]) == 15 | 64
-    assert "providers.configure" in effective_project_permissions(
-        ["project_member"], DEVELOPER_BITS
+@pytest.mark.parametrize(
+    ("roles", "bits", "change", "expands"),
+    [
+        (["project_member"], 1, {"permissions": 5}, True),
+        (["project_member"], 5, {"permissions": 1}, False),
+        (["project_member"], 1, {"role": "admin"}, True),
+        (["project_admin"], 1, {"role": "developer"}, False),
+        (["project_member"], 1, {"role": "developer"}, False),
+    ],
+)
+def test_member_access_expansion(
+    roles: list[str], bits: int, change: dict[str, object], expands: bool
+) -> None:
+    member = ProjectMemberRead(
+        project_id=uuid4(),
+        user_id=uuid4(),
+        email="dev@example.com",
+        status=MembershipStatus.ACTIVE,
+        roles=roles,
+        version=1,
+    )
+    assert (
+        _member_expands_access(member, bits, ProjectMemberUpdate.model_validate(change)) is expands
     )

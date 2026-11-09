@@ -139,7 +139,7 @@ describe("C4-5: Sidebar NavLink contract in source", () => {
     // pair exactly once, and the nav binds through that table.
     const tabPathsBlock = routesSource.slice(
       routesSource.indexOf("export const TAB_PATHS"),
-      routesSource.indexOf("export const SYSTEM_CREDENTIALS_TAB_PATH")
+      routesSource.indexOf("export const LEGACY_GLOBAL_REDIRECTS")
     )
     for (const [id, routePath] of [
       ["quotas", "/system/quotas"],

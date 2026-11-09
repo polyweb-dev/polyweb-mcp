@@ -420,7 +420,7 @@ describe("ProviderLimitsCards", () => {
     expect(screen.queryByRole("button", { name: "Refresh limits for Exa" })).toBeNull()
     await user.click(screen.getByRole("button", { name: "Actions for Exa" }))
     expect(await screen.findByRole("button", { name: "Set balance" })).not.toBeNull()
-    expect(screen.getByRole("button", { name: "Set budget limit" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Set budget" })).not.toBeNull()
     expect(screen.getByRole("button", { name: "View balance history" })).not.toBeNull()
     await user.keyboard("{Escape}")
 
@@ -439,8 +439,8 @@ describe("ProviderLimitsCards", () => {
     await user.click(await screen.findByRole("button", { name: "Set balance" }))
     const allowance = screen.getByLabelText<HTMLInputElement>("Allowance (USD)")
     const remaining = screen.getByLabelText<HTMLInputElement>("Balance remaining (USD)")
-    expect(allowance.value).toBe("10.00")
-    expect(remaining.value).toBe("4.50")
+    expect(allowance.value).toBe("10.000")
+    expect(remaining.value).toBe("4.500")
     expect(allowance.disabled).toBe(false)
     expect(remaining.disabled).toBe(false)
     await user.clear(remaining)
@@ -449,7 +449,7 @@ describe("ProviderLimitsCards", () => {
 
     await user.click(screen.getByTestId("manual-quota-cancel"))
     await user.click(screen.getByRole("button", { name: "Actions for Exa" }))
-    await user.click(await screen.findByRole("button", { name: "Set budget limit" }))
+    await user.click(await screen.findByRole("button", { name: "Set budget" }))
     expect(screen.getByLabelText("Search budget (USD)")).not.toBeNull()
     expect(screen.getByLabelText("Fetch budget (USD)")).not.toBeNull()
   })
@@ -693,7 +693,7 @@ describe("ProviderLimitsCards display order", () => {
     expect(list.textContent).not.toContain("Provider balance not reported")
     expect(screen.queryByRole("button", { name: "Refresh limits for Brave" })).toBeNull()
     expect(screen.getByRole("button", { name: "Actions for Brave" })).not.toBeNull()
-    expect(screen.getByRole("button", { name: "Connect" })).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull()
   })
 
   it("puts bonus balances in the compact list without a denominator or progress bar", () => {
@@ -742,7 +742,7 @@ describe("Quotas review r4b", () => {
     expect(within(first).getByRole("button", { name: "Refresh Brave balances" })).toBeInTheDocument()
     vi.unstubAllGlobals()
   })
-  it("shows a manual provider balance on its sole key", async () => {
+  it("does not attribute a provider-wide manual balance to a key", async () => {
     installFetchStub((request) => request.url.includes("/limits/keys")
       ? ok([{ key_id: "you-key", label: "You key", owner_email: "owner@example.com", auth_mode: "api_key",
         oauth_connected: null, balance: null }]) : ok([]))
@@ -757,7 +757,7 @@ describe("Quotas review r4b", () => {
       renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
         accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
     const row = (await screen.findByText("You key")).closest("tr") as HTMLElement
-    expect(within(row).getByText(/\$100\.00 left.*manual/)).toBeInTheDocument()
+    expect(within(row).queryByText(/\$100\.00 left.*manual/)).toBeNull()
     vi.unstubAllGlobals()
   })
   it("includes stored keys even when the active rail is keyless", async () => {
@@ -787,7 +787,7 @@ describe("Quotas review r4b", () => {
     expect(screen.queryByText("$0.005")).toBeNull()
     await userEvent.keyboard("{Escape}")
     expect(screen.queryByRole("button", { name: "Actions for Keenable" })).toBeNull()
-    expect(screen.queryByRole("menuitem", { name: "Set budget limit" })).toBeNull()
+    expect(screen.queryByRole("menuitem", { name: "Set budget" })).toBeNull()
     expect(screen.getByText("Free")).toBeInTheDocument()
   })
   it("puts unreported providers in a single table with three columns", () => {
@@ -817,6 +817,7 @@ it("keeps disconnected OAuth controls on their key row and fixes the balance dia
   expect(within(first).queryByText("Disconnected")).toBeNull()
   expect(within(first).queryByRole("link")).toBeNull()
   expect(within(oauth).getByText("Disconnected")).toBeInTheDocument()
+  expect(within(screen.getByText("Capture OAuth").closest("td") as HTMLElement).getByText("Disconnected")).toBeInTheDocument()
   expect(within(oauth).getByRole("link", { name: "Connect in Keys and pools" })).toHaveAttribute("href", "/account/keys")
   expect(within(oauth).queryByRole("button", { name: "Actions for Parallel" })).toBeNull()
   await userEvent.click(within(first).getByRole("button", { name: "Actions for Parallel" }))

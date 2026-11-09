@@ -294,6 +294,8 @@ class StoredAllocation:
     max_queue_wait_ms: int | None
     granted_by: UUID
     version: int
+    key_pool_id: UUID | None = None
+    limit_scope: str = "operation"
 
     @property
     def effective_max_rate(self) -> int | None:
@@ -373,6 +375,8 @@ def _stored_allocation(row: ProjectPoolAllocationRow) -> StoredAllocation:
         max_queue_wait_ms=row.max_queue_wait_ms,
         granted_by=UUID(row.granted_by),
         version=row.version,
+        key_pool_id=UUID(row.key_pool_id) if row.key_pool_id is not None else None,
+        limit_scope=row.limit_scope,
     )
 
 

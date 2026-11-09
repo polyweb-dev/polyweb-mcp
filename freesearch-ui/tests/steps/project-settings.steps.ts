@@ -89,11 +89,21 @@ When("I inherit the settings field {string}", async ({ page }, label: string) =>
 })
 
 When("I turn off trace deletion", async ({ page }) => {
-  await page.getByRole("switch", { name: "Delete traces older than" }).click()
+  await page.getByRole("switch", { name: "Delete old traces" }).click()
 })
 
 Then("trace deletion is off", async ({ page }) => {
-  await expect(page.getByRole("switch", { name: "Delete traces older than" })).toHaveAttribute("aria-checked", "false")
+  await expect(page.getByRole("switch", { name: "Delete old traces" })).not.toBeChecked()
+  await expect(page.getByRole("spinbutton", { name: "Days" })).toHaveCount(0)
+})
+
+Then("trace deletion is on with {int} days", async ({ page }, days: number) => {
+  await expect(page.getByRole("switch", { name: "Delete old traces" })).toBeChecked()
+  await expect(page.getByRole("spinbutton", { name: "Days" })).toHaveValue(String(days))
+})
+
+Then("the payload detail choice is unavailable", async ({ page }) => {
+  await expect(page.getByRole("combobox", { name: "Payload detail" })).toHaveCount(0)
 })
 
 When("I save the settings", async ({ page }) => {

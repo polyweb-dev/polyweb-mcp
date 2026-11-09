@@ -131,10 +131,11 @@ function validMemberExtension(record: Record<string, unknown>): record is Record
   role: "admin" | "developer"
   permissions: number
   provider_owner: boolean
+  account_active: boolean
 } {
   return (record.role === "admin" || record.role === "developer") &&
     typeof record.permissions === "number" && Number.isInteger(record.permissions) && record.permissions >= 0 &&
-    typeof record.provider_owner === "boolean"
+    typeof record.provider_owner === "boolean" && typeof record.account_active === "boolean"
 }
 
 /** Decode one member projection. */
@@ -166,6 +167,7 @@ export function decodeProjectMember(value: unknown): ProjectMember {
     role: record.role,
     permissions: record.permissions,
     provider_owner: record.provider_owner,
+    account_active: record.account_active,
   }
 }
 

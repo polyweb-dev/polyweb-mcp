@@ -66,7 +66,7 @@ function renderCapacitySelection({ providers, pool, provider, setProvider, keys,
 function findKeys(data: VaultData | null, provider: string, pool?: ProjectPool): VaultKey[] {
   if (!data) return []
   return data.keys.filter((item) => item.provider_type === (pool?.provider_type ?? provider) &&
-    (!pool || item.label === pool.key_label))
+    (!pool || item.id === data.pool?.credential_id))
 }
 
 function renderChooser({ props, vault, provider, setProvider, keys, item, setSelectedKey, setSelected }: {

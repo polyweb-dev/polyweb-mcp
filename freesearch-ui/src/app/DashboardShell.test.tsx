@@ -188,41 +188,52 @@ describe("DashboardShell former global sections", () => {
     await waitFor(() => expect(location()).toBe("/projects"))
   })
 
-  it("redirects Routing to Projects when the remembered project is no longer readable", async () => {
+  it.each(["/routing", "/system/routing"])("redirects %s to Projects when the remembered project is no longer readable", async (path) => {
     writeLastProject(adminAccountFixture().id, PROJECT_BETA_ID)
-    renderWithAccess("/routing", { ...ACCESS, projects: [ALPHA] })
+    renderWithAccess(path, { ...ACCESS, projects: [ALPHA] })
     await waitFor(() => expect(location()).toBe("/projects"))
   })
 
-  it("replaces the retired Routing URL in browser history", async () => {
+  it.each([
+    ["/routing", `/p/${PROJECT_ALPHA_ID}/providers`],
+    ["/admin/users", "/projects"],
+    ["/system/keys", "/account/keys"],
+  ])("replaces %s in browser history", async (path, target) => {
     writeLastProject(adminAccountFixture().id, PROJECT_ALPHA_ID)
     installImmediateLocks()
     installFakeChannel()
-    installAuthStub({ account: adminAccountFixture() }, (req) => answerWorkspaceAccess(req, ACCESS) ?? controlRoutes(req))
+    const access = { ...ACCESS, systemPermissions: [...SYSTEM_ADMIN_PERMISSIONS, "vault.manage"] }
+    installAuthStub({ account: adminAccountFixture() }, (req) => answerWorkspaceAccess(req, access) ?? controlRoutes(req))
     render(
-      <MemoryRouter initialEntries={["/account", "/routing"]}>
+      <MemoryRouter initialEntries={["/account", path]}>
         <App />
         <LocationProbe />
         <BackProbe />
       </MemoryRouter>
     )
 
-    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_ALPHA_ID}/providers`))
+    await waitFor(() => expect(location()).toBe(target))
     await userEvent.click(screen.getByRole("button", { name: "Go back" }))
     await waitFor(() => expect(location()).toBe("/account"))
   })
 
-  it("redirects the retired Accounts URL to the last readable project", async () => {
+  it.each(["/system/accounts", "/admin/users"])("redirects %s to Projects even with a remembered project", async (path) => {
     writeLastProject(adminAccountFixture().id, PROJECT_BETA_ID)
-    renderWithAccess("/admin/users")
+    renderWithAccess(path)
 
-    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_BETA_ID}`))
-    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Beta" })).toBeInTheDocument()
+    await waitFor(() => expect(location()).toBe("/projects"))
+    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Projects" })).toBeInTheDocument()
   })
 
-  it("redirects the retired Accounts URL to Projects without a remembered project", async () => {
-    renderWithAccess("/admin/users")
+  it.each(["/system/accounts", "/admin/users"])("redirects %s to Projects without a remembered project", async (path) => {
+    renderWithAccess(path)
     await waitFor(() => expect(location()).toBe("/projects"))
+  })
+
+  it("redirects the former project keys tab to project Providers", async () => {
+    renderWithAccess(`/p/${PROJECT_ALPHA_ID}/settings?tab=keys`)
+    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_ALPHA_ID}/providers`))
+    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Providers" })).toBeInTheDocument()
   })
 
   it.each([
@@ -293,10 +304,20 @@ describe("DashboardShell access states", () => {
     ["/system/providers?other=1&tab=keys", "Keys and pools", "/account/keys"],
     ["/system/providers?tab=credentials", "Keys and pools", "/account/keys"],
   ])("opens %s for the system administrator", async (path, heading, landed) => {
+    writeLastProject(adminAccountFixture().id, PROJECT_ALPHA_ID)
     renderWithAccess(path, { ...ACCESS, systemPermissions: [...SYSTEM_ADMIN_PERMISSIONS, "vault.manage"] })
     expect(await within(await screen.findByRole("main")).findByRole("heading", { name: heading })).toBeInTheDocument()
     await waitFor(() => expect(location()).toBe(landed))
   })
+
+  it.each(["/system/keys", "/system/capacity", "/system/credentials"])(
+    "opens the vault for %s without a remembered project",
+    async (path) => {
+      renderWithAccess(path, { ...ACCESS, systemPermissions: [...SYSTEM_ADMIN_PERMISSIONS, "vault.manage"] })
+      await waitFor(() => expect(location()).toBe("/account/keys"))
+      expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Keys and pools" })).toBeInTheDocument()
+    },
+  )
 
   it("denies the vault with allocation management alone", async () => {
     renderWithAccess("/system/credentials", { ...ACCESS, systemPermissions: ["system.allocations.manage"] }, agentAccountFixture())

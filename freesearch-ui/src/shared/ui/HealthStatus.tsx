@@ -2,7 +2,8 @@ import { useEffect, useState } from "react"
 import { formatDateTime, formatLatency, formatRelativeTime } from "@/shared/lib/formatTime"
 import { StatusDot, type StatusTone } from "./StatusDot"
 
-const HEALTH: Record<string, { label: string; tone: StatusTone }> = {
+type HealthState = "healthy" | "degraded" | "rate_limited" | "circuit_broken" | "offline"
+const HEALTH: Record<HealthState | "failing" | "testing", { label: string; tone: StatusTone }> = {
   healthy: { label: "Healthy", tone: "positive" },
   degraded: { label: "Degraded", tone: "warning" },
   rate_limited: { label: "Rate limited", tone: "warning" },
@@ -19,7 +20,7 @@ interface TestResult {
   message: string
 }
 
-function observedStatus(health: string | null, checkedAt: string | null | undefined, result?: TestResult) {
+function observedStatus(health: HealthState | null, checkedAt: string | null | undefined, result?: TestResult) {
   const callAt = checkedAt == null ? NaN : Date.parse(checkedAt)
   if (result && Number.isFinite(result.checkedAt) && (!Number.isFinite(callAt) || result.checkedAt > callAt)) {
     const detail = result.success ? formatLatency(result.latencyMs) : result.message
@@ -36,7 +37,7 @@ function observedStatus(health: string | null, checkedAt: string | null | undefi
 
 /** One health label and observation time across tables and dialogs. */
 export function HealthStatus({ health, checkedAt, result, testing = false, now }: {
-  health: string | null
+  health: HealthState | null
   checkedAt?: string | null
   result?: TestResult
   testing?: boolean

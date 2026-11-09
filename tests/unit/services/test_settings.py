@@ -17,6 +17,7 @@ from freesearch.models.settings import (
     SystemRoutingDefaults,
     SystemSafetyLimits,
     SystemSettingsDocument,
+    resolve_trace_policy,
 )
 from freesearch.persistence.settings import StoredSettings
 from freesearch.services.settings import _project_document, _system_document, resolve_settings
@@ -257,3 +258,45 @@ def test_version_one_trace_documents_upgrade_without_old_controls() -> None:
         )
     )
     assert explicit.trace.retention_days == 45
+
+
+def test_legacy_system_metadata_default_upgrades_but_project_override_survives() -> None:
+    legacy = SystemSettingsDocument().model_dump(mode="json", exclude={"revision"})
+    legacy["trace"] = {
+        "detail": "metadata",
+        "sampling_rate": 1.0,
+        "payload_redaction": "standard",
+        "retention_days": 30,
+    }
+    system, revision = _system_document(
+        StoredSettings(namespace="projects", schema_version=1, revision=4, document=legacy)
+    )
+    inherited = _project_document(None)
+    explicit = _project_document(
+        StoredSettings(
+            namespace="projects",
+            schema_version=1,
+            revision=2,
+            document={"trace": {"detail": "metadata"}},
+        )
+    )
+    for project, expected in ((inherited, "full"), (explicit, "metadata")):
+        resolution = resolve_settings(
+            system=system,
+            system_revision=revision,
+            project=project,
+            project_revision=project.revision,
+            project_id=uuid4(),
+        )
+        assert resolution.effective_settings["trace.detail"] == expected
+        assert resolve_trace_policy(system=system, project=project).detail == expected
+
+    current, _ = _system_document(
+        StoredSettings(
+            namespace="projects",
+            schema_version=3,
+            revision=5,
+            document={"trace": {"detail": "metadata"}},
+        )
+    )
+    assert resolve_trace_policy(system=current, project=inherited).detail == "metadata"

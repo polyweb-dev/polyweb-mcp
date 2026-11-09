@@ -8,7 +8,7 @@ import { projectStorageKey } from "@/domains/projects"
 import { NotificationsContext } from "@/shared/notifications/context"
 import { ProjectMembersPage } from "./ProjectMembersPage"
 
-const MEMBER = { project_id: "p1", user_id: "u1", email: "admin@example.com", status: "active", roles: ["project_admin"], version: 1, role: "admin", permissions: 15, provider_owner: false }
+const MEMBER = { project_id: "p1", user_id: "u1", email: "admin@example.com", status: "active", roles: ["project_admin"], version: 1, role: "admin", permissions: 15, provider_owner: false, account_active: true }
 const SECOND_ADMIN = { ...MEMBER, user_id: "u3", email: "other@example.com" }
 function access(permissions: string[], roles = ["project_admin"]) {
   return { project_id: "p1", permissions, roles, policy_revision: 1 }
@@ -48,7 +48,6 @@ describe("ProjectMembersPage", () => {
     const developer = { ...MEMBER, user_id: "u2", email: "dev@example.com", roles: ["project_member"], role: "developer", permissions: 15, provider_owner: false }
     renderPage(["members.read"], [admin, developer], { user_id: "u1", email: admin.email })
     expect(await screen.findByText("Provider owner")).toBeInTheDocument()
-    expect(screen.getByText("Provider owner")).toHaveClass("text-[var(--muted)]")
     expect(screen.getByText("People in this project and what each person can do")).toBeInTheDocument()
     expect(screen.getByText("Project admin")).toBeInTheDocument()
     expect(screen.getByText("Developer")).toBeInTheDocument()
@@ -65,6 +64,14 @@ describe("ProjectMembersPage", () => {
     await user.click(within(dialog).getByRole("button", { name: "Claim provider ownership" }))
     await waitFor(() => expect(stub.requests.some((req) => req.url.endsWith("/provider-owner") && req.method === "POST" && JSON.stringify(req.body) === JSON.stringify({ user_id: "acc" }))).toBe(true))
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Provider ownership transferred", "success"))
+  })
+  it("protects the last active admin when another admin account is inactive", async () => {
+    renderPage(["members.read", "members.manage", "roles.assign"],
+      [MEMBER, { ...SECOND_ADMIN, account_active: false }], null)
+    expect(await screen.findByText("Account inactive")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Actions for admin@example.com" }))
+    expect(screen.getByRole("button", { name: "Make developer" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Remove from project" })).toBeDisabled()
   })
   it("puts the current account first, then sorts members by email", async () => {
     const self = { ...MEMBER, user_id: "acc", email: "z-self@example.com" }
@@ -84,7 +91,7 @@ describe("ProjectMembersPage", () => {
     renderPage(["members.read", "members.manage", "roles.assign"], [{ ...MEMBER, permissions: 0 }], null)
     await screen.findByText("admin@example.com")
     expect(screen.getByLabelText("Account email")).toBeInTheDocument()
-    expect(screen.getByText("Starts with 5 of 9 permissions. Change them from the row menu")).toBeInTheDocument()
+    expect(screen.getByText("Starts with 5 of 9 permissions. Change them in the menu")).toBeInTheDocument()
     const user = userEvent.setup()
     await user.click(
       screen.getByRole("button", { name: "Actions for admin@example.com" })

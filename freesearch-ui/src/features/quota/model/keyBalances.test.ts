@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { canRefreshKey, decodeKeyBalances, listKeyBalances, syncKeyBalance } from "./keyBalances"
+import { decodeKeyBalances, listKeyBalances, syncKeyBalance } from "./keyBalances"
 import { requestJson } from "@/shared/api/client"
 
 vi.mock("@/shared/api/client", () => ({ requestJson: vi.fn() }))
@@ -18,8 +18,8 @@ describe("key balances", () => {
   it("decodes only safe fields and accepts a missing observation", () => {
     const result = decodeKeyBalances([wire, { ...wire, key_id: "2", balance: null }])
     expect(result).toEqual([
-      { keyId: "key/1", label: "Work key", ownerEmail: "owner@example.com", authMode: "api_key", oauthConnected: null, balance: { remaining: "12.50", unit: "usd", observedAt: "2026-01-01T12:00:00Z" } },
-      { keyId: "2", label: "Work key", ownerEmail: "owner@example.com", authMode: "api_key", oauthConnected: null, balance: null },
+      { keyId: "key/1", label: "Work key", authMode: "api_key", oauthConnected: null, balance: { remaining: "12.50", unit: "usd", observedAt: "2026-01-01T12:00:00Z" } },
+      { keyId: "2", label: "Work key", authMode: "api_key", oauthConnected: null, balance: null },
     ])
     expect(JSON.stringify(result)).not.toContain("must-not-survive")
   })
@@ -36,7 +36,6 @@ describe("key balances", () => {
 
   it("rejects malformed responses", () => {
     expect(() => decodeKeyBalances({})).toThrow()
-    expect(() => decodeKeyBalances([{ ...wire, owner_email: null }])).toThrow()
     expect(() => decodeKeyBalances([{ ...wire, balance: { ...wire.balance, remaining: {} } }])).toThrow()
     expect(() => decodeKeyBalances([{ ...wire, auth_mode: "oauth", oauth_connected: null }])).toThrow()
     expect(() => decodeKeyBalances([{ ...wire, auth_mode: "api_key", oauth_connected: true }])).toThrow()
@@ -46,15 +45,6 @@ describe("key balances", () => {
   it.each([true, false])("decodes OAuth connection state %s", (connected) => {
     expect(decodeKeyBalances([{ ...wire, auth_mode: "oauth", oauth_connected: connected }])[0])
       .toMatchObject({ authMode: "oauth", oauthConnected: connected })
-  })
-
-  it("permits only an administrator or the key owner", () => {
-    const key = decodeKeyBalances([wire])[0]
-    if (!key) throw new Error("Missing key")
-    expect(canRefreshKey(key, true, null)).toBe(true)
-    expect(canRefreshKey(key, false, "OWNER@example.com")).toBe(true)
-    expect(canRefreshKey(key, false, "other@example.com")).toBe(false)
-    expect(canRefreshKey(key, false, null)).toBe(false)
   })
 
   it("uses encoded provider and key paths for reads and sync", async () => {

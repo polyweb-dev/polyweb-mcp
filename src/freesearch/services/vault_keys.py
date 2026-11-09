@@ -248,6 +248,7 @@ class VaultKeyService:
                 session, CredentialRepository(session), key.credential, body
             )
             affected.extend(await KeyPoolRepository(session).list_for_key(key_id))
+            await _after_key_change(session, {p.project_id for p in affected if p.project_id})
             await self._audit(session, actor, key_id, "vault.key_rotated")
             return await self._view(session, await _owned(session, actor.id, key_id))
 

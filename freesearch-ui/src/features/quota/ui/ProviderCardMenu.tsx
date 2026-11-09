@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 import { RowActionsMenu, type RowAction } from "@/shared/ui/RowActionsMenu"
 import { Button } from "@/shared/ui/button"
-import { BALANCE_ENTRY_ACTION, HISTORY_ACTION, SPEND_CAP } from "../model/quotaLabels"
+import { BALANCE_ENTRY_ACTION, HISTORY_ACTION } from "../model/quotaLabels"
 
 /** The one dialog a card can hold open. */
 export type CardModal = "manual" | "grant" | "history" | null
@@ -26,7 +26,7 @@ export function ProviderCardMenu({ providerName, manualEligible, budgetAllowed =
   if (manualEligible) {
     actions.push({ key: "manual", label: BALANCE_ENTRY_ACTION, onSelect: () => onOpenModal("manual") })
   }
-  if (budgetAllowed) actions.push({ key: "grant", label: "Set " + SPEND_CAP.toLowerCase(), onSelect: () => onOpenModal("grant") })
+  if (budgetAllowed) actions.push({ key: "grant", label: "Set budget", onSelect: () => onOpenModal("grant") })
   if (historyAllowed) actions.push({ key: "history", label: "View " + HISTORY_ACTION.toLowerCase(), onSelect: () => onOpenModal("history") })
   const onlyAction = actions[0]
   if (actions.length === 0 || onlyAction === undefined) return null

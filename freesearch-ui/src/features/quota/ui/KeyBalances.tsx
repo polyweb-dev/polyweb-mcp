@@ -4,7 +4,7 @@ import { useContext, useState } from "react"
 import { formatDateTime, formatRelativeTime } from "@/shared/lib/formatTime"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
 import { Button } from "@/shared/ui/button"
-import { canRefreshKey, listKeyBalances, syncKeyBalance, type KeyBalance } from "../model/keyBalances"
+import { listKeyBalances, syncKeyBalance, type KeyBalance } from "../model/keyBalances"
 import { nativeLeftText } from "../model/numberText"
 import { syncText } from "../model/providerRefresh"
 import { KeyBalancesLayoutScope, KeyBalancesRefreshScope } from "../model/keyBalanceContext"
@@ -37,10 +37,6 @@ function keyRow(key: KeyBalance, now: number, compact: boolean) {
       </span>
     </li>
   )
-}
-
-function refreshableKeys(keys: KeyBalance[], isAdmin: boolean, email: string | null): KeyBalance[] {
-  return keys.filter((key) => canRefreshKey(key, isAdmin, email) && canPoll(key))
 }
 
 function keyList(keys: KeyBalance[], expanded: boolean, now: number, compact: boolean) {
@@ -112,7 +108,7 @@ function standardBalances(input: {
 }
 
 export function KeyBalances(props: KeyBalancesProps) {
-  const { providerId, providerName, accountId, isAdmin, email, refreshDashboard } = props
+  const { providerId, providerName, accountId, refreshDashboard } = props
   const refreshable = useContext(KeyBalancesRefreshScope)
   const { compact, actionsTarget, renderTable } = useContext(KeyBalancesLayoutScope)
   const target = actionsTarget
@@ -146,7 +142,7 @@ export function KeyBalances(props: KeyBalancesProps) {
     return renderTable ? renderTable([], error, null) : error
   }
   const keys = resource.data
-  const refreshKeys = refreshableKeys(keys, isAdmin, email)
+  const refreshKeys = keys.filter(canPoll)
   if (renderTable) {
     const { status, button } = tableState({ keys: refreshKeys, refreshable, providerName, sync,
       onRefresh: () => void refresh(refreshKeys) })

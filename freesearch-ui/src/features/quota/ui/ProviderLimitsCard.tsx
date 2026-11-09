@@ -246,7 +246,6 @@ export function ProviderLimitsCard(props: ProviderLimitsCardProps): ReactNode {
         auth={auth}
         fetchAvailable={view.fetchAvailable}
         creditMode={info.creditMode}
-        nativeDisplay={view.nativeDisplay}
         providers={props.providers}
         providerUnits={props.providerUnits}
         observed={props.observed}

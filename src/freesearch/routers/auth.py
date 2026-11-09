@@ -65,7 +65,7 @@ from freesearch.services.users import (
 )
 
 #: Auth routes whose validation failures must not echo submitted credentials.
-_AUTH_VALIDATION_PREFIXES = ("/auth/", "/users/me", "/api/v1/users/me")
+_AUTH_VALIDATION_PREFIXES = ("/auth/", "/users/me")
 
 _SAFE_VALIDATION_DETAIL = "invalid authentication request"
 
@@ -554,7 +554,6 @@ def register_auth_routes(app: FastAPI) -> None:
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    @app.get("/api/v1/users/me", response_model=UserRead)
     @app.get("/users/me", response_model=UserRead)
     async def users_me(request: Request) -> UserRead:
         """Return the authenticated account's own record, never its hash."""

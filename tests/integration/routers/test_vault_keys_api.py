@@ -153,6 +153,18 @@ async def test_vault_key_lifecycle_and_ownership(repository, vault_env, auth_sec
             await client.app.state.secret_store.get(credential_secret_slot(key_id, 2))
             == "second-secret"
         )
+        async with repository.session() as session:
+            from freesearch.persistence.bindings import ProjectBindingRepository
+            from freesearch.persistence.pools import PoolAllocationRepository
+
+            bindings = await ProjectBindingRepository(session).list_for_project(
+                project_id=project.project_id
+            )
+            assert any(binding.credential_id == key_id for binding in bindings)
+            allocations = await PoolAllocationRepository(session).list_for_project(
+                project_id=project.project_id
+            )
+            assert any(allocation.key_pool_id == pool.id for allocation in allocations)
         stale = client.post(
             f"{BASE}/{key_id}/rotate",
             headers=headers,

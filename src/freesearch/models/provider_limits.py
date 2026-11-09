@@ -808,7 +808,6 @@ class VaultKeyUsage(ContractModel):
 
     key_id: UUID
     label: str
-    owner_email: str
     auth_mode: CredentialAuthMode = CredentialAuthMode.API_KEY
     oauth_connected: bool | None = None
     balance: NativePool | None = None

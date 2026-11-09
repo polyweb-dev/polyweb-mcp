@@ -54,7 +54,7 @@ describe("WorkspaceRouteGate", () => {
   })
 
   it("redirects an unauthorized direct URL to the workspace entry", () => {
-    renderAt("systemCapacity", "/system/capacity", { systemAccess: systemAccessFixture(SETTINGS_READER_PERMISSIONS) })
+    renderAt("accountKeys", "/account/keys", { systemAccess: systemAccessFixture(SETTINGS_READER_PERMISSIONS) })
     expect(screen.getByText("Workspace entry")).toBeInTheDocument()
     expect(screen.queryByText("Gated page")).toBeNull()
   })

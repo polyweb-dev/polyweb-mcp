@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.models.projects import PermissionAction
 from freesearch.models.users import UserPrincipal
-from freesearch.models.vault import PoolBudget, PoolRate
+from freesearch.models.vault import OperationLimit, PoolBudget, PoolRate
 from freesearch.persistence.credentials import CredentialRepository
 from freesearch.persistence.key_pools import KeyPoolRepository
 from freesearch.persistence.projects import ProjectRepository
@@ -42,6 +42,7 @@ class ProjectPoolRead(BaseModel):
     budget: PoolBudget | None
     budget_used: Decimal
     operations: frozenset[str]
+    operation_limits: dict[str, OperationLimit] | None
     overcommit: bool
 
     @field_serializer("budget_used", when_used="json")
@@ -85,6 +86,7 @@ async def list_project_pools(
                     budget_used=Decimal(await pool_budget_used_micros(session, pool.id))
                     / Decimal(1_000_000),
                     operations=pool.operations,
+                    operation_limits=pool.operation_limits,
                     overcommit=key.overcommit,
                 )
             )

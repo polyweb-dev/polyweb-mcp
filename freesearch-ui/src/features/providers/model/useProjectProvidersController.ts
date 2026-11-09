@@ -1,20 +1,11 @@
-import { useCallback, useMemo } from "react"
+import { useCallback } from "react"
 import { getProjectProviderView } from "@/domains/providers"
-import type { ManagedProjectKey, ProjectProviderView } from "@/domains/providers"
+import type { ProjectProviderView } from "@/domains/providers"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
 import type { ScopedResource } from "@/shared/lib/useScopedResource"
-import { projectCredentialRoutes } from "./credentialRoutes"
-import { useActionStatus } from "./useActionStatus"
-import type { ActionStatus } from "./useActionStatus"
-import { useCredentialActions } from "./useCredentialActions"
-import type { CredentialActions } from "./useCredentialActions"
 
 export interface ProjectProvidersController {
   view: ScopedResource<ProjectProviderView>
-  /** Project-facing keys by id (management flag and generation). */
-  credentialsById: ReadonlyMap<string, ManagedProjectKey>
-  bindingStatus: ActionStatus
-  credentialActions: CredentialActions
   reloadAll: () => void
 }
 
@@ -38,10 +29,5 @@ export function useProjectProvidersController(options: {
   const reloadAll = useCallback(() => {
     void reloadViewResource()
   }, [reloadViewResource])
-  const routes = useMemo(() => projectCredentialRoutes(), [])
-  const credentialActions = useCredentialActions(routes, reloadAll)
-  const bindingStatus = useActionStatus()
-  const credentialsById = useMemo(() => new Map<string, ManagedProjectKey>(), [])
-
-  return { view, credentialsById, bindingStatus, credentialActions, reloadAll }
+  return { view, reloadAll }
 }

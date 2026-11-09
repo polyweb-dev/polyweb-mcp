@@ -141,7 +141,8 @@ def _upgrade_stored_document(stored: StoredSettings, *, system: bool) -> dict[st
         trace.pop("sampling_rate", None)
         trace.pop("payload_redaction", None)
         if system:
-            # Version 1 always persisted the old 30-day default.
+            # Version 1 persisted metadata and 30 days as system defaults.
+            trace.pop("detail", None)
             trace.pop("retention_days", None)
         document["trace"] = trace
     if stored.schema_version in (1, 2) and isinstance(document.get("routing"), dict):

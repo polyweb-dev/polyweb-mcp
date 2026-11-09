@@ -39,7 +39,7 @@ function installKeysStub(options: StubOptions = {}) {
       return ok({ project_id: PROJECT_ALPHA_ID, permissions, roles: [], policy_revision: 1 })
     }
     if (req.url === `${base}/members`) {
-      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", status: "active", roles: ["project_admin"], role: "admin", permissions: 15, provider_owner: false, version: 1 }])
+      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", status: "active", roles: ["project_admin"], role: "admin", permissions: 15, provider_owner: false, account_active: true, version: 1 }])
     }
     if (req.url === `${base}/api-keys` && req.method === "GET") return ok(keys)
     const override = options.onMutation?.(req)

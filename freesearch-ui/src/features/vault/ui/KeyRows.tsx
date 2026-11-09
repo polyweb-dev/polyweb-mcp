@@ -27,6 +27,6 @@ export function KeyRows({ row, open, projects, actions, onToggle, onPool }: {
       <td>{projectNames.length ? projectNames.join(", ") : <span className="text-[var(--muted)]">—</span>}</td>
       <td className="w-16 !text-right"><RowActionsMenu label={`Actions for ${item.label}`} actions={actions} /></td>
     </tr>
-    {open && <tr><td colSpan={5}><VaultPoolsTable pools={row.pools} projects={projects} onAction={onPool} /></td></tr>}
+    {open && <VaultPoolsTable pools={row.pools} projects={projects} onAction={onPool} />}
   </>
 }

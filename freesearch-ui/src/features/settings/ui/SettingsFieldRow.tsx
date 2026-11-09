@@ -1,8 +1,7 @@
-import { disabledOptionReason, fieldLabel } from "@/domains/settings"
+import { disabledOptionReason, fieldLabel, formatSettingsValue } from "@/domains/settings"
 import type { SettingsField, SettingsValue } from "@/domains/settings"
 import { controlValue, isInheritPending } from "../model/settingsDraft"
 import type { SettingsDraft } from "../model/settingsDraft"
-import { valueText } from "../model/settingsFormat"
 import { SETTING_CONTROL_COLUMN } from "./settingControlStyles"
 import { SettingsFieldControl } from "./SettingsFieldControl"
 import { SettingsFieldHint } from "./SettingsFieldHint"
@@ -77,7 +76,7 @@ export function SettingsFieldRow(props: SettingsFieldRowProps) {
             onValidity={(valid) => onValidity(field.id, valid)}
           />
         ) : (
-          <p className="flex h-8 items-center text-[var(--text)] tnum">{valueText(field.id, field.effectiveValue)}</p>
+          <p className="flex h-8 items-center text-[var(--text)] tnum">{formatSettingsValue(field.id, field.effectiveValue)}</p>
         )}
       </div>
     </div>

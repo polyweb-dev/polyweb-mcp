@@ -129,6 +129,16 @@ def _rate(pool: StoredKeyPool, operation: str) -> int | None:
     return value
 
 
+def _rate_window(pool: StoredKeyPool, operation: str) -> int:
+    value = (pool.operation_limits or {}).get(operation)
+    if isinstance(value, dict):
+        window = value.get("rate_window_seconds", pool.rate_window_seconds)
+        if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
+            raise ValueError("invalid operation rate window")
+        return int(window)
+    return pool.rate_window_seconds
+
+
 async def _insert_pool(session: AsyncSession, account_id: str, pool: StoredKeyPool) -> None:
     pool_id = _runtime_id("credential-pool", pool.credential_id)
     operations = json.dumps(sorted(pool.operations))
@@ -184,7 +194,13 @@ async def _insert_pool(session: AsyncSession, account_id: str, pool: StoredKeyPo
     )
     for operation in sorted(pool.operations):
         rate = _rate(pool, operation)
-        params = {**args, "operation": operation, "rate": rate, "best_effort": int(rate == 0)}
+        params = {
+            **args,
+            "operation": operation,
+            "rate": rate,
+            "rate_window": _rate_window(pool, operation),
+            "best_effort": int(rate == 0),
+        }
         await session.execute(
             text(
                 "INSERT INTO credential_pool_links "

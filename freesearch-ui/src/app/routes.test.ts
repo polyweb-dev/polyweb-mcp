@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
-  LEGACY_GLOBAL_REDIRECTS,
   LEGACY_SECTION_PATHS,
   PROJECT_SECTIONS,
-  SYSTEM_CREDENTIALS_TAB_PATH,
-  TAB_PATHS,
   canAccessProjectSection,
   canAccessRoute,
   isGatedRoute,
@@ -29,8 +26,6 @@ import {
 const ALL_TABS: TabId[] = [
   "quotas",
   "settings",
-  "systemCredentials",
-  "systemCapacity",
   "projects",
   "account",
 ]
@@ -46,29 +41,6 @@ const OPEN_TABS: TabId[] = ["projects", "account"]
 const SETTINGS_TABS: TabId[] = ["quotas", "settings"]
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111"
-
-describe("TAB_PATHS", () => {
-  it("maps every tab id to its exact path", () => {
-    expect(TAB_PATHS).toEqual({
-      quotas: "/system/quotas",
-      settings: "/system/providers",
-      systemCredentials: "/system/credentials",
-      systemCapacity: "/system/capacity",
-      projects: "/projects",
-      account: "/account",
-      accountKeys: "/account/keys",
-    })
-    expect(SYSTEM_CREDENTIALS_TAB_PATH).toBe("/system/providers?tab=keys")
-    expect(LEGACY_GLOBAL_REDIRECTS).toEqual({
-      "/settings": "/system/providers",
-      "/usage": "/system/quotas",
-      "/providers": "/system/providers",
-      "/system/credentials": "/account/keys",
-      "/system/capacity": "/account/keys",
-      "/system/keys": "/account/keys",
-    })
-  })
-})
 
 describe("legacyKeysDestination", () => {
   it.each(["/settings", "/providers", "/system/providers"])(
@@ -115,20 +87,9 @@ describe("canAccessRoute", () => {
     }
   )
 
-  it("opens System credentials only with system.credentials.manage (which also opens System Providers)", () => {
-    expect(canAccessRoute("systemCredentials", systemAccessFixture(["system.credentials.manage"]))).toBe(true)
-    expect(canAccessRoute("systemCredentials", systemAccessFixture(SETTINGS_READER_PERMISSIONS))).toBe(false)
-    expect(canAccessRoute("systemCredentials", systemAccessFixture(["system.pools.manage"]))).toBe(false)
-    // System Providers hosts the Credentials tab, so credential management alone opens it.
+  it("opens System Providers with system.credentials.manage", () => {
     expect(canAccessRoute("settings", systemAccessFixture(["system.credentials.manage"]))).toBe(true)
     expect(canAccessRoute("settings", systemAccessFixture(["system.pools.manage"]))).toBe(false)
-  })
-
-  it("opens Capacity with either pool or allocation management (any-of)", () => {
-    expect(canAccessRoute("systemCapacity", systemAccessFixture(["system.pools.manage"]))).toBe(true)
-    expect(canAccessRoute("systemCapacity", systemAccessFixture(["system.allocations.manage"]))).toBe(true)
-    expect(canAccessRoute("systemCapacity", systemAccessFixture(["system.credentials.manage"]))).toBe(false)
-    expect(canAccessRoute("systemCapacity", null)).toBe(false)
   })
 
   it("ignores project permissions that share a suffix with a system permission", () => {
@@ -141,8 +102,6 @@ describe("isGatedRoute", () => {
     expect(ALL_TABS.filter(isGatedRoute)).toEqual([
       "quotas",
       "settings",
-      "systemCredentials",
-      "systemCapacity",
     ])
   })
 })
@@ -246,11 +205,14 @@ describe("isInternalPath", () => {
     "/account",
     "/system/credentials",
     "/system/capacity",
+    "/system/keys",
+    "/system/accounts",
+    "/admin/users",
   ])("accepts the internal path %s", (path) => {
     expect(isInternalPath(path)).toBe(true)
   })
 
-  it.each(["", "playground", "//evil", "https://evil", "/unknown", "/system", "/system/other", "/admin/users"])(
+  it.each(["", "playground", "//evil", "https://evil", "/unknown", "/system", "/system/other"])(
     "rejects the foreign value %s",
     (path) => {
       expect(isInternalPath(path)).toBe(false)
@@ -292,7 +254,7 @@ describe("loginPathFor", () => {
   it("keeps an internal destination in the returnTo query", () => {
     expect(loginPathFor("/playground")).toBe("/login?returnTo=%2Fplayground")
     expect(loginPathFor("/account")).toBe("/login?returnTo=%2Faccount")
-    expect(loginPathFor("/admin/users")).toBe("/login")
+    expect(loginPathFor("/admin/users")).toBe("/login?returnTo=%2Fadmin%2Fusers")
   })
 
   it.each(["https://evil", "//evil", "/unknown", ""])(
@@ -307,7 +269,7 @@ describe("returnDestination", () => {
   it("keeps a validated internal destination", () => {
     expect(returnDestination("/routing")).toBe("/routing")
     expect(returnDestination("/account")).toBe("/account")
-    expect(returnDestination("/admin/users")).toBe("/")
+    expect(returnDestination("/admin/users")).toBe("/admin/users")
   })
 
   it.each(["https://evil", "//evil", "/unknown", ""])(

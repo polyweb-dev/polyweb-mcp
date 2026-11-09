@@ -478,6 +478,62 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
         runtime.shutdown()
 
 
+async def test_full_fetch_json_is_scrubbed_before_export_and_trace_read(
+    repository: SQLiteRepository,
+) -> None:
+    from freesearch.infrastructure.observability import (
+        OtelObservability,
+        SpanKindName,
+        _AttributionSpanProcessor,
+        bind_execution_attribution,
+        bind_trace_capture,
+        use_observability,
+    )
+    from freesearch.infrastructure.trace_payloads import _annotate_fetch_root
+    from freesearch.models.contracts import FetchedDocument, FetchRequest, FetchResponse
+    from freesearch.models.projects import ProjectTracePolicy
+
+    attribution = await seed_execution_project(repository)
+    provider = TracerProvider()
+    capture = _CapturingExporter()
+    provider.add_span_processor(_AttributionSpanProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(capture))
+    runtime = OtelObservability(provider.get_tracer("json-capture"), provider)
+    exporter = SQLiteSpanExporter(repository.database_path)
+    document = (
+        '{"items":[{"Token":"sentinel-token","public":"visible"},{"authHeader":"sentinel-auth"}]}'
+    )
+    response = FetchResponse(
+        provider="test",
+        document=FetchedDocument(
+            url="https://example.com", content=document, fetched_at=datetime.now(UTC)
+        ),
+    )
+    try:
+        with use_observability(runtime):
+            bind_execution_attribution(attribution)
+            bind_trace_capture(ProjectTracePolicy(detail="full"))
+            with runtime.span("POST /fetch", kind=SpanKindName.SERVER) as root:
+                root.set_attributes({TraceAttribute.USER_ID: str(attribution.actor_id)})
+                _annotate_fetch_root(runtime, FetchRequest(url="https://example.com"), response)
+                with runtime.span("freesearch.provider") as child:
+                    child.add_event("freesearch.provider.response", {"payload": document})
+                trace_id = root.trace_id
+        assert trace_id is not None
+        assert "sentinel-" not in "".join(span.to_json() for span in capture.spans)
+        assert exporter.export(capture.spans) is SpanExportResult.SUCCESS
+        with sqlite3.connect(repository.database_path) as connection:
+            rows = connection.execute("SELECT output_json, events_json FROM trace_spans").fetchall()
+        assert "sentinel-" not in str(rows)
+        assert "visible" in str(rows)
+        detail = await repository.get_trace(trace_id, user_id=attribution.actor_id)
+        assert detail is not None
+        assert "sentinel-" not in detail.model_dump_json()
+        assert "visible" in detail.model_dump_json()
+    finally:
+        runtime.shutdown()
+
+
 async def test_unstamped_spans_are_persisted_as_metadata(
     repository: SQLiteRepository,
 ) -> None:

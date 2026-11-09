@@ -7,7 +7,7 @@ import { Button } from "@/shared/ui/button"
 import { Field } from "@/shared/ui/Field"
 import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
-import { ProviderLogo } from "@/shared/ui/ProviderLogo"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { Select } from "@/shared/ui/select"
 
 interface Props {
@@ -20,15 +20,18 @@ interface Props {
   onSaved: () => void
 }
 
-function affectedPools(pools: ProjectPool[] | null, projectName: string) {
+function affectedPools(pools: ProjectPool[] | null) {
   if (pools === null || pools.length === 0) return null
+  const providers = [...new Map(pools.map((pool) => {
+    const identity = providerIdentity(pool.provider_type)
+    return [identity.id, identity] as const
+  })).values()].sort((a, b) => a.name.localeCompare(b.name))
   return (
     <>
-      <p>These pools no longer serve {projectName}:</p>
-      <ul className="space-y-1">{[...pools].sort((a, b) => a.label.localeCompare(b.label)).map((pool) => (
-        <li key={pool.pool_id} className="flex items-center gap-2">
-          <ProviderLogo providerId={providerIdentity(pool.provider_type).id} name={pool.provider_type} />
-          {pool.label}
+      <p>These providers lose their capacity:</p>
+      <ul className="space-y-1">{providers.map((provider) => (
+        <li key={provider.id}>
+          <ProviderBadge providerId={provider.id} name={provider.name} />
         </li>
       ))}</ul>
     </>
@@ -36,7 +39,7 @@ function affectedPools(pools: ProjectPool[] | null, projectName: string) {
 }
 
 export function TransferOwnershipDialog({ projectId, projectName, members, ownerId, initialUserId, onClose, onSaved }: Props) {
-  const admins = members.filter((member) => member.user_id !== ownerId && member.status === "active" &&
+  const admins = members.filter((member) => member.user_id !== ownerId && member.account_active && member.status === "active" &&
     member.role === "admin").sort((a, b) => a.email.localeCompare(b.email))
   const [selected, setSelected] = useState(initialUserId ?? admins[0]?.user_id ?? "")
   const [pools, setPools] = useState<ProjectPool[] | null>(null)
@@ -75,7 +78,7 @@ export function TransferOwnershipDialog({ projectId, projectName, members, owner
               options={admins.map((admin) => ({ value: admin.user_id, label: admin.email }))} />
           </Field>
           <p>{recipient?.email} becomes the provider owner of <strong>{projectName}</strong></p>
-          {affectedPools(pools, projectName)}
+          {affectedPools(pools)}
           <p>These providers stop until {recipient?.email} adds capacity</p>
         </div>
       )}

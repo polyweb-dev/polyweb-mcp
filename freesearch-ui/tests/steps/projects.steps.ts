@@ -217,7 +217,7 @@ When("I open the provider ownership transfer dialog", async ({ page }) => {
 
 Then("the transfer dialog requires another project admin", async ({ page }) => {
   const dialog = page.getByRole("dialog", { name: "Transfer provider ownership" })
-  await expect(dialog).toContainText("Make another member a project admin first.")
+  await expect(dialog).toContainText(/make another member a project admin first/i)
   await expect(dialog.getByRole("button", { name: "Transfer ownership" })).toHaveCount(0)
 })
 

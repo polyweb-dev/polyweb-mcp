@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import type { SearchResponse } from "@/domains/execution"
-import { providerIdentity } from "@/domains/providers"
+import { getProviderPrices, providerIdentity } from "@/domains/providers"
+import { useScopedResource } from "@/shared/lib/useScopedResource"
 import { formatLatency } from "@/shared/lib/formatTime"
 import { Button } from "@/shared/ui/button"
 import { InspectorSplitPane } from "@/shared/ui/InspectorSplitPane"
@@ -65,7 +66,16 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
     canFetch,
     handleFetchResult,
   } = controller
-  const usage = usageTelemetry(activeSearch)
+  const needsPrice = activeSearch.costUnitKind !== "USD" && activeSearch.costUnitKind !== "FREE" &&
+    activeSearch.selectedProviderId !== "aggregated"
+  const prices = useScopedResource({
+    scopeKey: activeSearch.selectedProviderId,
+    load: getProviderPrices,
+    enabled: needsPrice,
+  })
+  const price = prices.status === "ready" ? prices.data.find((item) =>
+    providerIdentity(item.providerType).id === providerIdentity(activeSearch.selectedProviderId).id) : undefined
+  const usage = usageTelemetry(activeSearch, price)
   const showAttribution = new Set(activeSearch.results.flatMap((result) =>
     (result.sources?.length ? result.sources : [result.providerId]).map((id) => providerIdentity(id).id)
   )).size > 1

@@ -5,7 +5,6 @@ import { BudgetFields } from "@/shared/ui/BudgetFields"
 import { NumericField } from "@/shared/ui/NumericField"
 import { Button } from "@/shared/ui/button"
 import { FormActions } from "@/shared/ui/FormActions"
-import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { toDraft, validateDraft, grantPayloadOf, type GrantDraft, type GrantErrors } from "../model/grantForm"
 import { StoredBudgetTable } from "./StoredBudgetTable"
 
@@ -17,7 +16,6 @@ export interface UsdGrantFormProps {
   saving: boolean
   saveError: string | null
   staleVersion: boolean
-  nativeDisplay?: TavilyDisplayAdapter
   onSave: (payload: UsdGrantPayload) => Promise<boolean>
   onClose: () => void
   onReload: () => void
@@ -53,7 +51,7 @@ export function UsdGrantForm(props: UsdGrantFormProps) {
     <FormActions {...(staleVersion ? { start: <Button type="button" variant="ghost" size="form"
       onClick={props.onReload}>Reload limits</Button> } : {})}>
       <Button type="button" variant="outline" size="form" onClick={props.onClose}>Cancel</Button>
-      <Button type="submit" size="form" disabled={saving}>{saving ? "Saving…" : "Save budget limit"}</Button>
+      <Button type="submit" size="form" pending={saving}>Save budget</Button>
     </FormActions>
   </form>
 }

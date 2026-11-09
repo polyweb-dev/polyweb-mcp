@@ -12,24 +12,29 @@ export function VaultPoolsTable({ pools, projects, onAction }: {
   onAction: (action: PoolAction, pool: KeyPool) => void
 }) {
   const free = useFreeProvider(pools[0]?.provider_type ?? "")
-  if (pools.length === 0) return <p>No pools yet. Create a pool to let a project use this key</p>
-  return <><ul aria-label="Pools of this key" className="space-y-3 pl-6">
-    {pools.map((pool) => <li key={pool.id} className="flex items-start justify-between gap-4">
-      <div className="space-y-1">
-        <div className="font-medium">{pool.label}</div>
-        <div className="flex flex-wrap items-center gap-2 text-[var(--muted)]">
-          <span>{pool.project_id ? projects.find((entry) => entry.id === pool.project_id)?.name ?? pool.project_id : <Tag tone="warning">Unassigned</Tag>}</span>
+  if (pools.length === 0) return <tr><td colSpan={5}>No pools yet. Create a pool to let a project use this key</td></tr>
+  return <>
+    {pools.map((pool) => <tr key={pool.id}>
+      <td />
+      <td className="font-medium">{pool.label}</td>
+      <td><div className="flex flex-wrap items-center gap-2 text-[var(--muted)]">
           {pool.operations.map((op) => <Tag key={op}>{op === "search" ? "Search" : "Fetch"}</Tag>)}
           <span>{formatPoolRate(pool.rate, { short: true, operationLimits: pool.operation_limits })}</span>
-          <PoolBudgetUsage pool={pool} />
-        </div>
-      </div>
-      <RowActionsMenu label={`Actions for ${pool.label}`} actions={[
+      </div></td>
+      <td><div className="space-y-2">
+        {pool.project_id ? (() => {
+          const name = projects.find((entry) => entry.id === pool.project_id)?.name ?? pool.project_id
+          return name !== pool.label ? <div>{name}</div> : null
+        })() : <Tag tone="warning">Unassigned</Tag>}
+        <PoolBudgetUsage pool={pool} />
+      </div></td>
+      <td className="w-16 !text-right"><RowActionsMenu label={`Actions for ${pool.label}`} actions={[
         { key: "edit", label: "Edit pool", onSelect: () => onAction("edit", pool) },
         { key: "copy", label: "Copy to another project", onSelect: () => onAction("copy", pool) },
         pool.project_id ? { key: "unassign", label: "Remove from project", onSelect: () => onAction("unassign", pool) } : { key: "assign", label: "Assign to project", onSelect: () => onAction("assign", pool) },
         { key: "delete", label: "Delete pool", danger: true, onSelect: () => onAction("delete", pool) },
-      ]} />
-    </li>)}
-  </ul>{!free && pools.some((pool) => pool.budget) && <p className="fs-hint pl-6">{POOL_BUDGET_HELP}</p>}</>
+      ]} /></td>
+    </tr>)}
+    {!free && pools.some((pool) => pool.budget) && <tr><td /><td colSpan={4}><p className="fs-hint">{POOL_BUDGET_HELP}</p></td></tr>}
+  </>
 }

@@ -5,8 +5,8 @@ import { err, installFetchStub, ok } from "@/test/fetchMock"
 import { TransferOwnershipDialog } from "./TransferOwnershipDialog"
 
 const admins = [
-  { project_id: "p1", user_id: "old", email: "old@example.com", status: "active" as const, roles: ["project_admin"], role: "admin" as const, permissions: 33023, provider_owner: true, version: 1 },
-  { project_id: "p1", user_id: "new", email: "new@example.com", status: "active" as const, roles: ["project_admin"], role: "admin" as const, permissions: 15, provider_owner: false, version: 1 },
+  { project_id: "p1", user_id: "old", email: "old@example.com", status: "active" as const, roles: ["project_admin"], role: "admin" as const, permissions: 33023, provider_owner: true, account_active: true, version: 1 },
+  { project_id: "p1", user_id: "new", email: "new@example.com", status: "active" as const, roles: ["project_admin"], role: "admin" as const, permissions: 15, provider_owner: false, account_active: true, version: 1 },
 ]
 afterEach(() => vi.unstubAllGlobals())
 
@@ -21,10 +21,9 @@ it("names pools affected by transfer and sends the selected admin", async () => 
     : ok({ user_id: "new", email: "new@example.com", unassigned_pools: [{ pool_id: "pool1", label: "Search pool" }] }))
   const saved = vi.fn()
   render(<TransferOwnershipDialog projectId="p1" projectName="Project" members={admins} ownerId="old" onClose={vi.fn()} onSaved={saved} />)
-  expect(await screen.findByText("Search pool")).toBeInTheDocument()
+  expect(await screen.findByText("Brave Search")).toBeInTheDocument()
   expect(screen.getByTestId("provider-logo-brave")).toBeInTheDocument()
-  expect(screen.getByText("These pools no longer serve Project:")).toBeInTheDocument()
-  expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Alpha pool", "Search pool"])
+  expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Brave Search", "Exa"])
   expect(screen.getByText("These providers stop until new@example.com adds capacity")).toBeInTheDocument()
   expect(screen.queryByText(/Your pools no longer serve this project/)).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole("button", { name: "Transfer ownership" }))
@@ -36,6 +35,15 @@ it("does not offer transfer when no other active admin exists", async () => {
   installFetchStub(() => ok([]))
   render(<TransferOwnershipDialog projectId="p1" projectName="Project" members={[admins[0]!]} ownerId="old" onClose={vi.fn()} onSaved={vi.fn()} />)
   expect(screen.getByText("Make another member a project admin first")).toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "Transfer ownership" })).toBeNull()
+  await act(async () => {})
+})
+
+it("excludes an inactive account from transfer recipients", async () => {
+  installFetchStub(() => ok([]))
+  render(<TransferOwnershipDialog projectId="p1" projectName="Project"
+    members={[admins[0]!, { ...admins[1]!, account_active: false }]} ownerId="old" onClose={vi.fn()} onSaved={vi.fn()} />)
+  expect(screen.getByText(/make another member a project admin first/i)).toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "Transfer ownership" })).toBeNull()
   await act(async () => {})
 })

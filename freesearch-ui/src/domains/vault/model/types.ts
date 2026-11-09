@@ -11,6 +11,8 @@ export interface PoolBudget {
 type BudgetInput = { limit: number; period?: "day" | "week" | "month" }
 
 export type PoolOperation = "search" | "fetch"
+export type OperationLimit = number | null | { rate_limit: number | null; rate_window_seconds: number }
+export type OperationLimits = Partial<Record<PoolOperation, OperationLimit>>
 
 export interface VaultKey {
   id: string
@@ -32,7 +34,7 @@ export interface KeyPoolInput {
   rate?: Partial<RateLimit>
   budget?: BudgetInput | null
   operations?: PoolOperation[] | null
-  operation_limits?: Partial<Record<PoolOperation, number>> | null
+  operation_limits?: OperationLimits | null
 }
 
 export interface KeyPool extends KeyPoolInput {
@@ -44,7 +46,7 @@ export interface KeyPool extends KeyPoolInput {
   budget: { limit: number; period: "day" | "week" | "month" } | null
   budget_used_usd: number
   operations: PoolOperation[]
-  operation_limits: Partial<Record<PoolOperation, number>> | null
+  operation_limits: OperationLimits | null
 }
 
 export interface VaultKeyDeleteResult {

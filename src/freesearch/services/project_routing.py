@@ -96,6 +96,12 @@ def _order(
     keyless: Collection[str] = (),
 ) -> list[str]:
     stored = getattr(document, operation.value)
+    if (
+        stored.strategy == RoutingStrategy.CUSTOM
+        and stored.custom_order is not None
+        and set(members).issubset(stored.custom_order)
+    ):
+        return order_for(stored.strategy, members, stored.custom_order, {})
     costs = {
         provider: call_cost_usd(provider, operation, keyless=provider in keyless)
         for provider in members
@@ -109,6 +115,13 @@ async def effective_order(
     """Resolve a runtime order within the caller's existing read session."""
 
     document, _ = await _document(session, project_id)
+    stored = getattr(document, operation.value)
+    if (
+        stored.strategy == RoutingStrategy.CUSTOM
+        and stored.custom_order is not None
+        and set(members).issubset(stored.custom_order)
+    ):
+        return _order(document, operation, members)
     return _order(document, operation, members, await _keyless_members(session, project_id))
 
 

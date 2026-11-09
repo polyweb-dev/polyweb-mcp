@@ -2,6 +2,7 @@
 import { PROVIDER_CATALOG, catalogNameOf } from "./catalog"
 import type { ProviderOperation } from "./projectProviders"
 import type { ProviderPricing } from "./providerPricing"
+import type { ProviderHealthStatus } from "./types"
 
 export const PROVIDER_OPERATIONS: readonly ProviderOperation[] = ["search", "fetch"]
 
@@ -37,22 +38,8 @@ export interface ProviderTypeView extends ProviderPricing {
   bindings: ProviderBinding[]
   effectiveOperations: ProviderOperation[]
   /** Latest project-scoped provider observation, shared by all members. */
-  healthStatus?: string | null
+  healthStatus?: ProviderHealthStatus | null
   healthCheckedAt?: string | null
-}
-
-/** Management state required by the legacy key-menu fallback. */
-export interface ManagedProjectKey {
-  canManage: boolean
-  generation: number | null
-}
-
-/** Input of one credential creation; `secret` only for `api_key`. */
-export interface NewCredentialInput {
-  providerType: string
-  label: string
-  authMode: CredentialAuthMode
-  secret: string
 }
 
 /** Display name of one wire provider type. */

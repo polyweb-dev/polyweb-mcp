@@ -50,7 +50,7 @@ export function PoolProjectDialog({ mode, item, pool, projects, onClose, onSaved
       {eligible.length === 0 && <p>You are not the provider owner of a project without {providerTypeName(item.provider_type)}</p>}
       {mode === "copy" && <><TextField id="copy-label" label="Pool name" type="text" value={name} onChange={setLabel} /><p>The copy has the same limits and uses the same key</p></>}
       {error && <p role="alert" className="fs-field-error">{error}</p>}
-      <FormActions><Button size="form" variant="outline" onClick={onClose}>Cancel</Button><Button size="form" disabled={cannotSave(mode, pending, projectId, name)} onClick={() => void save()}>{mode === "copy" ? "Copy pool" : "Assign to project"}</Button></FormActions>
+      <FormActions><Button size="form" variant="outline" onClick={onClose}>Cancel</Button><Button size="form" pending={pending} disabled={cannotSave(mode, pending, projectId, name)} onClick={() => void save()}>{mode === "copy" ? "Copy pool" : "Assign to project"}</Button></FormActions>
     </div>
   </Modal>
 }

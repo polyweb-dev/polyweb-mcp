@@ -15,8 +15,7 @@ beforeEach(() => {
 
 describe("useFreeProvider", () => {
   it.each([
-    ["tinyfish", true], ["keenable", true], ["brave", false],
-    ["you", false], ["tavily", false], ["exa", false],
+    ["tinyfish", true], ["brave", false], ["exa", false],
   ])("reads the price-only catalog for %s without system permissions", async (provider, free) => {
     const { result } = renderHook(() => useFreeProvider(provider))
     await waitFor(() => expect(mocks.prices).toHaveBeenCalled())

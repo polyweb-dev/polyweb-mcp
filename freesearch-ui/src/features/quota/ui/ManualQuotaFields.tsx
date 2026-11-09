@@ -10,7 +10,7 @@ import {
   type CreditMode,
 } from "../model/quotaLabels"
 import { ManualQuotaField } from "./ManualQuotaField"
-import { QuotaDateField } from "./QuotaDateField"
+import { DateField } from "@/shared/ui/DateField"
 
 const BALANCE_MODE_LABEL: Record<CreditMode, string> = {
   free: "Free balance",
@@ -98,7 +98,7 @@ export function ManualQuotaFields({
       {modeField(providerId, mode, pending, onModeChange)}
       <div role="group" aria-label="Billing dates" className="space-y-1">
         <div className="grid grid-cols-2 gap-3">
-          <QuotaDateField
+          <DateField placeholder="YYYY-MM-DD"
             id={"manual-quota-start-" + providerId}
             label="Billing start"
             value={fields.billingStart}
@@ -106,7 +106,7 @@ export function ManualQuotaFields({
             disabled={pending}
             onChange={(value) => onChange("billingStart", value)}
           />
-          <QuotaDateField
+          <DateField placeholder="YYYY-MM-DD"
             id={"manual-quota-end-" + providerId}
             label="Billing end"
             value={fields.billingEnd}

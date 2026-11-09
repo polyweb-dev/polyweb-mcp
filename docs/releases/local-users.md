@@ -305,13 +305,13 @@ one origin. A `BroadcastChannel` carries a session-change hint only. A browser
 without Web Locks or `BroadcastChannel` receives a compatibility error before
 any cookie request.
 
-Global account listing and creation are no longer exposed by this app. Public
-registration remains available. The legacy `GET /api/v1/users/{user_id}` path
-denies authenticated callers; the role-change path is removed.
+This app removes the global account list, creation, lookup, deactivation, and
+role-change routes. Public registration and `GET /users/me` remain available.
 
-One permission helper serves the navigation filter and the route gate. An Agent
-sees the Playground, the Activity view, and the Account view. A Developer and an
-Admin also see the Routing, the Usage, and the Settings views.
+One permission helper controls navigation and route access. Project permissions
+control access to project pages, including Providers, Playground, and Activity.
+System permissions control access to global pages and the account key vault.
+Provider routing order is on the project Providers page.
 
 The playground snapshot now uses one key per account:
 `freesearch:playground:v1:<account-uuid>`. The client discards the legacy

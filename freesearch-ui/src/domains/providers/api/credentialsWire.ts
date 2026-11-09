@@ -22,6 +22,14 @@ import type {
   ProviderBinding,
   ProviderTypeView,
 } from "../model/providerView"
+import type { ProviderHealthStatus } from "../model/types"
+
+function decodeHealth(value: unknown): ProviderHealthStatus | null {
+  if (value === "unavailable") return "offline"
+  if (value === "healthy" || value === "degraded" || value === "rate_limited" ||
+      value === "circuit_broken" || value === "offline") return value
+  return null
+}
 
 /** Decode one available credential of the project provider view. */
 export function decodeAvailableCredential(value: unknown): AvailableCredential | null {
@@ -73,7 +81,7 @@ export function decodeProviderTypeView(value: unknown): ProviderTypeView | null 
     capability: readMembers(record, "capability", PROVIDER_OPERATIONS),
     killSwitch: readFlag(record, "kill_switch"),
     systemEnabledOperations: readMembers(record, "system_enabled_operations", PROVIDER_OPERATIONS),
-    healthStatus: readString(record, "health_status"),
+    healthStatus: decodeHealth(record.health_status),
     healthCheckedAt: readString(record, "health_checked_at"),
     credentials: decodeRows(record.credentials, decodeAvailableCredential),
     bindings: decodeRows(record.bindings, decodeBinding),

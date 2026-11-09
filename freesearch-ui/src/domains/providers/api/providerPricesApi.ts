@@ -3,7 +3,7 @@ import { asRecord, decodeList, readFlag, readString } from "@/shared/api/decode"
 import { decodeCallCosts } from "../model/providerPricing"
 import type { ProviderPricing } from "../model/providerPricing"
 
-interface ProviderPrice extends ProviderPricing {
+export interface ProviderPrice extends ProviderPricing {
   providerType: string
   free: boolean
   keyless: boolean

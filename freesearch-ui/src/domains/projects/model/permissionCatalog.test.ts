@@ -1,6 +1,5 @@
 import { expect, it } from "vitest"
-import { readFileSync } from "node:fs"
-import { resolve } from "node:path"
+import contract from "./permissionContract.json"
 import { DEVELOPER_BITS, memberPermissionSummary, PERMISSION_COPY, PERMISSION_PRESETS, PROJECT_PERMISSION_BITS } from "./permissionCatalog"
 
 it("pins project permission bits and presets to the backend contract", () => {
@@ -12,11 +11,10 @@ it("pins project permission bits and presets to the backend contract", () => {
   expect(PERMISSION_PRESETS).toEqual({ "Read only": 12, Standard: 15, "Full developer": 255 })
 })
 
-it("has a label for every backend permission catalog key", () => {
-  const source = readFileSync(resolve(process.cwd(), "../src/freesearch/models/project_permissions.py"), "utf8")
-  const keys = Array.from(source.matchAll(/\bkey="([^"]+)"/g), (match) => match[1])
-  expect(keys).toHaveLength(9)
-  expect([...keys].sort()).toEqual(Object.keys(PERMISSION_COPY).sort())
+it("matches the shared permission data contract", () => {
+  const bits = Object.fromEntries(contract.permissions.map(({ key, bit }) => [key, bit]))
+  expect(Object.fromEntries(Object.entries(PERMISSION_COPY).map(([key, value]) => [key, value.bit]))).toEqual(bits)
+  expect(PERMISSION_PRESETS).toEqual(contract.presets)
 })
 
 it("counts Base access and every displayed permission without counting the owner bit", () => {

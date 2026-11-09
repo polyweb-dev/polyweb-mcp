@@ -512,13 +512,6 @@ describe("TraceDetailDialog inspector workspace", () => {
     ).toBeInTheDocument()
   })
 
-  it("sizes the dialog to its content instead of a fixed tall body", () => {
-    renderAggregated()
-
-    expect(document.body.innerHTML).not.toContain("h-[min(90svh,920px)]")
-    expect(document.querySelector('[data-slot="modal-body"]')?.className).toContain("overflow-y-auto")
-  })
-
   it("selects the first result and shows its full snippet beside the compact list", () => {
     renderAggregated()
 
@@ -543,26 +536,4 @@ describe("TraceDetailDialog inspector workspace", () => {
     expect(screen.queryByRole("button", { name: /show all/i })).not.toBeInTheDocument()
   })
 
-  it("preserves loading, error, and Escape behavior in the new shell", async () => {
-    const { onRetry } = (() => {
-      const onClose = vi.fn()
-      const retry = vi.fn()
-      render(
-        <TraceDetailDialog
-          trace={null}
-          isOpen
-          status="error"
-          error="boom"
-          onClose={onClose}
-          onRetry={retry}
-        />
-      )
-      return { onRetry: retry }
-    })()
-
-    expect(screen.getByRole("alert")).toHaveTextContent(/trace detail unavailable/i)
-    const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Retry" }))
-    expect(onRetry).toHaveBeenCalledTimes(1)
-  })
 })

@@ -8,7 +8,7 @@
  */
 
 import type { ProviderAuthLimits } from "@/domains/dashboard"
-import { providerCallCost } from "@/domains/providers"
+import { formatCallCost } from "@/domains/providers"
 import { operationAvailable } from "./usdCardModel"
 import { providerRateFacts } from "./providerRateFacts"
 import { operationLabel, type CreditMode } from "./quotaLabels"
@@ -34,14 +34,7 @@ export function balancePrefill(auth: ProviderAuthLimits): BalancePrefill | null 
 const OPERATIONS = ["search", "fetch"] as const
 const UNKNOWN_TEXT = "unknown"
 
-/** The provider id whose wire fetch operation reads as Extract. */
 const TAVILY_ID = "tavily"
-
-/** The shown operation name: Tavily names its wire fetch operation Extract. */
-function operationViewName(providerId: string | undefined, operation: string): string {
-  if (providerId === TAVILY_ID && operation === "fetch") return "Extract"
-  return operationLabel(operation)
-}
 
 /** A known text of one field; an absent, empty, or unknown value yields null. */
 function known(value: string | null | undefined): string | null {
@@ -61,11 +54,10 @@ export function safeHref(url: string | null | undefined): string | null {
 function costFact(
   auth: ProviderAuthLimits,
   operation: (typeof OPERATIONS)[number],
-  providerId: string | undefined,
 ): ProviderInfoFact | null {
   const record = operation === "search" ? auth.search : auth.fetch
   if (record === null) return null
-  const label = operationViewName(providerId, operation) + " cost"
+  const label = operationLabel(operation) + " cost"
   if (["unbilled_free", "unbilled_keyless"].includes(record.conversion_profile.source)) {
     return { label, value: "Free", note: null }
   }
@@ -74,7 +66,7 @@ function costFact(
   if (cost === null) return null
   const usd = cost
   if (usd === null) return null
-  const value = providerCallCost({ callCostUsd: { [operation]: usd } }, operation)
+  const value = formatCallCost(usd)
   return { label: value === "Free" ? label : label + " (USD)", value, note: null }
 }
 
@@ -156,7 +148,7 @@ function appendOperationFacts(
     const native = nativeCostFact(auth, operation)
     if (native !== null) facts.push(native)
   }
-  const cost = costFact(auth, operation, providerId)
+  const cost = costFact(auth, operation)
   if (cost !== null) facts.push(cost)
   const count = countFact(auth, operation, providerId, wholeRequests)
   if (count !== null) facts.push(count)
@@ -175,7 +167,7 @@ export function providerInfo(
     const factories = [
       (operation: "search" | "fetch") => nativeCostFact(auth, operation),
       (operation: "search" | "fetch") => countFact(auth, operation, providerId, wholeRequests),
-      (operation: "search" | "fetch") => costFact(auth, operation, providerId),
+      (operation: "search" | "fetch") => costFact(auth, operation),
     ]
     for (const factory of factories) {
       for (const operation of operations) {

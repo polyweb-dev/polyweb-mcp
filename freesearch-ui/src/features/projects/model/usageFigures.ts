@@ -29,13 +29,3 @@ export function usageFigures(totals: readonly ProjectUsageTotal[], order?: Proje
   }
   return figures
 }
-
-/** Dollars with cents, keeping sub-cent precision below one dollar: `$0.035`, `$12.40`. */
-export function formatUsd(amount: number): string {
-  return amount.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: amount < 1 ? 4 : 2,
-  })
-}

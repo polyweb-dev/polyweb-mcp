@@ -399,6 +399,7 @@ function memberWire(project: StubProject, member: StubMember): Record<string, un
     role: admin ? "admin" : "developer",
     permissions: (member.permissions ?? (admin ? 255 : 15)) | (owner?.user_id === member.user_id ? 32768 : 0),
     provider_owner: owner?.user_id === member.user_id,
+    account_active: true,
   }
 }
 

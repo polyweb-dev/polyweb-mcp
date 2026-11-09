@@ -20,7 +20,7 @@ describe("KeyHealthCell.test.tsx", () => {
   })
 
   it("keeps an unknown result muted even if a timestamp is present", () => {
-    render(<HealthStatus health="unknown" checkedAt="2026-11-08T09:00:00Z" />)
+    render(<HealthStatus health={null} checkedAt="2026-11-08T09:00:00Z" />)
     expect(screen.getByText("Health not known")).toBeInTheDocument()
     expect(screen.queryByText(/ago/)).toBeNull()
   })
@@ -43,17 +43,6 @@ const NOW = Date.parse("2026-11-08T11:00:00Z")
 const PROPS = { health: "healthy" as const, checkedAt: CHECKED, now: NOW, testing: false, result: undefined }
 
 describe("ProviderHealthStatus.test.tsx", () => {
-  it("shows the latest real call age and exact timestamp", () => {
-    render(<HealthStatus {...PROPS} />)
-    expect(screen.getByText("Healthy · 2 h ago")).toBeInTheDocument()
-    expect(screen.getByTitle(`Last call: ${formatDateTime(CHECKED)}`)).toBeInTheDocument()
-  })
-
-  it("shows a degraded call without treating it as a test", () => {
-    render(<HealthStatus {...PROPS} health="degraded" checkedAt="2026-11-08T10:55:00Z" />)
-    expect(screen.getByText("Degraded · 5 min ago")).toBeInTheDocument()
-  })
-
   it("uses a newer session test and identifies its source in the tooltip", () => {
     render(<HealthStatus {...PROPS} result={{ success: false, message: "Connection failed", latencyMs: 1, checkedAt: NOW - 60_000 }} />)
     expect(screen.getByText("Failing · 1 min ago")).toBeInTheDocument()

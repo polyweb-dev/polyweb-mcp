@@ -1,3 +1,4 @@
+export { ClaimProviderOwnership } from "./ui/ClaimProviderOwnership"
 export {
   LAST_PROJECT_ADMIN_MESSAGE,
   PERMISSION_LOST_MESSAGE,
@@ -24,7 +25,7 @@ export { getProjectPermissionCatalog } from "./api/permissionCatalogApi"
 export type { PermissionCatalog, PermissionCatalogEntry } from "./api/permissionCatalogApi"
 export { getProviderOwner, transferProviderOwner } from "./api/providerOwnerApi"
 export type { ProviderOwner, OwnershipTransfer } from "./api/providerOwnerApi"
-export { attachProjectPool, detachProjectPool, listProjectPools } from "./api/projectPoolsApi"
+export { detachProjectPool, listProjectPools } from "./api/projectPoolsApi"
 export type { ProjectPool } from "./api/projectPoolsApi"
 export {
   apiKeyMutationMessage,

@@ -15,6 +15,7 @@ const MEMBER: ProjectMember = {
   role: "admin",
   permissions: 32768,
   provider_owner: true,
+  account_active: true,
   version: 1,
 }
 

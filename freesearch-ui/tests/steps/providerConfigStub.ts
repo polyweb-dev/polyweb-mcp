@@ -3,15 +3,10 @@ import { ALPHA_PROJECT_ID, BETA_PROJECT_ID } from "./projectActivityStub"
 
 /**
  * In-memory provider configuration backend for the U3 scenarios
- * (TASK-000048): credential instances, project bindings and provider views,
- * project settings with copy, system credentials with grants, pools with
- * links and per-project allocations, plus the credential-scoped OAuth device
- * flow. Wire shapes follow `.tmp/u3/api-schemas.txt`; 409 bodies are
+ * (TASK-000048): provider views and project settings with copy. Seeded
+ * credentials, bindings, grants, pools and allocations support these views.
+ * Wire shapes follow `.tmp/u3/api-schemas.txt`; 409 bodies are
  * `{"detail": {"code", "message"}}`, 400/403/404 answer with no body.
- *
- * Secrets: create and rotate bodies are recorded in `configTraffic` so a
- * scenario can prove the POST carried the fake secret; the stub never stores
- * a secret in its credential state and never echoes one in a response.
  *
  * The routes are installed by `installProjectStub` (projectStub.ts) for every
  * project scenario. The project provider view switches from the U2 fixture to
@@ -63,15 +58,6 @@ interface StubProviderType {
   capability: Operation[]
   kill_switch: boolean
   system_enabled_operations: Operation[]
-}
-
-interface StubOAuth {
-  status: "pending" | "connected" | "refresh_failed" | "disconnected"
-  approved: boolean
-  denied: boolean
-  polls: number
-  last_error_code: string | null
-  connected_at: string | null
 }
 
 interface StubPool {
@@ -173,10 +159,6 @@ export const SEED = {
   bravePool: "90010000-0000-4000-8000-000000000002",
 } as const
 
-/** Fake OAuth device values; the user code is the only code the UI may show. */
-export const OAUTH_USER_CODE = "WXYZ-1234"
-export const OAUTH_VERIFICATION_URI = "https://parallel.example/device"
-
 interface ConfigState {
   active: boolean
   seq: number
@@ -184,7 +166,6 @@ interface ConfigState {
   credentials: StubCredential[]
   grants: StubGrant[]
   bindings: StubBinding[]
-  oauth: Record<string, StubOAuth>
   systemSettings: {
     revision: number
     routing: Record<string, unknown>
@@ -205,7 +186,6 @@ const state: ConfigState = {
   credentials: [],
   grants: [],
   bindings: [],
-  oauth: {},
   systemSettings: { revision: 0, routing: {}, execution: {}, trace: {}, safety_limits: {} },
   projectSettings: {},
   pools: [],
@@ -328,7 +308,6 @@ export function resetProviderConfigStub(): void {
       version: 1,
     },
   ]
-  state.oauth = {}
   state.systemSettings = {
     revision: 4,
     routing: { fallback_policy: "chained", cost_optimization_preset: "balanced", max_attempts: 3, preferred_providers: [] },
@@ -423,56 +402,6 @@ resetProviderConfigStub()
 // Scenario controls
 // ---------------------------------------------------------------------------
 
-function credentialByLabel(label: string): StubCredential {
-  const found = state.credentials.find((c) => c.label === label)
-  if (found === undefined) throw new Error(`unknown stub credential ${label}`)
-  return found
-}
-
-/** Id of one credential by label. */
-export function credentialIdOf(label: string): string {
-  return credentialByLabel(label).id
-}
-
-/** Simulate a rotation by someone else: the next rotate with the old generation conflicts. */
-export function rotateCredentialElsewhere(label: string): void {
-  credentialByLabel(label).generation += 1
-}
-
-/** Seed a private Parallel OAuth credential, not yet connected. */
-export function seedPrivateOAuthCredential(projectId: string, label: string): void {
-  state.credentials.push(cred(nextId("9c000000"), "parallel", label, "project", projectId, 1, "oauth"))
-}
-
-/** Seed a system Parallel OAuth credential, not yet connected. */
-export function seedSystemOAuthCredential(label: string): void {
-  state.credentials.push(cred(nextId("5c000000"), "parallel", label, "system", null, 1, "oauth"))
-}
-
-/** Let the next poll of this credential's pending device flow report connected. */
-export function approveOAuthDevice(label: string): void {
-  const id = credentialByLabel(label).id
-  const flow = state.oauth[id]
-  if (flow !== undefined) flow.approved = true
-}
-
-/** Let the next poll of this credential's pending device flow report a denial. */
-export function denyOAuthDevice(label: string): void {
-  const id = credentialByLabel(label).id
-  const flow = state.oauth[id]
-  if (flow !== undefined) flow.denied = true
-}
-
-/** OAuth state of one credential by label. */
-export function oauthStatusOf(label: string): StubOAuth["status"] {
-  return state.oauth[credentialByLabel(label).id]?.status ?? "disconnected"
-}
-
-/** Number of poll requests one credential's device flow received. */
-export function oauthPollCount(label: string): number {
-  return state.oauth[credentialByLabel(label).id]?.polls ?? 0
-}
-
 /** Bump one project's settings revision as if another tab saved. */
 export function changeProjectSettingsElsewhere(projectId: string): void {
   const doc = state.projectSettings[projectId]
@@ -505,27 +434,6 @@ export function projectBindings(projectId: string): StubBinding[] {
   return state.bindings.filter((b) => b.project_id === projectId)
 }
 
-/** Grants of one system credential by label. */
-export function grantsOf(label: string): StubGrant[] {
-  const id = credentialByLabel(label).id
-  return state.grants.filter((g) => g.credential_id === id)
-}
-
-/** All pools, current state. */
-export function stubPools(): StubPool[] {
-  return state.pools
-}
-
-/** All pool links, current state. */
-export function stubLinks(): StubLink[] {
-  return state.links
-}
-
-/** Whether a credential with this label exists (deleted ones are gone). */
-export function credentialExists(label: string): boolean {
-  return state.credentials.some((c) => c.label === label)
-}
-
 // ---------------------------------------------------------------------------
 // Wire projections
 // ---------------------------------------------------------------------------
@@ -537,19 +445,6 @@ function nextId(prefix: string): string {
 
 function capabilityOf(provider: string): Operation[] {
   return state.providerTypes.find((t) => t.provider_type === provider)?.capability ?? ["search"]
-}
-
-function credentialRead(c: StubCredential): Record<string, unknown> {
-  return {
-    id: c.id,
-    provider_type: c.provider_type,
-    owner_scope: c.owner_scope,
-    owner_project_id: c.owner_project_id,
-    label: c.label,
-    auth_mode: c.auth_mode,
-    generation: c.generation,
-    status: c.status,
-  }
 }
 
 /** Credentials one project may see: its own private ones and granted system ones. */
@@ -802,10 +697,6 @@ function record(route: Route): ConfigRequest {
   return entry
 }
 
-function isOps(value: unknown): value is Operation[] {
-  return Array.isArray(value) && value.every((v) => v === "search" || v === "fetch")
-}
-
 const UUID = "[0-9a-f-]{36}"
 
 // ---------------------------------------------------------------------------
@@ -814,221 +705,19 @@ const UUID = "[0-9a-f-]{36}"
 
 async function handleProjectCredentials(
   route: Route,
-  req: ConfigRequest,
   projectId: string,
   permissions: string[]
 ): Promise<void> {
-  const match = new RegExp(`/credentials(?:/(${UUID}))?(/rotate|/oauth(?:/device|/poll)?)?$`).exec(req.path)
-  const credentialId = match?.[1]
-  const tail = match?.[2]
   if (!permissions.includes("providers.read")) return empty(route, 403)
-  if (credentialId === undefined) {
-    if (req.method === "GET") {
-      return json(
-        route,
-        visibleCredentials(projectId).map(({ c, ops }) => projectCredentialRead(c, ops, permissions))
-      )
-    }
-    if (req.method !== "POST") return empty(route, 405)
-    if (!permissions.includes("credentials.manage_private")) return empty(route, 403)
-    return createCredential(route, req.body, "project", projectId, permissions)
-  }
-  const visible = visibleCredentials(projectId).find((v) => v.c.id === credentialId)
-  if (visible === undefined) return empty(route, 404)
-  const isPrivate = visible.c.owner_scope === "project"
-  if (tail === undefined) {
-    if (req.method === "GET") return json(route, projectCredentialRead(visible.c, visible.ops, permissions))
-    if (req.method !== "DELETE") return empty(route, 405)
-    if (!isPrivate || !permissions.includes("credentials.manage_private")) return empty(route, 403)
-    deleteCredential(visible.c.id)
-    return empty(route, 204)
-  }
-  if (tail === "/rotate") {
-    if (!isPrivate || !permissions.includes("credentials.manage_private")) return empty(route, 403)
-    return rotateCredential(route, req.body, visible.c, (c) =>
-      projectCredentialRead(c, visible.ops, permissions)
-    )
-  }
-  if (req.method !== "GET" && (!isPrivate || !permissions.includes("credentials.manage_private"))) {
-    return empty(route, 403)
-  }
-  return handleOAuth(route, req, visible.c, tail)
-}
-
-async function createCredential(
-  route: Route,
-  body: Record<string, unknown> | null,
-  owner: "system" | "project",
-  projectId: string | null,
-  permissions: string[]
-): Promise<void> {
-  if (body === null) return invalid(route, "invalid body")
-  const provider = typeof body.provider_type === "string" ? body.provider_type : ""
-  const label = typeof body.label === "string" ? body.label : ""
-  const authMode = body.auth_mode === undefined ? "api_key" : body.auth_mode
-  if (!state.providerTypes.some((t) => t.provider_type === provider)) return invalid(route, "unknown provider")
-  if (label.length < 1 || label.length > 100) return invalid(route, "invalid label")
-  if (authMode !== "api_key" && authMode !== "oauth") return invalid(route, "invalid auth_mode")
-  if (authMode === "api_key" && (typeof body.secret !== "string" || body.secret === "")) {
-    return invalid(route, "secret is required for api_key credentials")
-  }
-  if (authMode === "oauth" && body.secret !== undefined && body.secret !== null) {
-    return invalid(route, "secret is forbidden for oauth credentials")
-  }
-  if (authMode === "oauth" && provider !== "parallel") return invalid(route, "oauth is Parallel only")
-  if (state.credentials.some((c) => c.owner_scope === owner && c.owner_project_id === projectId && c.label === label)) {
-    return conflict(route, "CREDENTIAL_LABEL_TAKEN", "A credential with this label already exists.")
-  }
-  const created = cred(
-    nextId(owner === "system" ? "5c000000" : "9c000000"),
-    provider,
-    label,
-    owner,
-    projectId,
-    1,
-    authMode
+  return json(
+    route,
+    visibleCredentials(projectId).map(({ c, ops }) => projectCredentialRead(c, ops, permissions))
   )
-  state.credentials.push(created)
-  if (owner === "system") return json(route, credentialRead(created), 201)
-  return json(route, projectCredentialRead(created, capabilityOf(provider), permissions), 201)
 }
 
-async function rotateCredential(
-  route: Route,
-  body: Record<string, unknown> | null,
-  c: StubCredential,
-  read: (c: StubCredential) => Record<string, unknown>
-): Promise<void> {
-  if (body === null) return invalid(route, "invalid body")
-  if (typeof body.expected_generation !== "number" || typeof body.secret !== "string" || body.secret === "") {
-    return invalid(route, "expected_generation and secret are required")
-  }
-  if (c.auth_mode !== "api_key") return conflict(route, "CREDENTIAL_NOT_ROTATABLE", "OAuth credentials do not rotate.")
-  if (body.expected_generation !== c.generation) {
-    return conflict(route, "CREDENTIAL_GENERATION_CONFLICT", "The credential generation changed.")
-  }
-  c.generation += 1
-  return json(route, read(c))
-}
-
-function deleteCredential(id: string): void {
-  state.credentials = state.credentials.filter((c) => c.id !== id)
-  state.grants = state.grants.filter((g) => g.credential_id !== id)
-  state.bindings = state.bindings.filter((b) => b.credential_id !== id)
-  state.links = state.links.filter((l) => l.credential_id !== id)
-  delete state.oauth[id]
-}
-
-async function handleOAuth(route: Route, req: ConfigRequest, c: StubCredential, tail: string): Promise<void> {
-  if (c.auth_mode !== "oauth") return empty(route, 404)
-  const flow = (state.oauth[c.id] ??= {
-    status: "disconnected",
-    approved: false,
-    denied: false,
-    polls: 0,
-    connected_at: null,
-    last_error_code: null,
-  })
-  const status = (interval: number | null) => ({
-    credential_id: c.id,
-    status: flow.status,
-    scopes: flow.status === "connected" ? "balance:read" : null,
-    access_expires_at: null,
-    connected_at: flow.connected_at,
-    refreshed_at: null,
-    disconnected_at: null,
-    last_error_code: flow.last_error_code,
-    interval,
-  })
-  if (tail === "/oauth/device") {
-    if (req.method !== "POST") return empty(route, 405)
-    flow.status = "pending"
-    flow.approved = false
-    flow.denied = false
-    flow.polls = 0
-    flow.last_error_code = null
-    return json(
-      route,
-      { user_code: OAUTH_USER_CODE, verification_uri: OAUTH_VERIFICATION_URI, interval: 1, expires_in: 600 },
-      201
-    )
-  }
-  if (tail === "/oauth/poll") {
-    if (req.method !== "POST") return empty(route, 405)
-    flow.polls += 1
-    if (flow.status === "pending" && flow.denied) {
-      // The backend ends a denied flow: the grant is disconnected.
-      flow.status = "disconnected"
-      flow.last_error_code = "access_denied"
-    } else if (flow.status === "pending" && flow.approved) {
-      flow.status = "connected"
-      flow.connected_at = "2026-11-02T10:00:00Z"
-    }
-    return json(route, status(flow.status === "pending" ? 1 : null))
-  }
-  if (req.method === "GET") return json(route, status(null))
-  if (req.method === "DELETE") {
-    flow.status = "disconnected"
-    flow.connected_at = null
-    return empty(route, 204)
-  }
-  return empty(route, 405)
-}
-
-async function handleBindings(
-  route: Route,
-  req: ConfigRequest,
-  projectId: string,
-  permissions: string[]
-): Promise<void> {
+async function handleBindings(route: Route, projectId: string, permissions: string[]): Promise<void> {
   if (!permissions.includes("providers.read")) return empty(route, 403)
-  const bindingId = new RegExp(`/bindings/(${UUID})$`).exec(req.path)?.[1]
-  if (bindingId === undefined) {
-    if (req.method === "GET") return json(route, projectBindings(projectId).map(bindingRead))
-    if (req.method !== "POST") return empty(route, 405)
-    if (!permissions.includes("providers.configure")) return empty(route, 403)
-    const body = req.body
-    if (body === null) return invalid(route, "invalid body")
-    if ("enabled_operations" in body) return invalid(route, "enabled_operations is not accepted on create")
-    const credentialId = typeof body.credential_id === "string" ? body.credential_id : ""
-    const routeLabel = typeof body.route_label === "string" ? body.route_label : ""
-    const priority = body.priority === undefined ? 100 : body.priority
-    if (routeLabel.length < 1 || routeLabel.length > 100) return invalid(route, "invalid route_label")
-    if (typeof priority !== "number" || priority < 0) return invalid(route, "invalid priority")
-    if (!visibleCredentials(projectId).some((v) => v.c.id === credentialId)) return empty(route, 404)
-    const created: StubBinding = {
-      id: nextId("b3000000"),
-      project_id: projectId,
-      credential_id: credentialId,
-      route_label: routeLabel,
-      enabled_operations: [],
-      priority,
-      version: 1,
-    }
-    state.bindings.push(created)
-    return json(route, bindingRead(created), 201)
-  }
-  const binding = state.bindings.find((b) => b.id === bindingId && b.project_id === projectId)
-  if (binding === undefined) return empty(route, 404)
-  if (!permissions.includes("providers.configure")) return empty(route, 403)
-  if (req.method === "DELETE") {
-    state.bindings = state.bindings.filter((b) => b.id !== bindingId)
-    return empty(route, 204)
-  }
-  if (req.method !== "PATCH") return empty(route, 405)
-  const body = req.body ?? {}
-  if (body.enabled_operations !== undefined && body.enabled_operations !== null) {
-    if (!isOps(body.enabled_operations)) return invalid(route, "invalid enabled_operations")
-    const granted = visibleCredentials(projectId).find((v) => v.c.id === binding.credential_id)?.ops ?? []
-    if (body.enabled_operations.some((op) => !granted.includes(op))) {
-      return conflict(route, "OPERATION_NOT_GRANTED", "The credential does not permit this operation.")
-    }
-    binding.enabled_operations = [...new Set(body.enabled_operations)]
-  }
-  if (typeof body.priority === "number") binding.priority = body.priority
-  if (typeof body.route_label === "string") binding.route_label = body.route_label
-  binding.version += 1
-  return json(route, bindingRead(binding))
+  return json(route, projectBindings(projectId).map(bindingRead))
 }
 
 async function handleSettings(
@@ -1216,11 +905,11 @@ export async function installProviderConfigRoutes(page: Page, bridge: ProjectAcc
       }
       if (resource === "bindings") {
         if (req.method !== "GET" || req.path !== `/api/v1/projects/${projectId}/bindings`) return empty(route, 404)
-        return handleBindings(route, req, projectId, access.permissions)
+        return handleBindings(route, projectId, access.permissions)
       }
       if (resource === "credentials") {
         if (req.method !== "GET" || req.path !== `/api/v1/projects/${projectId}/credentials`) return empty(route, 404)
-        return handleProjectCredentials(route, req, projectId, access.permissions)
+        return handleProjectCredentials(route, projectId, access.permissions)
       }
       if (req.path.endsWith("/settings")) return handleSettings(route, req, projectId, access.permissions)
       if (/\/settings\/copy(\/preview)?$/.test(req.path)) {

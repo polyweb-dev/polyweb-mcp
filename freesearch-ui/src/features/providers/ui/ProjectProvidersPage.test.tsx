@@ -126,6 +126,13 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe("ProjectProvidersPage view", () => {
+  it("shows an unavailable wire observation and its timestamp", async () => {
+    const checkedAt = new Date(Date.now() - 7_200_000).toISOString()
+    installProvidersStub({ view: providerView({ checkedAt, health: "unavailable" }) })
+    renderInProject(<ProjectProvidersPage accountId="acc" />)
+    expect(await screen.findByText(/Unavailable.*2 h ago/)).toBeInTheDocument()
+    expect(screen.getByTitle(/^Last call:/)).toBeInTheDocument()
+  })
   it("shows the age of the last credential result when the provider view supplies it", async () => {
     const checkedAt = new Date(Date.now() - 7_200_000).toISOString()
     installProvidersStub({ view: providerView({ checkedAt }) })
@@ -236,7 +243,7 @@ function capacityStub(ownerId = "acc", permissions = [...PROJECT_MEMBER_PERMISSI
 }
 
 describe("ProjectProvidersPage pool capacity", () => {
-  function keylessStub(ownerId = "acc", keys: unknown[] = []) {
+  function keylessStub(ownerId = "acc", keys: unknown[] = [], failKey = false) {
     const keyless = {
       provider_type: "keenable", capability: ["search", "fetch"], kill_switch: false,
       system_enabled_operations: ["search", "fetch"], available: true, enabled: true, keyless: true,
@@ -249,6 +256,9 @@ describe("ProjectProvidersPage pool capacity", () => {
       onMutation: (req) => {
         if (req.url === `${BASE}/provider-owner`) return ok({ user_id: ownerId, email: "owner@example.com" })
         if (req.url === `${BASE}/pools`) return ok([CAPACITY_POOL])
+        if (failKey && req.method === "POST" && req.url === "/api/v1/account/vault/keys") {
+          return err(422, { detail: "bad secret fake-provider-key-123" })
+        }
         if (req.url === "/api/v1/account/vault/keys") return ok(keys)
         if (req.url === `${BASE}/routing/order`) {
           const order = { strategy: "lowest_cost", providers: [
@@ -281,6 +291,18 @@ describe("ProjectProvidersPage pool capacity", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add a key for higher limits" }))
     const dialog = await screen.findByRole("dialog", { name: "Add Keenable key" })
     expect(within(dialog).getByLabelText("Label")).toHaveValue("Keenable key")
+  })
+
+  it("does not expose an echoed secret after a vault key failure", async () => {
+    keylessStub("acc", [], true)
+    renderInProject(<ProjectProvidersPage accountId="acc" />)
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for Keenable" }))
+    await userEvent.click(screen.getByRole("button", { name: "Add a key for higher limits" }))
+    const dialog = await screen.findByRole("dialog", { name: "Add Keenable key" })
+    await userEvent.type(within(dialog).getByLabelText("API key"), "fake-provider-key-123")
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add key" }))
+    expect(await within(dialog).findByRole("alert")).not.toHaveTextContent("fake-provider-key-123")
+    expect(within(dialog).getByLabelText("API key")).toHaveValue("")
   })
 
   it("keeps a keyless provider selected when the owner has multiple keys", async () => {
@@ -394,7 +416,7 @@ describe("ProjectProvidersPage pool operations", () => {
     const requests = stub(["search", "fetch"])
     renderInProject(<ProjectProvidersPage accountId="acc" />)
     await userEvent.click(await screen.findByRole("switch", { name: "Use Tavily for Search" }))
-    const dialog = await screen.findByRole("dialog", { name: "Stop Search in pool Tavily pool" })
+    const dialog = await screen.findByRole("dialog", { name: "Stop Tavily Search" })
     expect(requests.requests.some((req) => req.method === "PATCH")).toBe(false)
     await userEvent.click(within(dialog).getByRole("button", { name: "Stop Search" }))
     await waitFor(() => expect(requests.requests.find((req) => req.method === "PATCH")?.body).toEqual({ operations: ["fetch"] }))
@@ -405,7 +427,7 @@ describe("ProjectProvidersPage pool operations", () => {
     const requests = stub(["search", "fetch"])
     renderInProject(<ProjectProvidersPage accountId="acc" />)
     await userEvent.click(await screen.findByRole("switch", { name: "Use Tavily for Search" }))
-    const dialog = await screen.findByRole("dialog", { name: "Stop Search in pool Tavily pool" })
+    const dialog = await screen.findByRole("dialog", { name: "Stop Tavily Search" })
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
     expect(requests.requests.some((req) => req.method === "PATCH")).toBe(false)
     expect(screen.getByRole("switch", { name: "Use Tavily for Search" })).toBeChecked()
@@ -416,7 +438,7 @@ describe("ProjectProvidersPage pool operations", () => {
     renderInProject(<ProjectProvidersPage accountId="acc" />)
     await userEvent.click(await screen.findByRole("tab", { name: "Fetch 1" }))
     await userEvent.click(screen.getByRole("switch", { name: "Use Tavily for Fetch" }))
-    const dialog = await screen.findByRole("dialog", { name: "Stop Fetch in pool Tavily pool" })
+    const dialog = await screen.findByRole("dialog", { name: "Stop Tavily Fetch" })
     await userEvent.click(within(dialog).getByRole("button", { name: "Stop Fetch" }))
     await waitFor(() => expect(requests.requests.find((req) => req.method === "PATCH")?.body).toEqual({ operations: ["search"] }))
     expect(await screen.findByRole("tab", { name: "Fetch 0" })).toHaveAttribute("aria-selected", "true")

@@ -21,15 +21,14 @@ Feature: Project settings
     And I see the heading "Trace policy"
     And the settings page shows no field "routing.max_attempts"
     And the settings page shows no field "execution.cache_enabled"
-    And the settings field "trace.retention_days" shows "Traces older than this limit are deleted."
-    And the settings field "trace.retention_days" shows "Your override exceeds the system limit; the system limit applies."
+    And trace deletion is on with 90 days
+    And the settings field "trace.retention_days" shows "Your override exceeds the system limit. The system limit applies"
     And the settings page shows no field "trace.sampling_rate"
     And the settings page shows no field "trace.payload_redaction"
-    And the settings field "trace.detail" shows "API keys, auth headers, cookies, passwords and tokens are always removed from traces."
+    And the settings field "trace.detail" shows "API keys, auth headers, cookies, passwords and tokens are always removed from traces"
     And the settings field "trace.detail" shows "Full requests"
     When I open the Settings page of project Beta
-    Then the settings field "trace.retention_days" shows "Keep all traces."
-    And trace deletion is off
+    Then trace deletion is off
     When I set the settings field "trace.detail" labelled "Payload detail" to "Metadata only"
     Then the settings field "trace.detail" shows "Metadata only"
 
@@ -49,7 +48,7 @@ Feature: Project settings
       """
       { "expected_revision": 3, "trace": { "retention_days": null } }
       """
-    And the settings field "trace.retention_days" shows "Keep all traces."
+    And trace deletion is off
 
   Scenario: An out-of-range number shows its range and is not saved
     Given I am a member of project Alpha with role project_admin
@@ -74,13 +73,13 @@ Feature: Project settings
     Given the system limits traces to metadata
     And I am a member of project Alpha with role project_admin
     When I open the Settings page of project Alpha
-    Then the settings field "trace.detail" shows "The system limit is metadata only."
+    Then the settings field "trace.detail" shows "Metadata only"
+    And the payload detail choice is unavailable
 
   Scenario: A project member sees settings read-only without copy
     Given I am a member of project Alpha with role project_member
     When I open the Settings page of project Alpha
-    Then I see "You can view these settings. Ask a project administrator to change them."
-    And the settings field "trace.retention_days" shows "90"
+    Then the settings field "trace.retention_days" shows "90"
     And the settings page offers no editing controls
 
   Scenario: Copy previews first, then applies the preview's revisions and selected bindings

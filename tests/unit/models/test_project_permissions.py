@@ -67,6 +67,8 @@ def test_presets(preset: int, keys: set[str]) -> None:
         (["routing_editor"], 0),
         (["provider_editor"], 64),
         (["token_manager"], 128),
+        (["provider_editor", "token_manager"], 192),
+        (["project_member", "provider_editor"], 79),
         (["project_member", "routing_editor", "provider_editor", "token_manager"], 207),
         (["project_admin", "provider_editor", "token_manager"], 192),
     ],

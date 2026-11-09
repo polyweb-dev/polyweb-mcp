@@ -41,19 +41,18 @@ from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import ROUND_CEILING, Decimal
+from decimal import Decimal
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.registry import adapter_factory
 from freesearch.configuration.config import get_settings
 from freesearch.configuration.provider_config import ProviderConfig, ProviderConfigError
+from freesearch.configuration.provider_limits import provider_limit_defaults
 from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.observability import (
@@ -82,6 +81,7 @@ from freesearch.models.contracts import (
     FetchRequest,
     FetchResponse,
     HealthStatus,
+    ProviderError,
     ProviderHealth,
     ProviderTraceItem,
     QuotaSnapshot,
@@ -182,8 +182,15 @@ from freesearch.services.monitoring import (
     tracked_call,
 )
 from freesearch.services.parallel_oauth_adapter import ParallelOAuthAdapter
+from freesearch.services.pool_budget import (
+    actual_price,
+    failure_price,
+    price_micros,
+    request_price,
+    reserve_with_window,
+)
 from freesearch.services.pool_budget import release as release_pool_budget
-from freesearch.services.pool_budget import reserve_with_window
+from freesearch.services.pool_budget import settle_actual as settle_pool_budget
 from freesearch.services.project_routing import effective_order
 from freesearch.services.projects import ProjectStorageUnavailable
 from freesearch.services.provider_runtime import (
@@ -192,7 +199,6 @@ from freesearch.services.provider_runtime import (
     routing_policy,
     schedule_quota_refresh,
 )
-from freesearch.services.routing_order import call_cost_usd
 
 logger = logging.getLogger(__name__)
 
@@ -408,36 +414,21 @@ class _AllocationScope:
     limit_scope: str
 
 
-async def _allocation_scope(
-    session: AsyncSession, allocation: StoredAllocation
-) -> _AllocationScope:
-    row = (
-        await session.execute(
-            text(
-                "SELECT key_pool_id, limit_scope FROM project_pool_allocations "
-                "WHERE project_id=:project AND pool_id=:pool AND operation_scope=:operation"
-            ),
-            {
-                "project": str(allocation.project_id),
-                "pool": str(allocation.pool_id),
-                "operation": allocation.operation.value,
-            },
-        )
-    ).one_or_none()
-    if row is None or row.limit_scope not in ("pool", "operation"):
+def _allocation_scope(allocation: StoredAllocation) -> _AllocationScope:
+    if allocation.limit_scope not in ("pool", "operation"):
         raise ExecutionBindingMissing("the project allocation changed before dispatch")
-    if row.limit_scope == "pool" and row.key_pool_id is None:
+    if allocation.limit_scope == "pool" and allocation.key_pool_id is None:
         raise ExecutionBindingMissing("the shared allocation has no vault pool")
     return _AllocationScope(
-        key_pool_id=UUID(row.key_pool_id) if row.key_pool_id is not None else None,
-        limit_scope=row.limit_scope,
+        key_pool_id=allocation.key_pool_id,
+        limit_scope=allocation.limit_scope,
     )
 
 
-async def _check_allocation_scope(
-    session: AsyncSession, allocation: StoredAllocation | None, expected: _AllocationScope | None
+def _check_allocation_scope(
+    allocation: StoredAllocation | None, expected: _AllocationScope | None
 ) -> None:
-    current = None if allocation is None else await _allocation_scope(session, allocation)
+    current = None if allocation is None else _allocation_scope(allocation)
     if current != expected:
         raise ExecutionBindingMissing("the provider configuration changed before dispatch")
 
@@ -1005,10 +996,14 @@ class ExecutionService:
             None,
         )
 
-    async def vault_key_usage(self, provider: str) -> list[VaultKeyUsage]:
-        """Return sanitized per-key usage observations for installation admins."""
+    async def vault_key_usage(self, provider: str, owner_id: UUID) -> list[VaultKeyUsage]:
+        """Return sanitized observations for the owner's keys."""
 
-        credentials = await self._vault_usage_credentials(provider)
+        credentials = [
+            item
+            for item in await self._vault_usage_credentials(provider)
+            if item.owner_user_id == owner_id
+        ]
         base = self._limits.observation_pool_id(provider, AuthMode.KEYED)
         results = []
         for item in credentials:
@@ -1023,11 +1018,12 @@ class ExecutionService:
                 if base is not None
                 else None
             )
+            if pool is not None and pool.credential_generation != credential.generation:
+                pool = None
             results.append(
                 VaultKeyUsage(
                     key_id=credential.id,
                     label=credential.label,
-                    owner_email=item.owner_email,
                     balance=pool,
                 )
             )
@@ -1477,7 +1473,7 @@ class ExecutionService:
                     operation=operation,
                 )
                 if allocation is not None:
-                    allocation_scope = await _allocation_scope(session, allocation)
+                    allocation_scope = _allocation_scope(allocation)
             credential = await self._credentials.resolve_material_in_session(
                 session,
                 context,
@@ -2620,15 +2616,48 @@ class _GrantedReservation:
 class _BudgetReservation:
     """Associate an unsent refund with its underlying capacity reservation."""
 
-    def __init__(self, inner: Any, pool_id: UUID, cost: int, window: str) -> None:
+    def __init__(
+        self,
+        inner: Any,
+        pool_id: UUID,
+        cost: int,
+        window: str,
+        *,
+        record: Any = None,
+        repository: Any = None,
+    ) -> None:
         self.inner = inner
         self.pool_id = pool_id
         self.cost = cost
         self.window = window
         self.refunded = False
+        self.record = record
+        self.repository = repository
+        self.settled = False
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
+
+    async def settle_pool_actual(self, response: SearchResponse | FetchResponse) -> None:
+        if self.record is not None:
+            await self._settle_pool_price(actual_price(self.record, response))
+
+    async def settle_pool_failure(self, error: BaseException | None) -> None:
+        provider_error = getattr(error, "error", None)
+        if isinstance(provider_error, ProviderError) and self.record is not None:
+            await self._settle_pool_price(failure_price(self.record, provider_error))
+
+    async def _settle_pool_price(self, price: Decimal | None) -> None:
+        if self.settled or self.refunded or self.record is None:
+            return
+        if price is None:
+            return
+        async with self.repository.session() as session:
+            await settle_pool_budget(
+                session, self.pool_id, self.cost, price_micros(price), window_start=self.window
+            )
+            await session.commit()
+        self.settled = True
 
 
 class _AttemptSeam:
@@ -2825,7 +2854,7 @@ class _AttemptSeam:
                         raise ExecutionBindingMissing(
                             "the provider configuration changed before dispatch"
                         )
-                    await _check_allocation_scope(session, allocation, leg.allocation_scope)
+                    _check_allocation_scope(allocation, leg.allocation_scope)
         except (
             CredentialStorageUnavailable,
             ProjectStorageUnavailable,
@@ -2915,10 +2944,21 @@ class _AttemptSeam:
         scope = current.allocation_scope
         if scope is None or scope.key_pool_id is None:
             return reservation
-        price = call_cost_usd(current.provider, RoutingOperation(self._operation.value))
+        records = self._limits.records if self._limits is not None else provider_limit_defaults()
+        record = next(
+            (
+                item
+                for item in records
+                if item.provider == current.provider
+                and item.operation == self._rails_context.operation
+                and item.auth_mode == self._auth_mode
+            ),
+            None,
+        )
+        price = None if record is None else request_price(record, self._request)
         if price is None or price == 0:
             return reservation
-        cost = int((price * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+        cost = price_micros(price)
         task = asyncio.create_task(self._commit_budget(scope.key_pool_id, cost))
         try:
             allowed, window = await asyncio.shield(task)
@@ -2943,7 +2983,14 @@ class _AttemptSeam:
             )
         if window is None:
             return reservation
-        return _BudgetReservation(reservation, scope.key_pool_id, cost, window)
+        return _BudgetReservation(
+            reservation,
+            scope.key_pool_id,
+            cost,
+            window,
+            record=record,
+            repository=self._service._repository,
+        )
 
     async def _commit_budget(self, pool_id: UUID, cost: int) -> tuple[bool, str | None]:
         async with self._service._repository.session() as session:

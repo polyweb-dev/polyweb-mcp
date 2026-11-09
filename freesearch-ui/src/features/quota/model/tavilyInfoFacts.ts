@@ -4,6 +4,7 @@ import { callsText } from "./usdDisplay"
 import { multiplyDecimal } from "./manualQuotaMath"
 import { groupDigits } from "./numberText"
 import { formatTavilyPopoverAmount } from "./tavilyCredits"
+import { operationLabel } from "./quotaLabels"
 
 function known(value: string | null | undefined): string | null {
   if (value == null) return null
@@ -44,7 +45,7 @@ export function nativeCostFact(
   const advancedBatch = advancedBatchRaw === null ? null : formatTavilyPopoverAmount(advancedBatchRaw, "native")
   if (batch === null || advancedBatch === null) return null
   return {
-    label: isSearch ? "Search cost" : "Extract cost",
+    label: operationLabel(operation) + " cost",
     value: creditWord(batch) + (isSearch ? "" : " per " + EXTRACT_BATCH_URLS + " URLs"),
     note: "(advanced: " + creditWord(advancedBatch) + ")",
   }
@@ -98,4 +99,3 @@ export function tavilyRateFacts(auth: ProviderAuthLimits, rateLimitOverride?: st
   }
   return facts
 }
-

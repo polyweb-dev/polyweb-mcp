@@ -68,9 +68,16 @@ interface TableRowsInput {
 }
 
 function keyOAuthActions(key: KeyBalance | null, actions: ReactNode, status: ReactNode): ReactNode {
-  if (key === null) return status == null ? actions : null
+  if (key === null) return null
   if (key.authMode !== "oauth" || key.oauthConnected !== false) return null
-  return <><OAuthStatusTag status="disconnected" />{actions}</>
+  return status == null ? actions : null
+}
+
+function keyLabel(key: KeyBalance | null, status: ReactNode): ReactNode {
+  return <span className="inline-flex items-center gap-2">
+    {key?.label ?? status ?? "No keys"}
+    {key?.authMode === "oauth" && key.oauthConnected === false && <OAuthStatusTag status="disconnected" />}
+  </span>
 }
 
 function keyTableRows(input: TableRowsInput): ReactNode {
@@ -78,14 +85,14 @@ function keyTableRows(input: TableRowsInput): ReactNode {
   return rows.map((key, index) => (
     <tr key={key?.keyId ?? "empty"}>
       {index === 0 && <td rowSpan={rows.length} className="fs-cell-strong align-middle">{input.identity}</td>}
-      <td className="align-middle">{key?.label ?? input.keyStatus ?? "—"}</td>
+      <td className="align-middle">{keyLabel(key, input.keyStatus)}</td>
       <td className="align-middle">
-        {keyBalanceText(key, input.keys.length <= 1 ? input.fallback : null)}
+        {keyBalanceText(key, input.keys.length === 0 ? input.fallback : null)}
       </td>
       <td className="align-middle text-[var(--muted)]">{keyRefreshTime(key, input.now)}</td>
       <td className="fs-cell-actions min-w-80 align-middle">
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex items-center justify-end gap-2">
             {index === 0 && <>{input.refresh}{input.actions}{input.keys.length > 0 && input.keyStatus}</>}
             {keyOAuthActions(key, input.oauthActions, input.keyStatus)}
           </div>
@@ -127,7 +134,6 @@ export function ProviderUsageRow(props: ProviderUsageRowProps): ReactNode {
         auth={view.auth}
         fetchAvailable={view.fetchAvailable}
         creditMode={info.creditMode}
-        nativeDisplay={view.nativeDisplay}
         providers={props.providers}
         providerUnits={props.providerUnits}
         observed={props.observed}

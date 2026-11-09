@@ -60,7 +60,7 @@ def _metadata_only(record: TraceSpanRecord) -> TraceSpanRecord:
 
 
 def apply_trace_policy(record: TraceSpanRecord, policy: ProjectTracePolicy) -> TraceSpanRecord:
-    """Return the record as the project's detail and redaction policy allows."""
+    """Return the record as the project's detail policy allows."""
 
     if policy.captures_payload:
         return record

@@ -1,5 +1,6 @@
 """Unit tests for materialized allocation rate admission."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -112,41 +113,21 @@ def test_null_rate_is_unlimited_but_zero_is_a_strict_limit(base_rate: int | None
         assert len(spec.windows) == 1 and spec.windows[0].limit_units == 0
 
 
-@pytest.mark.asyncio
-async def test_allocation_scope_reads_materialized_identity() -> None:
-    allocation = _allocation(3)
+def test_allocation_scope_reads_materialized_identity() -> None:
     key_pool_id = uuid4()
-    session = AsyncMock()
-    session.execute.return_value.one_or_none = Mock(
-        return_value=SimpleNamespace(key_pool_id=str(key_pool_id), limit_scope="pool")
-    )
-    assert await _allocation_scope(session, allocation) == _AllocationScope(key_pool_id, "pool")
+    allocation = replace(_allocation(3), key_pool_id=key_pool_id, limit_scope="pool")
+    assert _allocation_scope(allocation) == _AllocationScope(key_pool_id, "pool")
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "row",
-    [
-        None,
-        SimpleNamespace(key_pool_id=None, limit_scope="pool"),
-        SimpleNamespace(key_pool_id=None, limit_scope="invalid"),
-    ],
-)
-async def test_allocation_scope_rejects_missing_or_invalid_rows(row: object) -> None:
-    session = AsyncMock()
-    session.execute.return_value.one_or_none = Mock(return_value=row)
+@pytest.mark.parametrize("scope", ["pool", "invalid"])
+def test_allocation_scope_rejects_invalid_scope(scope: str) -> None:
     with pytest.raises(ExecutionBindingMissing):
-        await _allocation_scope(session, _allocation(3))
+        _allocation_scope(replace(_allocation(3), limit_scope=scope))
 
 
-@pytest.mark.asyncio
-async def test_allocation_scope_revalidation_rejects_changed_scope() -> None:
-    session = AsyncMock()
+def test_allocation_scope_revalidation_rejects_changed_scope() -> None:
     key_pool_id = uuid4()
-    session.execute.return_value.one_or_none = Mock(
-        return_value=SimpleNamespace(key_pool_id=str(key_pool_id), limit_scope="operation")
-    )
     with pytest.raises(ExecutionBindingMissing):
-        await _check_allocation_scope(
-            session, _allocation(3), _AllocationScope(key_pool_id, "pool")
+        _check_allocation_scope(
+            replace(_allocation(3), key_pool_id=key_pool_id), _AllocationScope(key_pool_id, "pool")
         )

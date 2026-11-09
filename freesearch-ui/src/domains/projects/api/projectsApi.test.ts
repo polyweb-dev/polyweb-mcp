@@ -39,6 +39,7 @@ const MEMBER_BODY = {
   role: "developer",
   permissions: 15,
   provider_owner: false,
+  account_active: true,
 }
 
 describe("projectsApi", () => {

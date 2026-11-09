@@ -89,7 +89,7 @@ export function MemberActionsMenu({
   const isOwner = ownerId != null && member.user_id === ownerId
   const reason = statusReason(isOwner, lastAdmin, admin, ownerId)
   const ownershipAction = ownershipLabel({ allowed: callerIsProviderOwner && onTransfer !== undefined,
-    isOwner, isSelf, admin, active: member.status === "active" })
+    isOwner, isSelf, admin, active: member.account_active && member.status === "active" })
 
   const suspend = () =>
     onConfirm({

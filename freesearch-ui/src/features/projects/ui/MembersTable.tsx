@@ -5,7 +5,7 @@ import type { ProjectMembersController } from "../model/useProjectMembersControl
 import { MemberRowActions } from "./MemberRowActions"
 
 function isActiveAdmin(member: ProjectMember): boolean {
-  return member.status === "active" && member.role === "admin"
+  return member.account_active && member.status === "active" && member.role === "admin"
 }
 
 export interface MembersTableProps {
@@ -59,6 +59,7 @@ export function MembersTable({ members, accountId, projectName, canManage, canAs
                       </span>
                     )}
                     {member.status === "suspended" && <Tag tone="warning">Suspended</Tag>}
+                    {!member.account_active && <Tag tone="warning">Account inactive</Tag>}
                   </span>
                 </td>
                 <td>

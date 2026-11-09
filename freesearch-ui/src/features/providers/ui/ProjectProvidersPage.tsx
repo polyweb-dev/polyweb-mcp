@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { getProviderOwner, hasPermission, listProjectPools, detachProjectPool, PROJECT_PERMISSIONS, SYSTEM_PERMISSIONS, useProjectScope, useProjectsOptional } from "@/domains/projects"
 import type { ProjectAccess, ProjectPool, ProviderOwner } from "@/domains/projects"
-import { providerTypeName } from "@/domains/providers"
+import { StopOperationConfirm } from "@/domains/providers"
 import type { ProviderTypeView } from "@/domains/providers"
 import { ApiError } from "@/shared/api/http"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
@@ -56,10 +56,10 @@ function isCapacityOwner(owner: ScopedResource<ProviderOwner | null>, access: Pr
 
 function operationConfirmation(operation: ReturnType<typeof usePoolOperation>, projectName: string) {
   const change = operation.change
-  const label = change?.operation === "search" ? "Search" : "Fetch"
-  const remaining = change?.operation === "search" ? "Fetch" : "Search"
-  return <ConfirmDialog open={change !== null} title={`Stop ${label} in pool ${change?.pool.label ?? "—"}`}
-    message={`${change ? providerTypeName(change.pool.provider_type) : "This provider"} leaves the ${label} order of ${projectName}. ${remaining} stays on`} confirmLabel={`Stop ${label}`}
+  if (!change) return null
+  const remaining = change.operation === "search" ? "fetch" : "search"
+  return <StopOperationConfirm provider={change.pool.provider_type} operation={change.operation} projectName={projectName}
+    remaining={change.pool.operations.includes(remaining) ? remaining : undefined}
     pending={operation.pending} error={operation.error} onClose={operation.close} onConfirm={operation.confirm} />
 }
 
@@ -110,7 +110,6 @@ export function ProjectProvidersPage({ accountId }: { accountId: string }) {
     <PageHeader title="Providers" description="The providers this project uses and the pool that serves each one" />
     <ProviderOwnerLine owner={owner} projectId={projectId} accountId={accountId} isAdmin={isAdmin}
       canConfigure={canConfigure} onClaimed={reload} />
-    {controller.bindingStatus.message && <p role="alert">{controller.bindingStatus.message}</p>}
     {operationNotice(operation)}
     <ProjectProvidersContent projectId={projectId} revision={revision} controller={controller} owner={owner} pools={pools}
       missing={missing} isOwner={isOwner} canConfigure={canConfigure} canEditSystem={hasPermission(systemAccess, SYSTEM_PERMISSIONS.settingsWrite)} reload={reload}

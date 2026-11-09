@@ -2,16 +2,17 @@ export { toBackendId, toUiId } from "./api/idMapping";
 export { PROVIDER_CATALOG, catalogNameOf, catalogEntryForId } from "./model/catalog";
 export type { StaticProviderMeta } from "./model/catalog";
 export { providerIdentity } from "./model/providerIdentity";
-export { providerCallCost } from "./model/providerPricing";
+export { formatCallCost, formatCostTotal, providerCallCost } from "./model/providerPricing";
+export { StopOperationConfirm } from "./model/StopOperationConfirm";
 export { getProviderPrices } from "./api/providerPricesApi";
+export type { ProviderPrice } from "./api/providerPricesApi";
 export { providersForOperation } from "./model/projectProviders";
 export type { ProjectProvider, ProviderOperation } from "./model/projectProviders";
 export {
   getProjectProviderView,
 } from "./api/providerViewApi";
 export type { ProjectProviderView } from "./api/providerViewApi";
-export { hasEffectiveRoute, routeOrder } from "./model/routeOrder";
-export type { RouteEntry } from "./model/routeOrder";
+export { hasEffectiveRoute } from "./model/routeOrder";
 export {
   credentialProviderTypes,
   providerTypeName,
@@ -21,8 +22,6 @@ export {
 export type {
   AvailableCredential,
   CredentialAuthMode,
-  NewCredentialInput,
-  ManagedProjectKey,
   ProviderBinding,
   ProviderTypeView,
 } from "./model/providerView";

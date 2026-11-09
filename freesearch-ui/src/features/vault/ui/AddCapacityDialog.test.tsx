@@ -59,6 +59,48 @@ describe("AddCapacityDialog", () => {
     await waitFor(() => expect(api.updateKeyPool).toHaveBeenCalledWith("pool", expect.objectContaining({ budget: { limit: 20, period: "month" } })))
   })
 
+  it.each([null, { limit: 100, window_seconds: 60 }])("preserves an unlimited pool when the key capacity is %s", async (capacity) => {
+    render(<AddCapacityDialog item={{ ...item, capacity }} pool={{ ...pool, rate: { limit: null, window_seconds: 60 } }}
+      projects={[]} onClose={vi.fn()} onSaved={vi.fn()} />)
+    await userEvent.clear(screen.getByLabelText("Pool name"))
+    await userEvent.type(screen.getByLabelText("Pool name"), "Renamed")
+    await userEvent.click(screen.getByRole("button", { name: "Save pool" }))
+    await waitFor(() => expect(api.updateKeyPool).toHaveBeenCalledWith("pool", expect.objectContaining({
+      label: "Renamed", rate: { limit: null, window_seconds: 60 },
+    })))
+  })
+
+  it("saves strict zero rate and budget", async () => {
+    render(<AddCapacityDialog item={item} pool={{ ...pool, rate: { limit: 0, window_seconds: 60 }, budget: { limit: 0, period: "month" } }}
+      projects={[]} onClose={vi.fn()} onSaved={vi.fn()} />)
+    await userEvent.click(screen.getByRole("button", { name: "Save pool" }))
+    await waitFor(() => expect(api.updateKeyPool).toHaveBeenCalledWith("pool", expect.objectContaining({
+      rate: { limit: 0, window_seconds: 60 }, budget: { limit: 0, period: "month" },
+    })))
+  })
+
+  it("keeps migrated per-operation windows and unlimited values on edit", async () => {
+    const limits = { search: { rate_limit: 20, rate_window_seconds: 60 }, fetch: { rate_limit: null, rate_window_seconds: 3600 } }
+    render(<AddCapacityDialog item={{ ...item, provider_type: "tavily" }} pool={{ ...pool, provider_type: "tavily",
+      operations: ["search", "fetch"], operation_limits: limits }} projects={[]} onClose={vi.fn()} onSaved={vi.fn()} />)
+    await userEvent.clear(screen.getByLabelText("Pool name"))
+    await userEvent.type(screen.getByLabelText("Pool name"), "Renamed")
+    await userEvent.click(screen.getByRole("button", { name: "Save pool" }))
+    await waitFor(() => expect(api.updateKeyPool).toHaveBeenCalledWith("pool", expect.objectContaining({ operation_limits: limits })))
+  })
+
+  it("applies an explicit rate unit change to migrated operation limits", async () => {
+    const limits = { search: { rate_limit: 20, rate_window_seconds: 60 }, fetch: { rate_limit: null, rate_window_seconds: 3600 } }
+    render(<AddCapacityDialog item={{ ...item, provider_type: "tavily" }} pool={{ ...pool, provider_type: "tavily",
+      operations: ["search", "fetch"], operation_limits: limits }} projects={[]} onClose={vi.fn()} onSaved={vi.fn()} />)
+    await userEvent.click(screen.getByRole("combobox", { name: "Rate unit" }))
+    await userEvent.click(await screen.findByRole("option", { name: "Per hour" }))
+    await userEvent.click(screen.getByRole("button", { name: "Save pool" }))
+    await waitFor(() => expect(api.updateKeyPool).toHaveBeenCalledWith("pool", expect.objectContaining({
+      operation_limits: { search: { rate_limit: 20, rate_window_seconds: 3600 }, fetch: limits.fetch },
+    })))
+  })
+
   it.each([false, true])("hides budget controls for a free provider (edit: %s)", async (edit) => {
     render(<AddCapacityDialog item={{ ...item, provider_type: "tinyfish" }} pool={edit ? { ...pool, provider_type: "tinyfish" } : undefined}
       projects={[{ id: "p1", name: "Alpha", available_providers: ["tinyfish"] }]} onClose={vi.fn()} onSaved={vi.fn()} />)

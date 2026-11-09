@@ -84,6 +84,20 @@ export function dollarText(amount: string): string {
   return "$" + (trimmed === "" ? "0" : trimmed)
 }
 
+/** Format stored USD without losing supported fractional amounts. */
+export function formatUsdTotal(amount: string): string {
+  const text = amount.trim()
+  if (scaled(text) === null) return "—"
+  const [whole = "0", fraction = ""] = text.split(".")
+  const digits = fraction.replace(/0+$/, "").padEnd(2, "0")
+  return "$" + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "." + digits
+}
+
+export function formatUsdBudgetUsage(limit: string, used: string, period: string): string {
+  const periods: Record<string, string> = { day: "today", week: "this week", month: "this month" }
+  return `${formatUsdTotal(used)} of ${formatUsdTotal(limit)} ${periods[period] ?? period}`
+}
+
 /** Visible text of one credit-unit view, including its non-finite states. */
 export function formatUsd(view: UsdView): string {
   if (view.state === "unmetered") return UNMETERED_TEXT

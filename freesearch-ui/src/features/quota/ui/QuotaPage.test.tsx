@@ -87,7 +87,7 @@ describe("QuotaPage", () => {
     vi.unstubAllGlobals()
   })
 
-  it("supplies native usage totals to the Tavily block", () => {
+  it("supplies precise USD usage totals to the Tavily row", () => {
     const previous = mockFreeSearchState.current
     const profile = {
       native_usd_per_unit: "0.008",
@@ -158,7 +158,7 @@ describe("QuotaPage", () => {
       const table = screen.getByRole("table", { name: "Usage totals" })
       const row = within(table).getByRole("row", { name: /Tavily/ })
       expect(within(row).getByText("1")).toBeInTheDocument()
-      expect(within(row).getByText("$0.01")).toBeInTheDocument()
+      expect(within(row).getByText("$0.008")).toBeInTheDocument()
       expect(table).not.toHaveTextContent(/Tavily credits?/i)
     } finally {
       mockFreeSearchState.current = previous

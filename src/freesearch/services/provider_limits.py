@@ -990,7 +990,10 @@ class ProviderLimitsService:
         await self._refresh_daily_pool(provider, pools, now)
         await self._refresh_monthly_pool(provider, pools, now)
         # Project newer credential-scoped observations for display only.
-        card_pools = _with_scoped_observations(pools)
+        identities = {}
+        if self._repository is not None and any("#" in pool_id for pool_id in pools):
+            identities = await self._repository.observation_identities(provider)
+        card_pools = _with_scoped_observations(pools, identities)
         return ProviderLimitsResponse(
             provider=provider,
             active_auth_mode=self._active_mode(provider, records),
@@ -1685,7 +1688,9 @@ def _has_observation(pool: NativePool) -> bool:
     return pool.observed_at is not None and pool.remaining is not None
 
 
-def _with_scoped_observations(pools: Mapping[str, NativePool]) -> dict[str, NativePool]:
+def _with_scoped_observations(
+    pools: Mapping[str, NativePool], identities: Mapping[str, tuple[str, set[int]]]
+) -> dict[str, NativePool]:
     """Project credential-scoped observations onto their unobserved catalog pools.
 
     Execution and the manual refresh record vendor truth on scoped rows
@@ -1695,13 +1700,23 @@ def _with_scoped_observations(pools: Mapping[str, NativePool]) -> dict[str, Nati
     The returned mapping is a read-only view and is never written back.
     """
 
-    scoped: dict[str, list[NativePool]] = {}
+    scoped: dict[str, dict[str, NativePool]] = {}
     for pool_id, pool in pools.items():
-        base_id, marker, _scope = pool_id.partition("#")
-        if marker and _has_observation(pool):
-            scoped.setdefault(base_id, []).append(pool)
+        base_id, marker, scope = pool_id.partition("#")
+        identity = identities.get(scope)
+        if not marker or identity is None or pool.credential_generation not in identity[1]:
+            continue
+        if _has_observation(pool):
+            identity_map = scoped.setdefault(base_id, {})
+            previous = identity_map.get(identity[0])
+            if previous is None or (
+                pool.observed_at is not None
+                and (previous.observed_at is None or pool.observed_at > previous.observed_at)
+            ):
+                identity_map[identity[0]] = pool
     projected = dict(pools)
-    for base_id, members in scoped.items():
+    for base_id, identity_members in scoped.items():
+        members = list(identity_members.values())
         base = pools.get(base_id)
         newest = max(member.observed_at for member in members if member.observed_at is not None)
         if (

@@ -14,6 +14,11 @@ describe("vault response decoders", () => {
       .toMatchObject({ project_id: null, budget: null, budget_used_usd: 0 })
   })
 
+  it("retains migrated operation windows and unlimited limits", () => {
+    const limits = { search: { rate_limit: 20, rate_window_seconds: 60 }, fetch: { rate_limit: null, rate_window_seconds: 3600 } }
+    expect(decodeKeyPool({ ...pool, operation_limits: limits }).operation_limits).toEqual(limits)
+  })
+
   it("rejects missing or invalid budget usage and invalid budget periods", () => {
     expect(() => decodeKeyPool({ ...pool, budget_used_usd: undefined })).toThrow()
     expect(() => decodeKeyPool({ ...pool, budget_used_usd: "1.2" })).toThrow()

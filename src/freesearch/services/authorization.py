@@ -48,7 +48,6 @@ from freesearch.models.users import UserPrincipal
 from freesearch.persistence.projects import (
     AccountRow,
     ProjectMembershipRow,
-    ProjectRepository,
     ProjectRoleAssignmentRow,
     ProjectRow,
     SystemRoleAssignmentRow,
@@ -262,10 +261,12 @@ class ScopedAuthorizationService:
             return None
         membership = (
             await session.execute(
-                select(ProjectMembershipRow).where(
+                select(ProjectMembershipRow)
+                .where(
                     ProjectMembershipRow.project_id == str(project_id),
                     ProjectMembershipRow.user_id == str(principal.user_id),
                 )
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if membership is None or membership.status != "active":
@@ -280,10 +281,7 @@ class ScopedAuthorizationService:
                 )
             ).scalars()
         )
-        bits = await ProjectRepository(session).get_member_permissions(
-            project_id, principal.user_id
-        )
-        permissions = self._permissions_from_project_roles(role_rows, bits or 0)
+        permissions = self._permissions_from_project_roles(role_rows, membership.permissions or 0)
         policy_revision = max([membership.version, *(row.version for row in role_rows), 1])
         return ProjectContext(
             account_id=self._account_id,
@@ -420,10 +418,12 @@ class ScopedAuthorizationService:
             return frozenset()
         membership = (
             await session.execute(
-                select(ProjectMembershipRow).where(
+                select(ProjectMembershipRow)
+                .where(
                     ProjectMembershipRow.project_id == str(scope_id),
                     ProjectMembershipRow.user_id == str(user_id),
                 )
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if membership is None or membership.status != "active":
@@ -437,8 +437,7 @@ class ScopedAuthorizationService:
                 )
             )
         ).scalars()
-        bits = await ProjectRepository(session).get_member_permissions(scope_id, user_id)
-        return self._permissions_from_project_roles(list(role_rows), bits or 0)
+        return self._permissions_from_project_roles(list(role_rows), membership.permissions or 0)
 
     @staticmethod
     def _permissions_from_project_roles(

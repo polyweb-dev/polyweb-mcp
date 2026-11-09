@@ -193,8 +193,8 @@ describe("ProviderInfoPopover order", () => {
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
     expect(await screen.findByText("Quota details")).not.toBeNull()
-    const labels = ["Search cost", "Extract cost", "Searches left", "Fetches left",
-      "Search cost (USD)", "Extract cost (USD)", "Search and fetch rate limit", "Retry after"]
+    const labels = ["Search cost", "Fetch cost", "Searches left", "Fetches left",
+      "Search cost (USD)", "Fetch cost (USD)", "Search and fetch rate limit", "Retry after"]
     const elements = labels.map((label) => screen.getByText(label))
     for (let index = 1; index < elements.length; index += 1) {
       const position = elements[index - 1].compareDocumentPosition(elements[index])
@@ -202,7 +202,7 @@ describe("ProviderInfoPopover order", () => {
     }
     expect(screen.getByText("Free")).not.toBeNull()
     expect(screen.getByText("Search budget limit")).not.toBeNull()
-    expect(screen.getByText("Extract budget limit")).not.toBeNull()
+    expect(screen.getByText("Fetch budget limit")).not.toBeNull()
     expect(screen.getByRole("link", { name: "Tavily usage page" })).not.toBeNull()
   })
 
@@ -229,7 +229,7 @@ describe("ProviderInfoPopover precision", () => {
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
     expect(await screen.findByText("600 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
-    expect(screen.getByText("$0.00 of $0.01 this month")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.008 this month")).not.toBeNull()
     expect(screen.getByText("0.05")).not.toBeNull()
   })
 })

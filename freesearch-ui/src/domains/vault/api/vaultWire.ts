@@ -41,15 +41,21 @@ function decodeOperations(value: unknown): PoolOperation[] {
   return operations
 }
 
-function decodeOperationLimits(value: unknown): KeyPool["operation_limits"] {
+export function decodeOperationLimits(value: unknown): KeyPool["operation_limits"] {
   if (value === null) return null
   const item = record(value)
-  const limits: Partial<Record<PoolOperation, number>> = {}
+  const limits: NonNullable<KeyPool["operation_limits"]> = {}
   for (const operation of ["search", "fetch"] as const) {
     const limit = item[operation]
     if (limit === undefined) continue
-    if (typeof limit !== "number") throw new ApiError(0, "The server returned an unexpected vault response.", value)
-    limits[operation] = limit
+    if (limit === null || typeof limit === "number") limits[operation] = limit
+    else {
+      const nested = required(limit, ["rate_limit", "rate_window_seconds"])
+      if ((nested.rate_limit !== null && typeof nested.rate_limit !== "number") || typeof nested.rate_window_seconds !== "number") {
+        throw new ApiError(0, "The server returned an unexpected vault response.", value)
+      }
+      limits[operation] = { rate_limit: nested.rate_limit, rate_window_seconds: nested.rate_window_seconds }
+    }
   }
   return limits
 }

@@ -121,7 +121,7 @@ function scopeText({ view, output, attempt, mode }: ScopeTextOptions): ReactNode
     )
   }
   if (output === null) return null
-  if (output.kind === "fetch_document") return "Fetched document"
+  if (output.kind === "fetch_document") return null
   return resultCountText(output.results.length, mode)
 }
 

@@ -1,7 +1,7 @@
 import { fieldLabel } from "@/domains/settings"
 import type { CopyPlan } from "@/domains/settings"
 import { Tag } from "@/shared/ui/Tag"
-import { valueText } from "../model/settingsFormat"
+import { formatSettingsValue } from "@/domains/settings"
 
 function rejectedLabel(fieldId: string): string {
   return fieldId.startsWith("binding:") ? "Route" : fieldLabel(fieldId)
@@ -30,7 +30,7 @@ export function CopyPreviewView({ plan }: { plan: CopyPlan }) {
             {plan.fields.map((field) => (
               <tr key={field.fieldId}>
                 <td className="fs-cell-strong">{fieldLabel(field.fieldId)}</td>
-                <td className="tnum">{valueText(field.fieldId, field.value)}</td>
+                <td className="tnum">{formatSettingsValue(field.fieldId, field.value)}</td>
                 <td>{field.changed ? <Tag tone="accent">Changes</Tag> : <span className="text-[var(--muted)]">No change</span>}</td>
               </tr>
             ))}

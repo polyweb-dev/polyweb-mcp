@@ -3,7 +3,7 @@ import { Button } from "@/shared/ui/button"
 import { formatDateTime, formatRelativeTime } from "@/shared/lib/formatTime"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/ui/table"
 import type { UsdConversionProfile, LimitAuditEvent } from "@/domains/dashboard"
-import { dollarText } from "../model/usdDisplay"
+import { formatUsdTotal } from "../model/usdDisplay"
 import { DEFAULT_TAVILY_PROFILE, formatCreditAmount, tavilyUsdToCredits } from "../model/tavilyCredits"
 import { operationLabel, reasonLabel, sourceLabel } from "../model/quotaLabels"
 import { newestFirst } from "../model/timeText"
@@ -36,11 +36,11 @@ function nativeUnitText(event: LimitAuditEvent, fallback: string | null): string
 }
 
 function usdFromLedger(value: string): string {
-  return groupDigits(dollarText(value))
+  return formatUsdTotal(value)
 }
 
 function nativeText(value: string, unit: string): string {
-  if (unit.toUpperCase() === "USD") return "$" + Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  if (unit.toUpperCase() === "USD") return formatUsdTotal(value)
   if (unit.toUpperCase() === "FREE") return "Free"
   return groupDigits(value) + " " + nativeUnitLabel(unit)
 }
@@ -66,7 +66,7 @@ function historySource(event: LimitAuditEvent): string {
 }
 
 function detailText(event: LimitAuditEvent): string {
-  const operation = event.provider === "tavily" && event.operation === "fetch" ? "Extract" : operationLabel(event.operation)
+  const operation = operationLabel(event.operation)
   const reason = event.reason === "vendor_sync" && event.source === "local_ledger" ? "Balance recorded" : reasonLabel(event.reason)
   return [operation, reason].filter((part) => part !== "").join(" · ")
 }
@@ -74,7 +74,7 @@ function detailText(event: LimitAuditEvent): string {
 function changeText(event: LimitAuditEvent, nativeUnit: string | null): string {
   const unit = nativeUnitText(event, nativeUnit)
   if (event.native_debit !== null && unit?.toUpperCase() === "USD") {
-    return "−$" + Number(event.native_debit).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })
+    return "−" + formatUsdTotal(event.native_debit)
   }
   if (event.native_debit !== null && unit !== null) return "−" + nativeText(event.native_debit, unit)
   return event.debit_usd === null ? "Not recorded" : "−" + usdFromLedger(event.debit_usd)

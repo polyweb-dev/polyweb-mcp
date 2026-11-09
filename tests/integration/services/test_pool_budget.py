@@ -2,23 +2,31 @@
 
 import asyncio
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from freesearch.models.contracts import FallbackPolicy, RoutingConfigResponse
+from freesearch.models.contracts import (
+    FallbackPolicy,
+    RoutingConfigResponse,
+    SearchResponse,
+    UnitKind,
+    UsageEvent,
+    UsageOperation,
+)
 from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.models.provider_limits import LimitStoreUnavailable
+from freesearch.models.provider_limits import AuthMode, LimitStoreUnavailable
 from freesearch.persistence.credentials import CredentialRepository
 from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
 from freesearch.persistence.settings import ProjectSettingsRepository
 from freesearch.services.credentials import credential_secret_slot
 from freesearch.services.execution import _AttemptSeam
-from freesearch.services.pool_budget import pool_budget_used_micros, release, reserve
+from freesearch.services.pool_budget import pool_budget_used_micros, release, reserve, settle_actual
 from freesearch.services.pool_materializer import materialize_pools
 from freesearch.services.provider_runtime import initialize_provider_configs, persist_routing_config
 from tests.fixtures.a2_execution import RecordingAdapter, build_execution_world, search_request
@@ -80,6 +88,43 @@ async def test_unlimited_pool_does_not_write(budget_store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_uncapped_admission_checks_live_cap_once(budget_store) -> None:
+    pool_id = uuid4()
+    statements = []
+    async with budget_store() as session:
+        await session.execute(
+            text("INSERT INTO key_pools VALUES (:id, NULL, 2592000)"), {"id": str(pool_id)}
+        )
+        await session.commit()
+        connection = await session.connection()
+
+        def record(_conn, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement)
+
+        event.listen(connection.sync_connection, "before_cursor_execute", record)
+        try:
+            assert await reserve(session, pool_id, 999)
+        finally:
+            event.remove(connection.sync_connection, "before_cursor_execute", record)
+        assert len(statements) == 1
+        assert statements[0].lstrip().upper().startswith("SELECT")
+
+
+@pytest.mark.asyncio
+async def test_settlement_adjusts_original_window_even_above_cap(budget_store) -> None:
+    pool_id = uuid4()
+    jan = datetime(2024, 1, 31, tzinfo=UTC)
+    async with budget_store() as session:
+        await session.execute(
+            text("INSERT INTO key_pools VALUES (:id, 100, 2592000)"), {"id": str(pool_id)}
+        )
+        assert await reserve(session, pool_id, 60, now=jan)
+        await settle_actual(session, pool_id, 60, 120, window_start="2024-01-01")
+        assert await pool_budget_used_micros(session, pool_id, now=jan) == 120
+        assert not await reserve(session, pool_id, 1, now=jan)
+
+
+@pytest.mark.asyncio
 async def test_concurrent_reservations_never_exceed_cap(budget_store) -> None:
     pool_id = uuid4()
     async with budget_store() as session:
@@ -99,11 +144,18 @@ async def test_concurrent_reservations_never_exceed_cap(budget_store) -> None:
         assert await pool_budget_used_micros(session, pool_id) == 100
 
 
-async def _routing_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cap: int):
+async def _routing_world(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cap: int,
+    *,
+    primary: str = "exa",
+    auth_mode: AuthMode = AuthMode.KEYED,
+):
     world = await build_execution_world(tmp_path, monkeypatch, labels=(), limits=False)
     pools = {}
     async with world.repository.session() as session:
-        for provider, limit in (("exa", cap), ("brave", None)):
+        for provider, limit in ((primary, cap), ("brave", None)):
             credential = await CredentialRepository(session).insert_credential(
                 account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
                 provider_type=provider,
@@ -128,7 +180,9 @@ async def _routing_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cap: i
                 ),
             )
             pools[provider] = pool.id
-            world.adapters_by_secret[secret] = RecordingAdapter(provider)
+            world.adapters_by_secret[secret] = RecordingAdapter(
+                provider, auth_mode=auth_mode if provider == primary else AuthMode.KEYED
+            )
         await materialize_pools(session, project_id=world.project.project_id)
         await session.commit()
     monkeypatch.setattr(
@@ -152,7 +206,7 @@ async def _routing_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cap: i
             project_id=world.project.project_id,
             namespace="provider_order",
             schema_version=1,
-            overrides={"search": {"strategy": "custom", "custom_order": ["exa", "brave"]}},
+            overrides={"search": {"strategy": "custom", "custom_order": [primary, "brave"]}},
             expected_revision=revision,
         )
         await session.commit()
@@ -173,6 +227,49 @@ async def test_exhausted_pool_falls_through_project_order(
         assert world.adapters_by_secret["budget-brave"].search_calls == 1
         async with world.repository.session() as session:
             assert await pool_budget_used_micros(session, pools["exa"]) == 0
+    finally:
+        await world.aclose()
+
+
+@pytest.mark.asyncio
+async def test_advanced_request_uses_its_price_before_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world, pools = await _routing_world(tmp_path, monkeypatch, 10_000)
+    try:
+        response = await world.service.search(
+            search_request(world, limit=100), attribution=world.project, context=world.context
+        )
+        assert response.provider == "brave"
+        assert world.adapters_by_secret["budget-exa"].search_calls == 0
+        async with world.repository.session() as session:
+            assert await pool_budget_used_micros(session, pools["exa"]) == 0
+    finally:
+        await world.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,cap,expected",
+    [
+        (AuthMode.KEYED, 8_000, "brave"),
+        (AuthMode.KEYLESS, 0, "tavily"),
+    ],
+)
+async def test_tavily_advanced_keyed_and_keyless_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: AuthMode, cap: int, expected: str
+) -> None:
+    world, pools = await _routing_world(
+        tmp_path, monkeypatch, cap, primary="tavily", auth_mode=mode
+    )
+    try:
+        response = await world.service.search(
+            search_request(world, mode="advanced"), attribution=world.project, context=world.context
+        )
+        assert response.provider == expected
+        assert world.adapters_by_secret["budget-tavily"].search_calls == (expected == "tavily")
+        async with world.repository.session() as session:
+            assert await pool_budget_used_micros(session, pools["tavily"]) == 0
     finally:
         await world.aclose()
 
@@ -199,11 +296,42 @@ async def test_successful_send_charges_catalog_price(
 
 
 @pytest.mark.asyncio
+async def test_successful_send_settles_reported_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world, pools = await _routing_world(tmp_path, monkeypatch, 50_000)
+
+    async def charged(_adapter, request):
+        return SearchResponse(
+            query=request.query,
+            provider="exa",
+            results=[],
+            usage=UsageEvent(
+                provider="exa",
+                operation=UsageOperation.SEARCH,
+                units=Decimal("0.023"),
+                unit_kind=UnitKind.USD,
+                observed_at=datetime.now(UTC),
+            ),
+        )
+
+    world.adapters_by_secret["budget-exa"].search_handler = charged
+    try:
+        await world.service.search(
+            search_request(world), attribution=world.project, context=world.context
+        )
+        async with world.repository.session() as session:
+            assert await pool_budget_used_micros(session, pools["exa"]) == 23_000
+    finally:
+        await world.aclose()
+
+
+@pytest.mark.asyncio
 async def test_unknown_cost_is_admitted_without_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     world, pools = await _routing_world(tmp_path, monkeypatch, 0)
-    monkeypatch.setattr("freesearch.services.execution.call_cost_usd", lambda *_: None)
+    monkeypatch.setattr("freesearch.services.execution.request_price", lambda *_: None)
     try:
         response = await world.service.search(
             search_request(world), attribution=world.project, context=world.context

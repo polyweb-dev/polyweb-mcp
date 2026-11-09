@@ -43,9 +43,9 @@ describe("usageTotalsView", () => {
       total({ provider: "tavily", eventCount: 1, unitKind: "REQUEST" }),
     ], order)
     expect(view.rows.map((row) => usageAmountText(row, "usd"))).toEqual([
-      "Free", "Free", "Not reported", "Not reported",
+      "Free", "Free", "—", "—",
     ])
-    expect(usageAmountText(view.total, "usd")).toBe("Not reported")
+    expect(usageAmountText(view.total, "usd")).toBe("—")
   })
 
   it("shows recorded zero dollar costs as free without masking unknown mixed costs", () => {
@@ -94,7 +94,7 @@ describe("usageTotalsView", () => {
     ])
 
     expect(view.columns).toEqual(["usd", "other"])
-    expect(usageAmountText(view.rows[0]!, "usd")).toBe("Not reported")
+    expect(usageAmountText(view.rows[0]!, "usd")).toBe("—")
     expect(usageAmountText(view.rows[0]!, "other")).toBe("0.5")
   })
 
@@ -116,7 +116,7 @@ describe("usageTotalsView", () => {
     const tavily = view.rows.find((row) => row.provider === "tavily")!
 
     expect(usageAmountText(exa, "usd")).toBe("$0.007")
-    expect(usageAmountText(tavily, "usd")).toBe("Not reported")
+    expect(usageAmountText(tavily, "usd")).toBe("—")
     expect(usageAmountText(tavily, "credits")).toBe("12")
     expect(usageAmountText(view.total, "usd")).toBe("$0.007")
   })
@@ -138,7 +138,7 @@ describe("usageTotalsView", () => {
       total({ provider: "keenable", unitKind: "FREE", eventCount: 1 }),
       total({ provider: "keenable", unitKind: "CREDIT", totalUnits: 1, eventCount: 1 }),
     ])
-    expect(usageAmountText(view.rows[0]!, "usd")).toBe("Not reported")
-    expect(usageAmountText(view.total, "usd")).toBe("Not reported")
+    expect(usageAmountText(view.rows[0]!, "usd")).toBe("—")
+    expect(usageAmountText(view.total, "usd")).toBe("—")
   })
 })

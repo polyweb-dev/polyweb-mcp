@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { decodeCallCosts, formatCallCost, providerCallCost } from "./providerPricing"
+import { decodeCallCosts, formatCallCost, formatCostTotal, providerCallCost } from "./providerPricing"
 
 describe("catalog pricing", () => {
   it.each([
@@ -16,6 +16,12 @@ describe("catalog pricing", () => {
     expect(providerCallCost(tavily, "search", true)).toBe("Free")
     expect(providerCallCost(tavily, "fetch", true)).toBe("Free")
     expect(providerCallCost({ callCostUsd: { search: 0 } }, "search", true)).toBe("—")
+  })
+
+  it("formats totals consistently without hiding small recorded costs", () => {
+    expect(formatCostTotal(12.34)).toBe("$12.34")
+    expect(formatCostTotal(0.035)).toBe("$0.035")
+    expect(formatCostTotal(null)).toBe("—")
   })
 
   it("drops invalid catalog prices and unsupported fields", () => {

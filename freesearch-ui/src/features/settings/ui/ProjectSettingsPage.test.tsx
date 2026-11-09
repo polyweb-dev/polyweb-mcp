@@ -39,7 +39,6 @@ describe("ProjectSettingsPage view", () => {
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument()
     expect(await screen.findByRole("heading", { level: 3, name: "Trace policy" })).toBeInTheDocument()
     const retention = screen.getByTestId("settings-field-trace.retention_days")
-    expect(screen.getByText("API keys, auth headers, cookies, passwords and tokens are always removed from traces")).toBeInTheDocument()
     expect(within(retention).getByText("The system can delete traces after this limit")).toBeInTheDocument()
     expect(within(retention).getByText("Your override exceeds the system limit. The system limit applies")).toBeInTheDocument()
     expect(within(screen.getByTestId("settings-field-trace.detail")).queryByText(/System default/)).toBeNull()

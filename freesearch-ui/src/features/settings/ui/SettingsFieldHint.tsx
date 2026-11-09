@@ -1,7 +1,6 @@
-import { fieldLabel } from "@/domains/settings"
+import { fieldLabel, formatSettingsValue } from "@/domains/settings"
 import type { SettingsField } from "@/domains/settings"
 import { Button } from "@/shared/ui/button"
-import { valueText } from "../model/settingsFormat"
 
 interface SettingsFieldHintProps {
   field: SettingsField
@@ -18,7 +17,7 @@ function originText(field: SettingsField, inheriting: boolean): string | null {
   if (!field.overrideAllowed) return "Set by system"
   if (inheriting) return "System default after saving"
   if (field.projectOverride === null) return null
-  return `Overridden · default ${valueText(field.id, field.systemDefault)}`
+  return `Overridden · default ${formatSettingsValue(field.id, field.systemDefault)}`
 }
 
 /**

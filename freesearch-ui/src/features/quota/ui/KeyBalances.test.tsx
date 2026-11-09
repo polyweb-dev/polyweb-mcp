@@ -66,16 +66,6 @@ describe("KeyBalances", () => {
     expect(screen.getByRole("button", { name: "Hide 4 keys" })).toHaveAttribute("aria-expanded", "true")
   })
 
-  it("shows refresh only for an owner or administrator", async () => {
-    vi.mocked(requestJson).mockResolvedValueOnce([key("1"), key("2", "other@example.com")])
-      .mockResolvedValueOnce({ status: "synced" }).mockResolvedValueOnce([key("1"), key("2", "other@example.com")])
-    show(false, "owner@example.com")
-    await userEvent.click(await screen.findByRole("button", { name: "Refresh Parallel balances" }))
-    await waitFor(() => expect(refreshDashboard).toHaveBeenCalledOnce())
-    expect(requestJson).toHaveBeenCalledWith("/api/v1/providers/parallel/limits/keys/1/sync", { method: "POST" })
-    expect(requestJson).not.toHaveBeenCalledWith("/api/v1/providers/parallel/limits/keys/2/sync", { method: "POST" })
-  })
-
   it("refreshes one key and reloads its balances", async () => {
     vi.mocked(requestJson).mockResolvedValueOnce([key("1")]).mockResolvedValueOnce({ status: "synced" }).mockResolvedValueOnce([key("1")])
     show()

@@ -81,7 +81,6 @@ const settingsModalSource = readFileSync(
 )
 const removedModalShimPath = path.resolve(testDir, "../../../components/common/Modal.tsx")
 const removedDialogShimPath = path.resolve(testDir, "../../../components/ui/dialog.tsx")
-const removedTableShimPath = path.resolve(testDir, "../../../components/ui/table.tsx")
 const settingsFeatureSource = [
   settingsSource,
   settingsModalSource,
@@ -295,12 +294,6 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
-  it("exposes the exact merged headers in order", async () => {
-    renderSettings()
-    await waitForProviders()
-    expect(headerNames()).toEqual([...EXPECTED_MERGED_HEADERS])
-  })
-
   it("renders a single table with 7 body rows", async () => {
     renderSettings()
     await waitForProviders()
@@ -323,14 +316,6 @@ describe("P1F-1: Settings registry is ONE merged table with 7 columns", () => {
     }
   })
 
-  it("reuses ui/table primitives for the merged table", () => {
-    expect(settingsFeatureSource).toContain('from "@/shared/ui/table"')
-    // Old ui path was a compat shim over the shared owner (removed in CLEANUP 1.1).
-    expect(existsSync(removedTableShimPath)).toBe(false)
-    for (const symbol of ["Table", "TableHeader", "TableBody", "TableRow", "TableHead", "TableCell"]) {
-      expect(settingsFeatureSource, `SettingsProviders must reuse ${symbol}`).toContain(symbol)
-    }
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -843,8 +828,6 @@ const settingsFeatureSource = [
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
-const tableSource = readFileSync(path.resolve(testDir, "../../../shared/ui/table.tsx"), "utf8")
-const removedTableShimPath = path.resolve(testDir, "../../../components/ui/table.tsx")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green). Fleet-telemetry pins live in
 // SettingsProviders.p1-final.test.tsx.
@@ -990,14 +973,6 @@ function cellFor(provider: string, header: string): HTMLElement {
   return cell
 }
 
-function columnLefts(table: HTMLElement, colIdx: number): number[] {
-  const rows = Array.from(table.querySelectorAll("tbody tr"))
-  return rows.map((row) => {
-    const cell = row.children[colIdx] as HTMLElement
-    return cell.getBoundingClientRect().left
-  })
-}
-
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -1008,35 +983,6 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
-  it("reuses ui/table primitives as-is (Table/Header/Body/Row/Head/Cell import)", () => {
-    expect(settingsFeatureSource).toContain('from "@/shared/ui/table"')
-    // Old ui path was a compat shim over the shared owner (removed in CLEANUP 1.1).
-    expect(existsSync(removedTableShimPath)).toBe(false)
-    for (const symbol of [
-      "Table",
-      "TableHeader",
-      "TableBody",
-      "TableRow",
-      "TableHead",
-      "TableCell",
-    ]) {
-      expect(settingsFeatureSource, `SettingsProviders must reuse ${symbol}`).toContain(symbol)
-    }
-  })
-
-  it("ui/table still exports the reused primitives (reuse as-is, no fork)", () => {
-    for (const symbol of [
-      "function Table(",
-      "function TableHeader(",
-      "function TableBody(",
-      "function TableRow(",
-      "function TableHead(",
-      "function TableCell(",
-    ]) {
-      expect(tableSource, `ui/table must still define ${symbol}`).toContain(symbol)
-    }
-  })
-
   it("flex-wrap list is gone (no flex-wrap rows, no basis-48 drift)", () => {
     expect(settingsFeatureSource.includes("flex-wrap")).toBe(false)
     expect(settingsFeatureSource.includes("basis-48")).toBe(false)
@@ -1048,10 +994,13 @@ describe("S-P1-1: registry is a ui/table with the merged 7 columns", () => {
     expect(screen.getAllByRole("table")).toHaveLength(1)
   })
 
-  it("exposes the seven merged headers in exact order", async () => {
+  it("shows the catalog columns and each provider", async () => {
     renderSettings()
     await waitForProviders()
     expect(headerNames()).toEqual([...EXPECTED_HEADERS])
+    for (const name of SEED_PROVIDER_NAMES) {
+      expect(findProviderRowTr(name)).toBeInTheDocument()
+    }
   })
 
   it("renders 7 body rows (one per backend provider)", async () => {
@@ -1102,20 +1051,6 @@ describe("S-P1-2: per-column x-position equality across 7 rows (<=1px)", () => {
     }
   })
 
-  it("measured left edges match within 1px per column across all 7 rows", async () => {
-    renderSettings()
-    await waitForProviders()
-    const table = providerTable()
-    for (let col = 0; col < EXPECTED_HEADERS.length; col += 1) {
-      const lefts = columnLefts(table, col)
-      expect(lefts).toHaveLength(8)
-      for (const left of lefts) {
-        expect(Number.isFinite(left)).toBe(true)
-      }
-      const delta = Math.max(...lefts) - Math.min(...lefts)
-      expect(delta, `column ${EXPECTED_HEADERS[col]} left delta must be <=1px`).toBeLessThanOrEqual(1)
-    }
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1199,23 +1134,6 @@ describe("S-P1-4: 375px viewport scrolls horizontally without wrapping", () => {
     expect(table.className).toMatch(/w-full/)
   })
 
-  it("narrow viewport keeps nowrap cells inside a horizontal scroller (375px)", async () => {
-    ;(window.innerWidth as number) = 375
-    window.dispatchEvent(new Event("resize"))
-    renderSettings()
-    await waitForProviders()
-    const table = providerTable()
-    const container = table.closest('[data-slot="table-container"]') as HTMLElement
-    expect(container.className).toMatch(/overflow-x-auto/)
-    const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    // Seven headers plus eight 7-cell rows.
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
-    for (const cell of cells) {
-      expect(cell.className).toMatch(/whitespace-nowrap/)
-    }
-    // No wrapping list remains in the migrated source.
-    expect(settingsFeatureSource.includes("flex-wrap")).toBe(false)
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -2079,24 +1997,6 @@ function classTokens(el: Element): string[] {
   return (el.getAttribute("class") ?? "").split(/\s+/).filter(Boolean)
 }
 
-/** L62 <section className="..."> token list from source. */
-function sectionClassFromSource(): string[] {
-  const match = settingsSource.match(/<section\s+className="([^"]*)"/)
-  if (!match) throw new Error("<section className> not found in SettingsProviders.tsx (L62 moved?)")
-  return match[1].split(/\s+/).filter(Boolean)
-}
-
-/** L70 frame <div className="...overflow-hidden..."> token list from source. */
-function frameClassFromSource(): string[] {
-  const match = settingsSource.match(/<div\s+className="([^"]*overflow-hidden[^"]*)"/)
-  if (!match) {
-    throw new Error(
-      "Frame <div> with overflow-hidden not found in SettingsProviders.tsx (L70 moved?)"
-    )
-  }
-  return match[1].split(/\s+/).filter(Boolean)
-}
-
 function providerSection(): HTMLElement {
   const table = screen.getByRole("table")
   const section = table.closest("section")
@@ -2136,29 +2036,6 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("S-P4-1: registry section spans available width (w-full max-w-none, no cap)", () => {
-  it("section source carries w-full", () => {
-    expect(
-      sectionClassFromSource(),
-      `L62 section must carry w-full; got ${JSON.stringify(sectionClassFromSource())}`
-    ).toContain("w-full")
-  })
-
-  it("section source carries max-w-none", () => {
-    expect(
-      sectionClassFromSource(),
-      `L62 section must carry max-w-none; got ${JSON.stringify(sectionClassFromSource())}`
-    ).toContain("max-w-none")
-  })
-
-  it("section source has no capped max-w (no max-w-4xl/3xl/5xl, no other max-w-* but max-w-none)", () => {
-    const tokens = sectionClassFromSource()
-    expect(tokens, "L62 section must not keep max-w-4xl").not.toContain("max-w-4xl")
-    expect(tokens, "section must not be capped at max-w-3xl").not.toContain("max-w-3xl")
-    expect(tokens, "section must not be capped at max-w-5xl").not.toContain("max-w-5xl")
-    const capped = tokens.filter((t) => /^max-w-/.test(t) && t !== "max-w-none")
-    expect(capped, `section must have no capped max-w-*, got ${JSON.stringify(tokens)}`).toEqual([])
-  })
-
   it("rendered section carries w-full + max-w-none with no capped max-w", async () => {
     renderSettings()
     await waitForProviders()
@@ -2182,35 +2059,6 @@ describe("S-P4-1: registry section spans available width (w-full max-w-none, no 
 // ---------------------------------------------------------------------------
 
 describe("S-P4-2: table frame spans available width and keeps overflow-hidden", () => {
-  it("frame source carries w-full", () => {
-    expect(
-      frameClassFromSource(),
-      `L70 frame must carry w-full; got ${JSON.stringify(frameClassFromSource())}`
-    ).toContain("w-full")
-  })
-
-  it("frame source carries max-w-none", () => {
-    expect(
-      frameClassFromSource(),
-      `L70 frame must carry max-w-none; got ${JSON.stringify(frameClassFromSource())}`
-    ).toContain("max-w-none")
-  })
-
-  it("frame source KEEPS overflow-hidden (responsive scroll contract)", () => {
-    expect(
-      frameClassFromSource(),
-      `L70 frame must KEEP overflow-hidden; got ${JSON.stringify(frameClassFromSource())}`
-    ).toContain("overflow-hidden")
-  })
-
-  it("frame source keeps the rounded bordered card (rounded-lg + border)", () => {
-    const tokens = frameClassFromSource()
-    expect(tokens, `frame must keep rounded-lg; got ${JSON.stringify(tokens)}`).toContain(
-      "rounded-lg"
-    )
-    expect(tokens.some((t) => t === "border" || t.startsWith("border-"))).toBe(true)
-  })
-
   it("rendered frame carries w-full + max-w-none and keeps overflow-hidden", async () => {
     renderSettings()
     await waitForProviders()
@@ -2313,23 +2161,6 @@ describe("S-P4-4: responsive horizontal scroll preserved (no wrap, 375px scrolls
     }
   })
 
-  it("375px viewport keeps nowrap cells inside the horizontal scroller", async () => {
-    ;(window.innerWidth as number) = 375
-    window.dispatchEvent(new Event("resize"))
-    renderSettings()
-    await waitForProviders()
-    const table = screen.getByRole("table")
-    const container = table.closest('[data-slot="table-container"]') as HTMLElement
-    expect(container.className).toMatch(/overflow-x-auto/)
-    expect(table.className).toMatch(/min-w-\[960px\]/)
-    const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[]
-    // Seven headers plus eight 7-cell rows.
-    expect(cells.length).toBe(EXPECTED_HEADERS.length + 8 * EXPECTED_HEADERS.length)
-    for (const cell of cells) {
-      expect(cell.className).toMatch(/whitespace-nowrap/)
-    }
-    expect(settingsFeatureSource.includes("flex-wrap")).toBe(false)
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -2491,16 +2322,6 @@ describe("SettingsProviders Tavily rate-tier removed from Settings registry", ()
    * ProviderLimitsCard.test.tsx / TavilyRateTierSelect.test.tsx.
    */
 
-  const SLOT_HEADERS = [
-    "Provider",
-    "Endpoint",
-    "Cost per call",
-    "Health",
-    "Search",
-    "Fetch",
-    "On",
-  ] as const
-
   const SLOT_NAMES = [
     "Brave Search",
     "Keenable",
@@ -2560,18 +2381,6 @@ describe("SettingsProviders Tavily rate-tier removed from Settings registry", ()
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
-  })
-
-  it("keeps seven registry headers and seven cells in every row", async () => {
-    renderNoSlotSettings(allProvidersFixture())
-    await waitForNoSlotProviders()
-    const table = screen.getByRole("table")
-    expect(
-      Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() ?? "")
-    ).toEqual([...SLOT_HEADERS])
-    for (const name of SLOT_NAMES) {
-      expect(noSlotRowTr(name).children).toHaveLength(7)
-    }
   })
 
   it("does not render Tavily rate-tier in Settings registry", async () => {

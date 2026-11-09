@@ -53,7 +53,7 @@ function initialKeyCapacity(item?: VaultKey) {
   }
 }
 
-const TITLES: Record<Mode, string> = { add: "Add key", rotate: "Rotate key", settings: "Key settings" }
+const TITLES: Record<Mode, string> = { add: "Add key", rotate: "Rotate key", settings: "Edit key" }
 const ACTIONS: Record<Mode, string> = { add: "Add key", rotate: "Rotate key", settings: "Save settings" }
 
 export function KeyDialog({ mode, item, onClose, onSaved }: {
@@ -101,7 +101,7 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
   const title = TITLES[mode]
   const action = ACTIONS[mode]
   return (
-    <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(provider).id} title={title} />} maxWidth="lg">
+    <Modal isOpen onClose={onClose} title={mode === "add" ? title : <ProviderDialogTitle providerId={providerIdentity(provider).id} title={title} />} maxWidth="lg">
       <form noValidate onSubmit={(event) => void save(event)} className="space-y-4">
         {mode === "rotate" && <p>Enter the new API key. Each pool that uses this key switches to it at once</p>}
         {mode === "add" && (
@@ -140,7 +140,7 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
           </AdvancedSection>
         )}
         {error && <p role="alert" className="fs-field-error">{error}</p>}
-        <FormActions><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button><Button type="submit" size="form" disabled={pending}>{action}</Button></FormActions>
+        <FormActions><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button><Button type="submit" size="form" pending={pending}>{action}</Button></FormActions>
       </form>
     </Modal>
   )

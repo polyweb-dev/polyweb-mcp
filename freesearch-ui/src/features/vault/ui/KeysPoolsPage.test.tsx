@@ -118,7 +118,7 @@ describe("KeysPoolsPage", () => {
     await user.click(screen.getByRole("checkbox", { name: "Fetch" }))
     await user.click(screen.getByRole("button", { name: "Save pool" }))
     expect(api.updateKeyPool).not.toHaveBeenCalled()
-    const confirm = screen.getByRole("dialog", { name: "Stop Fetch in pool Research" })
+    const confirm = screen.getByRole("dialog", { name: "Stop Tavily Fetch" })
     expect(within(confirm).getByText("Tavily leaves the Fetch order of Research. Search stays on")).toBeInTheDocument()
     await user.click(within(confirm).getByRole("button", { name: "Stop Fetch" }))
     await waitFor(() => expect(api.updateKeyPool).toHaveBeenCalledWith("pool1", expect.objectContaining({ operations: ["search"] })))

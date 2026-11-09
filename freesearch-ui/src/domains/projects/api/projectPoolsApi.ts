@@ -1,7 +1,7 @@
 import { requestJson } from "@/shared/api/client"
 import { ApiError } from "@/shared/api/http"
-import { unassignKeyPool } from "@/domains/vault"
-import type { KeyPoolInput, PoolBudget, PoolOperation, RateLimit, VaultKeyInput } from "@/domains/vault"
+import { decodeOperationLimits, unassignKeyPool } from "@/domains/vault"
+import type { OperationLimits, PoolBudget, PoolOperation, RateLimit } from "@/domains/vault"
 
 export interface ProjectPool {
   pool_id: string
@@ -13,6 +13,7 @@ export interface ProjectPool {
   budget: PoolBudget | null
   budget_used: number
   operations: PoolOperation[]
+  operation_limits?: OperationLimits | null
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -65,6 +66,7 @@ function decodePool(value: unknown): ProjectPool {
     pool_id: fields.pool_id, label: fields.label, provider_type: fields.provider_type, key_label: fields.key_label,
     owner: decodeOwner(fields.owner), rate: decodeRate(fields.rate), budget: decodeBudget(fields.budget),
     budget_used: fields.budget_used, operations: decodeOperations(fields.operations),
+    operation_limits: decodeOperationLimits(fields.operation_limits ?? null),
   }
 }
 
@@ -74,10 +76,6 @@ export async function listProjectPools(projectId: string, signal?: AbortSignal):
   const result = await requestJson<unknown>(path(projectId), { signal })
   if (!Array.isArray(result)) throw new ApiError(0, "The server returned an unexpected pool list.", result)
   return result.map(decodePool)
-}
-
-export async function attachProjectPool(projectId: string, input: { key_id: string; pool: KeyPoolInput } | { new_key: VaultKeyInput; pool: KeyPoolInput }): Promise<ProjectPool> {
-  return decodePool(await requestJson<unknown>(path(projectId), { method: "POST", body: JSON.stringify(input) }))
 }
 
 export async function detachProjectPool(_projectId: string, poolId: string): Promise<void> {

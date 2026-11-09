@@ -1,5 +1,6 @@
 import { providerCallCost, type ProviderConfig } from "@/domains/providers"
 import type { ProviderInfo } from "./providerInfo"
+import { operationLabel } from "./quotaLabels"
 
 type QuotaCatalogProvider = ProviderConfig & { free?: boolean; keyless?: boolean }
 
@@ -18,7 +19,7 @@ export function catalogQuotaInfo(info: ProviderInfo, provider: ProviderConfig | 
   for (const operation of ["fetch", "search"] as const) {
     const price = providerCallCost(provider, operation, keyless)
     if (price === "—") continue
-    const name = operation === "fetch" && provider.id === "tavily" ? "Extract" : operation === "fetch" ? "Fetch" : "Search"
+    const name = operationLabel(operation)
     const value = price === "Free without a key" ? "Free" : price
     facts.unshift({ label: name + (value === "Free" ? " cost" : " cost (USD)"), value, note: null })
   }
