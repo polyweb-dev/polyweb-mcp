@@ -29,7 +29,7 @@ export const PERMISSION_GROUPS = [
   { name: "Requests", items: [
     PERMISSION_COPY.search, PERMISSION_COPY.fetch,
   ] },
-  { name: "Insight", items: [
+  { name: "Activity and usage", items: [
     PERMISSION_COPY.traces, PERMISSION_COPY.usage,
   ] },
   { name: "Configuration", items: [

@@ -114,7 +114,7 @@ let dashboardQuotaOverride: unknown[] | null = null
 // ---------------------------------------------------------------------------
 
 let stubbedProviderLimits: unknown[] | null = null
-let stubbedCrdTotals: unknown[] | null = null
+let stubbedUsdTotals: unknown[] | null = null
 
 type StubbedHistoryValue = { events: unknown[]; nextCursor: string | null; error: string | null }
 const stubbedHistory: Record<string, StubbedHistoryValue> = {}
@@ -127,9 +127,9 @@ export function setStubbedProviderLimits(limits: unknown[] | null): void {
   stubbedProviderLimits = limits === null ? null : [...limits]
 }
 
-/** Serve this crd_usage_totals array from GET /dashboard. */
-export function setStubbedCrdTotals(totals: unknown[] | null): void {
-  stubbedCrdTotals = totals === null ? null : [...totals]
+/** Serve this spend_totals array from GET /dashboard. */
+export function setStubbedUsdTotals(totals: unknown[] | null): void {
+  stubbedUsdTotals = totals === null ? null : [...totals]
 }
 
 /** Serve one history page (or an error) for a backend provider id. */
@@ -157,7 +157,6 @@ export function stubbedSyncCalls(): string[] {
 
 function ui7ConversionProfile(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: "1",
     cost_basis: "priced_native_use",
     price_version: "v2026-09",
@@ -202,7 +201,7 @@ function ui7FetchRecord(): Record<string, unknown> {
   }
 }
 
-/** Finite Brave card: USD 5 allowance, USD 4.500 left, 4500 CRD, 90%. */
+/** Finite Brave card: USD 5 allowance, USD 4.500 left, 4500 Usd, 90%. */
 export function braveCreditLimits(): unknown[] {
   return [
     {
@@ -236,13 +235,13 @@ export function braveCreditLimits(): unknown[] {
             stale: false,
             manual_anchor: false,
           },
-          crd_views: [
+          usd_views: [
             {
               state: "finite",
               operation: "search",
-              remaining_crd: "4500",
-              local_remaining_crd: null,
-              request_cost_crd: "5",
+              remaining_usd: "4.5",
+              local_remaining_usd: null,
+              request_cost_usd: "0.005",
               shared_pool_id: "brave:keyed:usd",
               possible_standard_calls: "900",
               price_version: "v2026-09",
@@ -251,9 +250,9 @@ export function braveCreditLimits(): unknown[] {
             {
               state: "unavailable",
               operation: "fetch",
-              remaining_crd: null,
-              local_remaining_crd: null,
-              request_cost_crd: null,
+              remaining_usd: null,
+              local_remaining_usd: null,
+              request_cost_usd: null,
               shared_pool_id: null,
               possible_standard_calls: null,
               price_version: null,
@@ -292,7 +291,7 @@ export function braveCreditLimits(): unknown[] {
             last_sync_at: FIXED_AT,
             stale: false,
             price_version: "v2026-09",
-            crd_split_note: null,
+            balance_split_note: null,
             rate_windows: [
               {
                 bucket_id: "brave:search:1s",
@@ -318,7 +317,7 @@ export function braveCreditLimits(): unknown[] {
   ]
 }
 
-/** Brave card after one 5-CRD debit: 4495 CRD, USD 4.495, 89.9%. */
+/** Brave card after one 5-Usd debit: 4495 Usd, USD 4.495, 89.9%. */
 export function braveCreditLimitsAfterDebit(): unknown[] {
   const limits = braveCreditLimits() as Array<Record<string, unknown>>
   const entry = limits[0] as Record<string, unknown>
@@ -328,8 +327,8 @@ export function braveCreditLimitsAfterDebit(): unknown[] {
     ...(auth.aggregate_pool as Record<string, unknown>),
     remaining: "4.495",
   }
-  const views = auth.crd_views as Array<Record<string, unknown>>
-  views[0] = { ...views[0], remaining_crd: "4495", possible_standard_calls: "899" }
+  const views = auth.usd_views as Array<Record<string, unknown>>
+  views[0] = { ...views[0], remaining_usd: "4.495", possible_standard_calls: "899" }
   const detail = auth.detail as Record<string, unknown>
   auth.detail = { ...detail, native_balance: "4.495" }
   return limits as unknown[]
@@ -358,8 +357,8 @@ export function unknownCreditLimits(): unknown[] {
               native_unit: "unknown",
               native_remaining: null,
               native_allowance: null,
-              remaining_crd: null,
-              allowance_crd: null,
+              remaining_usd: null,
+              allowance_usd: null,
               reset_rule: "unknown",
               reset_at: null,
               funding_mode: "unknown",
@@ -371,13 +370,13 @@ export function unknownCreditLimits(): unknown[] {
           ],
           tier_split_known: false,
           aggregate_pool: null,
-          crd_views: [
+          usd_views: [
             {
               state: "unknown",
               operation: "search",
-              remaining_crd: null,
-              local_remaining_crd: null,
-              request_cost_crd: null,
+              remaining_usd: null,
+              local_remaining_usd: null,
+              request_cost_usd: null,
               shared_pool_id: null,
               possible_standard_calls: null,
               price_version: null,
@@ -386,9 +385,9 @@ export function unknownCreditLimits(): unknown[] {
             {
               state: "unavailable",
               operation: "fetch",
-              remaining_crd: null,
-              local_remaining_crd: null,
-              request_cost_crd: null,
+              remaining_usd: null,
+              local_remaining_usd: null,
+              request_cost_usd: null,
               shared_pool_id: null,
               possible_standard_calls: null,
               price_version: null,
@@ -412,7 +411,7 @@ export function unknownCreditLimits(): unknown[] {
             last_sync_at: null,
             stale: false,
             price_version: "",
-            crd_split_note: null,
+            balance_split_note: null,
             rate_windows: [],
             tier_split_known: false,
             aggregate_pool_id: null,
@@ -449,13 +448,13 @@ export function parallelCardLimits(): unknown[] {
           unknown_tiers: [],
           tier_split_known: true,
           aggregate_pool: null,
-          crd_views: [
+          usd_views: [
             {
               state: "unknown",
               operation: "search",
-              remaining_crd: null,
-              local_remaining_crd: null,
-              request_cost_crd: null,
+              remaining_usd: null,
+              local_remaining_usd: null,
+              request_cost_usd: null,
               shared_pool_id: null,
               possible_standard_calls: null,
               price_version: null,
@@ -464,9 +463,9 @@ export function parallelCardLimits(): unknown[] {
             {
               state: "unavailable",
               operation: "fetch",
-              remaining_crd: null,
-              local_remaining_crd: null,
-              request_cost_crd: null,
+              remaining_usd: null,
+              local_remaining_usd: null,
+              request_cost_usd: null,
               shared_pool_id: null,
               possible_standard_calls: null,
               price_version: null,
@@ -490,7 +489,7 @@ export function parallelCardLimits(): unknown[] {
             last_sync_at: null,
             stale: false,
             price_version: "",
-            crd_split_note: null,
+            balance_split_note: null,
             rate_windows: [],
             tier_split_known: true,
             aggregate_pool_id: null,
@@ -509,7 +508,7 @@ export function bravePlusParallelLimits(): unknown[] {
   return [...braveCreditLimits(), ...parallelCardLimits()]
 }
 
-/** One history event with exact CRD balances plus a native fallback event. */
+/** One history event with exact Usd balances plus a native fallback event. */
 export function ui7HistoryEvents(): unknown[] {
   return [
     {
@@ -523,9 +522,9 @@ export function ui7HistoryEvents(): unknown[] {
       reason: "local_success",
       old_native: "4.500",
       new_native: "4.495",
-      old_crd: "4500",
-      new_crd: "4495",
-      crd_debit: "5",
+      old_usd: "4.5",
+      new_usd: "4.495",
+      debit_usd: "0.005",
       native_debit: "0.005",
       actual_usd: null,
       confidence: "observed",
@@ -543,14 +542,14 @@ export function ui7HistoryEvents(): unknown[] {
       reason: "grant",
       old_native: null,
       new_native: null,
-      old_crd: null,
-      new_crd: null,
-      crd_debit: null,
+      old_usd: null,
+      new_usd: null,
+      debit_usd: null,
       native_debit: null,
       actual_usd: null,
       confidence: "authoritative",
       local_attempt_id: null,
-      detail: { native_unit: "USD", actor: "", search_granted_crd: "100" },
+      detail: { native_unit: "USD", actor: "", search_granted_usd: "0.1" },
     },
   ]
 }
@@ -560,7 +559,7 @@ export function ui7HistoryEvents(): unknown[] {
 //
 // Native CREDIT pool with the documented free allowance (1000 Credits,
 // monthly reset on day 1) and the PAYGO reference profile (USD 0.008 per
-// Credit, 8 CRD per Credit). Search bills 1 Credit per basic call (2 per
+// Credit, 8 Usd per Credit). Search bills 1 Credit per basic call (2 per
 // advanced); extract bills 0.2 Credits per good URL (1 Credit per 5 URLs,
 // 2 per 5 advanced). The shared minute bucket is dev 100 RPM, prod 1000 RPM.
 // ---------------------------------------------------------------------------
@@ -576,7 +575,6 @@ export const TAVILY_402_URL = "https://tavily-402.example.com/article"
 
 function tavilyConversionProfile(): Record<string, unknown> {
   return {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: "0.008",
     cost_basis: "paygo_reference",
     price_version: "paygo-reference",
@@ -665,8 +663,8 @@ function tavilyFreeTier(overrides: Record<string, unknown> = {}): Record<string,
     native_unit: "CREDIT",
     native_remaining: "1000",
     native_allowance: "1000",
-    remaining_crd: "8000",
-    allowance_crd: "8000",
+    remaining_usd: "8",
+    allowance_usd: "8",
     reset_rule: "monthly_first",
     reset_at: "2026-10-01T00:00:00Z",
     funding_mode: "recurring",
@@ -685,8 +683,8 @@ function tavilyPaygoTier(): Record<string, unknown> {
     native_unit: "CREDIT",
     native_remaining: null,
     native_allowance: null,
-    remaining_crd: null,
-    allowance_crd: null,
+    remaining_usd: null,
+    allowance_usd: null,
     reset_rule: "never",
     reset_at: null,
     funding_mode: "postpaid",
@@ -723,9 +721,9 @@ function tavilySearchView(overrides: Record<string, unknown> = {}): Record<strin
   return {
     state: "finite",
     operation: "search",
-    remaining_crd: "8000",
-    local_remaining_crd: null,
-    request_cost_crd: "8",
+    remaining_usd: "8",
+    local_remaining_usd: null,
+    request_cost_usd: "0.008",
     shared_pool_id: "tavily:keyed:credits",
     possible_standard_calls: "1000",
     price_version: "paygo-reference",
@@ -738,9 +736,9 @@ function tavilyFetchView(overrides: Record<string, unknown> = {}): Record<string
   return {
     state: "finite",
     operation: "fetch",
-    remaining_crd: "8000",
-    local_remaining_crd: null,
-    request_cost_crd: "1.6",
+    remaining_usd: "8",
+    local_remaining_usd: null,
+    request_cost_usd: "0.0016",
     shared_pool_id: "tavily:keyed:credits",
     possible_standard_calls: "5000",
     price_version: "paygo-reference",
@@ -765,7 +763,7 @@ function tavilyDetail(overrides: Record<string, unknown> = {}): Record<string, u
     last_sync_at: FIXED_AT,
     stale: false,
     price_version: "paygo-reference",
-    crd_split_note: null,
+    balance_split_note: null,
     rate_windows: [tavilyMinuteWindow("100", "100")],
     retry_after_seconds: null,
     tier_split_known: true,
@@ -791,7 +789,7 @@ export function tavilyCreditLimits(): unknown[] {
           unknown_tiers: [],
           tier_split_known: true,
           aggregate_pool: tavilyPool(),
-          crd_views: [tavilySearchView(), tavilyFetchView()],
+          usd_views: [tavilySearchView(), tavilyFetchView()],
           rate_progress: [],
           grants: null,
           detail: tavilyDetail(),
@@ -810,14 +808,14 @@ function withTavilyBalance(limits: unknown[], remaining: string, calls: string):
   const auths = entry.auths as Array<Record<string, unknown>>
   const auth = auths[0] as Record<string, unknown>
   auth.aggregate_pool = { ...(auth.aggregate_pool as Record<string, unknown>), remaining }
-  const views = auth.crd_views as Array<Record<string, unknown>>
-  const remainingCrd = String(Number(remaining) * 8)
-  views[0] = { ...views[0], remaining_crd: remainingCrd, possible_standard_calls: calls }
-  views[1] = { ...views[1], remaining_crd: remainingCrd }
+  const views = auth.usd_views as Array<Record<string, unknown>>
+  const remainingUsd = String(Number(remaining) * 0.008)
+  views[0] = { ...views[0], remaining_usd: remainingUsd, possible_standard_calls: calls }
+  views[1] = { ...views[1], remaining_usd: remainingUsd }
   const detail = auth.detail as Record<string, unknown>
   auth.detail = { ...detail, native_balance: remaining }
   const tiers = auth.free_tiers as Array<Record<string, unknown>>
-  auth.free_tiers = tiers.map((tier) => ({ ...tier, native_remaining: remaining, remaining_crd: remainingCrd }))
+  auth.free_tiers = tiers.map((tier) => ({ ...tier, native_remaining: remaining, remaining_usd: remainingUsd }))
   return limits
 }
 
@@ -834,7 +832,6 @@ export function tavilyCreditLimitsAfterAdvanced(): unknown[] {
 /** Keyless Tavily rail: no reported quota, no numeric minute headroom. */
 export function tavilyKeylessLimits(): unknown[] {
   const keylessProfile = {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: null,
     cost_basis: "keyless_unpublished",
     price_version: "",
@@ -844,9 +841,9 @@ export function tavilyKeylessLimits(): unknown[] {
   const unknownView = (operation: string): Record<string, unknown> => ({
     state: "unknown",
     operation,
-    remaining_crd: null,
-    local_remaining_crd: null,
-    request_cost_crd: null,
+    remaining_usd: null,
+    local_remaining_usd: null,
+    request_cost_usd: null,
     shared_pool_id: null,
     possible_standard_calls: null,
     price_version: null,
@@ -887,7 +884,7 @@ export function tavilyKeylessLimits(): unknown[] {
           unknown_tiers: [],
           tier_split_known: true,
           aggregate_pool: null,
-          crd_views: [unknownView("search"), unknownView("fetch")],
+          usd_views: [unknownView("search"), unknownView("fetch")],
           rate_progress: [],
           grants: null,
           detail: tavilyDetail({
@@ -926,7 +923,7 @@ export function tavilyPaygoLimits(): unknown[] {
   return limits as unknown[]
 }
 
-/** Finite Tavily rail with a stored operator grant (800 + 1600 CRD). */
+/** Finite Tavily rail with a stored operator grant (800 + 1600 Usd). */
 export function tavilyGrantLimits(): unknown[] {
   const limits = tavilyCreditLimits() as Array<Record<string, unknown>>
   const auth = (limits[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
@@ -934,15 +931,14 @@ export function tavilyGrantLimits(): unknown[] {
   keyed.grants = {
     provider: "tavily",
     auth_mode: "keyed",
-    period_start: "2026-09-01",
-    period_end: "2026-09-30",
+    period: "month" as const,
     version: 1,
-    search_granted_crd: "800",
-    search_consumed_crd: "0",
-    search_reserved_crd: "0",
-    fetch_granted_crd: "1600",
-    fetch_consumed_crd: "0",
-    fetch_reserved_crd: "0",
+    search_granted_usd: "0.8",
+    search_consumed_usd: "0",
+    search_reserved_usd: "0",
+    fetch_granted_usd: "1.6",
+    fetch_consumed_usd: "0",
+    fetch_reserved_usd: "0",
   }
   return limits as unknown[]
 }
@@ -980,9 +976,9 @@ export function tavilyHistoryEvents(): unknown[] {
       reason: "local_success",
       old_native: "1000",
       new_native: "999",
-      old_crd: "8000",
-      new_crd: "7992",
-      crd_debit: "8",
+      old_usd: "8",
+      new_usd: "7.992",
+      debit_usd: "0.008",
       native_debit: "1",
       actual_usd: null,
       confidence: "observed",
@@ -1000,32 +996,32 @@ export function tavilyHistoryEvents(): unknown[] {
       reason: "grant",
       old_native: null,
       new_native: null,
-      old_crd: null,
-      new_crd: null,
-      crd_debit: null,
+      old_usd: null,
+      new_usd: null,
+      debit_usd: null,
       native_debit: null,
       actual_usd: null,
       confidence: "authoritative",
       local_attempt_id: null,
-      detail: { native_unit: "CREDIT", actor: "", search_granted_crd: "800" },
+      detail: { native_unit: "CREDIT", actor: "", search_granted_usd: "0.8" },
     },
   ]
 }
 
-/** Recorded Tavily search + extract use (8 CRD basic search, 1.6 CRD extract). */
+/** Recorded Tavily search + extract use (8 Usd basic search, 1.6 Usd extract). */
 export function tavilyUseTotals(): unknown[] {
   return [
     {
       provider: "tavily",
       operation: "search",
-      normalized_crd: "8",
+      spend_usd: "0.008",
       attempt_count: 1,
       volume_count: 1,
     },
     {
       provider: "tavily",
       operation: "fetch",
-      normalized_crd: "1.6",
+      spend_usd: "0.0016",
       attempt_count: 1,
       volume_count: 5,
     },
@@ -1067,8 +1063,8 @@ export const TAVILY_ACCOUNT_PLAN_BOOTSTRAP = "Bootstrap"
 /** Long zero-decimal native input: displays as `100`, never rounded up. */
 export const TAVILY_LONG_DECIMAL_NATIVE = "100.000000000"
 
-/** Long zero-decimal extract CRD input: displays as `1.6 CRD`. */
-export const TAVILY_LONG_DECIMAL_CRD = "1.600000000"
+/** Long zero-decimal extract Usd input: displays as `1.6 Usd`. */
+export const TAVILY_LONG_DECIMAL_Usd = "1.600000000"
 
 /** Long zero-decimal search USD input: displays as `[USD 0.008]`. */
 export const TAVILY_LONG_DECIMAL_USD_SEARCH = "0.008000000"
@@ -1158,7 +1154,7 @@ export function tavilyBootstrapProdLimits(): unknown[] {
 
 /**
  * Fractional native rail: 999.6/1000 funds floor to 999 visible Credits with
- * exact amounts kept for the percent math. The 1.6 CRD extract cost and the
+ * exact amounts kept for the percent math. The 1.6 Usd extract cost and the
  * 0.008/0.0016 USD prices come from the base budgets unchanged (FIX-Q1).
  */
 export function tavilyFractionalNativeLimits(): unknown[] {
@@ -1166,19 +1162,19 @@ export function tavilyFractionalNativeLimits(): unknown[] {
   const auths = (entries[0] as Record<string, unknown>).auths as Array<Record<string, unknown>>
   const keyed = auths[0] as Record<string, unknown>
   keyed.aggregate_pool = { ...(keyed.aggregate_pool as Record<string, unknown>), remaining: "999.6" }
-  const views = keyed.crd_views as Array<Record<string, unknown>>
-  views[0] = { ...views[0], remaining_crd: "7996.8", possible_standard_calls: "999.6" }
-  views[1] = { ...views[1], remaining_crd: "7996.8" }
+  const views = keyed.usd_views as Array<Record<string, unknown>>
+  views[0] = { ...views[0], remaining_usd: "7.9968", possible_standard_calls: "999.6" }
+  views[1] = { ...views[1], remaining_usd: "7.9968" }
   const detail = keyed.detail as Record<string, unknown>
   keyed.detail = { ...detail, native_balance: "999.6" }
   const tiers = keyed.free_tiers as Array<Record<string, unknown>>
-  keyed.free_tiers = tiers.map((tier) => ({ ...tier, native_remaining: "999.6", remaining_crd: "7996.8" }))
+  keyed.free_tiers = tiers.map((tier) => ({ ...tier, native_remaining: "999.6", remaining_usd: "7.9968" }))
   return entries as unknown[]
 }
 
 /**
  * Long zero-decimal rail: `100.000000000` funds and windows display as 100,
- * `1.600000000` CRD as `1.6 CRD`, `0.008000000` USD as `[USD 0.008]`, and
+ * `1.600000000` Usd as `1.6 Usd`, `0.008000000` USD as `[USD 0.008]`, and
  * `0.001600000` USD as `[USD 0.0016]` (FIX-Q1: trim, never integer-convert).
  */
 export function tavilyLongDecimalLimits(): unknown[] {
@@ -1204,14 +1200,14 @@ export function tavilyLongDecimalLimits(): unknown[] {
     remaining: TAVILY_LONG_DECIMAL_NATIVE,
     allowance: TAVILY_LONG_DECIMAL_NATIVE,
   }
-  const views = keyed.crd_views as Array<Record<string, unknown>>
+  const views = keyed.usd_views as Array<Record<string, unknown>>
   views[0] = {
     ...views[0],
-    remaining_crd: "800.000000000",
-    request_cost_crd: "8.000000000",
+    remaining_usd: "0.800000000",
+    request_cost_usd: "0.008000000",
     possible_standard_calls: TAVILY_LONG_DECIMAL_NATIVE,
   }
-  views[1] = { ...views[1], remaining_crd: "800.000000000", request_cost_crd: TAVILY_LONG_DECIMAL_CRD }
+  views[1] = { ...views[1], remaining_usd: "0.800000000", request_cost_usd: TAVILY_LONG_DECIMAL_Usd }
   const detail = keyed.detail as Record<string, unknown>
   keyed.detail = {
     ...detail,
@@ -1224,8 +1220,8 @@ export function tavilyLongDecimalLimits(): unknown[] {
     ...tier,
     native_remaining: TAVILY_LONG_DECIMAL_NATIVE,
     native_allowance: TAVILY_LONG_DECIMAL_NATIVE,
-    remaining_crd: "800.000000000",
-    allowance_crd: "800.000000000",
+    remaining_usd: "0.800000000",
+    allowance_usd: "0.800000000",
   }))
   return entries as unknown[]
 }
@@ -2417,7 +2413,7 @@ function dashboardFixture(): Record<string, unknown> {
     latest_health: [{ provider: "brave", status: "healthy", checked_at: FIXED_AT }],
     generated_at: FIXED_AT,
     provider_limits: stubbedProviderLimits ?? [],
-    crd_usage_totals: stubbedCrdTotals ?? [],
+    spend_totals: stubbedUsdTotals ?? [],
   }
 }
 
@@ -2454,7 +2450,7 @@ export async function installBackendStub(page: Page): Promise<void> {
   for (const key of Object.keys(stubbedManualQuotas)) delete stubbedManualQuotas[key]
   dashboardQuotaOverride = null
   stubbedProviderLimits = null
-  stubbedCrdTotals = null
+  stubbedUsdTotals = null
   for (const key of Object.keys(stubbedHistory)) delete stubbedHistory[key]
   stubbedGrantRequests.length = 0
   stubbedGrantMode = "ok"
@@ -2671,8 +2667,8 @@ export async function installBackendStub(page: Page): Promise<void> {
     return json(route, dashboardWithQuotaOverride())
   })
 
-  // UI7 grant route: PUT /api/v1/providers/{id}/crd-grants/{auth}.
-  await page.route("**/api/v1/providers/*/crd-grants/*", (route) => {
+  // UI7 grant route: PUT /api/v1/providers/{id}/budgets/{auth}.
+  await page.route("**/api/v1/providers/*/budgets/*", (route) => {
     if (route.request().method() !== "PUT") return route.fallback()
     const body = readJsonBody(route)
     stubbedGrantRequests.push(body)

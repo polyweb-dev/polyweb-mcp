@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { SPEND_CAP_NOTE } from "../model/quotaLabels"
-import { CRDGrantForm } from "./CRDGrantForm"
+import { UsdGrantForm } from "./UsdGrantForm"
 
 /**
  * UI7 grant form: search-only for Brave, one-digit rule on changed input,
@@ -14,15 +14,14 @@ function grants() {
   return {
     provider: "brave",
     auth_mode: "keyed",
-    period_start: "2026-09-01",
-    period_end: "2026-09-30",
+    period: "month" as const,
     version: 3,
-    search_granted_crd: "4.500",
-    search_consumed_crd: "0",
-    search_reserved_crd: "0",
-    fetch_granted_crd: "0",
-    fetch_consumed_crd: "0",
-    fetch_reserved_crd: "0",
+    search_granted_usd: "0.0045",
+    search_consumed_usd: "0",
+    search_reserved_usd: "0",
+    fetch_granted_usd: "0",
+    fetch_consumed_usd: "0",
+    fetch_reserved_usd: "0",
   }
 }
 
@@ -31,7 +30,7 @@ function renderForm(fetchAvailable: boolean, overrides: Record<string, unknown> 
   const onClose = vi.fn()
   const onReload = vi.fn()
   render(
-    <CRDGrantForm
+    <UsdGrantForm
       providerName="Brave"
       authMode="keyed"
       grants={grants()}
@@ -48,7 +47,7 @@ function renderForm(fetchAvailable: boolean, overrides: Record<string, unknown> 
   return { onSave, onClose, onReload }
 }
 
-describe("CRDGrantForm", () => {
+describe("UsdGrantForm", () => {
   it("shows search only with no fetch field for Brave (UI7-04, UI7-08)", () => {
     renderForm(false)
     expect(screen.getByLabelText("Search budget (USD)")).not.toBeNull()
@@ -58,19 +57,19 @@ describe("CRDGrantForm", () => {
 
   it("keeps exact stored 4.500 until the user changes it (precision rule)", () => {
     renderForm(false)
-    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue("0.004500")
+    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue(0.0045)
   })
 
-  it("updates the provider list-price equivalent while editing a CRD budget", async () => {
+  it("updates the provider list-price equivalent while editing a Usd budget", async () => {
     renderForm(false)
     const input = screen.getByLabelText("Search budget (USD)")
     const user = userEvent.setup()
     await user.clear(input)
     await user.type(input, "5000")
-    expect(input).toHaveValue("5000")
+    expect(input).toHaveValue(5000)
     await user.clear(input)
     await user.type(input, "2500")
-    expect(input).toHaveValue("2500")
+    expect(input).toHaveValue(2500)
   })
 
   it("rejects a changed amount with two decimal digits (UI7-08)", async () => {
@@ -90,10 +89,9 @@ describe("CRDGrantForm", () => {
     expect(onSave).toHaveBeenCalledWith({
       auth_mode: "keyed",
       version: 3,
-      period_start: "2026-09-01",
-      period_end: "2026-09-30",
-      search_crd: "4.500",
-      fetch_crd: "0",
+      period: "month" as const,
+      search_usd: "0.0045",
+      fetch_usd: "0",
     })
   })
 
@@ -101,7 +99,7 @@ describe("CRDGrantForm", () => {
     const onClose = vi.fn()
     const user = userEvent.setup()
     render(
-      <CRDGrantForm
+      <UsdGrantForm
         providerName="Brave"
         authMode="keyed"
         grants={grants()}
@@ -121,7 +119,7 @@ describe("CRDGrantForm", () => {
   it("shows the reload action after HTTP 409 and keeps the draft (UI7-08)", () => {
     renderForm(false, { staleVersion: true, saveError: "The server holds a newer version of this record. Reload the limits and try again." })
     expect(screen.getByRole("button", { name: "Reload limits" })).not.toBeNull()
-    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue("0.004500")
+    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue(0.0045)
   })
 
   it("labels every input explicitly with error descriptions (a11y)", async () => {
@@ -133,14 +131,11 @@ describe("CRDGrantForm", () => {
     expect(screen.getByLabelText("Search budget (USD)").getAttribute("aria-invalid")).toBe("true")
   })
 
-  it("uses one column with three full-width rows in amount-period order (final-polish 2)", () => {
+  it("uses the shared amount and calendar period controls", () => {
     renderForm(false)
-    const grid = document.querySelector("div.grid")
-    expect(grid).not.toBeNull()
-    expect(grid?.className ?? "").toContain("grid-cols-1")
-    expect(grid?.className ?? "").not.toContain("sm:grid-cols-2")
-    const labels = Array.from(document.querySelectorAll("label")).map((entry) => entry.textContent)
-    expect(labels).toEqual(["Search budget (USD)", "Period start", "Period end"])
+    expect(screen.getByLabelText("Search budget (USD)")).toHaveAttribute("type", "number")
+    expect(screen.getByRole("combobox", { name: "Budget period" })).toHaveTextContent("Per month")
+    expect(screen.queryByLabelText("Period start")).toBeNull()
   })
 
   it("shows stored facts as a Set, Used, Reserved table without a helper paragraph (CARD-4)", () => {
@@ -148,8 +143,7 @@ describe("CRDGrantForm", () => {
     const table = screen.getByRole("table", { name: "Current budget limit" })
     expect(Array.from(table.querySelectorAll("th")).map((th) => th.textContent)).toEqual([
       "Operation",
-      "Set (USD)",
-      "Used (USD)",
+      "Usage",
       "Reserved (USD)",
     ])
     expect(table.querySelectorAll("tbody tr")).toHaveLength(1)
@@ -168,10 +162,9 @@ describe("CRDGrantForm", () => {
   })
 })
 
-describe("CRDGrantForm Tavily native", () => {
+describe("UsdGrantForm Tavily native", () => {
   function tavilyProfile() {
     return {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -184,15 +177,14 @@ describe("CRDGrantForm Tavily native", () => {
     return {
       provider: "tavily",
       auth_mode: "keyed",
-      period_start: "2026-09-01",
-      period_end: "2026-09-30",
+      period: "month" as const,
       version: 3,
-      search_granted_crd: "8",
-      search_consumed_crd: "0",
-      search_reserved_crd: "0",
-      fetch_granted_crd: "16",
-      fetch_consumed_crd: "0",
-      fetch_reserved_crd: "0",
+      search_granted_usd: "0.008",
+      search_consumed_usd: "0",
+      search_reserved_usd: "0",
+      fetch_granted_usd: "0.016",
+      fetch_consumed_usd: "0",
+      fetch_reserved_usd: "0",
     }
   }
 
@@ -201,7 +193,7 @@ describe("CRDGrantForm Tavily native", () => {
     const onClose = vi.fn()
     const onReload = vi.fn()
     render(
-      <CRDGrantForm
+      <UsdGrantForm
         providerName="Tavily"
         authMode="keyed"
         grants={tavilyGrants()}
@@ -219,16 +211,16 @@ describe("CRDGrantForm Tavily native", () => {
     return { onSave, onClose }
   }
 
-  it("displays native Credits while keeping stored CRD text convertible", () => {
+  it("displays native Credits while keeping stored Usd text convertible", () => {
     renderTavily()
-    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue("0.008")
-    expect(screen.getByLabelText("Fetch budget (USD)")).toHaveValue("0.016")
+    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue(0.008)
+    expect(screen.getByLabelText("Fetch budget (USD)")).toHaveValue(0.016)
     expect(screen.queryByText(/1 credit/)).toBeNull()
     expect(screen.queryByText(/2 credits/)).toBeNull()
-    expect(screen.queryByText("8 CRD")).toBeNull()
+    expect(screen.queryByText("8 Usd")).toBeNull()
   })
 
-  it("wires CRD on submit after a typed Credits amount", async () => {
+  it("wires Usd on submit after a typed Credits amount", async () => {
     const { onSave } = renderTavily()
     const user = userEvent.setup()
     await user.clear(screen.getByLabelText("Search budget (USD)"))
@@ -238,17 +230,16 @@ describe("CRDGrantForm Tavily native", () => {
     expect(onSave).toHaveBeenCalledWith({
       auth_mode: "keyed",
       version: 3,
-      period_start: "2026-09-01",
-      period_end: "2026-09-30",
-      search_crd: "3000",
-      fetch_crd: "16",
+      period: "month" as const,
+      search_usd: "3",
+      fetch_usd: "0.016",
     })
   })
 
-  it("disables conversion on an unknown profile and keeps CRD behavior", () => {
+  it("disables conversion on an unknown profile and keeps Usd behavior", () => {
     const onSave = vi.fn(() => Promise.resolve(true))
     render(
-      <CRDGrantForm
+      <UsdGrantForm
         providerName="Tavily"
         authMode="keyed"
         grants={tavilyGrants()}
@@ -262,24 +253,22 @@ describe("CRDGrantForm Tavily native", () => {
         onReload={() => {}}
       />,
     )
-    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue("0.008")
-    expect(screen.getByLabelText("Fetch budget (USD)")).toHaveValue("0.016")
+    expect(screen.getByLabelText("Search budget (USD)")).toHaveValue(0.008)
+    expect(screen.getByLabelText("Fetch budget (USD)")).toHaveValue(0.016)
     expect(screen.queryByText(/8 credits/)).toBeNull()
   })
 })
 
 
-describe("USD budget dates and precision", () => {
-  it("uses the shared text date fields and sends ISO bounds with exact edited USD", async () => {
+describe("USD budget period and precision", () => {
+  it("sends the selected calendar period with exact edited USD", async () => {
     const { onSave } = renderForm(false)
     const user = userEvent.setup()
-    expect(screen.getByLabelText("Period start")).toHaveAttribute("type", "text")
-    expect(screen.getByLabelText("Period end")).toHaveAttribute("type", "text")
-    await user.clear(screen.getByLabelText("Period start"))
-    await user.type(screen.getByLabelText("Period start"), "Sep 2, 2026")
+    await user.click(screen.getByRole("combobox", { name: "Budget period" }))
+    await user.click(screen.getByRole("option", { name: "Per week" }))
     await user.clear(screen.getByLabelText("Search budget (USD)"))
     await user.type(screen.getByLabelText("Search budget (USD)"), "1.234567")
     await user.click(screen.getByRole("button", { name: "Save budget limit" }))
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ period_start: "2026-09-02", search_crd: "1234.567000" }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ period: "week", search_usd: "1.234567" }))
   })
 })

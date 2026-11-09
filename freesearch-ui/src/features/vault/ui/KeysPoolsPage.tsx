@@ -78,7 +78,7 @@ export function KeysPoolsPage() {
         description="Provider keys you own and the pools that give projects access"
         actions={<Button size="form" onClick={() => setDialog({ type: "add" })}>Add key</Button>}
       />
-      <div className="mt-6">
+      <div>
         {resource.status === "loading" && <p role="status">Wait while the keys load</p>}
         {resource.status === "error" && (resource.error instanceof ApiError && resource.error.status === 404
           ? <EmptyState title="Keys and pools are not available yet" description="Try again later" />

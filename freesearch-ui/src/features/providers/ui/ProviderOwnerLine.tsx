@@ -3,7 +3,7 @@ import { transferProviderOwner } from "@/domains/projects"
 import type { ProviderOwner } from "@/domains/projects"
 import { ApiError } from "@/shared/api/http"
 import type { ScopedResource } from "@/shared/lib/useScopedResource"
-import { Button } from "@/shared/ui/button"
+import { Button, buttonVariants } from "@/shared/ui/button"
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog"
 
 interface Props {
@@ -24,15 +24,15 @@ function renderOwnerDetails({ current, projectId, accountId, isAdmin, canConfigu
   claim: () => void
 }) {
   const isOwner = current?.user_id === accountId
-  if (!current) return <><p role="note">Provider owner: None</p>
+  if (!current) return <><p role="note">Provider owner: —</p>
     <p>This project has no provider owner{!isAdmin && ". Ask a project admin"}</p>
     {isAdmin && <Button size="form" onClick={claim}>Become provider owner</Button>}</>
   return <>
     <p role="note">Provider owner: {current.email}{isOwner && " (you)"}
-      {isAdmin && <a className="ml-2 inline-flex rounded-md bg-[var(--raised)] px-2.5 py-1 text-[var(--text-strong)] hover:bg-[var(--raised-hover)]" href={`/p/${encodeURIComponent(projectId)}/members`}>Transfer ownership</a>}
+      {isAdmin && <a className={`${buttonVariants({ variant: "outline", size: "sm" })} ml-2`} href={`/p/${encodeURIComponent(projectId)}/members`}>Transfer ownership</a>}
+      {!isOwner && !isAdmin && !canConfigure && <span className="ml-2 text-[var(--muted)]">Ask a project admin to change this</span>}
     </p>
     {!isOwner && isAdmin && <p>Only the provider owner can add or remove capacity. Ask {current.email}</p>}
-    {!isOwner && !isAdmin && !canConfigure && <p>Ask a project admin to change this</p>}
   </>
 }
 

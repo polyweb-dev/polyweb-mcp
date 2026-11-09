@@ -1,7 +1,9 @@
 import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { ProjectPool } from "@/domains/projects"
 import { ProjectPoolCell } from "./ProjectPoolCell"
+
+vi.mock("@/features/vault/model/useFreeProvider", () => ({ useFreeProvider: (provider: string) => provider === "tinyfish" }))
 
 const pool: ProjectPool = {
   pool_id: "pool", provider_type: "tinyfish", label: "Alpha - Tinyfish", key_label: "Tinyfish key",
@@ -11,10 +13,20 @@ const pool: ProjectPool = {
 
 describe("ProjectPoolCell", () => {
   it("uses the common budget phrase and hides dollar budgets for free providers", () => {
-    const { rerender } = render(<ProjectPoolCell pool={pool} />)
+    const { rerender } = render(<ProjectPoolCell pool={{ ...pool, provider_type: "brave" }} operation="search" />)
     expect(screen.getByText(/\$2.00 of \$20.00 this month/)).toBeInTheDocument()
-    rerender(<ProjectPoolCell pool={pool} free />)
+    rerender(<ProjectPoolCell pool={pool} operation="search" />)
     expect(screen.queryByText(/\$/)).toBeNull()
-    expect(screen.getByText("60 per minute")).toBeInTheDocument()
+    expect(screen.getByText("60/min · Free")).toBeInTheDocument()
+  })
+
+  it("shows a single-operation restriction only in the other operation", () => {
+    const brave = { ...pool, provider_type: "brave", operations: ["search"] as const }
+    const searchOnly = { ...brave, operations: [...brave.operations] }
+    const { rerender } = render(<ProjectPoolCell pool={searchOnly} operation="search" />)
+    expect(screen.getByText("60/min · $2.00 of $20.00 this month")).toBeInTheDocument()
+    expect(screen.queryByText(/Search only/)).toBeNull()
+    rerender(<ProjectPoolCell pool={searchOnly} operation="fetch" />)
+    expect(screen.getByText(/Search only/)).toBeInTheDocument()
   })
 })

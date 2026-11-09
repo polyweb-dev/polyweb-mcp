@@ -86,7 +86,7 @@ describe("Provider order section", () => {
     const row = within(table).getByText("Tavily").closest("tr")
     if (!row) throw new Error("Missing Tavily row")
     expect(within(row).getByText("No key needed")).toBeInTheDocument()
-    expect(within(row).getByText("No pool needed")).toBeInTheDocument()
+    expect(within(row).getAllByRole("cell")[2]).toHaveTextContent("—")
     expect(within(row).queryByText("Pool name")).toBeNull()
     expect(within(table).getByText("Pool name")).toBeInTheDocument()
   })
@@ -219,6 +219,7 @@ describe("Provider order section", () => {
     const addCapacity = vi.fn()
     const { rerender } = render(<ProviderOrderSection context={context({ providers: [provider], isOwner: true, canEditSystem: true, addCapacity, poolOperations: () => undefined })} />)
     expect(await screen.findByText("No provider can serve Search in this project")).toBeInTheDocument()
+    expect(screen.queryByText("Always on")).toBeNull()
     expect(screen.getByRole("link", { name: "Turn on in System Providers" })).toHaveAttribute("href", "/system/providers")
     await userEvent.click(screen.getByRole("button", { name: "Add capacity" }))
     expect(addCapacity).toHaveBeenCalledOnce()
@@ -253,17 +254,15 @@ describe("Provider order section", () => {
     expect(within(rows[2] as HTMLElement).queryByLabelText(/Drag/)).toBeNull()
   })
 
-  it("uses a disabled on switch for keyless access and the catalog price instead of the order price", async () => {
+  it("shows always on for keyless access and the catalog price instead of the order price", async () => {
     const order = document()
     order.search.providers[0] = { provider: "tavily", name: "Tavily", callCostUsd: "99", keyless: true }
     mocks.get.mockResolvedValue(order)
     render(<ProviderOrderSection context={context({ isOwner: true, poolOperations: () => undefined })} />)
     const table = await screen.findByRole("table", { name: "Search provider order" })
-    const control = within(table).getByRole("switch", { name: "Use Tavily for Search" })
-    expect(control).toBeChecked()
-    expect(control).toBeDisabled()
-    expect(screen.getByTitle("Always on: no key needed")).toContainElement(control)
-    expect(within(table).getByText("Free without a key")).toBeInTheDocument()
+    expect(within(table).queryByRole("switch", { name: "Use Tavily for Search" })).toBeNull()
+    expect(within(table).getByText("Always on")).toBeInTheDocument()
+    expect(within(table).getByText("Free")).toBeInTheDocument()
     expect(within(table).queryByText(/99/)).toBeNull()
   })
 

@@ -12,26 +12,16 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/system/quotas"
     Then the Brave credit bar should show "90" percent
-    And the Brave card should show "4,500 / 5,000 CRD"
-    And the Brave CRD value should carry "$4.5 left" hover text
+    And the Brave card should show "4,500 / 5,000 USD"
+    And the Brave USD value should carry "$4.5 left" hover text
     And the Brave card should show one credit bar
-    And the usage view should not show "CRD left"
+    And the usage view should not show "USD left"
     And the usage view should not show "∞"
     And the Brave card should show the "Refresh" action
     And the Brave card should show the "Set balance" action
     And the Brave card should show the "Budget limit" action
     And the Brave card should show the "Balance history" action
     And the Brave card subtitle should contain "Reported by provider"
-
-  @stub @ui7 @precision
-  Scenario: U7-B02 Zero tiny and fractional funds stay exact
-    Given the stubbed provider limits show "Brave finite credits"
-    And the stubbed credit totals show "Brave no use"
-    When I navigate directly to "/system/quotas"
-    Then the formatted CRD amount "0" should be "0 CRD"
-    And the formatted CRD amount "0.04" should be "<0.1 CRD"
-    And the formatted CRD amount "0.599" should be "≈0.6 CRD"
-    And the formatted CRD amount "4.5" should be "4.5 CRD"
 
   @stub @ui7 @unknown
   Scenario: U7-B03 Unknown balance price tier and reset show no invented text
@@ -51,7 +41,7 @@ Feature: Provider credit units display honestly
     When I navigate directly to "/system/quotas"
     Then the Brave card should show "$4.50 left" with no total
     And the Brave card should show no credit bar
-    And the usage view should not show "CRD left"
+    And the usage view should not show "USD left"
 
   @stub @ui7 @free
   Scenario: U7-B05 Free state shows no invented finite funds
@@ -71,16 +61,16 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Brave one search use"
     And I reload the page
     Then the Brave credit bar should show "89.9" percent
-    And the Brave card should show "4,495 / 5,000 CRD"
-    And the Brave CRD value should carry "$4.495 left" hover text
+    And the Brave card should show "4,495 / 5,000 USD"
+    And the Brave USD value should carry "$4.495 left" hover text
 
   @stub @ui7 @totals
   Scenario: U7-B07 Repeated fractional debits keep exact USD use
     Given the stubbed provider limits show "Brave finite credits after debit"
     And the stubbed credit totals show "Brave fractional use"
     When I navigate directly to "/system/quotas"
-    # Final-polish Item 3c: card shows CRD only with USD in hover text; 0.011 stays a unit oracle in crdCardModel tests.
-    Then the Brave CRD value should carry "$4.495 left" hover text
+    # Final-polish Item 3c: card shows USD only with USD in hover text; 0.011 stays a unit oracle in usdCardModel tests.
+    Then the Brave USD value should carry "$4.495 left" hover text
 
   @stub @ui7 @shared
   Scenario: U7-B08 Shared funds pool two operations with local-only grants
@@ -88,7 +78,7 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/system/quotas"
     And I open the credit details for "Brave"
-    Then the credit details should show "Search cost in CRD"
+    Then the credit details should show "Search cost in USD"
     And the credit details should show "Searches left"
     And the credit details should show "Rate limit"
     And the credit details should show "Last sync"
@@ -129,7 +119,7 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/system/quotas"
     And I open the credit grant for "Brave"
-    Then the grant form should show "Search budget (CRD)"
+    Then the grant form should show "Search budget (USD)"
     And the grant form should have no fetch field
 
   @stub @ui7 @history
@@ -144,22 +134,13 @@ Feature: Provider credit units display honestly
     And the history modal should show "Old balance"
     And the history modal should show "New balance"
 
-  @stub @ui7 @footer
-  Scenario: U7-B14 Footer shows one price note with Brave cost
-    Given the stubbed provider limits show "Brave finite credits"
-    And the stubbed credit totals show "Brave no use"
-    When I navigate directly to "/system/quotas"
-    Then the price note should show "1 CRD = $0.001 of provider list price"
-    And the price note should show "0.005 USD"
-    And the price note should show "5 CRD"
-
   @stub @ui7 @page
-  Scenario: U7-B15 Page keeps CRD totals and OAuth slot without native table
+  Scenario: U7-B15 Page keeps USD totals and OAuth slot without native table
     Given the stubbed provider limits show "Brave finite credits"
     And the stubbed credit totals show "Brave one search use"
     When I navigate directly to "/system/quotas"
     Then the usage view should show "Usage totals"
-    And the usage view should show "Cost (CRD)"
+    And the usage view should show "Cost (USD)"
     And the usage view should not show "Provider quota view"
 
   @stub @ui7 @race
@@ -175,7 +156,7 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/system/quotas"
     And I open the credit grant for "Brave"
-    Then the grant form should show "Search budget (CRD)"
+    Then the grant form should show "Search budget (USD)"
     When I cancel the credit dialog
     Then the usage view should show "Brave"
 
@@ -201,7 +182,7 @@ Feature: Provider credit units display honestly
     And the Tavily card outside the popover should not show "100/100"
     And the Tavily card outside the popover should not show "Resets"
     And the Tavily card should show "Tavily credits"
-    And the usage view should not show "CRD left"
+    And the usage view should not show "USD left"
     And the usage view should not show "∞"
     And the Tavily card should show the "Refresh" action
     And the Tavily card should show the "Set balance" action
@@ -274,16 +255,16 @@ Feature: Provider credit units display honestly
     And the credit details should show "(advanced: 2 Tavily credits)"
     And the credit details should show "Searches left"
     And the credit details should show "Fetches left"
-    And the credit details should show "Search cost in CRD"
-    And the credit details should show "8 CRD"
+    And the credit details should show "Search cost in USD"
+    And the credit details should show "8 USD"
     And the credit details should show "(≈ $0.008)"
-    And the credit details should show "Fetch cost in CRD"
-    And the credit details should show "1.6 CRD"
+    And the credit details should show "Fetch cost in USD"
+    And the credit details should show "1.6 USD"
     And the credit details should show "(≈ $0.0016)"
     And the credit details should show "Search and fetch rate limit 100 requests per minute"
-    And the credit details should show rows in order "Search cost, Extract cost, Searches left, Fetches left, Search cost in CRD, Fetch cost in CRD, Search and fetch rate limit"
+    And the credit details should show rows in order "Search cost, Extract cost, Searches left, Fetches left, Search cost in USD, Fetch cost in USD, Search and fetch rate limit"
     And the credit details should not show "Minute headroom"
-    And the credit details should not show "Extract cost in CRD"
+    And the credit details should not show "Extract cost in USD"
     And the Tavily card outside the popover should not show "requests per minute"
 
   @stub @ui7 @tavily @exhaust
@@ -316,19 +297,19 @@ Feature: Provider credit units display honestly
     And the credit details should not show "Minute headroom"
 
   @stub @ui7 @tavily @grant
-  Scenario: U7-T08 Grant converts both directions and keeps stored CRD
+  Scenario: U7-T08 Grant converts both directions and keeps stored USD
     Given the stubbed provider limits show "Tavily grant credits"
     And the stubbed credit totals show "Tavily no use"
     When I navigate directly to "/system/quotas"
     And I open the Tavily credit grant
-    Then the grant form should show "Search budget (credits)"
-    And the grant form should show "Fetch budget (credits)"
-    And the "Search budget (credits)" grant field should show "100"
-    And the "Fetch budget (credits)" grant field should show "200"
-    When I type "101" into the "Search budget (credits)" grant field
+    Then the grant form should show "Search budget (USD)"
+    And the grant form should show "Fetch budget (USD)"
+    And the "Search budget (USD)" grant field should show "0.8"
+    And the "Fetch budget (USD)" grant field should show "1.6"
+    When I type "1.01" into the "Search budget (USD)" grant field
     And I save the credit grant
-    Then the submitted grant should carry "search_crd" "808"
-    And the submitted grant should carry "fetch_crd" "1600"
+    Then the submitted grant should carry "search_usd" "1.01"
+    And the submitted grant should carry "fetch_usd" "1.6"
 
   @stub @ui7 @tavily @history
   Scenario: U7-T09 History shows native Credits balances
@@ -347,7 +328,7 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Tavily search and extract use"
     When I navigate directly to "/system/quotas"
     Then the usage view should show "Native spend"
-    And the usage view should show "Cost (CRD)"
+    And the usage view should show "Cost (USD)"
     And the usage view should show "URLs fetched"
     And the usage view should show "1.2 Tavily credits"
     And the usage view should show "9.6"
@@ -370,9 +351,9 @@ Feature: Provider credit units display honestly
     And the stubbed credit totals show "Tavily no use"
     When I navigate directly to "/system/quotas"
     And I open the credit details for "Tavily"
-    Then the credit details should show "8 CRD"
+    Then the credit details should show "8 USD"
     And the credit details should show "(≈ $0.008)"
-    And the credit details should show "1.6 CRD"
+    And the credit details should show "1.6 USD"
     And the credit details should show "(≈ $0.0016)"
     And the Tavily card outside the popover should not show "(≈ $0.008)"
     And the Tavily card outside the popover should not show "requests per minute"
@@ -391,7 +372,7 @@ Feature: Provider credit units display honestly
     And the credit details should show "Retry after"
     And the credit details should show "45 s"
     And the credit details should not show "Minute headroom"
-    And the credit details should show rows in order "Search cost, Extract cost, Searches left, Fetches left, Search cost in CRD, Fetch cost in CRD, Search and fetch rate limit"
+    And the credit details should show rows in order "Search cost, Extract cost, Searches left, Fetches left, Search cost in USD, Fetch cost in USD, Search and fetch rate limit"
 
   @stub @ui7 @tavily @402
   Scenario: U7-T14 Out-of-Credits 402 reaches the user at once
@@ -404,12 +385,12 @@ Feature: Provider credit units display honestly
     Then the playground search error should show "Tavily is out of Credits. Wait until reset or upgrade."
 
   @stub @ui7 @tavily @brave
-  Scenario: U7-T15 Brave card stays in CRD beside the Tavily card
+  Scenario: U7-T15 Brave card stays in USD beside the Tavily card
     Given the stubbed provider limits show "Brave and Tavily finite credits"
     And the stubbed credit totals show "Brave no use"
     When I navigate directly to "/system/quotas"
     Then the Brave credit bar should show "90" percent
-    And the Brave card should show "4,500 / 5,000 CRD"
+    And the Brave card should show "4,500 / 5,000 USD"
     And the Brave card should show one credit bar
     And the Tavily credit bar should show "100" percent
     And the Tavily card should show "1,000 / 1,000 Tavily credits"
@@ -586,12 +567,12 @@ Feature: Provider credit units display honestly
     Then the Tavily details popover should stay within the viewport
 
   @stub @ui7 @tavily @precision
-  Scenario: U7-T29 Fractional CRD and USD keep fractions while long zeros trim
+  Scenario: U7-T29 Fractional USD and USD keep fractions while long zeros trim
     Given the stubbed provider limits show "Tavily long zero decimals"
     And the stubbed credit totals show "Tavily no use"
     When I navigate directly to "/system/quotas"
     And I open the credit details for "Tavily"
-    Then the credit details should show "1.6 CRD"
+    Then the credit details should show "1.6 USD"
     And the credit details should show "(≈ $0.008)"
     And the credit details should show "(≈ $0.0016)"
     And the credit details should not show "1.600000000"

@@ -8,9 +8,9 @@ describe("quota unit display", () => {
   })
 
   it("shows a legacy ledger balance in USD", () => {
-    expect(nativeUnitLabel("CRD")).toBe("USD")
-    expect(nativeLeftText("1000.5", "CRD")).toBe("$1.0005 left")
-    expect(nativeLeftText("invalid", "CRD")).toBeNull()
+    expect(nativeUnitLabel("USD")).toBe("USD")
+    expect(nativeLeftText("1000.5", "USD")).toBe("$1,000.50 left")
+    expect(nativeLeftText("invalid", "USD")).toBeNull()
   })
 
   it("shows USD balances in dollars", () => {

@@ -1,9 +1,9 @@
 import { useQuotaPrices, quotaPricedProvider } from "../model/useQuotaPrices"
 import type { ReactNode } from "react"
-import type { CRDUsageTotal, DashboardQuota, ProviderLimits } from "@/domains/dashboard"
+import type { UsdUsageTotal, DashboardQuota, ProviderLimits } from "@/domains/dashboard"
 import type { ProviderConfig } from "@/domains/providers"
 import { EmptyState } from "@/shared/ui/EmptyState"
-import { activeAuth } from "../model/crdCardModel"
+import { activeAuth } from "../model/usdCardModel"
 import { manualUnit, type ManualUnit } from "../model/manualQuotaUnit"
 import { balancePrefill, type BalancePrefill } from "../model/providerInfo"
 import { providerCardView, type ProviderCardView } from "../model/providerCardView"
@@ -15,7 +15,7 @@ export interface ProviderLimitsCardsProps {
   providers: ProviderConfig[]
   providerLimits: ProviderLimits[]
   /** Every reported credit-unit use row of the dashboard. */
-  crdUsageTotals: CRDUsageTotal[]
+  usdUsageTotals: UsdUsageTotal[]
   refreshDashboard: () => Promise<void>
   /** Providers that may hold a manual native anchor. */
   manualEligible: ReadonlySet<string>
@@ -38,7 +38,7 @@ export interface ProviderLimitsCardsProps {
 }
 
 /** Credit-unit use rows of one provider; a card receives its own rows only. */
-function usageFor(totals: CRDUsageTotal[], providerId: string): CRDUsageTotal[] {
+function usageFor(totals: UsdUsageTotal[], providerId: string): UsdUsageTotal[] {
   return totals.filter((total) => total.provider === providerId)
 }
 
@@ -85,7 +85,7 @@ interface ViewEntry {
 export function ProviderLimitsCards({
   providers,
   providerLimits,
-  crdUsageTotals,
+  usdUsageTotals,
   refreshDashboard,
   manualEligible,
   refreshableProviders,
@@ -113,7 +113,7 @@ export function ProviderLimitsCards({
     const view = providerCardView({
       providerId: entry.provider.id,
       limits: entry.limits,
-      usageTotals: usageFor(crdUsageTotals, entry.provider.id),
+      usageTotals: usageFor(usdUsageTotals, entry.provider.id),
       latestQuota: quotaOf(entry.provider.id),
       refreshableOverride: refreshableProviders?.has(entry.provider.id) ?? false,
     })
@@ -121,26 +121,26 @@ export function ProviderLimitsCards({
   }
   const byName = (a: ViewEntry, b: ViewEntry) => a.provider.name.localeCompare(b.provider.name)
   const reporting = viewed.filter((entry) => entry.view.measurable).sort(byName)
-  const quiet = viewed.filter((entry) => !entry.view.measurable).sort(byName)
+  const keyed = viewed.filter((entry) =>
+    renderKeyBalances !== undefined || (!entry.view.keyless && !entry.view.measurable)).sort(byName)
   return (
-    <section aria-labelledby="crd-cards-heading" className="space-y-4">
-      <h3 id="crd-cards-heading" className="fs-section-title">
+    <section aria-labelledby="usd-cards-heading" className="space-y-4">
+      <h3 id="usd-cards-heading" className="fs-section-title">
         Allowance left
       </h3>{viewed.length === 0 && (
         <EmptyState title="No provider usage yet" description="Add a system key to see usage" />
       )}
       {reporting.length > 0 && (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 items-start gap-4">
           {reporting.map((entry) => (
             <ProviderLimitsCard
               key={entry.provider.id}
               catalogProvider={entry.provider}
               providerId={entry.provider.id} providerName={entry.provider.name}
               limits={entry.limits}
-              crdUsageTotals={usageFor(crdUsageTotals, entry.provider.id)}
+              usdUsageTotals={usageFor(usdUsageTotals, entry.provider.id)}
               refreshDashboard={refreshDashboard}
               manualEligible={manualEligible.has(entry.provider.id)}
-              keyBalances={renderKeyBalances?.(entry.provider.id, entry.provider.name)}
               refreshableOverride={refreshableProviders?.has(entry.provider.id) ?? false}
               providers={selectable} providerUnits={providerUnits}
               observed={observed}
@@ -153,11 +153,11 @@ export function ProviderLimitsCards({
           ))}
         </div>
       )}
-      {quiet.length > 0 && (
+      {keyed.length > 0 && (
         <div className="space-y-3">
-          <h3 className="fs-section-title">Providers that do not report a balance</h3>
-          <div className="fs-panel overflow-hidden"><table className="fs-table w-full table-fixed" aria-label="Providers that do not report a balance"><thead><tr><th scope="col" className="w-1/2">Provider</th><th scope="col">Key</th><th scope="col">Last refresh</th></tr></thead><tbody>
-          {quiet.map((entry) => (
+          <h3 className="fs-section-title">Key balances</h3>
+          <div className="fs-panel overflow-hidden"><table className="fs-table w-full table-fixed" aria-label="Key balances"><thead><tr><th scope="col" className="w-1/5">Provider</th><th scope="col" className="w-1/5">Key</th><th scope="col" className="w-1/5">Balance</th><th scope="col" className="w-1/5">Last refresh</th><th scope="col" className="w-1/5 text-right">Actions</th></tr></thead><tbody>
+          {keyed.map((entry) => (
             <ProviderUsageRow
               key={entry.provider.id}
               catalogProvider={entry.provider}

@@ -1,8 +1,7 @@
-import { multiplyDecimal } from "../model/manualQuotaMath"
 import type { ReactNode } from "react"
-import type { CRDConversionProfile, TierBalance, TierBarView } from "@/domains/dashboard"
-import { dollarText, sumAmounts, tierBarModel } from "../model/crdDisplay"
-import { formatTavilyPopoverAmount, tavilyCRDToCredits } from "../model/tavilyCredits"
+import type { UsdConversionProfile, TierBalance, TierBarView } from "@/domains/dashboard"
+import { dollarText, sumAmounts, tierBarModel } from "../model/usdDisplay"
+import { formatTavilyPopoverAmount, tavilyUsdToCredits } from "../model/tavilyCredits"
 import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { groupDigits } from "../model/numberText"
 
@@ -18,9 +17,9 @@ export interface ProviderTierBarsProps {
 function barAmount(bar: TierBarView): string | null {
   if (bar.state === "unmetered") return "Free"
   if (bar.state === "postpaid") return "Postpaid access"
-  if (bar.remainingCRD === null) return null
-  if (bar.allowanceCRD === null) return dollarText(multiplyDecimal(bar.remainingCRD, "0.001") ?? "0")
-  return dollarText(multiplyDecimal(bar.remainingCRD, "0.001") ?? "0") + " of " + dollarText(multiplyDecimal(bar.allowanceCRD, "0.001") ?? "0")
+  if (bar.remainingUsd === null) return null
+  if (bar.allowanceUsd === null) return dollarText(bar.remainingUsd)
+  return dollarText(bar.remainingUsd) + " of " + dollarText(bar.allowanceUsd)
 }
 
 /** A CREDIT-kind unit text of any casing. */
@@ -36,21 +35,21 @@ function knownAmount(value: string | null | undefined): string | null {
   return text
 }
 
-/** Exact Tavily Credits of one tier balance: native fields first, else converted CRD-only values. */
+/** Exact Tavily Credits of one tier balance: native fields first, else converted Usd-only values. */
 function nativeCreditsOf(
   balance: TierBalance,
   field: "remaining" | "allowance",
-  profile: CRDConversionProfile | null,
+  profile: UsdConversionProfile | null,
 ): string | null {
   if (isCreditUnit(balance.native_unit)) {
     const raw = field === "remaining" ? balance.native_remaining : balance.native_allowance
     const native = knownAmount(raw)
     if (native !== null) return native
   }
-  const crdRaw = field === "remaining" ? balance.remaining_crd : balance.allowance_crd
-  const crd = knownAmount(crdRaw)
-  if (crd === null || profile === null) return null
-  return tavilyCRDToCredits(crd, profile)
+  const usdRaw = field === "remaining" ? balance.remaining_usd : balance.allowance_usd
+  const usd = knownAmount(usdRaw)
+  if (usd === null || profile === null) return null
+  return tavilyUsdToCredits(usd, profile)
 }
 
 /** Whole Tavily Credits word of one floored integer amount. */
@@ -59,7 +58,7 @@ function tavilyWord(amount: string): string {
 }
 
 /** Native Tavily tier amount with integer display; unknown stays null for the generic fallback. */
-function nativeTierAmount(balances: TierBalance[], profile: CRDConversionProfile | null): string | null {
+function nativeTierAmount(balances: TierBalance[], profile: UsdConversionProfile | null): string | null {
   if (balances.length === 0) return null
   const remainings: string[] = []
   for (const balance of balances) {

@@ -14,8 +14,8 @@ describe("ProvidersWithoutCapacity", () => {
   it("sorts the compact list by display name and adds capacity from its row", async () => {
     const add = vi.fn()
     render(<ProvidersWithoutCapacity providers={providers} isOwner onAdd={add} />)
-    const list = screen.getByRole("list", { name: "Without capacity" })
-    expect(within(list).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+    const table = screen.getByRole("table", { name: "Without capacity" })
+    expect(within(table).getAllByRole("row").map((item) => item.textContent)).toEqual([
       "Brave SearchAdd capacity", "ExaAdd capacity", "You.comAdd capacity",
     ])
     await userEvent.click(screen.getByRole("button", { name: "Add capacity for Brave Search" }))
@@ -28,6 +28,6 @@ describe("ProvidersWithoutCapacity", () => {
     expect(screen.queryByRole("button")).toBeNull()
     expect(screen.getAllByText("The provider owner must add capacity")).toHaveLength(3)
     rerender(<ProvidersWithoutCapacity providers={[]} isOwner onAdd={vi.fn()} />)
-    expect(screen.queryByRole("list")).toBeNull()
+    expect(screen.queryByRole("table")).toBeNull()
   })
 })

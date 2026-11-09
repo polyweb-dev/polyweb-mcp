@@ -19,7 +19,8 @@ export function catalogQuotaInfo(info: ProviderInfo, provider: ProviderConfig | 
     const price = providerCallCost(provider, operation, keyless)
     if (price === "—") continue
     const name = operation === "fetch" && provider.id === "tavily" ? "Extract" : operation === "fetch" ? "Fetch" : "Search"
-    facts.unshift({ label: name + " cost (USD)", value: price === "Free without a key" ? "Free" : price, note: null })
+    const value = price === "Free without a key" ? "Free" : price
+    facts.unshift({ label: name + (value === "Free" ? " cost" : " cost (USD)"), value, note: null })
   }
   return { ...info, facts, creditNote: catalogFree(provider, authMode) ? "Free tier" : info.creditNote }
 }

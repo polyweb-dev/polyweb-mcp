@@ -20,7 +20,7 @@ export function VaultPoolsTable({ pools, projects, onAction }: {
       <td>{pool.label}</td><td>{pool.operations.map((op) => <Tag key={op}>{op === "search" ? "Search" : "Fetch"}</Tag>)}</td>
       <td>{formatPoolRate(pool.rate, pool.operation_limits)}</td><td><PoolBudgetUsage pool={pool} /></td>
       <td className="w-12 !pr-0 !text-right"><RowActionsMenu label={`Actions for ${pool.label}`} actions={[
-        { key: "edit", label: "Edit limits", onSelect: () => onAction("edit", pool) },
+        { key: "edit", label: "Edit pool", onSelect: () => onAction("edit", pool) },
         { key: "copy", label: "Copy to another project", onSelect: () => onAction("copy", pool) },
         pool.project_id ? { key: "unassign", label: "Remove from project", onSelect: () => onAction("unassign", pool) } : { key: "assign", label: "Assign to project", onSelect: () => onAction("assign", pool) },
         { key: "delete", label: "Delete pool", danger: true, onSelect: () => onAction("delete", pool) },

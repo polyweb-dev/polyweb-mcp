@@ -32,7 +32,14 @@ describe("toPlaygroundResultView", () => {
       playgroundResult({ publishedDate: "2024-05-01" })
     )
 
-    expect(view.publishedDate).toBe("2024-05-01")
+    expect(view.publishedDate).toBe("May 1, 2024")
+  })
+
+  it("removes markdown from result snippets", () => {
+    const view = toPlaygroundResultView(playgroundResult({
+      snippet: "## [Title](https://example.com)\n**English:** a *result*",
+    }))
+    expect(view.snippet).toBe("Title\nEnglish: a result")
   })
 
   it("omits the published date when the execution recorded none", () => {

@@ -1,6 +1,6 @@
-import type { CRDResetRule, CRDView, ProviderAuthLimits } from "@/domains/dashboard"
+import type { UsdResetRule, UsdView, ProviderAuthLimits } from "@/domains/dashboard"
 import type { ProviderInfoFact } from "./providerInfoTypes"
-import { callsText } from "./crdDisplay"
+import { callsText } from "./usdDisplay"
 import { parseDecimal } from "./manualQuotaMath"
 import { groupDigits } from "./numberText"
 
@@ -13,7 +13,7 @@ function known(value: string | null | undefined): string | null {
 }
 
 /** The reset rule gives the period of one call count. */
-const COUNT_PERIOD: Record<CRDResetRule, string | null> = {
+const COUNT_PERIOD: Record<UsdResetRule, string | null> = {
   monthly_first: "month",
   vendor_period: "vendor period",
   daily_vendor: "day",
@@ -44,13 +44,13 @@ function floorDivToInt(numerator: string, denominator: string): string | null {
  * it still covers one request, so its possible_standard_calls reads 100 even
  * when the credit balance covers thousands more (39904 from $199.52 at
  * $0.005/search). The fetch view already projects the same balance in
- * fetch units (199520 at 1 CRD each), so the credit searches come from
- * floor(fetch remaining CRD / search CRD cost) without a second conversion.
+ * fetch units (199520 at 1 Usd each), so the credit searches come from
+ * floor(fetch remaining Usd / search Usd cost) without a second conversion.
  * Null unless the search view is the daily pool (a different shared pool
- * than the aggregate) with both CRD amounts known, so a pool-projected
+ * than the aggregate) with both Usd amounts known, so a pool-projected
  * search view never double-counts and no reset is invented.
  */
-function youcomSearchTotal(auth: ProviderAuthLimits, searchView: CRDView | undefined, dailyRaw: string): string | null {
+function youcomSearchTotal(auth: ProviderAuthLimits, searchView: UsdView | undefined, dailyRaw: string): string | null {
   const daily = callsText(dailyRaw)
   const extra = creditSearches(auth, searchView)
   if (daily === null || extra === null) return null
@@ -61,13 +61,13 @@ function youcomSearchTotal(auth: ProviderAuthLimits, searchView: CRDView | undef
   }
 }
 
-function creditSearches(auth: ProviderAuthLimits, searchView: CRDView | undefined): string | null {
+function creditSearches(auth: ProviderAuthLimits, searchView: UsdView | undefined): string | null {
   const poolId = auth.aggregate_pool?.pool_id ?? null
   if (poolId === null) return null
   if (searchView?.shared_pool_id === poolId) return null
-  const fetchView = auth.crd_views.find((entry) => entry.operation === "fetch")
-  const fetchRemaining = known(fetchView?.remaining_crd)
-  const searchCost = known(searchView?.request_cost_crd)
+  const fetchView = auth.usd_views.find((entry) => entry.operation === "fetch")
+  const fetchRemaining = known(fetchView?.remaining_usd)
+  const searchCost = known(searchView?.request_cost_usd)
   if (fetchRemaining === null || searchCost === null) return null
   return floorDivToInt(fetchRemaining, searchCost)
 }
@@ -79,7 +79,7 @@ export function countFact(
   providerId: string | undefined,
   wholeRequests: boolean = false,
 ): ProviderInfoFact | null {
-  const view = auth.crd_views.find((entry) => entry.operation === operation)
+  const view = auth.usd_views.find((entry) => entry.operation === operation)
   const raw = known(view?.possible_standard_calls)
   if (raw === null) return null
   // You.com search total (display-only): daily 100 plus credit-derived
@@ -99,7 +99,7 @@ export function countFact(
   }
 }
 
-function effectiveCount(input: { providerId: string | undefined; operation: string; auth: ProviderAuthLimits; view: CRDView | undefined; raw: string }): string {
+function effectiveCount(input: { providerId: string | undefined; operation: string; auth: ProviderAuthLimits; view: UsdView | undefined; raw: string }): string {
   if (input.providerId === "youcom" && input.operation === "search") return youcomSearchTotal(input.auth, input.view, input.raw) ?? input.raw
   return input.raw
 }

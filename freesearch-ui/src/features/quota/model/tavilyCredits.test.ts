@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type {
-  CRDConversionProfile,
+  UsdConversionProfile,
   LimitRateWindow,
   NativePool,
   ProviderAuthLimits,
@@ -14,20 +14,19 @@ import {
   formatTavilyPopoverAmount,
   minuteHeadroomOf,
   profileOf,
-  tavilyCRDToCredits,
+  tavilyUsdToCredits,
   tavilyCredits,
-  tavilyCreditsToCRD,
+  tavilyCreditsToUsd,
 } from "./tavilyCredits"
 
 /**
  * Tavily native Credits display model: aggregate-first selection without a
- * double sum, exact 8 CRD per Credit conversion, and honest finite, unknown,
+ * double sum, exact 8 Usd per Credit conversion, and honest finite, unknown,
  * keyless, paygo, and unavailable states.
  */
 
-function profile(overrides: Partial<CRDConversionProfile> = {}): CRDConversionProfile {
+function profile(overrides: Partial<UsdConversionProfile> = {}): UsdConversionProfile {
   return {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: "0.008",
     cost_basis: "paygo_reference",
     price_version: "paygo-reference",
@@ -66,8 +65,8 @@ function tier(overrides: Partial<TierBalance> = {}): TierBalance {
     native_unit: "CREDIT",
     native_remaining: "600",
     native_allowance: "1000",
-    remaining_crd: "4800",
-    allowance_crd: "8000",
+    remaining_usd: "4.8",
+    allowance_usd: "8",
     reset_rule: "monthly_first",
     reset_at: "2026-10-01T00:00:00Z",
     funding_mode: "prepaid",
@@ -118,7 +117,7 @@ function auth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
     unknown_tiers: [],
     tier_split_known: true,
     aggregate_pool: pool(),
-    crd_views: [],
+    usd_views: [],
     rate_progress: [],
     grants: null,
     detail: null,
@@ -167,7 +166,7 @@ describe("tavilyCredits selection", () => {
           last_sync_at: null,
           stale: false,
           price_version: "v2",
-          crd_split_note: null,
+          balance_split_note: null,
           rate_windows: [],
           tier_split_known: true,
           aggregate_pool_id: "tavily:keyed:credits",
@@ -212,7 +211,7 @@ describe("tavilyCredits selection", () => {
           last_sync_at: null,
           stale: false,
           price_version: "v2",
-          crd_split_note: null,
+          balance_split_note: null,
           rate_windows: [],
           tier_split_known: true,
           aggregate_pool_id: null,
@@ -306,35 +305,35 @@ describe("tavilyCredits states", () => {
 })
 
 describe("tavilyCredits conversion", () => {
-  it("converts 8 CRD to 1 Credit through the profile", () => {
-    expect(tavilyCRDToCredits("8", profile())).toBe("1")
+  it("converts 8 Usd to 1 Credit through the profile", () => {
+    expect(tavilyUsdToCredits("0.008", profile())).toBe("1")
   })
 
-  it("converts 1 Credit to 8 CRD through the profile", () => {
-    expect(tavilyCreditsToCRD("1", profile())).toBe("8")
+  it("converts 1 Credit to 8 Usd through the profile", () => {
+    expect(tavilyCreditsToUsd("1", profile())).toBe("0.008")
   })
 
-  it("gives eight CRD per native Credit under the default profile", () => {
-    expect(tavilyCreditsToCRD("2", DEFAULT_TAVILY_PROFILE)).toBe("16")
-    expect(tavilyCRDToCredits("16", DEFAULT_TAVILY_PROFILE)).toBe("2")
+  it("gives eight Usd per native Credit under the default profile", () => {
+    expect(tavilyCreditsToUsd("2", DEFAULT_TAVILY_PROFILE)).toBe("0.016")
+    expect(tavilyUsdToCredits("0.016", DEFAULT_TAVILY_PROFILE)).toBe("2")
   })
 
   it("returns null on an unknown profile without touching stored values", () => {
     const unknown = profile({ native_usd_per_unit: null })
-    expect(tavilyCRDToCredits("8", unknown)).toBeNull()
-    expect(tavilyCreditsToCRD("1", unknown)).toBeNull()
+    expect(tavilyUsdToCredits("8", unknown)).toBeNull()
+    expect(tavilyCreditsToUsd("1", unknown)).toBeNull()
   })
 
   it("returns null for malformed amounts and zero prices", () => {
-    expect(tavilyCRDToCredits("abc", profile())).toBeNull()
-    expect(tavilyCreditsToCRD("abc", profile())).toBeNull()
-    expect(tavilyCRDToCredits("8", profile({ native_usd_per_unit: "0" }))).toBeNull()
-    expect(tavilyCRDToCredits("8", profile({ reference_usd_per_crd: "0" }))).toBeNull()
-    expect(tavilyCreditsToCRD("1", profile({ reference_usd_per_crd: "0" }))).toBeNull()
+    expect(tavilyUsdToCredits("abc", profile())).toBeNull()
+    expect(tavilyCreditsToUsd("abc", profile())).toBeNull()
+    expect(tavilyUsdToCredits("8", profile({ native_usd_per_unit: "0" }))).toBeNull()
+    expect(tavilyUsdToCredits("8", profile({ native_usd_per_unit: null }))).toBeNull()
+    expect(tavilyCreditsToUsd("1", profile({ native_usd_per_unit: null }))).toBeNull()
   })
 
   it("exposes the documented default Tavily profile", () => {
-    expect(DEFAULT_TAVILY_PROFILE.reference_usd_per_crd).toBe("0.001")
+    expect(DEFAULT_TAVILY_PROFILE.native_usd_per_unit).toBe("0.008")
     expect(DEFAULT_TAVILY_PROFILE.native_usd_per_unit).toBe("0.008")
   })
 })
@@ -359,7 +358,7 @@ describe("tavilyCredits metadata", () => {
           last_sync_at: null,
           stale: false,
           price_version: "v2",
-          crd_split_note: null,
+          balance_split_note: null,
           rate_windows: [windowEntry({ remaining: "95", limit: "100" })],
           retry_after_seconds: 12,
           tier_split_known: true,
@@ -374,25 +373,24 @@ describe("tavilyCredits metadata", () => {
     expect(result.retryAfterSeconds).toBe(12)
   })
 
-  it("reports the lower stored grant ceiling in unconverted CRD text", () => {
+  it("reports the lower stored grant ceiling in unconverted Usd text", () => {
     const result = tavilyCredits(
       auth({
         grants: {
           provider: "tavily",
           auth_mode: "keyed",
-          period_start: "2026-09-01",
-          period_end: "2026-09-30",
+          period: "month" as const,
           version: 1,
-          search_granted_crd: "800",
-          search_consumed_crd: "8",
-          search_reserved_crd: "0",
-          fetch_granted_crd: "80",
-          fetch_consumed_crd: "8",
-          fetch_reserved_crd: "0",
+          search_granted_usd: "0.8",
+          search_consumed_usd: "0.008",
+          search_reserved_usd: "0",
+          fetch_granted_usd: "0.08",
+          fetch_consumed_usd: "0.008",
+          fetch_reserved_usd: "0",
         },
       }),
     )
-    expect(result.localCap).toBe("72")
+    expect(result.localCap).toBe("0.072")
   })
 
   it("leaves the local cap absent without stored grants", () => {
@@ -446,7 +444,7 @@ describe("displayAdapterOf", () => {
     const rail = auth({})
     const adapter = displayAdapterOf("tavily", rail)
     expect(adapter?.credits.unit).toBe("Credits")
-    expect(adapter?.profile?.reference_usd_per_crd).toBe("0.001")
+    expect(adapter?.profile?.native_usd_per_unit).toBe("0.008")
   })
 
   it("returns null for every other provider", () => {
@@ -473,35 +471,35 @@ describe("formatTavilyPopoverAmount", () => {
     expect(formatTavilyPopoverAmount("999.9", "native")).toBe("999")
   })
 
-  it("trims long zero decimals on native, CRD, and USD text", () => {
+  it("trims long zero decimals on native, Usd, and USD text", () => {
     expect(formatTavilyPopoverAmount("100.000000000", "native")).toBe("100")
-    expect(formatTavilyPopoverAmount("8.000000000", "crd")).toBe("8")
+    expect(formatTavilyPopoverAmount("8.000000000", "usd")).toBe("8")
     expect(formatTavilyPopoverAmount("0.008000000", "usd")).toBe("0.008")
   })
 
-  it("keeps significant CRD and USD fractions", () => {
-    expect(formatTavilyPopoverAmount("1.600000000", "crd")).toBe("1.6")
+  it("keeps significant Usd and USD fractions", () => {
+    expect(formatTavilyPopoverAmount("1.600000000", "usd")).toBe("1.6")
     expect(formatTavilyPopoverAmount("0.001600000", "usd")).toBe("0.0016")
-    expect(formatTavilyPopoverAmount("8", "crd")).toBe("8")
+    expect(formatTavilyPopoverAmount("8", "usd")).toBe("8")
     expect(formatTavilyPopoverAmount("0.008", "usd")).toBe("0.008")
   })
 
   it("keeps large exact decimals without float conversion", () => {
-    expect(formatTavilyPopoverAmount("123456789.987654321", "crd")).toBe("123456789.987654321")
+    expect(formatTavilyPopoverAmount("123456789.987654321", "usd")).toBe("123456789.987654321")
     expect(formatTavilyPopoverAmount("1000.000000000", "native")).toBe("1000")
   })
 
   it("yields null for malformed, absent, and unknown values", () => {
     expect(formatTavilyPopoverAmount("abc", "native")).toBeNull()
-    expect(formatTavilyPopoverAmount("", "crd")).toBeNull()
+    expect(formatTavilyPopoverAmount("", "usd")).toBeNull()
     expect(formatTavilyPopoverAmount("unknown", "usd")).toBeNull()
     expect(formatTavilyPopoverAmount("n/a", "native")).toBeNull()
-    expect(formatTavilyPopoverAmount("lots", "crd")).toBeNull()
+    expect(formatTavilyPopoverAmount("lots", "usd")).toBeNull()
   })
 
   it("yields null for negative values instead of an invented zero", () => {
     expect(formatTavilyPopoverAmount("-1", "native")).toBeNull()
-    expect(formatTavilyPopoverAmount("-0.5", "crd")).toBeNull()
+    expect(formatTavilyPopoverAmount("-0.5", "usd")).toBeNull()
     expect(formatTavilyPopoverAmount("-0.008", "usd")).toBeNull()
   })
 })

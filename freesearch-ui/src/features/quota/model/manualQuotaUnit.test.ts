@@ -6,7 +6,7 @@ function auth(unit: NativePool["native_unit"]): ProviderAuthLimits {
   return {
     auth_mode: "keyed", transport_available: true, search: null, fetch: null,
     free_tiers: [], paid_tiers: [], unknown_tiers: [], tier_split_known: false,
-    crd_views: [], rate_progress: [], grants: null, detail: null,
+    usd_views: [], rate_progress: [], grants: null, detail: null,
     aggregate_pool: {
       pool_id: "provider:pool", provider: "provider", auth_mode: "keyed", native_unit: unit,
       remaining: "1000", allowance: "2000", actual_spend_usd: null, source: "vendor_api",
@@ -29,9 +29,9 @@ describe("manual quota units", () => {
     })
   })
 
-  it("does not treat a legacy ledger unit as native credits", () => {
-    expect(manualUnit(auth("CRD"), "brave")).toEqual({
-      unitKind: null, displayUnit: null, amountMode: "usage",
+  it("keeps USD balances in USD", () => {
+    expect(manualUnit(auth("USD"), "brave")).toEqual({
+      unitKind: "USD", displayUnit: "USD", amountMode: "balance",
     })
   })
 

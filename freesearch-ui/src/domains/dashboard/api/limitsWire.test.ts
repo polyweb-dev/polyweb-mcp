@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
-  decodeCRDUsageTotals,
+  decodeUsdUsageTotals,
   decodeLimitHistory,
   decodeProviderLimits,
 } from "./limitsWire"
 
 /**
- * S0 generic wire decoders: synthetic payloads only, empty CRD state stays
+ * S0 generic wire decoders: synthetic payloads only, empty Usd state stays
  * empty, exact amount strings stay verbatim, never throws on unknown input.
  */
 
@@ -131,10 +131,10 @@ describe("decodeProviderLimits", () => {
       }),
     ])
     expect(result).toHaveLength(1)
-    expect(result[0].auths[0].free_tiers[0].remaining_crd).toBe("0.599")
-    expect(result[0].auths[0].free_tiers[0].allowance_crd).toBe("1")
-    expect(result[0].auths[0].crd_views[0].remaining_crd).toBe("0.599")
-    expect(result[0].auths[0].crd_views[0].request_cost_crd).toBe("0.05")
+    expect(result[0].auths[0].free_tiers[0].remaining_usd).toBe("0.000599")
+    expect(result[0].auths[0].free_tiers[0].allowance_usd).toBe("0.001")
+    expect(result[0].auths[0].usd_views[0].remaining_usd).toBe("0.000599")
+    expect(result[0].auths[0].usd_views[0].request_cost_usd).toBe("0.000050")
   })
 
   it("maps backend you to UI youcom via toUiId", () => {
@@ -174,7 +174,7 @@ describe("decodeProviderLimits", () => {
     ])
     expect(result[0].active_auth_mode).toBe("unknown")
     expect(result[0].auths[0].auth_mode).toBe("unknown")
-    expect(result[0].auths[0].crd_views[0].state).toBe("unknown")
+    expect(result[0].auths[0].usd_views[0].state).toBe("unknown")
   })
 
   it("drops a view with an unknown operation instead of keeping it", () => {
@@ -199,7 +199,7 @@ describe("decodeProviderLimits", () => {
         ],
       }),
     ])
-    expect(result[0].auths[0].crd_views).toEqual([])
+    expect(result[0].auths[0].usd_views).toEqual([])
   })
 
   it("never throws on unknown nested input", () => {
@@ -264,9 +264,9 @@ describe("decodeLimitHistory", () => {
     })
     expect(result.next_cursor).toBe("cursor-1")
     expect(result.events).toHaveLength(1)
-    expect(result.events[0].old_crd).toBe("0.599")
-    expect(result.events[0].new_crd).toBe("0.5")
-    expect(result.events[0].crd_debit).toBe("0.099")
+    expect(result.events[0].old_usd).toBe("0.000599")
+    expect(result.events[0].new_usd).toBe("0.000500")
+    expect(result.events[0].debit_usd).toBe("0.000099")
   })
 
   it("maps backend you to UI youcom in history events", () => {
@@ -309,13 +309,13 @@ describe("decodeLimitHistory", () => {
   })
 })
 
-describe("decodeCRDUsageTotals", () => {
+describe("decodeUsdUsageTotals", () => {
   it("decodes an empty wrapped list to []", () => {
-    expect(decodeCRDUsageTotals({ spend_totals: [] })).toEqual([])
+    expect(decodeUsdUsageTotals({ spend_totals: [] })).toEqual([])
   })
 
   it("decodes a bare array of synthetic totals", () => {
-    const result = decodeCRDUsageTotals([
+    const result = decodeUsdUsageTotals([
       {
         provider: "synth-a",
         operation: "search",
@@ -328,14 +328,14 @@ describe("decodeCRDUsageTotals", () => {
     expect(result[0]).toEqual({
       provider: "synth-a",
       operation: "search",
-      normalized_crd: "0.599",
+      spend_usd: "0.000599",
       attempt_count: 2,
       volume_count: 3,
     })
   })
 
   it("decodes a wrapped list of synthetic totals", () => {
-    const result = decodeCRDUsageTotals({
+    const result = decodeUsdUsageTotals({
       spend_totals: [
         {
           provider: "synth-b",
@@ -347,16 +347,16 @@ describe("decodeCRDUsageTotals", () => {
       ],
     })
     expect(result).toHaveLength(1)
-    expect(result[0].normalized_crd).toBe("1.25")
+    expect(result[0].spend_usd).toBe("0.001250")
   })
 
   it("returns [] for null and undefined", () => {
-    expect(decodeCRDUsageTotals(null)).toEqual([])
-    expect(decodeCRDUsageTotals(undefined)).toEqual([])
+    expect(decodeUsdUsageTotals(null)).toEqual([])
+    expect(decodeUsdUsageTotals(undefined)).toEqual([])
   })
 
   it("defaults missing spend_usd to 0", () => {
-    const result = decodeCRDUsageTotals([
+    const result = decodeUsdUsageTotals([
       {
         provider: "synth-a",
         operation: "search",
@@ -365,11 +365,11 @@ describe("decodeCRDUsageTotals", () => {
       },
     ])
     expect(result).toHaveLength(1)
-    expect(result[0].normalized_crd).toBe("0")
+    expect(result[0].spend_usd).toBe("0")
   })
 
   it("drops a total with an unknown operation", () => {
-    const result = decodeCRDUsageTotals([
+    const result = decodeUsdUsageTotals([
       {
         provider: "synth-a",
         operation: "bogus",
@@ -382,7 +382,7 @@ describe("decodeCRDUsageTotals", () => {
   })
 
   it("maps backend you to UI youcom in usage totals", () => {
-    const result = decodeCRDUsageTotals([
+    const result = decodeUsdUsageTotals([
       {
         provider: "you",
         operation: "search",
@@ -395,10 +395,10 @@ describe("decodeCRDUsageTotals", () => {
   })
 
   it("never throws on unknown input", () => {
-    expect(() => decodeCRDUsageTotals(42)).not.toThrow()
-    expect(decodeCRDUsageTotals(42)).toEqual([])
-    expect(() => decodeCRDUsageTotals({ spend_totals: "bogus" })).not.toThrow()
-    expect(decodeCRDUsageTotals({ spend_totals: "bogus" })).toEqual([])
+    expect(() => decodeUsdUsageTotals(42)).not.toThrow()
+    expect(decodeUsdUsageTotals(42)).toEqual([])
+    expect(() => decodeUsdUsageTotals({ spend_totals: "bogus" })).not.toThrow()
+    expect(decodeUsdUsageTotals({ spend_totals: "bogus" })).toEqual([])
   })
 })
 

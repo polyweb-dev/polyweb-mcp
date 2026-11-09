@@ -3,11 +3,10 @@
  * split reporting providers from the rest and sort them) and by the card.
  */
 
-import type { CRDUsageTotal, DashboardQuota, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
-import { activeAuth, creditCardModel, operationAvailable, type CreditCardModel } from "./crdCardModel"
-import { dollarText } from "./crdDisplay"
+import type { UsdUsageTotal, DashboardQuota, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
+import { activeAuth, creditCardModel, operationAvailable, type CreditCardModel } from "./usdCardModel"
+import { dollarText } from "./usdDisplay"
 import { nativeLeftText } from "./numberText"
-import { multiplyDecimal } from "./manualQuotaMath"
 import { balanceFallbackOf, type BalanceFallback } from "./providerCardFunds"
 import { providerCardRule, type ProviderCardRule } from "./providerCardRules"
 import { rateBarRows } from "./rateBarRows"
@@ -17,7 +16,7 @@ import { displayAdapterOf, type TavilyDisplayAdapter } from "./tavilyCredits"
 export interface ProviderCardViewInput {
   providerId: string
   limits: ProviderLimits
-  usageTotals: CRDUsageTotal[]
+  usageTotals: UsdUsageTotal[]
   latestQuota: DashboardQuota | undefined
   refreshableOverride?: boolean
 }
@@ -52,10 +51,10 @@ function isAbove(remaining: string, allowance: string): boolean {
 }
 
 /** The remaining pool amount in its own unit, else its USD reference value. */
-function leftText(auth: ProviderAuthLimits, remainingCRD: string): string {
+function leftText(auth: ProviderAuthLimits, remainingUsd: string): string {
   const pool = auth.aggregate_pool
   const native = pool?.remaining == null ? null : nativeLeftText(pool.remaining, pool.native_unit)
-  const usd = multiplyDecimal(remainingCRD, "0.001")
+  const usd = remainingUsd
   return native ?? (usd === null ? "Not reported" : dollarText(usd) + " left")
 }
 
@@ -71,15 +70,15 @@ interface Headline {
  * remaining amount alone, in the provider's own unit, with no bar.
  */
 function headlineOf(auth: ProviderAuthLimits, model: CreditCardModel): Headline {
-  const remaining = model.remainingCRD
+  const remaining = model.remainingUsd
   if (remaining === null) {
     const pool = auth.aggregate_pool
     const amountText = pool?.remaining == null ? null : nativeLeftText(pool.remaining, pool.native_unit)
     return { model, amountText, amountNote: null }
   }
   if (model.state !== "finite") return { model, amountText: null, amountNote: null }
-  if (model.allowanceCRD === null) return { model, amountText: leftText(auth, remaining), amountNote: null }
-  if (!isAbove(remaining, model.allowanceCRD)) return { model, amountText: null, amountNote: null }
+  if (model.allowanceUsd === null) return { model, amountText: leftText(auth, remaining), amountNote: null }
+  if (!isAbove(remaining, model.allowanceUsd)) return { model, amountText: null, amountNote: null }
   return {
     model: { ...model, percentRemaining: null },
     amountText: leftText(auth, remaining),
@@ -89,7 +88,7 @@ function headlineOf(auth: ProviderAuthLimits, model: CreditCardModel): Headline 
 
 function knowsUsage(view: Omit<ProviderCardView, "reports" | "sortShare" | "measurable">): boolean {
   if (view.hasRateRows || view.fallback !== null || view.amountText !== null) return true
-  if (view.model.state === "unmetered" || view.model.remainingCRD !== null) return true
+  if (view.model.state === "unmetered" || view.model.remainingUsd !== null) return true
   if (view.nativeDisplay === null) return false
   const credits = view.nativeDisplay.credits
   return credits.remaining !== null || credits.allowance !== null || credits.state === "unavailable"
@@ -108,7 +107,7 @@ export function providerCardView(input: ProviderCardViewInput): ProviderCardView
     rule,
     model: headline.model,
     nativeDisplay: displayAdapterOf(input.providerId, auth),
-    fallback: balanceFallbackOf(input.providerId, base, input.latestQuota, auth),
+    fallback: balanceFallbackOf(input.providerId, base, input.latestQuota),
     fetchAvailable,
     hasRateRows: !rule.noRateBars && rateBarRows(auth.rate_progress, fetchAvailable, rule.sharedRateBars).length > 0,
     keyless: auth.auth_mode === "keyless",

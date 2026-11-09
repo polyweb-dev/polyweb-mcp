@@ -13,6 +13,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +40,8 @@ _CAPACITY = "0002_capacity_actor"
 _VAULT = "0003_vault_rbac"
 _POOL_LIMITS = "0004_pool_limits"
 _POOL_BUDGET = "0005_pool_budget"
-_HEAD = "0006_keyless_credentials"
+_KEYLESS = "0006_keyless_credentials"
+_HEAD = "0007_provider_budget_period"
 _OLDER_REVISION = "0009_provider_credentials"
 _UNKNOWN_REVISION = "ffffffffffff_not_a_freesearch_revision"
 
@@ -237,24 +239,23 @@ def test_exactly_one_migration_revision_is_the_alpha_baseline() -> None:
         "0004_pool_limits.py",
         "0005_pool_budget.py",
         "0006_keyless_credentials.py",
+        "0007_provider_budget_period.py",
     ]
 
     script = ScriptDirectory.from_config(_config_for(Path("unused.db")))
     revisions = list(script.walk_revisions())
     assert [revision.revision for revision in revisions] == [
         _HEAD,
+        _KEYLESS,
         _POOL_BUDGET,
         _POOL_LIMITS,
         _VAULT,
         _CAPACITY,
         _BASELINE,
     ]
-    assert revisions[0].down_revision == _POOL_BUDGET
-    assert revisions[1].down_revision == _POOL_LIMITS
-    assert revisions[2].down_revision == _VAULT
-    assert revisions[3].down_revision == _CAPACITY
-    assert revisions[4].down_revision == _BASELINE
-    assert revisions[5].down_revision is None
+    for current, previous in pairwise(revisions):
+        assert current.down_revision == previous.revision
+    assert revisions[-1].down_revision is None
     assert script.get_heads() == [_HEAD]
     assert migration_head() == _HEAD
 

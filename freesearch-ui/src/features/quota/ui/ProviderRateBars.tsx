@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import type { CRDConfidence, RateBarView, RateProgressView } from "@/domains/dashboard"
+import type { UsdConfidence, RateBarView, RateProgressView } from "@/domains/dashboard"
 import { RemainingBar } from "@/shared/ui/RemainingBar"
 import { rateBarRows } from "../model/rateBarRows"
 import { formatDateTime } from "@/shared/lib/formatTime"
@@ -26,7 +26,7 @@ const UNIT_TEXT = { requests: "requests", urls: "URLs" } as const
  * count is the normal case and an unknown confidence says nothing, so
  * neither shows a note.
  */
-const CONFIDENCE_TEXT: Partial<Record<CRDConfidence, string>> = {
+const CONFIDENCE_TEXT: Partial<Record<UsdConfidence, string>> = {
   observed: "Observed",
   estimated: "Estimated",
 }

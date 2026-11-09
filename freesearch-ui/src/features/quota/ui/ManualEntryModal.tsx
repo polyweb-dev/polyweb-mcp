@@ -1,6 +1,7 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
+import { ProviderLogo } from "@/shared/ui/ProviderLogo"
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { unitLabel } from "@/services/api/mappers"
 import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQuotaWire"
@@ -9,7 +10,7 @@ import type { UnitKind } from "@/shared/api/units"
 import type { ManualAmountMode } from "../model/manualQuotaMath"
 import type { ManualUnit } from "../model/manualQuotaUnit"
 import type { BalancePrefill } from "../model/providerInfo"
-import { BALANCE_ENTRY, BALANCE_ENTRY_NOTE, type CreditMode } from "../model/quotaLabels"
+import { BALANCE_ENTRY_NOTE, type CreditMode } from "../model/quotaLabels"
 import type { ManualQuotaDefaults } from "../model/useQuotaForm"
 import { ManualEntryForm } from "./ManualEntryForm"
 import { ManualQuotaField } from "./ManualQuotaField"
@@ -112,11 +113,6 @@ function providerField(
  * provider, so a new target starts from its own saved entry or from its own
  * observed balance.
  */
-/** The modal title: an existing entry states the update. */
-function titleOf(isEditing: boolean): string {
-  return isEditing ? "Update " + BALANCE_ENTRY.toLowerCase() : BALANCE_ENTRY
-}
-
 function editingEntry(own: boolean, defaults: ManualQuotaDefaults | null): boolean {
   return own && Boolean(defaults?.allowance)
 }
@@ -206,7 +202,7 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
       isOpen={open}
       onClose={onClose}
       maxWidth="md"
-      title={titleOf(isEditing)}
+      title={<><ProviderLogo providerId={target.id} name={target.name} />{"Balance for " + target.name}</>}
       subtitle={BALANCE_ENTRY_NOTE}
     >
       <ManualEntryForm

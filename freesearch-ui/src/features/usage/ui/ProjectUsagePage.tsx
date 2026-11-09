@@ -31,7 +31,7 @@ export function ProjectUsagePage() {
         actions={
           <Link
             to={`/p/${projectId}/activity`}
-            className={buttonVariants({ variant: "outline", size: "form" })}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
           >
             See every call in Activity
           </Link>

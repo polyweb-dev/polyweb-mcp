@@ -71,7 +71,7 @@ Feature: Keenable card shared bar
     And the Keenable card should show the "Budget limit" action
     And the Keenable card should show the "Balance history" action
     When I open the Keenable quota details
-    Then the Keenable details should show "Search cost in CRD"
-    And the Keenable details should show "Fetch cost in CRD"
+    Then the Keenable details should show "Search cost in USD"
+    And the Keenable details should show "Fetch cost in USD"
     When I cancel the Keenable details
     Then the Keenable details control regains focus

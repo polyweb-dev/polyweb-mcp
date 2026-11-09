@@ -3,8 +3,6 @@
  * the leading integer and plain native-unit amounts.
  */
 import { formatLatency } from "@/shared/lib/formatTime"
-import { dollarText } from "./crdDisplay"
-import { multiplyDecimal } from "./manualQuotaMath"
 
 /** Thousands separators on the first integer of one shown amount. */
 export function groupDigits(text: string): string {
@@ -15,7 +13,6 @@ export function groupDigits(text: string): string {
 export function nativeUnitLabel(unit: string): string {
   const key = unit.trim().toUpperCase()
   if (["CREDIT", "CREDITS"].includes(key)) return "credits"
-  if (key === "CRD") return "USD"
   if (key === "FREE") return "Free"
   if (key === "USD") return "USD"
   return key === "REQUEST" ? "requests" : unit.toLowerCase()
@@ -35,10 +32,6 @@ function shortNumber(amount: string, fractionDigits: number): string | null {
 export function nativeLeftText(amount: string, unit: string): string | null {
   const key = unit.trim().toUpperCase()
   if (key === "FREE") return "Free"
-  if (key === "CRD") {
-    const usd = multiplyDecimal(amount, "0.001")
-    return usd === null ? null : groupDigits(dollarText(usd)) + " left"
-  }
   if (key === "USD") {
     const value = Number(amount.trim())
     if (!Number.isFinite(value)) return null

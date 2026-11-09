@@ -1,17 +1,15 @@
 import type { DragEvent, ReactNode } from "react"
 import { providerCallCost, providerIdentity } from "@/domains/providers"
-import type { ProviderTypeView, RouteEntry } from "@/domains/providers"
+import type { ProviderTypeView } from "@/domains/providers"
 import type { OrderOperation, OrderProvider } from "@/domains/routing"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { ReorderHandle } from "@/shared/ui/ReorderHandle"
 import { Switch } from "@/shared/ui/Switch"
 import { Tag } from "@/shared/ui/Tag"
-import { CredentialKeyCell } from "./CredentialKeyCell"
 import { KeyHealthCell } from "./KeyHealthCell"
 
 export interface ProviderOrderRowProps {
   item: OrderProvider
-  entry: RouteEntry | undefined
   provider?: ProviderTypeView
   operation: OrderOperation
   index: number
@@ -26,7 +24,6 @@ export interface ProviderOrderRowProps {
   menu?: ReactNode
   poolOperations?: readonly OrderOperation[]
   isOwner?: boolean
-  usesPool?: boolean
   showOperation?: boolean
   onToggle: (enabled: boolean) => void
   onMove: (direction: "up" | "down") => void
@@ -37,14 +34,14 @@ export interface ProviderOrderRowProps {
 }
 
 function providerCell(props: ProviderOrderRowProps, enabled: boolean, opLabel: string) {
-  const { item, entry, provider, operation, canEditSystem } = props
+  const { item, provider, operation, canEditSystem } = props
   const systemOff = provider && (provider.killSwitch || !provider.systemEnabledOperations.includes(operation))
   return (
     <td>
         <span className="flex items-center gap-2">
           <ProviderBadge providerId={providerIdentity(item.provider).id} name={providerIdentity(item.provider).name} logoClassName="size-4" />
           {item.keyless && <Tag>No key needed</Tag>}
-          {entry?.provider.killSwitch && <Tag tone="warning">Disabled by system</Tag>}
+          {provider?.killSwitch && <Tag tone="warning">Disabled by system</Tag>}
         </span>
         {!enabled && <span className="block text-[12px] text-[var(--muted)]">
           Off for {opLabel}. {systemOff ? <>Off in system. {canEditSystem && <a className="text-[var(--signal)] underline" href="/system/providers">Turn on in System Providers</a>}</>
@@ -55,26 +52,20 @@ function providerCell(props: ProviderOrderRowProps, enabled: boolean, opLabel: s
 }
 
 function poolCell(props: ProviderOrderRowProps) {
-  if (props.item.keyless && !props.poolOperations) return "No pool needed"
-  if (props.pool !== undefined) return props.pool
-  if (props.entry === undefined) return "—"
-  return <CredentialKeyCell providerType={props.entry.provider.providerType} credential={props.entry.credential} />
+  if (props.item.keyless && !props.poolOperations) return "—"
+  return props.pool ?? "—"
 }
 
 function operationCell(props: ProviderOrderRowProps, enabled: boolean, opLabel: string) {
-  if (props.usesPool) {
-    if (!props.poolOperations) return <span title={props.item.keyless && enabled ? "Always on: no key needed" : "No pool available"}><Switch checked={enabled} disabled ariaLabel={`Use ${props.item.name} for ${opLabel}`} onChange={props.onToggle} /></span>
-    if (!props.isOwner) return <Switch checked={enabled} disabled ariaLabel={`Use ${props.item.name} for ${opLabel}`} onChange={props.onToggle} />
-    return <Switch checked={props.poolOperations.includes(props.operation)} disabled={props.pending} ariaLabel={`Use ${props.item.name} for ${opLabel}`} onChange={props.onToggle} />
-  }
-  if (!props.entry) return "—"
-  return <Switch checked={enabled} disabled={!props.canConfigure || props.pending} ariaLabel={`Use ${props.item.name} for ${opLabel}`} onChange={props.onToggle} />
+  if (!props.poolOperations && props.item.keyless && enabled) return <span className="whitespace-nowrap text-[12px] text-[var(--muted)]">Always on</span>
+  if (!props.poolOperations) return <Tag>Off</Tag>
+  if (!props.isOwner) return <Switch checked={enabled} disabled ariaLabel={`Use ${props.item.name} for ${opLabel}`} onChange={props.onToggle} />
+  return <Switch checked={props.poolOperations.includes(props.operation)} disabled={props.pending} ariaLabel={`Use ${props.item.name} for ${opLabel}`} onChange={props.onToggle} />
 }
 
 function operationEnabled(props: ProviderOrderRowProps): boolean {
   if (props.provider) return props.provider.effectiveOperations.includes(props.operation)
-  if (props.usesPool) return props.poolOperations?.includes(props.operation) ?? false
-  return props.entry?.binding.enabledOperations.includes(props.operation) ?? false
+  return props.poolOperations?.includes(props.operation) ?? false
 }
 
 export function ProviderOrderRow(props: ProviderOrderRowProps) {

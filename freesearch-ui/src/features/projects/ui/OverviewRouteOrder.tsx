@@ -18,7 +18,7 @@ function orderList(label: string, providers: readonly OrderProvider[], destinati
             const identity = providerIdentity(provider.provider)
             return (
               <li key={provider.provider} className="flex items-center gap-3 px-4 py-2 text-[13px]">
-                <span className="fs-keycap"><span className="sr-only">Rank </span>{index + 1}</span>
+                <span className="tnum text-[var(--muted)]"><span className="sr-only">Rank </span>{index + 1}</span>
                 <ProviderLogo providerId={identity.id} name={identity.name} />
                 <span className="min-w-0 truncate font-medium text-[var(--text-strong)]">{identity.name}</span>
               </li>

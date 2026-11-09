@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type {
-  CRDConversionProfile,
+  UsdConversionProfile,
   ProviderAuthLimits,
   ProviderLimitDetail,
   TierBalance,
@@ -11,14 +11,25 @@ import { providerInfo } from "../model/providerInfo"
 import { displayAdapterOf } from "../model/tavilyCredits"
 import { ProviderInfoPopover } from "./ProviderInfoPopover"
 
+describe("ProviderInfoPopover table trigger", () => {
+  it("opens details from the provider name", async () => {
+    const auth = tavilyAuth()
+    render(<ProviderInfoPopover providerId="tavily" providerName="Tavily"
+      auth={auth} info={providerInfo(auth, "tavily")} inlineLabel />)
+    const trigger = screen.getByRole("button", { name: "Credit details for Tavily" })
+    expect(trigger).toHaveTextContent("Tavily")
+    await userEvent.click(trigger)
+    expect(screen.getByText("Quota details")).toBeInTheDocument()
+  })
+})
+
 /**
  * Tavily info popover: complete fact order, nested native precision and tier
- * vocab, CRD/USD disclosure only while open, keyboard behavior, narrow view.
+ * vocab, Usd/USD disclosure only while open, keyboard behavior, narrow view.
  */
 
-function tavilyProfile(): CRDConversionProfile {
+function tavilyProfile(): UsdConversionProfile {
   return {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: "0.008",
     cost_basis: "paygo_reference",
     price_version: "paygo-reference",
@@ -34,8 +45,8 @@ function tier(overrides: Partial<TierBalance> = {}): TierBalance {
     native_unit: "CREDIT",
     native_remaining: "600",
     native_allowance: "1000",
-    remaining_crd: "4800",
-    allowance_crd: "8000",
+    remaining_usd: "4.8",
+    allowance_usd: "8",
     reset_rule: "monthly_first",
     reset_at: "2026-10-01T00:00:00Z",
     funding_mode: "prepaid",
@@ -63,7 +74,7 @@ function detail(overrides: Partial<ProviderLimitDetail> = {}): ProviderLimitDeta
     last_sync_at: "2026-09-06T10:05:00Z",
     stale: false,
     price_version: "v2",
-    crd_split_note: null,
+    balance_split_note: null,
     rate_windows: [
       {
         bucket_id: "tavily:keyed:search:requests",
@@ -120,13 +131,13 @@ function tavilyAuth(): ProviderAuthLimits {
     unknown_tiers: [],
     tier_split_known: true,
     aggregate_pool: null,
-    crd_views: [
+    usd_views: [
       {
         state: "finite",
         operation: "search",
-        remaining_crd: "7992",
-        local_remaining_crd: null,
-        request_cost_crd: "8",
+        remaining_usd: "7.992",
+        local_remaining_usd: null,
+        request_cost_usd: "0.008",
         shared_pool_id: "tavily:keyed:credits",
         possible_standard_calls: "999",
         price_version: "paygo-reference",
@@ -135,9 +146,9 @@ function tavilyAuth(): ProviderAuthLimits {
       {
         state: "finite",
         operation: "fetch",
-        remaining_crd: "7992",
-        local_remaining_crd: null,
-        request_cost_crd: "1.600000000",
+        remaining_usd: "7.992",
+        local_remaining_usd: null,
+        request_cost_usd: "0.001600000",
         shared_pool_id: "tavily:keyed:credits",
         possible_standard_calls: "999",
         price_version: "paygo-reference",
@@ -148,15 +159,14 @@ function tavilyAuth(): ProviderAuthLimits {
     grants: {
       provider: "tavily",
       auth_mode: "keyed",
-      period_start: "2026-09-01",
-      period_end: "2026-09-30",
+      period: "month" as const,
       version: 3,
-      search_granted_crd: "8",
-      search_consumed_crd: "0",
-      search_reserved_crd: "0",
-      fetch_granted_crd: "16",
-      fetch_consumed_crd: "0",
-      fetch_reserved_crd: "0",
+      search_granted_usd: "0.008",
+      search_consumed_usd: "0",
+      search_reserved_usd: "0",
+      fetch_granted_usd: "0.016",
+      fetch_consumed_usd: "0",
+      fetch_reserved_usd: "0",
     } as never,
     detail: detail(),
   }
@@ -179,7 +189,7 @@ function renderPopover() {
 }
 
 describe("ProviderInfoPopover order", () => {
-  it("shows native costs, counts, CRD costs, and rate before Retry-After and nested rows", async () => {
+  it("shows native costs, counts, Usd costs, and rate before Retry-After and nested rows", async () => {
     renderPopover()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
@@ -206,13 +216,13 @@ describe("ProviderInfoPopover order", () => {
 })
 
 describe("ProviderInfoPopover precision", () => {
-  it("floors native amounts and keeps CRD/USD fractions inside the disclosure", async () => {
+  it("floors native amounts and keeps Usd/USD fractions inside the disclosure", async () => {
     renderPopover()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
     expect(await screen.findByText("1 Tavily credit per 5 URLs")).not.toBeNull()
     expect(screen.getByText("$0.0016")).not.toBeNull()
-    expect(screen.getByText("$0.008")).not.toBeNull()
+    expect(screen.getByText("$0.0080")).not.toBeNull()
   })
 
   it("shows native integer tier vocab with trimmed USD spend", async () => {
@@ -220,7 +230,7 @@ describe("ProviderInfoPopover precision", () => {
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
     expect(await screen.findByText("600 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
-    expect(screen.getByText("$0.008 set, $0 used")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.01 this month")).not.toBeNull()
     expect(screen.getByText("0.05")).not.toBeNull()
   })
 })
@@ -229,12 +239,12 @@ describe("ProviderInfoPopover disclosure", () => {
   it("keeps USD and detail text absent while closed and shows them when open", async () => {
     renderPopover()
     expect(screen.queryByText("Quota details")).toBe(null)
-    expect(screen.queryByText("$0.008")).toBe(null)
+    expect(screen.queryByText("$0.0080")).toBe(null)
     expect(screen.queryByText("600 Tavily credits of 1,000 Tavily credits")).toBe(null)
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Tavily" }))
     expect(await screen.findByText("Quota details")).not.toBeNull()
-    expect(screen.getByText("$0.008")).not.toBeNull()
+    expect(screen.getByText("$0.0080")).not.toBeNull()
     expect(screen.getByText("600 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
   })
 

@@ -20,6 +20,7 @@ from uuid import UUID
 
 from pydantic import BeforeValidator, ConfigDict, Field, PlainSerializer
 
+from freesearch.models.budget_period import BudgetPeriod
 from freesearch.models.contracts import (
     ContractModel,
     FetchRequest,
@@ -694,8 +695,7 @@ class CRDGrantPayload(ContractModel):
     """Operator grant of search and fetch credit units for one period."""
 
     version: int = Field(default=0, ge=0)
-    period_start: date
-    period_end: date
+    period: BudgetPeriod = "month"
     search_crd: ExactDecimal = Decimal("0")
     fetch_crd: ExactDecimal = Decimal("0")
 
@@ -720,6 +720,7 @@ class CRDGrantsSummary(ContractModel):
     auth_mode: AuthMode
     period_start: date
     period_end: date
+    period: BudgetPeriod = "month"
     version: int = 1
     search_granted_crd: ExactDecimal = Decimal("0")
     search_consumed_crd: ExactDecimal = Decimal("0")

@@ -1,16 +1,15 @@
 import type { ReactNode } from "react"
 import type {
-  CRDGrantsSummary,
+  UsdGrantsSummary,
   ProviderAuthLimits,
   ProviderLimitDetail,
 } from "@/domains/dashboard"
-import { dollarText, resetRuleText } from "../model/crdDisplay"
-import { operationAvailable } from "../model/crdCardModel"
+import { resetRuleText } from "../model/usdDisplay"
+import { operationAvailable } from "../model/usdCardModel"
 import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { formatTavilyPopoverAmount } from "../model/tavilyCredits"
 import { SPEND_CAP } from "../model/quotaLabels"
-import { dateText } from "../model/timeText"
-import { multiplyDecimal } from "../model/manualQuotaMath"
+import { formatBudgetUsage } from "@/shared/lib/budget"
 
 export interface ProviderLimitsDetailProps {
   providerName: string
@@ -19,14 +18,14 @@ export interface ProviderLimitsDetailProps {
   layout?: "default" | "popover"
   /**
    * The native display inputs of one Tavily rail: with a price profile, the
-   * local grant caps state themselves in Credits. Other providers keep CRD.
+   * local grant caps state themselves in Credits. Other providers keep Usd.
    */
   nativeDisplay?: TavilyDisplayAdapter
 }
 
 /** Value family of one row: the credit-unit block comes first and the USD block goes last. */
-type RowKind = "crd" | "plain" | "usd"
-const ROW_ORDER: RowKind[] = ["crd", "plain", "usd"]
+type RowKind = "plain" | "usd"
+const ROW_ORDER: RowKind[] = ["usd", "plain"]
 
 interface DetailRow {
   kind: RowKind
@@ -75,29 +74,24 @@ function detailRows(detail: ProviderLimitDetail | null, native: boolean = false)
 }
 
 /** The local budget always states USD, including providers with native credits. */
-function grantText(granted: string, consumed: string): string {
-  return dollarText(multiplyDecimal(granted, "0.001") ?? "0") + " set, "
-    + dollarText(multiplyDecimal(consumed, "0.001") ?? "0") + " used"
+function grantText(granted: string, consumed: string, period: string): string {
+  return formatBudgetUsage({ limit: Number(granted), period }, Number(consumed))
 }
 
 /** Spend cap facts of the supported operations only. */
 function grantRows(
-  grants: CRDGrantsSummary | null,
+  grants: UsdGrantsSummary | null,
   auth: ProviderAuthLimits,
   native: boolean,
 ): DetailRow[] {
   const rows: DetailRow[] = []
   if (grants === null) return rows
-  const start = known(grants.period_start)
-  const end = known(grants.period_end)
-  const period = start === null || end === null ? null : dateText(start) + " to " + dateText(end)
-  push(rows, "plain", SPEND_CAP + " period", period)
   if (operationAvailable(auth, "search")) {
-    push(rows, "crd", "Search " + SPEND_CAP.toLowerCase(), grantText(grants.search_granted_crd, grants.search_consumed_crd))
+    push(rows, "usd", "Search " + SPEND_CAP.toLowerCase(), grantText(grants.search_granted_usd, grants.search_consumed_usd, grants.period))
   }
   if (operationAvailable(auth, "fetch")) {
     const operation = native ? "Extract" : "Fetch"
-    push(rows, "crd", operation + " " + SPEND_CAP.toLowerCase(), grantText(grants.fetch_granted_crd, grants.fetch_consumed_crd))
+    push(rows, "usd", operation + " " + SPEND_CAP.toLowerCase(), grantText(grants.fetch_granted_usd, grants.fetch_consumed_usd, grants.period))
   }
   return rows
 }
@@ -120,7 +114,7 @@ export function ProviderLimitsDetail(props: ProviderLimitsDetailProps): ReactNod
   const native = nativeDisplay !== undefined
   const detail = auth.detail
   const rows = groupRows([...detailRows(detail, native), ...grantRows(auth.grants, auth, native)])
-  const splitNote = detail === null ? null : known(detail.crd_split_note)
+  const splitNote = detail === null ? null : known(detail.balance_split_note)
   if (rows.length === 0 && splitNote === null) return null
 
   return (

@@ -11,13 +11,17 @@ export function ProvidersWithoutCapacity({ providers, isOwner, onAdd }: {
 }) {
   if (providers.length === 0) return null
   return <Section title="Without capacity">
-    <ul aria-label="Without capacity" className="fs-panel divide-y divide-[var(--border-subtle)]">
-      {[...providers].sort((a, b) => a.name.localeCompare(b.name)).map((provider) => <li key={provider.providerType} className="flex min-h-12 items-center justify-between gap-4 px-4 py-2">
-        <ProviderBadge providerId={providerIdentity(provider.providerType).id} name={provider.name} logoClassName="size-4" />
-        {isOwner
-          ? <Button variant="secondary" className="w-28" aria-label={`Add capacity for ${provider.name}`} onClick={() => onAdd(provider.providerType)}>Add capacity</Button>
-          : <span className="text-[var(--muted)]">The provider owner must add capacity</span>}
-      </li>)}
-    </ul>
+    <div className="fs-panel overflow-x-auto">
+      <table aria-label="Without capacity" className="fs-table">
+        <tbody>
+          {[...providers].sort((a, b) => a.name.localeCompare(b.name)).map((provider) => <tr key={provider.providerType} className="h-[60px]">
+            <td><ProviderBadge providerId={providerIdentity(provider.providerType).id} name={provider.name} logoClassName="size-4" /></td>
+            <td className="text-right">{isOwner
+              ? <Button variant="outline" size="sm" aria-label={`Add capacity for ${provider.name}`} onClick={() => onAdd(provider.providerType)}>Add capacity</Button>
+              : <span className="text-[var(--muted)]">The provider owner must add capacity</span>}</td>
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
   </Section>
 }

@@ -1,13 +1,13 @@
 /**
- * Credit-unit (CRD) display and card model. Exact decimal strings stay exact in the model; only the visible text is rounded, with decimal
- * ROUND_HALF_UP on the digit that is shown. One CRD is USD 0.001 of priced native use. Never render a positive balance as zero.
+ * USD display and card model. Exact decimal strings stay exact in the model; only the visible text is rounded, with decimal
+ * ROUND_HALF_UP on the digit that is shown. Amounts use USD. Never render a positive balance as zero.
  */
 
 import type {
-  CRDConfidence,
-  CRDResetRule,
-  CRDState,
-  CRDView,
+  UsdConfidence,
+  UsdResetRule,
+  UsdState,
+  UsdView,
   LimitRecord,
   ProviderAuthLimits,
   RateBarInput,
@@ -22,8 +22,8 @@ const UNMETERED_TEXT = "Free"
 const UNAVAILABLE_TEXT = "n/a"
 const UNKNOWN_TEXT = "Unknown"
 
-const CONFIDENCE_RANK: Record<CRDConfidence, number> = { authoritative: 3, observed: 2, estimated: 1, unknown: 0 }
-const RESET_TEXT: Record<CRDResetRule, string> = {
+const CONFIDENCE_RANK: Record<UsdConfidence, number> = { authoritative: 3, observed: 2, estimated: 1, unknown: 0 }
+const RESET_TEXT: Record<UsdResetRule, string> = {
   monthly_first: "Resets on the first of the month",
   vendor_period: "Resets on the vendor period",
   daily_vendor: "Resets each day (vendor)",
@@ -60,32 +60,16 @@ function minAmount(values: string[]): string | null {
 }
 
 /** Exact spendable capacity of one view: the lower of the projectable native funds and the local grant ceiling, so a ceiling is never hidden. */
-function spendableCRD(view: CRDView): string | null {
-  const values = [view.remaining_crd, view.local_remaining_crd].filter((value): value is string => value !== null)
+function spendableUsd(view: UsdView): string | null {
+  const values = [view.remaining_usd, view.local_remaining_usd].filter((value): value is string => value !== null)
   return minAmount(values)
 }
 
-/**
- * Format one exact CRD amount for display: at most one decimal digit, decimal ROUND_HALF_UP, no trailing ".0", "≈" when the visible amount
- * differs from the exact amount, "<0.1 CRD" for a positive amount below 0.1, and exactly "0 CRD" for zero. A string that is not a plain
- * decimal amount becomes "Unknown", never a number.
- */
-export function formatCRDAmount(amount: string): string {
+/** Per-call USD prices use four decimal places. Unknown prices stay unknown. */
+export function formatUsdAmount(amount: string): string {
   const value = scaled(amount)
   if (value === null) return UNKNOWN_TEXT
-  if (value.int === 0n) return "0 credits"
-  // Tenths of a CRD, rounded half-up: rounded = round(amount * 10).
-  const perTenth = 10n ** BigInt(value.scale)
-  const numerator = value.int * 10n
-  if (numerator < perTenth) return "<0.1 credits"
-  const whole = numerator / perTenth
-  const remainder = numerator % perTenth
-  const rounded = remainder * 2n >= perTenth ? whole + 1n : whole
-  const exact = value.int * 10n === rounded * perTenth
-  const wholeText = (rounded / 10n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")
-  const numberText = rounded % 10n === 0n ? wholeText : `${wholeText}.${rounded % 10n}`
-  const unit = exact && numberText === "1" ? "credit" : "credits"
-  return `${exact ? "" : "≈"}${numberText} ${unit}`
+  return "$" + Number(amount).toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
 }
 
 /** Integer count form of one exact nonnegative decimal count: "498.000000000" becomes "498", and every other input stays verbatim. */
@@ -101,15 +85,15 @@ export function dollarText(amount: string): string {
 }
 
 /** Visible text of one credit-unit view, including its non-finite states. */
-export function formatCRD(view: CRDView): string {
+export function formatUsd(view: UsdView): string {
   if (view.state === "unmetered") return UNMETERED_TEXT
   if (view.state === "unavailable") return UNAVAILABLE_TEXT
   if (view.state === "unknown") return UNKNOWN_TEXT
-  const amount = spendableCRD(view)
-  return amount === null ? UNKNOWN_TEXT : formatCRDAmount(amount)
+  const amount = spendableUsd(view)
+  return amount === null ? UNKNOWN_TEXT : formatUsdAmount(amount)
 }
 
-function stateText(state: CRDState): string {
+function stateText(state: UsdState): string {
   if (state === "unmetered") return UNMETERED_TEXT
   if (state === "unavailable") return UNAVAILABLE_TEXT
   return UNKNOWN_TEXT
@@ -122,12 +106,12 @@ export function callsText(amount: string | null): string | null {
 }
 
 /** An unsupported rail is unavailable; a missing record stays unknown. A finite view without a spendable amount is unknown, never zero. */
-function operationState(view: CRDView | null, record: LimitRecord | null): CRDState {
+function operationState(view: UsdView | null, record: LimitRecord | null): UsdState {
   if (view === null) {
     if (record === null) return "unknown"
     return record.supported && record.transport_available ? "unknown" : "unavailable"
   }
-  if (view.state === "finite" && spendableCRD(view) === null) return "unknown"
+  if (view.state === "finite" && spendableUsd(view) === null) return "unknown"
   return view.state
 }
 
@@ -135,14 +119,14 @@ function operationState(view: CRDView | null, record: LimitRecord | null): CRDSt
 function operationView(
   auth: ProviderAuthLimits,
   operation: "search" | "fetch",
-): { view: CRDView | null; state: CRDState; headline: string } {
-  const view = auth.crd_views.find((entry) => entry.operation === operation) ?? null
+): { view: UsdView | null; state: UsdState; headline: string } {
+  const view = auth.usd_views.find((entry) => entry.operation === operation) ?? null
   const record = operation === "search" ? auth.search : auth.fetch
   const state = operationState(view, record)
-  return { view, state, headline: view === null ? stateText(state) : formatCRD(view) }
+  return { view, state, headline: view === null ? stateText(state) : formatUsd(view) }
 }
 
-function overallState(search: CRDState, fetch: CRDState): CRDState {
+function overallState(search: UsdState, fetch: UsdState): UsdState {
   const states = [search, fetch]
   if (states.every((state) => state === "unavailable")) return "unavailable"
   if (states.includes("finite")) return "finite"
@@ -152,15 +136,15 @@ function overallState(search: CRDState, fetch: CRDState): CRDState {
 }
 
 /** Input of one provider card model. */
-export interface ProviderCRDInput { provider: string; providerName: string; authMode: string; auth: ProviderAuthLimits }
+export interface ProviderUsdInput { provider: string; providerName: string; authMode: string; auth: ProviderAuthLimits }
 
 /** Card model: search and fetch headlines, states, and honest notes. */
-export interface ProviderCRDModel {
-  provider: string; providerName: string; authMode: string; state: CRDState; searchState: CRDState; fetchState: CRDState
+export interface ProviderUsdModel {
+  provider: string; providerName: string; authMode: string; state: UsdState; searchState: UsdState; fetchState: UsdState
   searchHeadline: string; fetchHeadline: string; sharedPoolId: string | null; sharedNote: string | null; notes: string[]
 }
 
-function callsNotes(search: CRDView | null, fetch: CRDView | null): string[] {
+function callsNotes(search: UsdView | null, fetch: UsdView | null): string[] {
   const notes: string[] = []
   const searchCalls = callsText(search === null ? null : search.possible_standard_calls)
   if (searchCalls !== null) notes.push(`About ${searchCalls} standard search calls remain`)
@@ -169,29 +153,29 @@ function callsNotes(search: CRDView | null, fetch: CRDView | null): string[] {
   return notes
 }
 
-function lowestCeiling(views: Array<CRDView | null>): string | null {
+function lowestCeiling(views: Array<UsdView | null>): string | null {
   const ceilings: string[] = []
   for (const view of views) {
-    if (view !== null && view.local_remaining_crd !== null) ceilings.push(view.local_remaining_crd)
+    if (view !== null && view.local_remaining_usd !== null) ceilings.push(view.local_remaining_usd)
   }
   return minAmount(ceilings)
 }
 
-function sharedPoolId(views: Array<CRDView | null>): string | null {
+function sharedPoolId(views: Array<UsdView | null>): string | null {
   const searchPool = views[0]?.shared_pool_id ?? null
   const fetchPool = views[1]?.shared_pool_id ?? null
   return searchPool !== null && searchPool === fetchPool ? searchPool : null
 }
 
 /** Build the card model. Shared views read one fund source, so the model reports the shared pool once and states that headlines do not add up. */
-export function providerCRDModel(input: ProviderCRDInput): ProviderCRDModel {
+export function providerUsdModel(input: ProviderUsdInput): ProviderUsdModel {
   const { auth } = input
   const search = operationView(auth, "search")
   const fetch = operationView(auth, "fetch")
   const views = [search.view, fetch.view]
   const notes = callsNotes(search.view, fetch.view)
   const ceiling = lowestCeiling(views)
-  if (ceiling !== null) notes.push(`Local grant ceiling ${formatCRDAmount(ceiling)}`)
+  if (ceiling !== null) notes.push(`Local grant ceiling ${formatUsdAmount(ceiling)}`)
   if (views.some((view) => view !== null && !view.priced)) {
     notes.push("Priced use is not configured; the credit value stays unknown")
   }
@@ -241,7 +225,7 @@ export function percentRemaining(remaining: string | null, allowance: string | n
 }
 
 /** Text of one reset rule, with the visible reset date when it is known. */
-export function resetRuleText(rule: CRDResetRule, resetAt: string | null): string {
+export function resetRuleText(rule: UsdResetRule, resetAt: string | null): string {
   const base = RESET_TEXT[rule]
   if (resetAt === null) return base
   const date = new Date(resetAt)
@@ -253,15 +237,15 @@ const uniqueNotes = (values: string[]): string[] => values.filter((value, index)
 const resetNote = (balance: TierBalance): string => resetRuleText(balance.reset_rule, balance.reset_at)
 
 /** A combined bar carries the weakest member confidence; combining a strong and a weak member cannot claim the strong one. */
-function weakestConfidence(balances: TierBalance[]): CRDConfidence {
-  return balances.reduce<CRDConfidence>(
+function weakestConfidence(balances: TierBalance[]): UsdConfidence {
+  return balances.reduce<UsdConfidence>(
     (weakest, balance) => (CONFIDENCE_RANK[balance.confidence] < CONFIDENCE_RANK[weakest] ? balance.confidence : weakest),
     "authoritative",
   )
 }
 
 function tierState(balances: TierBalance[]): TierBarView["state"] {
-  if (balances.every((balance) => balance.remaining_crd !== null)) return "finite"
+  if (balances.every((balance) => balance.remaining_usd !== null)) return "finite"
   if (balances.every((balance) => balance.funding_mode === "postpaid")) return "postpaid"
   if (balances.every((balance) => balance.funding_mode === "no_budget")) return "unmetered"
   return "unknown"
@@ -269,7 +253,7 @@ function tierState(balances: TierBalance[]): TierBarView["state"] {
 
 function emptyTierBar(input: TierBarInput, notes: string[]): TierBarView {
   return {
-    tier: input.tier, poolIds: [], remainingCRD: null, allowanceCRD: null, percentRemaining: null,
+    tier: input.tier, poolIds: [], remainingUsd: null, allowanceUsd: null, percentRemaining: null,
     source: "unknown", confidence: "unknown", resetNotes: notes, state: "unknown",
   }
 }
@@ -282,14 +266,14 @@ export function tierBarModel(input: TierBarInput): TierBarView {
   if (!input.tierSplitKnown) return emptyTierBar(input, ["Tier split unavailable"])
   if (input.balances.length === 0) return emptyTierBar(input, [])
   const balances = input.balances
-  const remainingCRD = sumAmounts(balances.map((balance) => balance.remaining_crd))
-  const allowanceCRD = sumAmounts(balances.map((balance) => balance.allowance_crd))
+  const remainingUsd = sumAmounts(balances.map((balance) => balance.remaining_usd))
+  const allowanceUsd = sumAmounts(balances.map((balance) => balance.allowance_usd))
   return {
     tier: input.tier,
     poolIds: uniqueNotes(balances.map((balance) => balance.pool_id)),
-    remainingCRD,
-    allowanceCRD,
-    percentRemaining: percentRemaining(remainingCRD, allowanceCRD),
+    remainingUsd,
+    allowanceUsd,
+    percentRemaining: percentRemaining(remainingUsd, allowanceUsd),
     source: uniqueNotes(balances.map((balance) => balance.source).filter(Boolean)).join(", ") || "unknown",
     confidence: weakestConfidence(balances),
     resetNotes: uniqueNotes(balances.map(resetNote)),

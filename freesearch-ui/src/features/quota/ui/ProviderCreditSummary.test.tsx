@@ -1,22 +1,22 @@
 import { describe, expect, it } from "vitest"
 import { render, screen } from "@testing-library/react"
-import type { CreditCardModel } from "../model/crdCardModel"
+import type { CreditCardModel } from "../model/usdCardModel"
 import type { TavilyCreditsDisplay } from "../model/tavilyCredits"
 import { ProviderCreditSummary } from "./ProviderCreditSummary"
 
 /**
  * Tavily native credit summary: Credits fraction and honest state footnotes
- * with unchanged CRD defaults for every other rail.
+ * with unchanged Usd defaults for every other rail.
  */
 
-function crdModel(overrides: Partial<CreditCardModel> = {}): CreditCardModel {
+function usdModel(overrides: Partial<CreditCardModel> = {}): CreditCardModel {
   return {
     state: "finite",
-    remainingCRD: "4500",
-    allowanceCRD: "5000",
+    remainingUsd: "4.5",
+    allowanceUsd: "5",
     percentRemaining: 90,
-    remainingUSD: "4.500",
-    pricedUseUSD: null,
+
+    pricedUseUsd: null,
     provenanceNote: null,
     poolIds: ["brave:keyed:usd"],
     ...overrides,
@@ -42,21 +42,21 @@ function credits(overrides: Partial<TavilyCreditsDisplay> = {}): TavilyCreditsDi
 
 describe("ProviderCreditSummary native Credits", () => {
   it("shows the native 999/1000 Credits fraction with a native bar", () => {
-    render(<ProviderCreditSummary providerName="Tavily" model={crdModel()} credits={credits()} />)
+    render(<ProviderCreditSummary providerName="Tavily" model={usdModel()} credits={credits()} />)
     expect(screen.getByText("999")).not.toBeNull()
     expect(screen.getByText("/ 1,000")).not.toBeNull()
     expect(screen.getByText("Balance left")).not.toBeNull()
     const bar = screen.getByRole("progressbar", { name: "Tavily native Credits remaining" })
     expect(bar.getAttribute("aria-valuenow")).toBe("99.9")
     expect(screen.getByText("99.9%")).not.toBeNull()
-    expect(screen.queryByText("CRD")).toBeNull()
+    expect(screen.queryByText("USD")).toBeNull()
   })
 
   it("shows the one quiet empty line for keyless access without a Credits quota", () => {
     const { container } = render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits({ state: "keyless", remaining: null, allowance: null })}
         emptyText="This provider does not report usage"
       />,
@@ -70,7 +70,7 @@ describe("ProviderCreditSummary native Credits", () => {
     render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits({ state: "unavailable", remaining: null, allowance: null })}
       />,
     )
@@ -82,7 +82,7 @@ describe("ProviderCreditSummary native Credits", () => {
     render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits({ state: "paygo", paygo: true, stale: true, localCap: "72" })}
       />,
     )
@@ -95,7 +95,7 @@ describe("ProviderCreditSummary native Credits", () => {
     const { container } = render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits({ remaining: "999", allowance: null })}
       />,
     )
@@ -105,9 +105,9 @@ describe("ProviderCreditSummary native Credits", () => {
   })
 })
 
-describe("ProviderCreditSummary CRD default", () => {
-  it("keeps the CRD fraction and USD hover text without native inputs", () => {
-    render(<ProviderCreditSummary providerName="Brave" model={crdModel()} />)
+describe("ProviderCreditSummary Usd default", () => {
+  it("keeps the Usd fraction and USD hover text without native inputs", () => {
+    render(<ProviderCreditSummary providerName="Brave" model={usdModel()} />)
     expect(screen.getByText("$4.5")).not.toBeNull()
     expect(screen.getByText("/ $5")).not.toBeNull()
     expect(screen.getByText("USD")).not.toBeNull()
@@ -120,7 +120,7 @@ describe("ProviderCreditSummary CRD default", () => {
 describe("ProviderCreditSummary native bar contract (FIX)", () => {
   it("renders the Credits title with one shared bar and inline percent", () => {
     const { container } = render(
-      <ProviderCreditSummary providerName="Tavily" model={crdModel()} credits={credits()} />,
+      <ProviderCreditSummary providerName="Tavily" model={usdModel()} credits={credits()} />,
     )
     expect(screen.getByText("Balance left")).not.toBeNull()
     const bars = screen.getAllByRole("progressbar", { name: "Tavily native Credits remaining" })
@@ -129,14 +129,14 @@ describe("ProviderCreditSummary native bar contract (FIX)", () => {
     // The percent shares the track row through the shared showPercent path.
     expect(bars[0].closest("div.flex")?.textContent).toContain("99.9%")
     expect(bars[0].getAttribute("aria-valuetext")).toBe("999 of 1,000 Tavily credits left")
-    expect(container.textContent).not.toContain("CRD")
+    expect(container.textContent).not.toContain("USD")
   })
 
   it("renders bodyNotes reset content above the action row", () => {
     render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits()}
         bodyNotes={<span data-testid="reset-note">Resets Oct 1</span>}
         actions={<button type="button">Card action</button>}
@@ -152,7 +152,7 @@ describe("ProviderCreditSummary native bar contract (FIX)", () => {
     render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits()}
         rateBars={<span data-testid="rate-slot">rate content</span>}
         actions={<button type="button">Card action</button>}
@@ -168,7 +168,7 @@ describe("ProviderCreditSummary native bar contract (FIX)", () => {
     render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits({ remaining: "0", allowance: "1000", state: "finite" })}
       />,
     )
@@ -182,7 +182,7 @@ describe("ProviderCreditSummary native bar contract (FIX)", () => {
     const { container } = render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits({ remaining: null, allowance: null, state: "unknown" })}
         fundsControl={<button type="button">Tier control</button>}
       />,
@@ -197,7 +197,7 @@ describe("ProviderCreditSummary native bar contract (FIX)", () => {
     render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits({ remaining: "999", allowance: "0" })}
       />,
     )
@@ -209,7 +209,7 @@ describe("ProviderCreditSummary native bar contract (FIX)", () => {
     render(
       <ProviderCreditSummary
         providerName="Tavily"
-        model={crdModel()}
+        model={usdModel()}
         credits={credits({ remaining: null, allowance: null, state: "paygo", paygo: true })}
       />,
     )

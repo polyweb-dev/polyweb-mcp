@@ -1,11 +1,11 @@
-import type { CRDConversionProfile } from "@/domains/dashboard"
+import type { UsdConversionProfile } from "@/domains/dashboard"
 import { formatDate } from "@/shared/lib/formatTime"
 import { multiplyDecimal } from "./manualQuotaMath"
 
 export function grantHint(input: {
   name: string
   value: string
-  conversion: CRDConversionProfile | null
+  conversion: UsdConversionProfile | null
   reference: string
 }): string | null {
   if (input.name === "start" || input.name === "end") {

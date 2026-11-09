@@ -10,7 +10,7 @@ function record(source = "usd_native", usageApi: string | null = null): LimitRec
     budget: { model: "usd", free_allowance: null, allowance_unit: "USD", allowance_period: null,
       cost_per_1k: null, standard_native_cost: "1", usd_per_call: null, on_exhausted: "unknown",
       usage_api: usageApi, priced: true },
-    conversion_profile: { source, reference_usd_per_crd: "0.001", native_usd_per_unit: "1",
+    conversion_profile: { source, native_usd_per_unit: "1",
       cost_basis: "usd_native", price_version: "test", estimated: false },
     plan_name: null, usage_url: null, version: 1,
   }
@@ -26,7 +26,7 @@ function pool(overrides: Partial<NativePool> = {}): NativePool {
 function auth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
   return { auth_mode: "keyed", transport_available: true, search: record(), fetch: null,
     free_tiers: [], paid_tiers: [], unknown_tiers: [], tier_split_known: false,
-    aggregate_pool: null, crd_views: [], rate_progress: [], grants: null, detail: null, ...overrides }
+    aggregate_pool: null, usd_views: [], rate_progress: [], grants: null, detail: null, ...overrides }
 }
 
 describe("quota reporting evidence", () => {

@@ -4,7 +4,7 @@
  * They turn key metadata into table text. None of them ever sees a raw key:
  * the list holds metadata only.
  */
-import { API_KEY_SCOPE_LABELS, isApiKeyScope } from "@/domains/projects"
+import { API_KEY_SCOPES, API_KEY_SCOPE_LABELS, isApiKeyScope } from "@/domains/projects"
 import type { ApiKeyStatus, ProjectApiKey } from "@/domains/projects"
 
 const STATUS_LABELS: Record<ApiKeyStatus, string> = {
@@ -42,7 +42,9 @@ export function lastUsedLabel(key: ProjectApiKey): string {
 
 /** Scopes column text, with display labels for the known scopes. */
 export function scopesLabel(scopes: readonly string[]): string {
-  return scopes.map((scope) => (isApiKeyScope(scope) ? API_KEY_SCOPE_LABELS[scope] : scope)).join(", ")
+  const known = API_KEY_SCOPES.filter((scope) => scopes.includes(scope))
+  return [...known, ...scopes.filter((scope) => !isApiKeyScope(scope))]
+    .map((scope) => (isApiKeyScope(scope) ? API_KEY_SCOPE_LABELS[scope] : scope)).join(", ")
 }
 
 /**

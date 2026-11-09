@@ -1,30 +1,16 @@
 """Atomic calendar-window budget reservations for vault pools."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from freesearch.models.budget_period import window_start
+
 _DAY = 86400
 _WEEK = 604800
 _MONTH = 2592000
-
-
-def window_start(now: datetime, period_seconds: int | None) -> str:
-    """Return the UTC calendar day, Monday week, or month start as an ISO date."""
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("budget time must be timezone-aware")
-    date = now.astimezone(UTC).date()
-    if period_seconds == _DAY:
-        pass
-    elif period_seconds == _WEEK:
-        date -= timedelta(days=date.weekday())
-    elif period_seconds in (_MONTH, None):
-        date = date.replace(day=1)
-    else:
-        raise ValueError("invalid budget window")
-    return date.isoformat()
 
 
 async def reserve_with_window(

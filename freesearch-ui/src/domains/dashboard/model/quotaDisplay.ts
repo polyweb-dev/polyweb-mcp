@@ -118,7 +118,7 @@ function quotaDetail(input: QuotaDisplayInput, nativeLabel: string): string | nu
 /**
  * Unit name of one quota value. Tavily native values are vendor `Credits`
  * (one native CREDIT unit), which keeps every Tavily message in Credits, never
- * CRD and never the generic "credits" lowercase label. Every other provider
+ * Usd and never the generic "credits" lowercase label. Every other provider
  * keeps the shared unit label.
  */
 function nativeLabel(input: QuotaDisplayInput): string {

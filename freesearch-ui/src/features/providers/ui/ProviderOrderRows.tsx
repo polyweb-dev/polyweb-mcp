@@ -33,8 +33,8 @@ export function ProviderOrderRows(props: {
       <table aria-label={`${operation === "search" ? "Search" : "Fetch"} provider order`} className="fs-table table-fixed min-w-[1080px]">
         <colgroup>
           <col className="w-[144px]" /><col className="w-[240px]" /><col />
-          <col className="w-[164px]" /><col className="w-[164px]" />
-          {showOperation && <col className="w-[64px]" />}<col className="w-[44px]" />
+          <col className="w-[144px]" /><col className="w-[144px]" />
+          {showOperation && <col className="w-[96px]" />}<col className="w-[44px]" />
         </colgroup>
         <thead><tr>
           <th scope="col">Order</th><th scope="col">Provider</th><th scope="col">Pool</th>
@@ -46,14 +46,11 @@ export function ProviderOrderRows(props: {
             const entry = entryFor(item)
             const actions = entry?.credential ? keyMenuActions({ provider: entry.provider, credential: entry.credential, controller: context.controller, canManagePrivate: context.canManagePrivate }) : []
             const menu = context.renderMenu ? context.renderMenu(item) : <RowActionsMenu label={`Actions for ${item.name}`} actions={actions} />
-            return <ProviderOrderRow key={item.provider} item={item} entry={entry} provider={context.providers.find((provider) => provider.providerType === item.provider)} operation={operation} index={index}
+            return <ProviderOrderRow key={item.provider} item={item} provider={context.providers.find((provider) => provider.providerType === item.provider)} operation={operation} index={index}
               count={enabled.length} ranked={index < enabled.length} canConfigure={context.canConfigure} pending={pending || context.controller.bindingStatus.pending || Boolean(context.operationPending)}
-              target={drag.targetId === item.provider} dragging={drag.draggingId === item.provider} canEditSystem={context.canEditSystem} pool={context.renderPool?.(item)} menu={menu}
-              usesPool={Boolean(context.poolOperations)} poolOperations={context.poolOperations?.(item.provider)} isOwner={context.isOwner} showOperation={showOperation}
-              onToggle={(enabled) => {
-                if (context.changePoolOperation) context.changePoolOperation(item.provider, operation, enabled)
-                else if (entry) void context.controller.toggleOperation(entry.binding, operation, enabled)
-              }}
+              target={drag.targetId === item.provider} dragging={drag.draggingId === item.provider} canEditSystem={context.canEditSystem} pool={context.renderPool?.(item, operation)} menu={menu}
+              poolOperations={context.poolOperations?.(item.provider)} isOwner={context.isOwner} showOperation={showOperation}
+              onToggle={(enabled) => context.changePoolOperation?.(item.provider, operation, enabled)}
               onMove={(direction) => { const target = enabled[index + (direction === "up" ? -1 : 1)]; if (target) void move(item.provider, target.provider) }}
               onDragStart={(event) => drag.startDrag(item.provider, event)} onDragEnd={drag.clearDrag}
               onDragOver={(event) => drag.dragOver(item.provider, event)} onDrop={(event) => drag.drop(item.provider, event)} />

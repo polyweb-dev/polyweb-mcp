@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { render, screen, within } from "@testing-library/react"
-import type { CRDConversionProfile, TierBalance } from "@/domains/dashboard"
+import type { UsdConversionProfile, TierBalance } from "@/domains/dashboard"
 import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { ProviderTierBars } from "./ProviderTierBars"
 
@@ -16,8 +16,8 @@ function makeTier(overrides: Partial<TierBalance> = {}): TierBalance {
     native_unit: "REQUEST",
     native_remaining: "10",
     native_allowance: "20",
-    remaining_crd: "5",
-    allowance_crd: "10",
+    remaining_usd: "0.005",
+    allowance_usd: "0.01",
     reset_rule: "monthly_first",
     reset_at: null,
     funding_mode: "prepaid",
@@ -64,12 +64,12 @@ describe("ProviderTierBars", () => {
     expect(screen.queryByText("Tier split unavailable")).toBe(null)
   })
 
-  it("formats a fractional CRD amount to one decimal", () => {
+  it("formats a fractional Usd amount to one decimal", () => {
     render(
       <ProviderTierBars
         providerName="Synth A"
         freeTiers={[
-          makeTier({ remaining_crd: "0.599", allowance_crd: "1" }),
+          makeTier({ remaining_usd: "0.000599", allowance_usd: "0.001" }),
         ]}
         paidTiers={[]}
         tierSplitKnown
@@ -84,8 +84,8 @@ describe("ProviderTierBars", () => {
         providerName="Synth A"
         freeTiers={[
           makeTier({
-            remaining_crd: null,
-            allowance_crd: null,
+            remaining_usd: null,
+            allowance_usd: null,
             funding_mode: "prepaid",
           }),
         ]}
@@ -102,13 +102,13 @@ describe("ProviderTierBars", () => {
     render(
       <ProviderTierBars
         providerName="Synth A"
-        freeTiers={[makeTier({ remaining_crd: "5", allowance_crd: "10" })]}
+        freeTiers={[makeTier({ remaining_usd: "0.005", allowance_usd: "0.01" })]}
         paidTiers={[
           makeTier({
             pool_id: "pool-synth-paid",
             tier: "paid",
-            remaining_crd: "5",
-            allowance_crd: "10",
+            remaining_usd: "0.005",
+            allowance_usd: "0.01",
             reset_rule: "vendor_period",
           }),
         ]}
@@ -124,7 +124,7 @@ describe("ProviderTierBars", () => {
       <ProviderTierBars
         providerName="Synth A"
         freeTiers={[
-          makeTier({ remaining_crd: "5", allowance_crd: null }),
+          makeTier({ remaining_usd: "0.005", allowance_usd: null }),
         ]}
         paidTiers={[]}
         tierSplitKnown
@@ -150,7 +150,7 @@ describe("ProviderTierBars", () => {
     render(
       <ProviderTierBars
         providerName="Synth A"
-        freeTiers={[makeTier({ remaining_crd: "5", allowance_crd: "10" })]}
+        freeTiers={[makeTier({ remaining_usd: "0.005", allowance_usd: "0.01" })]}
         paidTiers={[]}
         tierSplitKnown
       />,
@@ -168,9 +168,8 @@ describe("ProviderTierBars", () => {
  * unknown facts stay absent, generic formatting unchanged without the input.
  */
 
-function tavilyProfile(): CRDConversionProfile {
+function tavilyProfile(): UsdConversionProfile {
   return {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: "0.008",
     cost_basis: "paygo_reference",
     price_version: "paygo-reference",
@@ -179,7 +178,7 @@ function tavilyProfile(): CRDConversionProfile {
   }
 }
 
-function nativeAdapter(profile: CRDConversionProfile | null): TavilyDisplayAdapter {
+function nativeAdapter(profile: UsdConversionProfile | null): TavilyDisplayAdapter {
   return {
     credits: {
       remaining: "999",
@@ -205,8 +204,8 @@ function tavilyTier(overrides: Partial<TierBalance> = {}): TierBalance {
     native_unit: "CREDIT",
     native_remaining: "600",
     native_allowance: "1000",
-    remaining_crd: "4800",
-    allowance_crd: "8000",
+    remaining_usd: "4.8",
+    allowance_usd: "8",
     ...overrides,
   })
 }
@@ -223,7 +222,7 @@ describe("ProviderTierBars nativeDisplay", () => {
       />,
     )
     expect(screen.getByText("600 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
-    expect(screen.queryByText("4800 CRD")).toBe(null)
+    expect(screen.queryByText("4800 Usd")).toBe(null)
   })
 
   it("uses the singular Tavily Credit word for one unit", () => {
@@ -252,7 +251,7 @@ describe("ProviderTierBars nativeDisplay", () => {
     expect(screen.getByText("999 Tavily credits of 1,000 Tavily credits")).not.toBeNull()
   })
 
-  it("converts CRD-only tier values through a valid profile", () => {
+  it("converts Usd-only tier values through a valid profile", () => {
     render(
       <ProviderTierBars
         providerName="Tavily"
@@ -261,8 +260,8 @@ describe("ProviderTierBars nativeDisplay", () => {
             native_unit: "USD",
             native_remaining: null,
             native_allowance: null,
-            remaining_crd: "8",
-            allowance_crd: "16",
+            remaining_usd: "0.008",
+            allowance_usd: "0.016",
           }),
         ]}
         paidTiers={[]}
@@ -273,7 +272,7 @@ describe("ProviderTierBars nativeDisplay", () => {
     expect(screen.getByText("1 Tavily credit of 2 Tavily credits")).not.toBeNull()
   })
 
-  it("keeps generic CRD formatting without a valid conversion profile", () => {
+  it("keeps generic Usd formatting without a valid conversion profile", () => {
     render(
       <ProviderTierBars
         providerName="Tavily"
@@ -282,8 +281,8 @@ describe("ProviderTierBars nativeDisplay", () => {
             native_unit: "USD",
             native_remaining: null,
             native_allowance: null,
-            remaining_crd: "5",
-            allowance_crd: "10",
+            remaining_usd: "0.005",
+            allowance_usd: "0.01",
           }),
         ]}
         paidTiers={[]}
@@ -303,8 +302,8 @@ describe("ProviderTierBars nativeDisplay", () => {
           tavilyTier({
             native_remaining: null,
             native_allowance: null,
-            remaining_crd: null,
-            allowance_crd: null,
+            remaining_usd: null,
+            allowance_usd: null,
           }),
         ]}
         paidTiers={[]}

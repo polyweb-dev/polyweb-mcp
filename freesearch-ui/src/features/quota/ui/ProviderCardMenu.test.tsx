@@ -43,10 +43,19 @@ describe("ProviderCardMenu", () => {
   })
 
   it("hides a budget for a free rail", async () => {
-    render(<ProviderCardMenu providerName="Keenable" manualEligible={false} budgetAllowed={false} onOpenModal={vi.fn()} />)
-    await userEvent.click(screen.getByRole("button", { name: "Actions for Keenable" }))
-    expect(await screen.findByRole("button", { name: "Balance history" })).toBeInTheDocument()
+    const onOpenModal = vi.fn()
+    render(<ProviderCardMenu providerName="Keenable" manualEligible={false} budgetAllowed={false} onOpenModal={onOpenModal} />)
+    expect(screen.queryByRole("button", { name: "Actions for Keenable" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Balance history" })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Balance history" }))
+    expect(onOpenModal).toHaveBeenCalledWith("history")
     expect(screen.queryByRole("button", { name: "Budget limit" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Set balance" })).toBeNull()
+  })
+
+  it("omits history for a locally counted free provider", () => {
+    render(<ProviderCardMenu providerName="Keenable" manualEligible={false} budgetAllowed={false}
+      historyAllowed={false} onOpenModal={vi.fn()} />)
+    expect(screen.queryByRole("button", { name: /Actions|Balance history/ })).toBeNull()
   })
 })

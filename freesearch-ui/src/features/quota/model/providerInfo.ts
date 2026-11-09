@@ -8,8 +8,8 @@
  */
 
 import type { ProviderAuthLimits } from "@/domains/dashboard"
-import { dollarText } from "./crdDisplay"
-import { operationAvailable, usdFromCRD } from "./crdCardModel"
+import { providerCallCost } from "@/domains/providers"
+import { operationAvailable } from "./usdCardModel"
 import { providerRateFacts } from "./providerRateFacts"
 import { operationLabel, type CreditMode } from "./quotaLabels"
 import { balanceStatement } from "./balanceStatement"
@@ -69,11 +69,13 @@ function costFact(
   if (["unbilled_free", "unbilled_keyless"].includes(record.conversion_profile.source)) {
     return { label, value: "Free", note: null }
   }
-  const view = auth.crd_views.find((entry) => entry.operation === operation)
-  const cost = known(view?.request_cost_crd)
+  const view = auth.usd_views.find((entry) => entry.operation === operation)
+  const cost = known(view?.request_cost_usd)
   if (cost === null) return null
-  const usd = usdFromCRD(cost, record.conversion_profile)
-  return usd === null ? null : { label: label + " (USD)", value: dollarText(usd), note: null }
+  const usd = cost
+  if (usd === null) return null
+  const value = providerCallCost({ callCostUsd: { [operation]: usd } }, operation)
+  return { label: value === "Free" ? label : label + " (USD)", value, note: null }
 }
 
 /** The card subtitle: the detail plan name, else the search record plan name. */

@@ -56,18 +56,18 @@ def test_existing_budget_projects_to_usd_without_mutation() -> None:
 
 def test_budget_write_converts_exact_usd_to_existing_ledger_unit() -> None:
     payload = USDBudgetPayload(
-        period_start=date(2026, 11, 1),
-        period_end=date(2026, 11, 30),
+        period="month",
         search_usd=Decimal("1.234567"),
         fetch_usd=Decimal("0.0045"),
     )
     stored = payload.to_ledger()
     assert stored.search_crd == Decimal("1234.567")
     assert stored.fetch_crd == Decimal("4.5")
+    assert stored.period == "month"
 
 
 def test_budget_rejects_old_credit_fields_and_negative_usd() -> None:
-    bounds = {"period_start": "2026-11-01", "period_end": "2026-11-30"}
+    bounds = {"period": "month"}
     with pytest.raises(ValidationError):
         USDBudgetPayload.model_validate({**bounds, "search_crd": "10"})
     with pytest.raises(ValidationError):

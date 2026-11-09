@@ -104,8 +104,6 @@ def register_limit_routes(app: FastAPI) -> None:
         mode = _auth_mode(auth_mode)
         if provider_id == "brave" and payload.fetch_usd > 0:
             raise HTTPException(status_code=422, detail="brave has no fetch rail")
-        if payload.period_end <= payload.period_start:
-            raise HTTPException(status_code=422, detail="period_end must be after period_start")
         return await _guard(
             provider_id, lambda: service.save_grant(provider_id, payload.to_ledger(), mode)
         )

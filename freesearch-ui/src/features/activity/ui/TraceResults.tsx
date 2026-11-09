@@ -5,6 +5,7 @@ import { TraceSearchResults } from "./TraceSearchResults"
 
 export interface TraceResultsProps {
   output: TraceOutput | null
+  input: string | null
   mode: RankingMode
   /** Provider the scoped output belongs to, or null for a fused whole trace. */
   providerId: string | null
@@ -24,6 +25,7 @@ export interface TraceResultsProps {
  */
 export function TraceResults({
   output,
+  input,
   mode,
   providerId,
   results,
@@ -45,5 +47,5 @@ export function TraceResults({
       />
     )
   }
-  return <TraceFetchDocument output={output} />
+  return <TraceFetchDocument output={output} input={input} />
 }

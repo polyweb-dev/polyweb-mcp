@@ -35,7 +35,6 @@ function record(provider: string, overrides: Partial<LimitRecord> = {}): LimitRe
     rate: null,
     budget: budget(),
     conversion_profile: {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: null,
       cost_basis: "test",
       price_version: "1",
@@ -65,7 +64,7 @@ function detail(overrides: Partial<ProviderLimitDetail> = {}): ProviderLimitDeta
     last_sync_at: null,
     stale: false,
     price_version: "1",
-    crd_split_note: null,
+    balance_split_note: null,
     rate_windows: [],
     tier_split_known: false,
     aggregate_pool_id: null,
@@ -106,7 +105,7 @@ function auth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
     unknown_tiers: [],
     tier_split_known: false,
     aggregate_pool: null,
-    crd_views: [],
+    usd_views: [],
     rate_progress: [],
     grants: null,
     detail: null,
@@ -121,19 +120,19 @@ describe("providerInfo prices", () => {
     const info = providerInfo(auth({
       auth_mode: "keyless",
       search,
-      crd_views: [{ operation: "search", request_cost_crd: "4" } as never],
+      usd_views: [{ operation: "search", request_cost_usd: "0.004" } as never],
     }), "keenable")
     expect(info.facts).toContainEqual({ label: "Search cost", value: "Free", note: null })
-    expect(info.facts.some((fact) => fact.value.includes("CRD"))).toBe(false)
+    expect(info.facts.some((fact) => fact.value.includes("USD"))).toBe(false)
   })
 
   it("converts a priced operation to dollars", () => {
     const search = record("brave", { supported: true, transport_available: true })
     const info = providerInfo(auth({
       search,
-      crd_views: [{ operation: "search", request_cost_crd: "5" } as never],
+      usd_views: [{ operation: "search", request_cost_usd: "0.005" } as never],
     }), "brave")
-    expect(info.facts).toContainEqual({ label: "Search cost (USD)", value: "$0.005", note: null })
+    expect(info.facts).toContainEqual({ label: "Search cost (USD)", value: "$0.0050", note: null })
   })
 })
 
@@ -189,7 +188,6 @@ describe("balancePrefill", () => {
 describe("providerInfo Tavily native", () => {
   function tavilyProfile() {
     return {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -214,13 +212,13 @@ describe("providerInfo Tavily native", () => {
         budget: budget({ standard_native_cost: "0.2" }),
         conversion_profile: tavilyProfile(),
       }),
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -229,9 +227,9 @@ describe("providerInfo Tavily native", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -272,7 +270,7 @@ describe("providerInfo Tavily native", () => {
     expect(extract?.note).toBe("(advanced: 2 Tavily credits)")
     expect(info.facts.some((fact) => fact.label === "Fetch cost")).toBe(false)
     expect(info.facts.some((fact) => fact.label === "Extract cost (USD)")).toBe(true)
-    expect(info.facts.some((fact) => fact.label === "Fetch cost in CRD")).toBe(false)
+    expect(info.facts.some((fact) => fact.label === "Fetch cost in Usd")).toBe(false)
   })
 
   it("shares one Search and Fetch Rate Limit row and states the Retry-After delay", () => {
@@ -292,7 +290,7 @@ describe("providerInfo Tavily native", () => {
     expect(native?.value).not.toContain("$")
     expect(native?.note).not.toContain("$")
     const usd = info.facts.find((fact) => fact.label === "Search cost (USD)")
-    expect(usd?.value).toBe("$0.008")
+    expect(usd?.value).toBe("$0.0080")
     expect(usd?.note).toBe(null)
   })
 
@@ -315,7 +313,6 @@ describe("providerInfo Tavily row order", () => {
         transport_available: true,
         budget: budget({ standard_native_cost: "1" }),
         conversion_profile: {
-          reference_usd_per_crd: "0.001",
           native_usd_per_unit: "0.008",
           cost_basis: "paygo_reference",
           price_version: "paygo-reference",
@@ -329,7 +326,6 @@ describe("providerInfo Tavily row order", () => {
         transport_available: true,
         budget: budget({ standard_native_cost: "0.2" }),
         conversion_profile: {
-          reference_usd_per_crd: "0.001",
           native_usd_per_unit: "0.008",
           cost_basis: "paygo_reference",
           price_version: "paygo-reference",
@@ -337,13 +333,13 @@ describe("providerInfo Tavily row order", () => {
           estimated: true,
         },
       }),
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -352,9 +348,9 @@ describe("providerInfo Tavily row order", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -382,7 +378,7 @@ describe("providerInfo Tavily row order", () => {
     })
   }
 
-  it("orders native costs, counts, CRD costs, rate, then Retry-After and Last sync", () => {
+  it("orders native costs, counts, Usd costs, rate, then Retry-After and Last sync", () => {
     const info = providerInfo(orderedAuth(), "tavily")
     expect(info.facts.map((fact) => fact.label)).toEqual([
       "Search cost",
@@ -399,13 +395,13 @@ describe("providerInfo Tavily row order", () => {
 
   it("floors fractional call counts through callsText", () => {
     const rail = orderedAuth({
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999.9",
           price_version: "paygo-reference",
@@ -414,9 +410,9 @@ describe("providerInfo Tavily row order", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999.9",
           price_version: "paygo-reference",
@@ -506,7 +502,6 @@ describe("providerInfo Tavily precision", () => {
         transport_available: true,
         budget: budget({ standard_native_cost: searchCost }),
         conversion_profile: {
-          reference_usd_per_crd: "0.001",
           native_usd_per_unit: "0.008",
           cost_basis: "paygo_reference",
           price_version: "paygo-reference",
@@ -520,7 +515,6 @@ describe("providerInfo Tavily precision", () => {
         transport_available: true,
         budget: budget({ standard_native_cost: fetchCost }),
         conversion_profile: {
-          reference_usd_per_crd: "0.001",
           native_usd_per_unit: "0.008",
           cost_basis: "paygo_reference",
           price_version: "paygo-reference",
@@ -528,13 +522,13 @@ describe("providerInfo Tavily precision", () => {
           estimated: true,
         },
       }),
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8.000000000",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008000000",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -543,9 +537,9 @@ describe("providerInfo Tavily precision", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "1.600000000",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.001600000",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -556,20 +550,20 @@ describe("providerInfo Tavily precision", () => {
     })
   }
 
-  it("floors native amounts and trims CRD/USD zeros", () => {
+  it("floors native amounts and trims Usd/USD zeros", () => {
     const info = providerInfo(preciseAuth("1.9", "0.2"), "tavily")
     const search = info.facts.find((fact) => fact.label === "Search cost")
     expect(search?.value).toBe("1 Tavily credit")
-    const searchCrd = info.facts.find((fact) => fact.label === "Search cost (USD)")
-    expect(searchCrd?.value).toBe("$0.008")
-    expect(searchCrd?.note).toBe(null)
+    const searchUsd = info.facts.find((fact) => fact.label === "Search cost (USD)")
+    expect(searchUsd?.value).toBe("$0.0080")
+    expect(searchUsd?.note).toBe(null)
   })
 
-  it("keeps the 1.6 CRD extract fraction with its USD fraction", () => {
+  it("keeps the 1.6 Usd extract fraction with its USD fraction", () => {
     const info = providerInfo(preciseAuth("1", "0.2"), "tavily")
-    const fetchCrd = info.facts.find((fact) => fact.label === "Extract cost (USD)")
-    expect(fetchCrd?.value).toBe("$0.0016")
-    expect(fetchCrd?.note).toBe(null)
+    const fetchUsd = info.facts.find((fact) => fact.label === "Extract cost (USD)")
+    expect(fetchUsd?.value).toBe("$0.0016")
+    expect(fetchUsd?.note).toBe(null)
   })
 
   it("names Monthly Tavily Credits for a monthly Tavily rail", () => {
@@ -595,9 +589,9 @@ describe("providerInfo wholeRequests", () => {
     return {
       state: "finite",
       operation,
-      remaining_crd: "400000",
-      local_remaining_crd: null,
-      request_cost_crd: "4",
+      remaining_usd: "400",
+      local_remaining_usd: null,
+      request_cost_usd: "0.004",
       shared_pool_id: "keenable:keyed:request",
       possible_standard_calls: calls,
       price_version: "list_price",
@@ -631,7 +625,7 @@ describe("providerInfo wholeRequests", () => {
         supported: true,
         transport_available: true,
       }),
-      crd_views: [
+      usd_views: [
         view("search", "99995.00000000"),
         view("fetch", "99995.00000000"),
       ] as never,
@@ -649,7 +643,7 @@ describe("providerInfo wholeRequests", () => {
   it("keeps decimal standard calls without the opt-in flag", () => {
     const base = auth({
       search: record("keenable", { supported: true, transport_available: true }),
-      crd_views: [view("search", "99995.00000000")] as never,
+      usd_views: [view("search", "99995.00000000")] as never,
       detail: detail({ reset_rule: "vendor_period" }),
     })
     const current = providerInfo(base)
@@ -681,7 +675,7 @@ describe("providerInfo wholeRequests", () => {
         transport_available: true,
         rate: { windows: [exaWindow("100")], published: true } as never,
       }),
-      crd_views: [view("search", "12.9"), view("fetch", "3.7")] as never,
+      usd_views: [view("search", "12.9"), view("fetch", "3.7")] as never,
       detail: detail({ rate_windows: [exaWindow("10")] as never }),
     })
 
@@ -714,7 +708,7 @@ describe("providerInfo wholeRequests", () => {
   it("omits invalid counts instead of a fabricated zero", () => {
     const base = auth({
       search: record("keenable", { supported: true, transport_available: true }),
-      crd_views: [view("search", "lots")] as never,
+      usd_views: [view("search", "lots")] as never,
       detail: detail({
         reset_rule: "vendor_period",
         rate_windows: [window("lots", "requests")] as never,
@@ -727,7 +721,6 @@ describe("providerInfo wholeRequests", () => {
 
   it("preserves cost labels, USD notes, and monthly header notes", () => {
     const profile = {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.004",
       cost_basis: "priced_native_use",
       price_version: "list_price",
@@ -748,9 +741,9 @@ describe("providerInfo wholeRequests", () => {
         conversion_profile: profile,
         budget: budget({ allowance_period: "month", free_allowance: "100000" }),
       }),
-      crd_views: [
-        { ...view("search", "99995"), request_cost_crd: "4" },
-        { ...view("fetch", "99995"), request_cost_crd: "4" },
+      usd_views: [
+        { ...view("search", "99995"), request_cost_usd: "0.004" },
+        { ...view("fetch", "99995"), request_cost_usd: "0.004" },
       ] as never,
       detail: detail({ reset_rule: "monthly_first" }),
     })
@@ -759,26 +752,25 @@ describe("providerInfo wholeRequests", () => {
     expect(info.facts.map((fact) => fact.label)).toContain("Fetch cost (USD)")
     expect(info.creditNote).toBe("Monthly credits")
     const searchCost = info.facts.find((fact) => fact.label === "Search cost (USD)")
-    expect(searchCost?.value).toBe("$0.004")
+    expect(searchCost?.value).toBe("$0.0040")
   })
 
   it("keeps exact input strings unchanged", () => {
     const base = auth({
       search: record("keenable", { supported: true, transport_available: true }),
-      crd_views: [view("search", "99995.00000000")] as never,
+      usd_views: [view("search", "99995.00000000")] as never,
       detail: detail({ reset_rule: "vendor_period" }),
     })
     const first = providerInfo(base, "keenable", true)
     const second = providerInfo(base, "keenable", true)
     expect(first).toEqual(second)
-    expect(base.crd_views[0]).toMatchObject({ possible_standard_calls: "99995.00000000" })
+    expect(base.usd_views[0]).toMatchObject({ possible_standard_calls: "99995.00000000" })
   })
 })
 
 describe("providerInfo Firecrawl", () => {
   function firecrawlProfile() {
     return {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.0038",
       cost_basis: "hobby_reference",
       price_version: "hobby-reference",
@@ -803,13 +795,13 @@ describe("providerInfo Firecrawl", () => {
         budget: budget({ allowance_period: "monthly", standard_native_cost: "1" }),
         conversion_profile: firecrawlProfile(),
       }),
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "3800",
-          local_remaining_crd: null,
-          request_cost_crd: "7.6",
+          remaining_usd: "3.8",
+          local_remaining_usd: null,
+          request_cost_usd: "0.0076",
           shared_pool_id: "firecrawl:keyed:credit",
           possible_standard_calls: "500",
           price_version: "hobby-reference",
@@ -818,9 +810,9 @@ describe("providerInfo Firecrawl", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "3800",
-          local_remaining_crd: null,
-          request_cost_crd: "3.8",
+          remaining_usd: "3.8",
+          local_remaining_usd: null,
+          request_cost_usd: "0.0038",
           shared_pool_id: "firecrawl:keyed:credit",
           possible_standard_calls: "1000",
           price_version: "hobby-reference",
@@ -848,13 +840,13 @@ describe("providerInfo Firecrawl", () => {
 
   it("produces correct facts for Firecrawl", () => {
     const info = providerInfo(firecrawlAuth(), "firecrawl", true)
-    const searchCrd = info.facts.find((fact) => fact.label === "Search cost (USD)")
-    expect(searchCrd?.value).toBe("$0.0076")
-    expect(searchCrd?.note).toBe(null)
+    const searchUsd = info.facts.find((fact) => fact.label === "Search cost (USD)")
+    expect(searchUsd?.value).toBe("$0.0076")
+    expect(searchUsd?.note).toBe(null)
 
-    const fetchCrd = info.facts.find((fact) => fact.label === "Fetch cost (USD)")
-    expect(fetchCrd?.value).toBe("$0.0038")
-    expect(fetchCrd?.note).toBe(null)
+    const fetchUsd = info.facts.find((fact) => fact.label === "Fetch cost (USD)")
+    expect(fetchUsd?.value).toBe("$0.0038")
+    expect(fetchUsd?.note).toBe(null)
 
     const searchesLeft = info.facts.find((fact) => fact.label === "Searches left")
     expect(searchesLeft?.value).toBe("500")
@@ -890,13 +882,13 @@ describe("providerInfo You.com search total", () => {
         remaining: "199.52",
         allowance: null,
       }),
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "100000",
-          local_remaining_crd: null,
-          request_cost_crd: "5",
+          remaining_usd: "100",
+          local_remaining_usd: null,
+          request_cost_usd: "0.005",
           shared_pool_id: "you:keyed:daily-search",
           possible_standard_calls: "100",
           price_version: "v2026-09",
@@ -905,9 +897,9 @@ describe("providerInfo You.com search total", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "199520",
-          local_remaining_crd: null,
-          request_cost_crd: "1",
+          remaining_usd: "199.52",
+          local_remaining_usd: null,
+          request_cost_usd: "0.001",
           shared_pool_id: "youcom:keyed:usd",
           possible_standard_calls: "199520",
           price_version: "v2026-09",
@@ -932,13 +924,13 @@ describe("providerInfo You.com search total", () => {
     const base = youcomAuth()
     const pooled = {
       ...base,
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "95500",
-          local_remaining_crd: null,
-          request_cost_crd: "5",
+          remaining_usd: "95.5",
+          local_remaining_usd: null,
+          request_cost_usd: "0.005",
           shared_pool_id: "youcom:keyed:usd",
           possible_standard_calls: "19100",
           price_version: "v2026-09",
@@ -947,9 +939,9 @@ describe("providerInfo You.com search total", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "95500",
-          local_remaining_crd: null,
-          request_cost_crd: "1",
+          remaining_usd: "95.5",
+          local_remaining_usd: null,
+          request_cost_usd: "0.001",
           shared_pool_id: "youcom:keyed:usd",
           possible_standard_calls: "95500",
           price_version: "v2026-09",

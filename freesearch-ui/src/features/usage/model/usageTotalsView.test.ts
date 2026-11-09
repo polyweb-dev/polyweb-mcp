@@ -57,7 +57,7 @@ describe("usageTotalsView", () => {
     expect(view.rows).toHaveLength(2)
     const exa = view.rows.find((row) => row.provider === "exa")!
     expect(exa).toMatchObject({ calls: 7, usd: 0.035, credits: 1, requests: null })
-    expect(view.columns).toEqual(["usd", "requests", "credits"])
+    expect(view.columns).toEqual(["usd", "credits"])
   })
 
   it("sums every column on its own and never across unit kinds", () => {
@@ -70,6 +70,13 @@ describe("usageTotalsView", () => {
     expect(view.total).toMatchObject({ calls: 13, requests: 9, credits: null })
     expect(view.total.usd).toBeCloseTo(0.035, 6)
     expect(usageAmountText(view.total, "usd")).toBe("$0.035")
+  })
+
+  it("shows billed requests when a provider bills a different number of calls", () => {
+    const view = usageTotalsView([
+      total({ provider: "brave", totalUnits: 8, eventCount: 9, unitKind: "REQUEST" }),
+    ])
+    expect(view.columns).toContain("requests")
   })
 
   it("shows only the unit columns some row uses, legacy units in their own column", () => {

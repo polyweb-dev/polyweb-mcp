@@ -3,7 +3,6 @@ import type { FormEvent } from "react"
 import { credentialProviderTypes, providerIdentity, providerTypeName, supportsOAuth } from "@/domains/providers"
 import { createVaultKey, rotateVaultKey, updateVaultKey } from "@/domains/vault"
 import type { VaultKey } from "@/domains/vault"
-import { ApiError } from "@/shared/api/http"
 import { AdvancedSection } from "@/shared/ui/AdvancedSection"
 import { Button } from "@/shared/ui/button"
 import { Checkbox } from "@/shared/ui/Checkbox"
@@ -12,8 +11,9 @@ import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { Select } from "@/shared/ui/select"
-import { SecretInput } from "@/shared/ui/SecretInput"
 import { TextField } from "@/shared/ui/TextField"
+import { KeyFormFields } from "./KeyFormFields"
+import { keySaveError } from "./keySaveError"
 
 type Mode = "add" | "settings" | "rotate"
 
@@ -23,10 +23,6 @@ function invalidCapacity(capacity: string): boolean {
 
 function needsSecret(mode: Mode, auth: string): boolean {
   return mode === "rotate" || (mode === "add" && auth === "api_key")
-}
-
-function requiredError(submitted: boolean, value: string, message: string): string | null {
-  return submitted && !value.trim() ? message : null
 }
 
 function capacityToSave(form: HTMLFormElement, capacity: string, initial: string): string {
@@ -39,17 +35,11 @@ function invalidKeyValues({ mode, auth, label, capacity, secret }: {
   return (mode !== "rotate" && (!label.trim() || invalidCapacity(capacity))) || (needsSecret(mode, auth) && !secret.trim())
 }
 
-function keySaveError(mode: Mode, err: unknown): string {
-  if (!(err instanceof ApiError) || err.status !== 409) return "The key did not save. Try again."
-  if (mode === "rotate") return "The key changed in another window. Reload and try again."
-  if (mode === "settings") return "The pool limits are more than the key limit. Turn on overcommit or lower the limit."
-  return "The key did not save. A key with this label exists."
-}
-
 function initialKeyValues(item?: VaultKey) {
+  const provider = item?.provider_type ?? credentialProviderTypes()[0] ?? ""
   return {
-    provider: item?.provider_type ?? credentialProviderTypes()[0] ?? "",
-    label: item?.label ?? "",
+    provider,
+    label: item?.label ?? `${providerTypeName(provider)} key`,
     overcommit: item?.overcommit ?? true,
     contention: item?.contention_mode ?? "equal",
   }
@@ -63,7 +53,7 @@ function initialKeyCapacity(item?: VaultKey) {
 }
 
 const TITLES: Record<Mode, string> = { add: "Add key", rotate: "Rotate key", settings: "Key settings" }
-const ACTIONS: Record<Mode, string> = { add: "Save key", rotate: "Rotate key", settings: "Save settings" }
+const ACTIONS: Record<Mode, string> = { add: "Add key", rotate: "Rotate key", settings: "Save settings" }
 
 export function KeyDialog({ mode, item, onClose, onSaved }: {
   mode: Mode
@@ -84,8 +74,6 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState(false)
-  const labelError = requiredError(submitted, label, "Enter a label")
-  const secretError = requiredError(submitted, secret, "Enter the API key")
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -119,17 +107,23 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
           <Field id="vault-provider" label="Provider">
             <ProviderSelect id="vault-provider" value={providerIdentity(provider).id}
               options={credentialProviderTypes().map((type) => ({ value: providerIdentity(type).id, label: providerTypeName(type) }))}
-              onValueChange={(value) => { setProvider(credentialProviderTypes().find((type) => providerIdentity(type).id === value) ?? value); setAuth("api_key") }} />
+              onValueChange={(value) => {
+                const next = credentialProviderTypes().find((type) => providerIdentity(type).id === value) ?? value
+                setLabel((current) => current === `${providerTypeName(provider)} key` ? `${providerTypeName(next)} key` : current)
+                setProvider(next)
+                setAuth("api_key")
+              }} />
           </Field>
         )}
-        {mode !== "rotate" && <TextField id="vault-label" label="Label" type="text" value={label} onChange={setLabel} error={labelError} />}
-        {mode === "add" && supportsOAuth(provider) && (
-          <Field id="vault-auth" label="Authentication">
-            <Select id="vault-auth" value={auth} onValueChange={setAuth}
-              options={[{ value: "api_key", label: "API key" }, { value: "oauth", label: "OAuth" }]} />
-          </Field>
-        )}
-        {needsSecret(mode, auth) && <SecretInput id="vault-secret" label="API key" value={secret} onChange={setSecret} error={secretError} />}
+        <KeyFormFields idPrefix="vault" label={label} setLabel={setLabel} secret={secret} setSecret={setSecret}
+          submitted={submitted} showLabel={mode !== "rotate"} showSecret={needsSecret(mode, auth)}>
+          {mode === "add" && supportsOAuth(provider) && (
+            <Field id="vault-auth" label="Authentication">
+              <Select id="vault-auth" value={auth} onValueChange={setAuth}
+                options={[{ value: "api_key", label: "API key" }, { value: "oauth", label: "OAuth" }]} />
+            </Field>
+          )}
+        </KeyFormFields>
         {mode !== "rotate" && (
           <AdvancedSection label="Advanced">
             <TextField id="key-limit" label="Key limit" type="number" min="1" value={capacity} onChange={setCapacity} error={submitted && invalidCapacity(capacity) ? "Enter a positive whole number" : null} hint="Enter the requests that the provider allows for this key, or leave empty if unknown" />

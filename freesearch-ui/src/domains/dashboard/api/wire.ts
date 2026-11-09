@@ -36,7 +36,7 @@ export interface BackendDashboard {
   latest_health: BackendDashboardHealth[]
   /**
    * Additive raw limit fields. Each entry stays `unknown` here and is decoded
-   * by `decodeProviderLimits` / `decodeCRDUsageTotals` in the dashboard state,
+   * by `decodeProviderLimits` / `decodeUsdUsageTotals` in the dashboard state,
    * so a partial payload never becomes a fabricated balance.
    */
   provider_limits?: unknown[]

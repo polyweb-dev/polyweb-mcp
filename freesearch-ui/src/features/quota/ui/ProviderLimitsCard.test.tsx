@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { ReactNode } from "react"
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import type { CRDUsageTotal, CRDView, DashboardQuota, LimitRecord, ProviderAuthLimits, ProviderLimits, RateProgressView } from "@/domains/dashboard"
+import type { UsdUsageTotal, UsdView, DashboardQuota, LimitRecord, ProviderAuthLimits, ProviderLimits, RateProgressView } from "@/domains/dashboard"
 import { installFetchStub, ok } from "@/test/fetchMock"
 import { ProviderLimitsCard } from "./ProviderLimitsCard"
 
@@ -16,19 +16,19 @@ vi.mock("../model/useManualQuota", () => ({
 }))
 
 /**
- * UI7 Brave card: one credit bar with percent on the right, CRD and USD
+ * UI7 Brave card: one credit bar with percent on the right, Usd and USD
  * below the bar, unknown fields hidden, fetch controls gated, dialogs for
  * grant/history/manual. Replaces the S1 n/a and inline-grant expectations
  * per UI7-01, UI7-02, UI7-04, UI7-08.
  */
 
-function searchView(): CRDView {
+function searchView(): UsdView {
   return {
     state: "finite",
     operation: "search",
-    remaining_crd: "4500",
-    local_remaining_crd: null,
-    request_cost_crd: "5",
+    remaining_usd: "4.5",
+    local_remaining_usd: null,
+    request_cost_usd: "0.005",
     shared_pool_id: "brave:keyed:usd",
     possible_standard_calls: "900",
     price_version: "v2026-09",
@@ -36,13 +36,13 @@ function searchView(): CRDView {
   }
 }
 
-function fetchView(): CRDView {
+function fetchView(): UsdView {
   return {
     state: "unavailable",
     operation: "fetch",
-    remaining_crd: null,
-    local_remaining_crd: null,
-    request_cost_crd: null,
+    remaining_usd: null,
+    local_remaining_usd: null,
+    request_cost_usd: null,
     shared_pool_id: null,
     possible_standard_calls: null,
     price_version: null,
@@ -61,7 +61,6 @@ function searchRecord(): LimitRecord {
     rate: null,
     budget: null,
     conversion_profile: {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "1",
       cost_basis: "priced_native_use",
       price_version: "v2026-09",
@@ -85,7 +84,6 @@ function fetchRecord(): LimitRecord {
     rate: null,
     budget: null,
     conversion_profile: {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: null,
       cost_basis: "priced_native_use",
       price_version: "v2026-09",
@@ -126,7 +124,7 @@ function braveAuth(): ProviderAuthLimits {
       stale: false,
       manual_anchor: false,
     },
-    crd_views: [searchView(), fetchView()],
+    usd_views: [searchView(), fetchView()],
     rate_progress: [],
     grants: null,
     detail: null,
@@ -144,7 +142,7 @@ function braveLimits(): ProviderLimits {
   }
 }
 
-function noUseTotals(): CRDUsageTotal[] {
+function noUseTotals(): UsdUsageTotal[] {
   return []
 }
 
@@ -157,7 +155,7 @@ function renderBraveCard(): void {
       providerId="brave"
       providerName="Brave"
       limits={braveLimits()}
-      crdUsageTotals={noUseTotals()}
+      usdUsageTotals={noUseTotals()}
       refreshDashboard={() => Promise.resolve()}
       manualEligible
     />,
@@ -175,7 +173,6 @@ function tinyfishRecord(operation: "search" | "fetch"): LimitRecord {
     rate: null,
     budget: null,
     conversion_profile: {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: null,
       cost_basis: "priced_native_use",
       price_version: "v2026-09",
@@ -217,13 +214,13 @@ function tinyfishAuth(): ProviderAuthLimits {
     unknown_tiers: [],
     tier_split_known: true,
     aggregate_pool: null,
-    crd_views: [
+    usd_views: [
       {
         state: "unmetered",
         operation: "search",
-        remaining_crd: null,
-        local_remaining_crd: null,
-        request_cost_crd: null,
+        remaining_usd: null,
+        local_remaining_usd: null,
+        request_cost_usd: null,
         shared_pool_id: null,
         possible_standard_calls: null,
         price_version: null,
@@ -232,9 +229,9 @@ function tinyfishAuth(): ProviderAuthLimits {
       {
         state: "unmetered",
         operation: "fetch",
-        remaining_crd: null,
-        local_remaining_crd: null,
-        request_cost_crd: null,
+        remaining_usd: null,
+        local_remaining_usd: null,
+        request_cost_usd: null,
         shared_pool_id: null,
         possible_standard_calls: null,
         price_version: null,
@@ -275,7 +272,7 @@ function tinyfishAuth(): ProviderAuthLimits {
       last_sync_at: null,
       stale: false,
       price_version: "v2026-09",
-      crd_split_note: null,
+      balance_split_note: null,
       rate_windows: [
         {
           bucket_id: "tinyfish-search-1m",
@@ -306,34 +303,34 @@ function tinyfishLimits(): ProviderLimits {
   }
 }
 
-/** CARD-3 fraction oracle: "4500 / 5000 CRD" renders as split spans, never one "4500 CRD" node. */
+/** CARD-3 fraction oracle: "4500 / 5000 Usd" renders as split spans, never one "4500 Usd" node. */
 function expectFraction(remaining: string, total: string, unit = "USD"): void {
   expect(screen.getByText(remaining)).not.toBeNull()
   expect(screen.getByText(`/ ${total}`)).not.toBeNull()
   expect(screen.getByText(unit)).not.toBeNull()
-  expect(screen.queryByText(`${remaining} CRD`)).toBeNull()
-  expect(screen.queryByText("CRD left")).toBeNull()
+  expect(screen.queryByText(`${remaining} Usd`)).toBeNull()
+  expect(screen.queryByText("Usd left")).toBeNull()
   const value = screen.getByText(remaining).closest("span")?.parentElement
   expect(value?.textContent?.replace(/\s+/g, "")).toBe(`${remaining}/${total}${unit}`)
 }
 
 describe("ProviderLimitsCard Brave", () => {
-  it("shows one credit bar with 90 percent, CRD only, and no fetch headline (UI7-01, UI7-02, UI7-04, final-polish 3c)", () => {
+  it("shows one credit bar with 90 percent, Usd only, and no fetch headline (UI7-01, UI7-02, UI7-04, final-polish 3c)", () => {
     renderBraveCard()
     const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
     expect(bar.getAttribute("aria-valuenow")).toBe("90")
     expect(bar.getAttribute("aria-valuemin")).toBe("0")
     expect(bar.getAttribute("aria-valuemax")).toBe("100")
     expect(screen.getByText("90%")).not.toBeNull()
-    // CARD-3: credit fraction "4500 / 5000 CRD" via split spans; no "CRD left" label.
+    // CARD-3: credit fraction "4500 / 5000 Usd" via split spans; no "Usd left" label.
     expectFraction("$4.5", "$5")
-    // Final-polish Item 3c: card shows CRD only. USD value sits in hover title and aria-label.
+    // Final-polish Item 3c: card shows Usd only. USD value sits in hover title and aria-label.
     expect(screen.queryByText("4.500")).toBeNull()
     expect(screen.queryByText("USD left")).toBeNull()
     expect(screen.queryByText("USD use (priced)")).toBeNull()
-    const crdValue = screen.getByText("$4.5")
-    expect(crdValue.getAttribute("title")).toBe("$4.5 left")
-    expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
+    const usdValue = screen.getByText("$4.5")
+    expect(usdValue.getAttribute("title")).toBe("$4.5 left")
+    expect(usdValue.getAttribute("aria-label")).toBe("$4.5 left")
     // Polish Item 6: no auth_mode chip, no "keyed rail" text on the card.
     expect(screen.queryByText("keyed rail")).toBeNull()
     expect(screen.queryByText("n/a")).toBeNull()
@@ -342,14 +339,14 @@ describe("ProviderLimitsCard Brave", () => {
     vi.unstubAllGlobals()
   })
 
-  it("exposes USD value in hover title and aria-label only with CRD bar text intact (final-polish 3c, 3e)", () => {
+  it("exposes USD value in hover title and aria-label only with Usd bar text intact (final-polish 3c, 3e)", () => {
     renderBraveCard()
     expectFraction("$4.5", "$5")
-    const crdValue = screen.getByText("$4.5")
-    expect(crdValue.getAttribute("title")).toBe("$4.5 left")
-    expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
+    const usdValue = screen.getByText("$4.5")
+    expect(usdValue.getAttribute("title")).toBe("$4.5 left")
+    expect(usdValue.getAttribute("aria-label")).toBe("$4.5 left")
     expect(screen.queryByText("USD left")).toBeNull()
-    expect(screen.queryByText("CRD left")).toBeNull()
+    expect(screen.queryByText("Usd left")).toBeNull()
     const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
     expect(bar.getAttribute("aria-valuetext")).toBe("90% remaining, $4.50 left")
     vi.unstubAllGlobals()
@@ -364,7 +361,7 @@ describe("ProviderLimitsCard Brave", () => {
         providerId="brave"
         providerName="Brave"
         limits={braveLimits()}
-        crdUsageTotals={noUseTotals()}
+        usdUsageTotals={noUseTotals()}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -407,7 +404,7 @@ describe("ProviderLimitsCard Brave", () => {
         providerId="brave"
         providerName="Brave"
         limits={braveLimits()}
-        crdUsageTotals={noUseTotals()}
+        usdUsageTotals={noUseTotals()}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -417,14 +414,14 @@ describe("ProviderLimitsCard Brave", () => {
     const debited = {
       ...auth,
       aggregate_pool: auth.aggregate_pool === null ? null : { ...auth.aggregate_pool, remaining: "4.495" },
-      crd_views: [{ ...searchView(), remaining_crd: "4495" }, fetchView()],
+      usd_views: [{ ...searchView(), remaining_usd: "4.495" }, fetchView()],
     }
     rerender(
       <ProviderLimitsCard
         providerId="brave"
         providerName="Brave"
         limits={{ ...braveLimits(), auths: [debited] }}
-        crdUsageTotals={[{ provider: "brave", operation: "search", normalized_crd: "5", attempt_count: 1, volume_count: 1 }]}
+        usdUsageTotals={[{ provider: "brave", operation: "search", spend_usd: "0.005", attempt_count: 1, volume_count: 1 }]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -473,7 +470,6 @@ describe("ProviderLimitsCard Brave", () => {
 describe("ProviderLimitsCard Tavily native", () => {
   function tavilyProfile() {
     return {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -558,13 +554,13 @@ describe("ProviderLimitsCard Tavily native", () => {
         stale: false,
         manual_anchor: false,
       },
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -573,9 +569,9 @@ describe("ProviderLimitsCard Tavily native", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -599,7 +595,7 @@ describe("ProviderLimitsCard Tavily native", () => {
         last_sync_at: "2026-09-06T10:05:00Z",
         stale: false,
         price_version: "paygo-reference",
-        crd_split_note: null,
+        balance_split_note: null,
         rate_windows: [
           {
             bucket_id: "tavily:keyed:search:requests",
@@ -638,7 +634,7 @@ describe("ProviderLimitsCard Tavily native", () => {
         providerId="tavily"
         providerName="Tavily"
         limits={tavilyLimits()}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -652,7 +648,7 @@ describe("ProviderLimitsCard Tavily native", () => {
     expect(screen.getByText("999")).not.toBeNull()
     expect(screen.getByText("/ 1,000")).not.toBeNull()
     expect(screen.getByText("Balance left")).not.toBeNull()
-    expect(screen.queryByText("CRD")).toBeNull()
+    expect(screen.queryByText("USD")).toBeNull()
     expect(screen.queryByText("0.008")).toBeNull()
     expect(screen.queryByText("$0.008")).toBeNull()
     vi.unstubAllGlobals()
@@ -675,13 +671,13 @@ describe("ProviderLimitsCard Tavily native", () => {
  * Keeps the Brave fixture and cases above unchanged.
  */
 
-function keenableKeyedSearchView(): CRDView {
+function keenableKeyedSearchView(): UsdView {
   return {
     state: "finite",
     operation: "search",
-    remaining_crd: "399980",
-    local_remaining_crd: null,
-    request_cost_crd: "4",
+    remaining_usd: "399.98",
+    local_remaining_usd: null,
+    request_cost_usd: "0.004",
     shared_pool_id: "keenable:keyed:request",
     possible_standard_calls: "99995",
     price_version: "list_price",
@@ -689,13 +685,13 @@ function keenableKeyedSearchView(): CRDView {
   }
 }
 
-function keenableKeyedFetchView(): CRDView {
+function keenableKeyedFetchView(): UsdView {
   return {
     state: "finite",
     operation: "fetch",
-    remaining_crd: "399980",
-    local_remaining_crd: null,
-    request_cost_crd: "4",
+    remaining_usd: "399.98",
+    local_remaining_usd: null,
+    request_cost_usd: "0.004",
     shared_pool_id: "keenable:keyed:request",
     possible_standard_calls: "99995",
     price_version: "list_price",
@@ -714,7 +710,6 @@ function keenableKeyedSearchRecord(): LimitRecord {
     rate: null,
     budget: null,
     conversion_profile: {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.004",
       cost_basis: "priced_native_use",
       price_version: "list_price",
@@ -738,7 +733,6 @@ function keenableKeyedFetchRecord(): LimitRecord {
     rate: null,
     budget: null,
     conversion_profile: {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.004",
       cost_basis: "priced_native_use",
       price_version: "list_price",
@@ -779,7 +773,7 @@ function keenableKeyedAuth(): ProviderAuthLimits {
       stale: false,
       manual_anchor: false,
     },
-    crd_views: [keenableKeyedSearchView(), keenableKeyedFetchView()],
+    usd_views: [keenableKeyedSearchView(), keenableKeyedFetchView()],
     rate_progress: [],
     grants: null,
     detail: null,
@@ -797,13 +791,13 @@ function keenableLimits(): ProviderLimits {
   }
 }
 
-function keenableKeylessSearchView(): CRDView {
+function keenableKeylessSearchView(): UsdView {
   return {
     state: "unmetered",
     operation: "search",
-    remaining_crd: null,
-    local_remaining_crd: null,
-    request_cost_crd: null,
+    remaining_usd: null,
+    local_remaining_usd: null,
+    request_cost_usd: null,
     shared_pool_id: null,
     possible_standard_calls: null,
     price_version: null,
@@ -811,13 +805,13 @@ function keenableKeylessSearchView(): CRDView {
   }
 }
 
-function keenableKeylessFetchView(): CRDView {
+function keenableKeylessFetchView(): UsdView {
   return {
     state: "unmetered",
     operation: "fetch",
-    remaining_crd: null,
-    local_remaining_crd: null,
-    request_cost_crd: null,
+    remaining_usd: null,
+    local_remaining_usd: null,
+    request_cost_usd: null,
     shared_pool_id: null,
     possible_standard_calls: null,
     price_version: null,
@@ -836,7 +830,6 @@ function keenableKeylessRecord(operation: "search" | "fetch"): LimitRecord {
     rate: null,
     budget: null,
     conversion_profile: {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0",
       cost_basis: "priced_native_use",
       price_version: "",
@@ -860,7 +853,7 @@ function keenableKeylessAuth(): ProviderAuthLimits {
     unknown_tiers: [],
     tier_split_known: true,
     aggregate_pool: null,
-    crd_views: [keenableKeylessSearchView(), keenableKeylessFetchView()],
+    usd_views: [keenableKeylessSearchView(), keenableKeylessFetchView()],
     rate_progress: [
       {
         bucket_id: "keenable:keyless:requests",
@@ -893,7 +886,7 @@ function keenableKeylessAuth(): ProviderAuthLimits {
       last_sync_at: null,
       stale: false,
       price_version: "",
-      crd_split_note: null,
+      balance_split_note: null,
       rate_windows: [
         {
           bucket_id: "keenable:keyless:requests",
@@ -1068,7 +1061,7 @@ function renderKeenableCard(limits: ProviderLimits): void {
       providerId="keenable"
       providerName="Keenable"
       limits={limits}
-      crdUsageTotals={noUseTotals()}
+      usdUsageTotals={noUseTotals()}
       refreshDashboard={() => Promise.resolve()}
       manualEligible
     />,
@@ -1103,7 +1096,7 @@ describe("ProviderLimitsCard Keenable", () => {
         providerId="keenable"
         providerName="Keenable"
         limits={keenableKeylessLimits()}
-        crdUsageTotals={noUseTotals()}
+        usdUsageTotals={noUseTotals()}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -1134,7 +1127,7 @@ describe("ProviderLimitsCard Keenable", () => {
         providerId="keenable"
         providerName="Keenable"
         limits={keenableDecimalKeylessLimits()}
-        crdUsageTotals={noUseTotals()}
+        usdUsageTotals={noUseTotals()}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -1160,7 +1153,7 @@ describe("ProviderLimitsCard Keenable", () => {
         providerId="keenable"
         providerName="Keenable"
         limits={keenableKeylessLimits()}
-        crdUsageTotals={noUseTotals()}
+        usdUsageTotals={noUseTotals()}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -1177,7 +1170,7 @@ describe("ProviderLimitsCard Keenable", () => {
         providerId="keenable"
         providerName="Keenable"
         limits={keenableLimits()}
-        crdUsageTotals={noUseTotals()}
+        usdUsageTotals={noUseTotals()}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -1197,7 +1190,7 @@ describe("ProviderLimitsCard Keenable", () => {
         providerId="keenable"
         providerName="Keenable"
         limits={keenableAuthoritativeKeylessLimits()}
-        crdUsageTotals={noUseTotals()}
+        usdUsageTotals={noUseTotals()}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -1214,7 +1207,7 @@ describe("ProviderLimitsCard Keenable", () => {
         providerId="keenable"
         providerName="Keenable"
         limits={keenableAuthoritativeKeyedLimits()}
-        crdUsageTotals={noUseTotals()}
+        usdUsageTotals={noUseTotals()}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -1225,14 +1218,14 @@ describe("ProviderLimitsCard Keenable", () => {
     vi.unstubAllGlobals()
   })
 
-  it("keenable details preserve search and fetch CRD cost labels", async () => {
+  it("keenable details preserve search and fetch Usd cost labels", async () => {
     installFetchStub(() => ok({ events: [], next_cursor: null }))
     renderKeenableCard(keenableLimits())
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
     expect(await screen.findByText("Search cost (USD)")).not.toBeNull()
     expect(screen.getByText("Fetch cost (USD)")).not.toBeNull()
-    expect(screen.getAllByText("$0.004").length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText("$0.0040").length).toBeGreaterThanOrEqual(2)
     vi.unstubAllGlobals()
   })
 })
@@ -1248,7 +1241,7 @@ describe("ProviderLimitsCard Tinyfish", () => {
           providerId="tinyfish"
           providerName="Tinyfish"
           limits={tinyfishLimits()}
-          crdUsageTotals={noUseTotals()}
+          usdUsageTotals={noUseTotals()}
           refreshDashboard={() => Promise.resolve()}
           manualEligible
         />
@@ -1256,7 +1249,7 @@ describe("ProviderLimitsCard Tinyfish", () => {
           providerId="brave"
           providerName="Brave"
           limits={braveLimits()}
-          crdUsageTotals={noUseTotals()}
+          usdUsageTotals={noUseTotals()}
           refreshDashboard={() => Promise.resolve()}
           manualEligible
         />
@@ -1314,7 +1307,6 @@ describe("ProviderLimitsCard Tinyfish", () => {
 describe("ProviderLimitsCard Tavily FIX", () => {
   function fixProfile() {
     return {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -1379,13 +1371,13 @@ describe("ProviderLimitsCard Tavily FIX", () => {
         stale: false,
         manual_anchor: false,
       },
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -1394,9 +1386,9 @@ describe("ProviderLimitsCard Tavily FIX", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "7992",
-          local_remaining_crd: null,
-          request_cost_crd: "8",
+          remaining_usd: "7.992",
+          local_remaining_usd: null,
+          request_cost_usd: "0.008",
           shared_pool_id: "tavily:keyed:credits",
           possible_standard_calls: "999",
           price_version: "paygo-reference",
@@ -1420,7 +1412,7 @@ describe("ProviderLimitsCard Tavily FIX", () => {
         last_sync_at: "2026-09-06T10:05:00Z",
         stale: false,
         price_version: "paygo-reference",
-        crd_split_note: null,
+        balance_split_note: null,
         rate_windows: [
           {
             bucket_id: "tavily:keyed:search:requests",
@@ -1461,7 +1453,7 @@ describe("ProviderLimitsCard Tavily FIX", () => {
         providerId="tavily"
         providerName="Tavily"
         limits={fixLimits()}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
         {...(slot !== undefined ? { renderRateTier: slot } : {})}
@@ -1494,7 +1486,7 @@ describe("ProviderLimitsCard Tavily FIX", () => {
           providerId="tavily"
           providerName="Tavily"
           limits={fixLimits()}
-          crdUsageTotals={[]}
+          usdUsageTotals={[]}
           refreshDashboard={() => Promise.resolve()}
           manualEligible
           renderRateTier={slot}
@@ -1503,7 +1495,7 @@ describe("ProviderLimitsCard Tavily FIX", () => {
           providerId="brave"
           providerName="Brave"
           limits={braveLimits()}
-          crdUsageTotals={[]}
+          usdUsageTotals={[]}
           refreshDashboard={() => Promise.resolve()}
           manualEligible
           renderRateTier={slot}
@@ -1554,7 +1546,7 @@ describe("ProviderLimitsCard Tavily FIX", () => {
         providerId="tavily"
         providerName="Tavily"
         limits={fixLimits()}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
         renderRateTier={slot}
@@ -1578,7 +1570,7 @@ describe("ProviderLimitsCard Tavily FIX", () => {
         providerId="tavily"
         providerName="Tavily"
         limits={{ ...fixLimits(), auths: [confirmedAuth] }}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
         renderRateTier={slot}
@@ -1596,7 +1588,6 @@ describe("ProviderLimitsCard Tavily FIX", () => {
 describe("ProviderLimitsCard Firecrawl", () => {
   function firecrawlProfile() {
     return {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.0038",
       cost_basis: "hobby_reference",
       price_version: "hobby-reference",
@@ -1681,13 +1672,13 @@ describe("ProviderLimitsCard Firecrawl", () => {
         stale: false,
         manual_anchor: false,
       },
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "3230",
-          local_remaining_crd: null,
-          request_cost_crd: "7.6",
+          remaining_usd: "3.23",
+          local_remaining_usd: null,
+          request_cost_usd: "0.0076",
           shared_pool_id: "firecrawl:keyed:credit",
           possible_standard_calls: "425",
           price_version: "hobby-reference",
@@ -1696,9 +1687,9 @@ describe("ProviderLimitsCard Firecrawl", () => {
         {
           state: "finite",
           operation: "fetch",
-          remaining_crd: "3230",
-          local_remaining_crd: null,
-          request_cost_crd: "3.8",
+          remaining_usd: "3.23",
+          local_remaining_usd: null,
+          request_cost_usd: "0.0038",
           shared_pool_id: "firecrawl:keyed:credit",
           possible_standard_calls: "850",
           price_version: "hobby-reference",
@@ -1722,7 +1713,7 @@ describe("ProviderLimitsCard Firecrawl", () => {
         last_sync_at: "2026-03-10T12:00:00Z",
         stale: false,
         price_version: "hobby-reference",
-        crd_split_note: null,
+        balance_split_note: null,
         rate_windows: [
           {
             bucket_id: "firecrawl:keyed:requests",
@@ -1761,7 +1752,7 @@ describe("ProviderLimitsCard Firecrawl", () => {
         providerId="firecrawl"
         providerName="Firecrawl"
         limits={firecrawlLimits()}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible
       />,
@@ -1792,7 +1783,7 @@ describe("ProviderLimitsCard Firecrawl", () => {
  * balance_to_snapshot returns remaining USD with limit/percent null and no
  * aggregate pool, so the limits model holds no funds. The card shows the
  * authoritative remaining-only latestQuota against the display-only $5/mo
- * free credit (5000 CRD): "24870 / 5000 CRD" with a capped 100% bar (Firecrawl
+ * free credit (5000 Usd): "24870 / 5000 Usd" with a capped 100% bar (Firecrawl
  * 4761.4/3800 pattern) while Disconnect stays inline. Desktop only.
  */
 describe("ProviderLimitsCard Parallel OAuth balance", () => {
@@ -1807,7 +1798,6 @@ describe("ProviderLimitsCard Parallel OAuth balance", () => {
       rate: null,
       budget: null,
       conversion_profile: {
-        reference_usd_per_crd: "0.001",
         native_usd_per_unit: "1",
         cost_basis: "priced_native_use",
         price_version: "v2026-09",
@@ -1820,13 +1810,13 @@ describe("ProviderLimitsCard Parallel OAuth balance", () => {
     }
   }
 
-  function parallelUnknownView(operation: "search" | "fetch"): CRDView {
+  function parallelUnknownView(operation: "search" | "fetch"): UsdView {
     return {
       state: "unknown",
       operation,
-      remaining_crd: null,
-      local_remaining_crd: null,
-      request_cost_crd: null,
+      remaining_usd: null,
+      local_remaining_usd: null,
+      request_cost_usd: null,
       shared_pool_id: null,
       possible_standard_calls: null,
       price_version: null,
@@ -1849,7 +1839,7 @@ describe("ProviderLimitsCard Parallel OAuth balance", () => {
           unknown_tiers: [],
           tier_split_known: true,
           aggregate_pool: null,
-          crd_views: [parallelUnknownView("search"), parallelUnknownView("fetch")],
+          usd_views: [parallelUnknownView("search"), parallelUnknownView("fetch")],
           rate_progress: [],
           grants: null,
           detail: null,
@@ -1885,7 +1875,7 @@ describe("ProviderLimitsCard Parallel OAuth balance", () => {
         providerId="parallel"
         providerName="Parallel"
         limits={parallelNoPoolLimits()}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={false}
         latestQuota={authoritativeBalanceQuota()}
@@ -1894,7 +1884,7 @@ describe("ProviderLimitsCard Parallel OAuth balance", () => {
     )
     expect(screen.getByRole("button", { name: "Disconnect" })).not.toBeNull()
     // No allowance is invented: the OAuth balance shows as the dollar amount
-    // left, with its CRD value as hover text, and no bar.
+    // left, with its Usd value as hover text, and no bar.
     const amount = screen.getByText("$24.87 left")
     expect(amount.getAttribute("title")).toBe("$24.87")
     expect(screen.queryByText("/ 5,000")).toBeNull()
@@ -1912,14 +1902,14 @@ describe("ProviderLimitsCard Parallel OAuth balance", () => {
 /**
  * You.com Usage card parity with Parallel/Exa (frontend-only, desktop only).
  *
- * UI id `youcom` maps to backend `you` via idMapping. Search ($5/1k, 5 CRD)
- * and fetch ($1/1k live pages, 1 CRD) costs differ, so the card keeps
+ * UI id `youcom` maps to backend `you` via idMapping. Search ($5/1k, 5 Usd)
+ * and fetch ($1/1k live pages, 1 Usd) costs differ, so the card keeps
  * per-operation rate bars (Brave pattern): no shared bar, no shared title.
  * Keyed funds reuse the finite-USD path; without a catalog pool the ESTIMATED
  * cents balance-API snapshot falls back to the display-only $100 signup
- * credit (100000 CRD total, fetch-basis) with a capped bar, like Parallel
+ * credit (100000 Usd total, fetch-basis) with a capped bar, like Parallel
  * $5/5000. A vendor-balance pool without a backend allowance shows the same
- * display-only 100000 CRD denominator with a capped 100% bar (Firecrawl
+ * display-only 100000 Usd denominator with a capped 100% bar (Firecrawl
  * 4761/3800 pattern), never the amount-only footnote. Searches left adds the
  * daily 100 to the credit-derived searches from the same balance. Refresh
  * Limits stays visible for keyed; a keyless rail hides it. No Free strike
@@ -1929,7 +1919,6 @@ describe("ProviderLimitsCard Parallel OAuth balance", () => {
 describe("ProviderLimitsCard You.com", () => {
   function youcomProfile(): Record<string, unknown> {
     return {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "1",
       cost_basis: "priced_native_use",
       price_version: "v2026-09",
@@ -1956,13 +1945,13 @@ describe("ProviderLimitsCard You.com", () => {
     } as unknown as LimitRecord
   }
 
-  function youcomView(operation: "search" | "fetch", remaining: string, calls: string): CRDView {
+  function youcomView(operation: "search" | "fetch", remaining: string, calls: string): UsdView {
     return {
       state: "finite",
       operation,
-      remaining_crd: remaining,
-      local_remaining_crd: null,
-      request_cost_crd: operation === "search" ? "5" : "1",
+      remaining_usd: remaining,
+      local_remaining_usd: null,
+      request_cost_usd: operation === "search" ? "5" : "1",
       shared_pool_id: "youcom:keyed:usd",
       possible_standard_calls: calls,
       price_version: "v2026-09",
@@ -1970,13 +1959,13 @@ describe("ProviderLimitsCard You.com", () => {
     }
   }
 
-  function youcomUnknownView(operation: "search" | "fetch"): CRDView {
+  function youcomUnknownView(operation: "search" | "fetch"): UsdView {
     return {
       state: "unknown",
       operation,
-      remaining_crd: null,
-      local_remaining_crd: null,
-      request_cost_crd: null,
+      remaining_usd: null,
+      local_remaining_usd: null,
+      request_cost_usd: null,
       shared_pool_id: null,
       possible_standard_calls: null,
       price_version: null,
@@ -2034,7 +2023,7 @@ describe("ProviderLimitsCard You.com", () => {
             stale: false,
             manual_anchor: false,
           },
-          crd_views: [youcomView("search", "95500", "19100"), youcomView("fetch", "95500", "95500")],
+          usd_views: [youcomView("search", "95500", "19100"), youcomView("fetch", "95500", "95500")],
           rate_progress: [
             youcomRateProgress({}),
             youcomRateProgress({
@@ -2088,13 +2077,13 @@ describe("ProviderLimitsCard You.com", () => {
             stale: false,
             manual_anchor: false,
           },
-          crd_views: [
+          usd_views: [
             {
               state: "finite",
               operation: "search",
-              remaining_crd: "100000",
-              local_remaining_crd: null,
-              request_cost_crd: "5",
+              remaining_usd: "100",
+              local_remaining_usd: null,
+              request_cost_usd: "0.005",
               shared_pool_id: "you:keyed:daily-search",
               possible_standard_calls: "100",
               price_version: "v2026-09",
@@ -2103,9 +2092,9 @@ describe("ProviderLimitsCard You.com", () => {
             {
               state: "finite",
               operation: "fetch",
-              remaining_crd: "199520",
-              local_remaining_crd: null,
-              request_cost_crd: "1",
+              remaining_usd: "199.52",
+              local_remaining_usd: null,
+              request_cost_usd: "0.001",
               shared_pool_id: "youcom:keyed:usd",
               possible_standard_calls: "199520",
               price_version: "v2026-09",
@@ -2138,7 +2127,7 @@ describe("ProviderLimitsCard You.com", () => {
           unknown_tiers: [],
           tier_split_known: true,
           aggregate_pool: null,
-          crd_views: [youcomUnknownView("search"), youcomUnknownView("fetch")],
+          usd_views: [youcomUnknownView("search"), youcomUnknownView("fetch")],
           rate_progress: [],
           grants: null,
           detail: null,
@@ -2172,12 +2161,12 @@ describe("ProviderLimitsCard You.com", () => {
         providerId="youcom"
         providerName="You.com"
         limits={youcomKeyedLimits()}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={false}
       />,
     )
-    // Finite-USD pool: 95.500/100.000 USD -> 95500/100000 CRD at 95.5%.
+    // Finite-USD pool: 95.500/100.000 USD -> 95500/100000 Usd at 95.5%.
     expect(screen.getByText("$95.5")).not.toBeNull()
     expect(screen.getByText("/ $100")).not.toBeNull()
     expect(screen.getByText("USD")).not.toBeNull()
@@ -2220,7 +2209,7 @@ describe("ProviderLimitsCard You.com", () => {
         providerId="youcom"
         providerName="You.com"
         limits={youcomNoPoolLimits()}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={false}
         latestQuota={estimatedBalanceQuota()}
@@ -2237,7 +2226,7 @@ describe("ProviderLimitsCard You.com", () => {
     vi.unstubAllGlobals()
   })
 
-  it("shows the fallback amount-only when the CRD conversion is unavailable", () => {
+  it("shows the fallback amount-only when the Usd conversion is unavailable", () => {
     installFetchStub(() => {
       throw new Error("no backend in card test")
     })
@@ -2245,15 +2234,15 @@ describe("ProviderLimitsCard You.com", () => {
     const auth = limits.auths[0]
     const unpriced = {
       ...auth,
-      search: { ...auth.search, conversion_profile: { ...youcomProfile(), reference_usd_per_crd: "0.000" } },
-      fetch: { ...auth.fetch, conversion_profile: { ...youcomProfile(), reference_usd_per_crd: "0.000" } },
+      search: { ...auth.search, conversion_profile: { ...youcomProfile(),} },
+      fetch: { ...auth.fetch, conversion_profile: { ...youcomProfile(),} },
     }
     render(
       <ProviderLimitsCard
         providerId="youcom"
         providerName="You.com"
         limits={{ ...limits, auths: [unpriced] } as unknown as ProviderLimits}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={false}
         latestQuota={estimatedBalanceQuota()}
@@ -2274,7 +2263,7 @@ describe("ProviderLimitsCard You.com", () => {
         providerId="youcom"
         providerName="You.com"
         limits={youcomVendorBalanceNoAllowanceLimits()}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={false}
       />,
@@ -2289,8 +2278,8 @@ describe("ProviderLimitsCard You.com", () => {
     ).toBeNull()
     // Keyed rail keeps Refresh Limits visible.
     expect(screen.queryByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
-    // Popover: Search CRD cost 5, Searches left total 40004 (daily 100 +
-    // credit 39904 from 199520/5), Fetch CRD cost 1, Fetches left 199520.
+    // Popover: Search Usd cost 5, Searches left total 40004 (daily 100 +
+    // credit 39904 from 199520/5), Fetch Usd cost 1, Fetches left 199520.
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Credit details for You.com" }))
     expect(await screen.findByText("Search cost (USD)")).not.toBeNull()
@@ -2313,7 +2302,7 @@ describe("ProviderLimitsCard You.com", () => {
         providerId="youcom"
         providerName="You.com"
         limits={youcomNoPoolLimits("keyless")}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={false}
       />,
@@ -2330,7 +2319,7 @@ describe("ProviderLimitsCard You.com", () => {
         providerId="youcom"
         providerName="You.com"
         limits={youcomKeyedLimits()}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={false}
         keyBalances={<button type="button">Refresh key balances</button>}

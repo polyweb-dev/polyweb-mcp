@@ -282,7 +282,6 @@ async def test_usd_budget_round_trip_preserves_existing_ledger_values(
     repository, auth_secret: str
 ) -> None:
     """Existing stored grants keep their value through a USD API edit."""
-    from datetime import date
 
     from freesearch.models.provider_limits import CRDGrantPayload
 
@@ -292,8 +291,7 @@ async def test_usd_budget_round_trip_preserves_existing_ledger_values(
         await repository.limits.save_grant(
             "tavily",
             CRDGrantPayload(
-                period_start=date(2026, 11, 1),
-                period_end=date(2026, 11, 30),
+                period="month",
                 search_crd=Decimal("1234.567"),
                 fetch_crd=Decimal("4.500"),
             ),
@@ -311,8 +309,7 @@ async def test_usd_budget_round_trip_preserves_existing_ledger_values(
             headers=headers,
             json={
                 "version": grants["version"],
-                "period_start": "2026-11-01",
-                "period_end": "2026-11-30",
+                "period": "month",
                 "search_usd": "2.345678",
                 "fetch_usd": "0.0045",
             },
@@ -341,9 +338,36 @@ async def test_usd_budget_rejects_legacy_fields_before_write(repository, auth_se
         response = client.put(
             "/api/v1/providers/tavily/budgets/keyed",
             headers=raw_auth_headers(pair["access_token"]),
-            json={"period_start": "2026-11-01", "period_end": "2026-11-30", "search_crd": "10"},
+            json={"period": "month", "search_crd": "10"},
         )
         assert response.status_code == 422
+
+
+async def test_recurring_budget_defaults_to_month_and_requires_system_admin(
+    repository, auth_secret: str
+) -> None:
+    with TestClient(_client(repository)) as client:
+        member = register_and_login(client, temp_email("budget-member"))
+        endpoint = "/api/v1/providers/tavily/budgets/keyed"
+        denied = client.put(
+            endpoint, headers=raw_auth_headers(member["access_token"]), json={"search_usd": "20"}
+        )
+        assert denied.status_code == 403
+        admin = await register_system_admin_login(client, repository, temp_email("budget-admin"))
+        headers = raw_auth_headers(admin["access_token"])
+        for body, period in (
+            ({"search_usd": "20"}, "month"),
+            ({"search_usd": "1.234567", "period": "week"}, "week"),
+        ):
+            response = client.put(endpoint, headers=headers, json=body)
+            assert response.status_code == 200
+            keyed = next(auth for auth in response.json()["auths"] if auth["auth_mode"] == "keyed")
+            assert keyed["grants"]["period"] == period
+            assert "period_start" not in keyed["grants"]
+            assert "period_end" not in keyed["grants"]
+            assert Decimal(keyed["grants"]["search_granted_usd"]) == Decimal(body["search_usd"])
+        invalid = client.put(endpoint, headers=headers, json={"period": "year", "search_usd": "20"})
+        assert invalid.status_code == 422
 
 
 async def test_limits_patch_rejects_internal_credit_reference(repository, auth_secret: str) -> None:

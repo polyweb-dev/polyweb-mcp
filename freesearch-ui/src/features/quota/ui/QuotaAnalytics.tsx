@@ -7,12 +7,11 @@ import { listKeyBalances } from "@/features/quota/model/keyBalances"
 import type { RateTierSlotArgs } from "@/features/quota/ui/ProviderLimitsCard"
 import { isManualQuotaEligible } from "@/features/quota/model/quotaEligibility"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
-import { TavilyRateTierSelect } from "../settings/TavilyRateTierSelect"
+import { TavilyRateTierSelect } from "./TavilyRateTierSelect"
 
 /**
  * Compatibility shell: the usage route keeps rendering QuotaAnalytics while
- * the quota feature owns the page. The Tavily tier control stays composed
- * here, so the quota feature never imports the Settings feature directly.
+ * the quota feature owns the page. The Tavily tier control stays composed here.
  * Parallel OAuth no longer pairs from this page: OAuth belongs to one
  * vault key and connects from the Keys and pools page.
  */

@@ -29,8 +29,11 @@ const FACTS = [
 ] as const
 
 export function traceAttributeFacts(events: readonly TraceEvent[]): TraceAttributeFact[] {
+  const pdfPages = events.findLast((event) => count(event.attributes.pdf_pages) !== null)?.attributes.pdf_pages
   return FACTS.flatMap(({ key, label, format }) => {
     const event = events.findLast((candidate) => format(candidate.attributes[key]) !== null)
+    if (key === "pdf_pages" && event?.attributes[key] === 0) return []
+    if (key === "enhanced" && event?.attributes[key] === false && !(typeof pdfPages === "number" && pdfPages > 0)) return []
     const value = event === undefined ? null : format(event.attributes[key])
     return value === null ? [] : [{ label, value }]
   })

@@ -64,7 +64,7 @@ describe("ProjectUsagePage", () => {
       "Provider",
       "Operation",
       "Calls",
-      "Reported cost (USD)",
+      "Cost",
       "Provider credits",
     ])
     // Each unit column says what it counts in its header tooltip.
@@ -112,7 +112,7 @@ describe("ProjectUsagePage", () => {
     const link = screen.getByRole("link", { name: "See every call in Activity" })
     expect(link).toHaveAttribute("href", `/p/${PROJECT_ALPHA_ID}/activity`)
     // A secondary action beside the page title, not a text link in the section.
-    expect(link.className).toContain("h-8")
+    expect(link.className).toContain("h-6")
     expect(link.closest("section[aria-labelledby]")).toBeNull()
     expect(screen.queryByRole("table", { name: "Recent usage" })).toBeNull()
     expect(screen.queryByText("210ms")).toBeNull()
@@ -137,16 +137,14 @@ describe("ProjectUsagePage", () => {
       "Provider",
       "Operation",
       "Calls",
-      "Reported cost (USD)",
-      "Billed requests",
+      "Cost",
     ])
     const totalRow = within(totals).getByText("Total").closest("tr")!
-    expect(within(totalRow).getByText("Known cost")).toBeInTheDocument()
+    expect(within(totalRow).queryByText("Known cost")).not.toBeInTheDocument()
     const brave = within(totals).getByText("Brave Search").closest("tr")!
     expect(within(brave).getByText("Not reported")).toHaveClass("text-[var(--muted)]")
     expect(within(totalRow).getByText("15")).toBeInTheDocument()
     expect(within(totalRow).getByText("$0.035")).toBeInTheDocument()
-    expect(within(totalRow).getByText("9")).toBeInTheDocument()
   })
 
   it("shows the empty state in the totals table", async () => {

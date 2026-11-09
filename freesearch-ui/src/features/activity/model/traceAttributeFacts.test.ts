@@ -27,4 +27,9 @@ describe("traceAttributeFacts", () => {
     expect(traceAttributeFacts([event({ result_count: 1 }), event({ result_count: 3 }), event({ result_count: null })]))
       .toEqual([{ label: "Results", value: "3" }])
   })
+
+  it("hides PDF-only defaults for an HTML response", () => {
+    expect(traceAttributeFacts([event({ result_count: 1, pdf_pages: 0, enhanced: false })]))
+      .toEqual([{ label: "Results", value: "1" }])
+  })
 })

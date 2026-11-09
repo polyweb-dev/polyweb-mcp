@@ -3,7 +3,7 @@ import { useMemo, useState } from "react"
 import type { ReactNode } from "react"
 import { ProviderCardHeader } from "./ProviderCardHeader"
 import { formatDateTime } from "@/shared/lib/formatTime"
-import type { CRDUsageTotal, DashboardQuota, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
+import type { UsdUsageTotal, DashboardQuota, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
 import type { BackendManualQuota } from "@/domains/dashboard/api/manualQuotaWire"
 import type { ProviderConfig } from "@/domains/providers"
 import { manualUnit, type ManualUnit } from "../model/manualQuotaUnit"
@@ -37,7 +37,7 @@ export interface ProviderLimitsCardProps {
   providerName: string
   limits: ProviderLimits
   /** This provider's credit-unit use rows only. */
-  crdUsageTotals: CRDUsageTotal[]
+  usdUsageTotals: UsdUsageTotal[]
   refreshDashboard: () => Promise<void>
   manualEligible: boolean
   refreshableOverride?: boolean
@@ -56,7 +56,7 @@ export interface ProviderLimitsCardProps {
   renderRateTier?: (args: RateTierSlotArgs) => ReactNode
 }
 
-const CARD = "flex h-full flex-col gap-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-5"
+const CARD = "flex flex-col gap-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] p-5"
 
 function slug(providerId: string): string {
   return providerId.toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -100,13 +100,13 @@ function fundsProps(
   view: ProviderCardView,
 ): Pick<
   ProviderCreditSummaryProps,
-  "credits" | "nativePool" | "balanceFallbackUSD" | "balanceFallbackCRD" | "amountText" | "amountNote"
+  "credits" | "nativePool" | "balanceFallbackUsd" | "amountText" | "amountNote"
 > {
   return {
     ...(view.nativeDisplay !== null ? { credits: view.nativeDisplay.credits } : {}),
     nativePool: view.auth.aggregate_pool,
     ...(view.fallback !== null
-      ? { balanceFallbackUSD: view.fallback.usd, balanceFallbackCRD: view.fallback.crd }
+      ? { balanceFallbackUsd: view.fallback.usd }
       : {}),
     amountText: view.amountText,
     amountNote: view.amountNote,
@@ -132,8 +132,10 @@ function infoNode(view: ProviderCardView, providerId: string, providerName: stri
     {...(view.nativeDisplay === null ? {} : { nativeDisplay: view.nativeDisplay })} />
 }
 
-function cardMenu(providerName: string, manualEligible: boolean, free: boolean, setModal: (modal: CardModal) => void): ReactNode {
-  return <ProviderCardMenu providerName={providerName} manualEligible={manualEligible && !free} budgetAllowed={!free} onOpenModal={setModal} />
+function cardMenu(providerName: string, manualEligible: boolean, setModal: (modal: CardModal) => void,
+  { free, locallyCounted }: { free: boolean; locallyCounted: boolean }): ReactNode {
+  return <ProviderCardMenu providerName={providerName} manualEligible={manualEligible && !free} budgetAllowed={!free}
+    historyAllowed={!(free && locallyCounted)} onOpenModal={setModal} />
 }
 
 /**
@@ -160,7 +162,7 @@ function recordedTitle(auth: ProviderAuthLimits): string | undefined {
  * differences come from the card rule map, never from branches here.
  */
 export function ProviderLimitsCard(props: ProviderLimitsCardProps): ReactNode {
-  const { providerId, providerName, limits, crdUsageTotals, refreshDashboard, manualEligible, latestQuota } = props
+  const { providerId, providerName, limits, usdUsageTotals, refreshDashboard, manualEligible, latestQuota } = props
   const [actionsTarget, setActionsTarget] = useState<HTMLElement | null>(null)
   const [modal, setModal] = useState<CardModal>(null)
   // The composed control reports its pair state here; the card never feeds it back.
@@ -171,7 +173,7 @@ export function ProviderLimitsCard(props: ProviderLimitsCardProps): ReactNode {
   const [confirmedTier, setConfirmedTier] = useState<ConfirmedTier | null>(null)
   const titleId = "limits-title-" + slug(providerId)
   const view = providerCardView({
-    providerId, limits, usageTotals: crdUsageTotals, latestQuota,
+    providerId, limits, usageTotals: usdUsageTotals, latestQuota,
     refreshableOverride: props.refreshableOverride ?? false,
   })
   if (view === null) {
@@ -206,7 +208,8 @@ export function ProviderLimitsCard(props: ProviderLimitsCardProps): ReactNode {
         info={infoNode(view, providerId, providerName, info)} onActionsTarget={setActionsTarget}>
         <ProviderCardActions providerName={providerName} syncing={controller.syncing}
           onSync={() => void controller.syncNow()} refreshSkipped={props.keyBalances != null || refreshHidden(view, controller)} />
-        {cardMenu(providerName, manualEligible, free, setModal)}
+        {cardMenu(providerName, manualEligible, setModal,
+          { free, locallyCounted: auth.rate_progress.some((entry) => entry.source === "local_attempts") })}
       </ProviderCardHeader>
 
       <ProviderCreditSummary

@@ -1,12 +1,11 @@
 import type { ReactNode } from "react"
 import { RemainingBar, percentLabel } from "@/shared/ui/RemainingBar"
-import { dollarText, percentRemaining } from "../model/crdDisplay"
-import type { CreditCardModel } from "../model/crdCardModel"
+import { dollarText, percentRemaining } from "../model/usdDisplay"
+import type { CreditCardModel } from "../model/usdCardModel"
 import type { NativePool } from "@/domains/dashboard"
 import { groupDigits, nativeLeftText } from "../model/numberText"
 import { formatCreditValue, type TavilyCreditsDisplay } from "../model/tavilyCredits"
 import { Footnote } from "./Footnote"
-import { multiplyDecimal } from "../model/manualQuotaMath"
 
 export interface ProviderCreditSummaryProps {
   providerName: string
@@ -14,7 +13,7 @@ export interface ProviderCreditSummaryProps {
   /**
    * Optional native display facts of one rail. The Tavily card passes its
    * Credits facts here; every other card leaves them absent and keeps the
-   * current CRD fraction unchanged.
+   * current Usd fraction unchanged.
    */
   credits?: TavilyCreditsDisplay
   nativePool?: NativePool | null
@@ -36,9 +35,8 @@ export interface ProviderCreditSummaryProps {
    * amount-only when the limits model holds no funds; with a display-only
    * allowance it shows a fraction and bar instead.
    */
-  balanceFallbackUSD?: string | null
-  /** CRD equivalent of the fallback balance, shown as hover text. */
-  balanceFallbackCRD?: string | null
+  /** Usd equivalent of the fallback balance, shown as hover text. */
+  balanceFallbackUsd?: string | null
   /** Amount-only headline when no fraction is honest: "$192.33 left", "1,320 credits left". */
   amountText?: string | null
   /** A quiet note beside the amount, such as credits above the plan allowance. */
@@ -61,7 +59,7 @@ interface FractionInput {
   hover: string | null
 }
 
-/** The remaining amount, the total once, and the unit once: "4500 / 5000 CRD". */
+/** The remaining amount, the total once, and the unit once: "4500 / 5000 Usd". */
 function fraction({ remaining, total, unit, hover }: FractionInput): ReactNode {
   return (
     <>
@@ -92,7 +90,7 @@ function nativePoolValue(pool: NativePool | null): ReactNode {
 }
 
 function creditValue(model: CreditCardModel, usdLeft: string | null, amountText: string | null, pool: NativePool | null): ReactNode {
-  if (model.state !== "finite" || model.remainingCRD === null) return null
+  if (model.state !== "finite" || model.remainingUsd === null) return null
   if (amountText !== null) {
     return (
       <span className={AMOUNT} {...(usdLeft === null ? {} : { title: usdLeft })}>
@@ -102,8 +100,8 @@ function creditValue(model: CreditCardModel, usdLeft: string | null, amountText:
   }
   const native = nativePoolValue(pool)
   if (native !== null) return native
-  const remaining = model.remainingUSD ?? multiplyDecimal(model.remainingCRD, "0.001")
-  const total = model.allowanceCRD === null ? null : multiplyDecimal(model.allowanceCRD, "0.001")
+  const remaining = model.remainingUsd
+  const total = model.allowanceUsd === null ? null : model.allowanceUsd
   if (remaining === null) return null
   return fraction({ remaining: dollarText(remaining), total: total === null ? null : dollarText(total), unit: "USD", hover: usdLeft })
 }
@@ -134,10 +132,10 @@ function fundsBar({ label, percent, valueText }: FundsBarInput): ReactNode {
   )
 }
 
-/** The value text of one CRD funds bar. */
-function crdValueText(percent: number | null, remaining: string | null): string {
+/** The value text of one Usd funds bar. */
+function usdValueText(percent: number | null, remaining: string | null): string {
   if (percent === null || remaining === null) return ""
-  const usd = multiplyDecimal(remaining, "0.001")
+  const usd = remaining
   return usd === null ? "" : percentLabel(percent) + " remaining, " + dollarText(usd) + " left"
 }
 
@@ -145,7 +143,7 @@ function fundsValueText(model: CreditCardModel, pool: NativePool | null): string
   if (model.percentRemaining === null) return ""
   const native = pool?.remaining == null ? null : nativeLeftText(pool.remaining, pool.native_unit)
   return native === null
-    ? crdValueText(model.percentRemaining, model.remainingCRD)
+    ? usdValueText(model.percentRemaining, model.remainingUsd)
     : percentLabel(model.percentRemaining) + " remaining, " + native
 }
 
@@ -178,7 +176,7 @@ function nativeFootnotes(credits: TavilyCreditsDisplay): ReactNode[] {
   }
   if (credits.stale) notes.push(<Footnote key="stale">The last provider reading is out of date</Footnote>)
   if (credits.localCap !== null) {
-    notes.push(<Footnote key="cap">Budget limit {dollarText(multiplyDecimal(credits.localCap, "0.001") ?? "0")}</Footnote>)
+    notes.push(<Footnote key="cap">Budget limit {dollarText(credits.localCap)}</Footnote>)
   }
   return notes
 }
@@ -229,24 +227,24 @@ function usable(value: string | null | undefined): string | null {
   return Number.isFinite(Number(text)) ? value : null
 }
 
-interface FallbackBalance { usd: string; crd: string | null }
+interface FallbackBalance { usd: string }
 
 /**
  * Amount-only OAuth balance of one card: the limits model holds no funds, so
- * the authoritative remaining shows with its CRD equivalent. An unmetered rail
+ * the authoritative remaining shows with its Usd equivalent. An unmetered rail
  * keeps Free; the fallback never overrides it.
  */
 function fallbackBalanceOf(model: CreditCardModel, input: ProviderCreditSummaryProps): FallbackBalance | null {
-  if (model.remainingCRD !== null || model.state === "unmetered") return null
-  const usd = usable(input.balanceFallbackUSD)
+  if (model.remainingUsd !== null || model.state === "unmetered") return null
+  const usd = usable(input.balanceFallbackUsd)
   if (usd === null) return null
-  return { usd, crd: usable(input.balanceFallbackCRD) }
+  return { usd }
 }
 
-/** The value of one fallback balance: the dollar amount left, with its CRD value as hover text. */
+/** The value of one fallback balance: the dollar amount left, with its Usd value as hover text. */
 function fallbackValue(fallback: FallbackBalance): ReactNode {
   const amount = nativeLeftText(fallback.usd, "USD") ?? dollarText(fallback.usd) + " left"
-  const hover = fallback.crd === null ? null : dollarText(multiplyDecimal(fallback.crd, "0.001") ?? "0")
+  const hover = fallback.usd === null ? null : dollarText(fallback.usd)
   return (
     <span className={AMOUNT} {...(hover === null ? {} : { title: hover })}>
       {amount}
@@ -269,7 +267,7 @@ export function ProviderCreditSummary(props: ProviderCreditSummaryProps): ReactN
   const { providerName, model, credits, actions, info, bodyNotes, fundsControl, rateBars, emptyText } = props
   if (credits !== undefined) return nativeSummary({ ...props, credits })
   const percent = model.state === "finite" ? model.percentRemaining : null
-  const usdLeft = model.remainingUSD === null ? null : dollarText(model.remainingUSD) + " left"
+  const usdLeft = model.remainingUsd === null ? null : dollarText(model.remainingUsd) + " left"
   const fallback = fallbackBalanceOf(model, props)
   const barLabel = providerName + " balance remaining"
   return (

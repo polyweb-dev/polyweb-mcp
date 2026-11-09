@@ -14,7 +14,6 @@ export { hasEffectiveRoute, routeOrder } from "./model/routeOrder";
 export type { RouteEntry } from "./model/routeOrder";
 export {
   credentialProviderTypes,
-  oauthStatusText,
   providerTypeName,
   supportedOperationsOf,
   supportsOAuth,

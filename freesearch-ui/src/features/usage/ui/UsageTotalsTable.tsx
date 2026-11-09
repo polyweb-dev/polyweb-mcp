@@ -20,12 +20,11 @@ const FIXED_COLUMNS: UsageColumn[] = [
 
 const FOOTER_CELL = "border-t border-[var(--border-subtle)] tnum text-right fs-cell-strong"
 
-function amountCells(amounts: UsageAmounts, columns: readonly UsageAmountColumn[], className: string, footer = false) {
+function amountCells(amounts: UsageAmounts, columns: readonly UsageAmountColumn[], className: string) {
   return columns.map((column) => {
     const text = usageAmountText(amounts, column)
     return (
       <td key={column} className={text === "—" || text === "Not reported" ? `${className} text-[var(--muted)]` : className}>
-        {footer && column === "usd" && <span className="block text-[11px] font-normal text-[var(--muted)]">Known cost</span>}
         {text}
       </td>
     )
@@ -53,7 +52,7 @@ export function UsageTotalsTable({ totals, order }: { totals: readonly ProjectUs
           Total
         </td>
         <td className={FOOTER_CELL}>{view.total.calls.toLocaleString("en-US")}</td>
-        {amountCells(view.total, view.columns, FOOTER_CELL, true)}
+        {amountCells(view.total, view.columns, FOOTER_CELL)}
       </tr>
     ) : undefined
   return renderUsageTable({

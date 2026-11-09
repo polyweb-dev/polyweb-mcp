@@ -1,5 +1,5 @@
 import type { LimitRateWindow, ProviderAuthLimits } from "@/domains/dashboard"
-import { callsText } from "./crdDisplay"
+import { callsText } from "./usdDisplay"
 
 interface ProviderRateFact {
   label: string

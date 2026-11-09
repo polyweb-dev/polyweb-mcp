@@ -21,7 +21,7 @@ describe("PoolBudgetUsage", () => {
 
   it("uses the project Providers monthly budget phrase", () => {
     render(<PoolBudgetUsage pool={{ ...pool, budget: { limit: 20, period: "month" } }} />)
-    expect(screen.getByText("$0.00 of $20.00 per month")).toBeInTheDocument()
+    expect(screen.getByText("$0.00 of $20.00 this month")).toBeInTheDocument()
   })
 
   it("shows a neutral label when the pool has no cap", () => {
@@ -32,7 +32,7 @@ describe("PoolBudgetUsage", () => {
 
   it("clamps usage above the cap and displays the actual amount", () => {
     render(<PoolBudgetUsage pool={{ ...pool, budget: { limit: 10, period: "day" }, budget_used_usd: 12.345678 }} />)
-    expect(screen.getByText("$12.345678 of $10.00 per day")).toBeInTheDocument()
+    expect(screen.getByText("$12.35 of $10.00 today")).toBeInTheDocument()
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100")
   })
 

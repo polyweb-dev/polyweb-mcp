@@ -39,6 +39,7 @@ export function ProjectOverviewHeader({
   return (
     <PageHeader
       title={project?.name ?? "Project"}
+      description="Calls, order and recent activity for this project"
       meta={meta}
       {...(action === undefined ? {} : { actions: action })}
     />

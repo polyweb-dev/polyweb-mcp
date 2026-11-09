@@ -21,6 +21,7 @@ export interface ProviderInfoPopoverProps {
    * closed popover shows no vendor USD outside it.
    */
   nativeDisplay?: TavilyDisplayAdapter
+  inlineLabel?: boolean
 }
 
 const ROW = "grid w-full grid-cols-[fit-content(45%)_minmax(0,1fr)] items-baseline gap-x-3 border-b border-[var(--border-subtle)] py-2 last:border-0"
@@ -109,7 +110,7 @@ function vendorDetail(
  * element behind. An empty fact set yields no icon.
  *
  * For the keyless rail of `keenable`, the header credit note carries the word
- * `free`, and the two CRD cost rows keep their labels while their value and
+ * `free`, and the two Usd cost rows keep their labels while their value and
  * note sit inside a strike with the word `free` beside them.
  */
 export function ProviderInfoPopover({
@@ -118,14 +119,16 @@ export function ProviderInfoPopover({
   info,
   auth,
   nativeDisplay,
+  inlineLabel = false,
 }: ProviderInfoPopoverProps): ReactNode {
   const [open, setOpen] = useState(false)
-  if (info.facts.length === 0 && info.usageUrl === null) return null
+  if (info.facts.length === 0 && info.usageUrl === null) return inlineLabel ? providerName : null
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
-          <Button
+          inlineLabel ? <Button type="button" variant="link" size="sm" className="h-auto p-0 text-[var(--text-strong)]"
+            aria-label={"Credit details for " + providerName} /> : <Button
             type="button"
             variant="ghost"
             size="icon-sm"
@@ -135,7 +138,7 @@ export function ProviderInfoPopover({
           />
         }
       >
-        <Info aria-hidden="true" className={ICON} />
+        {inlineLabel ? providerName : <Info aria-hidden="true" className={ICON} />}
       </PopoverTrigger>
       {open && (
         <PopoverContent

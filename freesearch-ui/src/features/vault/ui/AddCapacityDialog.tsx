@@ -7,18 +7,14 @@ import { Button } from "@/shared/ui/button"
 import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
-import { SecretInput } from "@/shared/ui/SecretInput"
-import { TextField } from "@/shared/ui/TextField"
+import { KeyFormFields } from "./KeyFormFields"
+import { keySaveError } from "./keySaveError"
 import { PoolCapacityDialog } from "./PoolCapacityDialog"
 import { VaultOAuthDialog } from "./VaultOAuthDialog"
 
 function keyStepCopy(provider: string, projects: readonly VaultProject[]): string {
   const target = projects.length === 1 ? ` for ${projects[0]?.name}` : " for a project"
   return `You have no ${providerTypeName(provider)} key yet. Add one, then create the pool${target}`
-}
-
-function fieldError(submitted: boolean, value: string, message: string): string | null {
-  return submitted && !value.trim() ? message : null
 }
 
 export function AddCapacityDialog({ item, provider, pool, projects, onClose, onSaved }: {
@@ -62,8 +58,8 @@ export function AddCapacityDialog({ item, provider, pool, projects, onClose, onS
         setOAuthKey(created)
         setConnecting(true)
       } else setKey(created)
-    } catch {
-      setError("The key did not save. Check the label and try again.")
+    } catch (err) {
+      setError(keySaveError("add", err))
     } finally {
       setSecret("")
       setSubmitted(false)
@@ -74,8 +70,8 @@ export function AddCapacityDialog({ item, provider, pool, projects, onClose, onS
     <form onSubmit={(event) => void addKey(event)} className="space-y-4">
       <ProviderBadge providerId={providerIdentity(provider).id} name={providerTypeName(provider)} />
       <p>{keyStepCopy(provider, projects)}</p>
-      <TextField id="capacity-key-label" label="Label" type="text" value={label} onChange={setLabel} error={fieldError(submitted, label, "Enter a label")} />
-      {!oauth && <SecretInput id="capacity-key-secret" label="API key" value={secret} onChange={setSecret} error={fieldError(submitted, secret, "Enter the API key")} />}
+      <KeyFormFields idPrefix="capacity-key" label={label} setLabel={setLabel} secret={secret} setSecret={setSecret}
+        submitted={submitted} showSecret={!oauth} />
       {error && <p role="alert" className="fs-field-error">{error}</p>}
       <FormActions><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button>
         <Button type="submit" size="form" disabled={pending}>{oauth ? "Connect" : "Add key"}</Button></FormActions>

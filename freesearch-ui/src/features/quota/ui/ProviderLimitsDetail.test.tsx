@@ -5,7 +5,7 @@ import { ProviderLimitsDetail } from "./ProviderLimitsDetail"
 
 /**
  * CARD-2 detail: vendor spend + reset + budget-limit rows only.
- * Plan, USD per call, CRD cost rows and the usage link live in the popover.
+ * Plan, USD per call, Usd cost rows and the usage link live in the popover.
  * Covers CARD-2 kept-row set and order.
  */
 
@@ -23,7 +23,6 @@ function authFixture(): ProviderAuthLimits {
       rate: null,
       budget: null,
       conversion_profile: {
-        reference_usd_per_crd: "0.001",
         native_usd_per_unit: "1",
         cost_basis: "priced_native_use",
         price_version: "v2026-09",
@@ -44,7 +43,6 @@ function authFixture(): ProviderAuthLimits {
       rate: null,
       budget: null,
       conversion_profile: {
-        reference_usd_per_crd: "0.001",
         native_usd_per_unit: null,
         cost_basis: "priced_native_use",
         price_version: "",
@@ -77,13 +75,13 @@ function authFixture(): ProviderAuthLimits {
       stale: false,
       manual_anchor: false,
     },
-    crd_views: [
+    usd_views: [
       {
         state: "finite",
         operation: "search",
-        remaining_crd: "4500",
-        local_remaining_crd: null,
-        request_cost_crd: "5",
+        remaining_usd: "4.5",
+        local_remaining_usd: null,
+        request_cost_usd: "0.005",
         shared_pool_id: "brave:keyed:usd",
         possible_standard_calls: "900",
         price_version: "v2026-09",
@@ -92,9 +90,9 @@ function authFixture(): ProviderAuthLimits {
       {
         state: "unavailable",
         operation: "fetch",
-        remaining_crd: null,
-        local_remaining_crd: null,
-        request_cost_crd: null,
+        remaining_usd: null,
+        local_remaining_usd: null,
+        request_cost_usd: null,
         shared_pool_id: null,
         possible_standard_calls: null,
         price_version: null,
@@ -118,7 +116,7 @@ function authFixture(): ProviderAuthLimits {
       last_sync_at: "2026-09-06T10:05:00Z",
       stale: false,
       price_version: "v2026-09",
-      crd_split_note: null,
+      balance_split_note: null,
       rate_windows: [
         {
           bucket_id: "brave:search:1s",
@@ -142,15 +140,14 @@ function grantsFixture() {
   return {
     provider: "brave",
     auth_mode: "keyed",
-    period_start: "2026-09-01",
-    period_end: "2026-09-30",
+    period: "month" as const,
     version: 3,
-    search_granted_crd: "100",
-    search_consumed_crd: "12",
-    search_reserved_crd: "0",
-    fetch_granted_crd: "50",
-    fetch_consumed_crd: "5",
-    fetch_reserved_crd: "0",
+    search_granted_usd: "0.1",
+    search_consumed_usd: "0.012",
+    search_reserved_usd: "0",
+    fetch_granted_usd: "0.05",
+    fetch_consumed_usd: "0.005",
+    fetch_reserved_usd: "0",
   }
 }
 
@@ -179,12 +176,12 @@ function labels(): Array<string | null> {
 }
 
 describe("ProviderLimitsDetail", () => {
-  it("hides the plan, call price, CRD cost rows and usage link that the popover owns (CARD-2)", () => {
+  it("hides the plan, call price, Usd cost rows and usage link that the popover owns (CARD-2)", () => {
     render(<ProviderLimitsDetail providerName="Brave" auth={authFixture()} />)
     expect(screen.queryByText("Brave Search")).toBe(null)
     expect(screen.queryByText("0.005")).toBe(null)
-    expect(screen.queryByText("Search CRD cost")).toBe(null)
-    expect(screen.queryByText("Fetch CRD cost")).toBe(null)
+    expect(screen.queryByText("Search Usd cost")).toBe(null)
+    expect(screen.queryByText("Fetch Usd cost")).toBe(null)
     expect(screen.queryByRole("link", { name: "Brave usage page" })).toBe(null)
     expect(screen.queryByText("Remaining balance")).toBe(null)
     expect(screen.queryByText("Native balance")).toBe(null)
@@ -219,7 +216,7 @@ describe("ProviderLimitsDetail", () => {
         auth={withGrants(authFixture(), grantsFixture())}
       />,
     )
-    expect(screen.getByText("Budget limit period")).not.toBeNull()
+    expect(screen.getByText(/this month/)).not.toBeNull()
     expect(screen.getByText("Search budget limit")).not.toBeNull()
     expect(screen.queryByText("Fetch budget limit")).toBe(null)
   })
@@ -228,11 +225,10 @@ describe("ProviderLimitsDetail", () => {
     const auth = withGrants(withSpend(withFetchSupport(authFixture()), "1.23"), grantsFixture())
     render(<ProviderLimitsDetail providerName="Brave" auth={auth} />)
     expect(labels()).toEqual([
+      "Vendor-reported USD spend",
       "Search budget limit",
       "Fetch budget limit",
       "Reset",
-      "Budget limit period",
-      "Vendor-reported USD spend",
     ])
   })
 
@@ -255,18 +251,16 @@ describe("ProviderLimitsDetail", () => {
     const grants = {
       provider: "tavily",
       auth_mode: "keyed",
-      period_start: "2026-09-01",
-      period_end: "2026-09-30",
+      period: "month" as const,
       version: 3,
-      search_granted_crd: "8",
-      search_consumed_crd: "0",
-      search_reserved_crd: "0",
-      fetch_granted_crd: "16",
-      fetch_consumed_crd: "0",
-      fetch_reserved_crd: "0",
+      search_granted_usd: "0.008",
+      search_consumed_usd: "0",
+      search_reserved_usd: "0",
+      fetch_granted_usd: "0.016",
+      fetch_consumed_usd: "0",
+      fetch_reserved_usd: "0",
     }
     const profile = {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -283,24 +277,23 @@ describe("ProviderLimitsDetail", () => {
     )
     expect(screen.getByText("Search budget limit")).not.toBeNull()
     expect(screen.getByText("Extract budget limit")).not.toBeNull()
-    expect(screen.getByText("$0.008 set, $0 used")).not.toBeNull()
-    expect(screen.getByText("$0.016 set, $0 used")).not.toBeNull()
-    expect(screen.queryByText("8 CRD")).toBeNull()
+    expect(screen.getByText("$0.00 of $0.01 this month")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.02 this month")).not.toBeNull()
+    expect(screen.queryByText("8 Usd")).toBeNull()
   })
 
-  it("keeps CRD caps without a conversion profile", () => {
+  it("keeps Usd caps without a conversion profile", () => {
     const grants = {
       provider: "tavily",
       auth_mode: "keyed",
-      period_start: "2026-09-01",
-      period_end: "2026-09-30",
+      period: "month" as const,
       version: 3,
-      search_granted_crd: "8",
-      search_consumed_crd: "0",
-      search_reserved_crd: "0",
-      fetch_granted_crd: "16",
-      fetch_consumed_crd: "0",
-      fetch_reserved_crd: "0",
+      search_granted_usd: "0.008",
+      search_consumed_usd: "0",
+      search_reserved_usd: "0",
+      fetch_granted_usd: "0.016",
+      fetch_consumed_usd: "0",
+      fetch_reserved_usd: "0",
     }
     const auth = withGrants(withFetchSupport(authFixture()), grants)
     render(<ProviderLimitsDetail providerName="Tavily" auth={auth} />)
@@ -316,7 +309,6 @@ describe("ProviderLimitsDetail", () => {
 
 function tavilyProfile() {
   return {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: "0.008",
     cost_basis: "paygo_reference",
     price_version: "paygo-reference",
@@ -329,21 +321,20 @@ function tavilyGrants(searchGranted: string, fetchGranted: string) {
   return {
     provider: "tavily",
     auth_mode: "keyed",
-    period_start: "2026-09-01",
-    period_end: "2026-09-30",
+    period: "month" as const,
     version: 3,
-    search_granted_crd: searchGranted,
-    search_consumed_crd: "0",
-    search_reserved_crd: "0",
-    fetch_granted_crd: fetchGranted,
-    fetch_consumed_crd: "0",
-    fetch_reserved_crd: "0",
+    search_granted_usd: searchGranted,
+    search_consumed_usd: "0",
+    search_reserved_usd: "0",
+    fetch_granted_usd: fetchGranted,
+    fetch_consumed_usd: "0",
+    fetch_reserved_usd: "0",
   }
 }
 
 describe("ProviderLimitsDetail nativeDisplay", () => {
   it("floors fractional grant caps to whole Tavily Credits", () => {
-    const auth = withGrants(withFetchSupport(authFixture()), tavilyGrants("9.9", "17.9"))
+    const auth = withGrants(withFetchSupport(authFixture()), tavilyGrants("0.0099", "0.0179"))
     render(
       <ProviderLimitsDetail
         providerName="Tavily"
@@ -351,8 +342,8 @@ describe("ProviderLimitsDetail nativeDisplay", () => {
         nativeDisplay={{ credits: {} as never, profile: tavilyProfile() } as never}
       />,
     )
-    expect(screen.getByText("$0.0099 set, $0 used")).not.toBeNull()
-    expect(screen.getByText("$0.0179 set, $0 used")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.01 this month")).not.toBeNull()
+    expect(screen.getByText("$0.00 of $0.02 this month")).not.toBeNull()
   })
 
   it("trims USD spend zeros for the native rail", () => {

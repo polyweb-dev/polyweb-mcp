@@ -1,7 +1,7 @@
 import { expect } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
 import { providerQuotaSurface } from "./providerQuotaUi"
-import { setStubbedCrdTotals, setStubbedProviderLimits } from "./backendStub"
+import { setStubbedUsdTotals, setStubbedProviderLimits } from "./backendStub"
 import { userAccountBody } from "./accountStub"
 
 /**
@@ -29,7 +29,7 @@ function multiplyByFour(amount: string): string {
 
 function keenableConversionProfile(): Record<string, unknown> {
   return {
-    reference_usd_per_crd: "0.001",
+    reference_usd_per_usd: "0.000001",
     native_usd_per_unit: "0.004",
     cost_basis: "priced_native_use",
     price_version: "list_price",
@@ -40,7 +40,7 @@ function keenableConversionProfile(): Record<string, unknown> {
 
 function keenableKeylessConversionProfile(): Record<string, unknown> {
   return {
-    reference_usd_per_crd: "0.001",
+    reference_usd_per_usd: "0.000001",
     native_usd_per_unit: "0",
     cost_basis: "priced_native_use",
     price_version: "",
@@ -75,13 +75,13 @@ function keenableCreditLimits(
   remaining: string,
 ): unknown[] {
   if (authMode === "keyed") {
-    const remainingCrd = multiplyByFour(remaining)
+    const remainingUsd = multiplyByFour(remaining)
     const view = (operation: string): Record<string, unknown> => ({
       state: "finite",
       operation,
-      remaining_crd: remainingCrd,
-      local_remaining_crd: null,
-      request_cost_crd: "4",
+      remaining_usd: remainingUsd,
+      local_remaining_usd: null,
+      request_cost_usd: "0.004",
       shared_pool_id: "keenable:keyed:request",
       possible_standard_calls: remaining,
       price_version: "list_price",
@@ -119,7 +119,7 @@ function keenableCreditLimits(
               stale: false,
               manual_anchor: false,
             },
-            crd_views: [view("search"), view("fetch")],
+            usd_views: [view("search"), view("fetch")],
             rate_progress: [],
             grants: null,
             detail: null,
@@ -148,9 +148,9 @@ function keenableCreditLimits(
   const unmetered = (operation: string): Record<string, unknown> => ({
     state: "unmetered",
     operation,
-    remaining_crd: null,
-    local_remaining_crd: null,
-    request_cost_crd: null,
+    remaining_usd: null,
+    local_remaining_usd: null,
+    request_cost_usd: null,
     shared_pool_id: null,
     possible_standard_calls: null,
     price_version: null,
@@ -171,7 +171,7 @@ function keenableCreditLimits(
           unknown_tiers: [],
           tier_split_known: true,
           aggregate_pool: null,
-          crd_views: [unmetered("search"), unmetered("fetch")],
+          usd_views: [unmetered("search"), unmetered("fetch")],
           rate_progress: [progress("search"), progress("fetch")],
           grants: null,
           detail: {
@@ -189,7 +189,7 @@ function keenableCreditLimits(
             last_sync_at: null,
             stale: false,
             price_version: "",
-            crd_split_note: null,
+            balance_split_note: null,
             rate_windows: [
               {
                 bucket_id: "keenable:keyless:requests",
@@ -269,7 +269,7 @@ Given(
       })
     })
     setStubbedProviderLimits(keenableCreditLimits(access, capacity))
-    setStubbedCrdTotals([])
+    setStubbedUsdTotals([])
   },
 )
 

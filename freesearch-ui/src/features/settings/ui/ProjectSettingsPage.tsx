@@ -43,11 +43,11 @@ export function ProjectSettingsPage({ accountId }: { accountId: string }) {
     <section className="flex flex-1 flex-col space-y-6">
       <PageHeader
         title="Settings"
-        description="What this project stores for each call"
+        description={<>What this project stores for each call{!canWrite && <> · <span>{READ_ONLY_NOTE}</span></>}</>}
         {...(canCopy
           ? {
               actions: (
-                <Button size="sm" variant="ghost" onClick={() => setCopying(true)}>
+                <Button size="sm" variant="outline" onClick={() => setCopying(true)}>
                   Copy from another project
                 </Button>
               ),
@@ -55,7 +55,6 @@ export function ProjectSettingsPage({ accountId }: { accountId: string }) {
           : {})}
       />
 
-      {!canWrite && <p role="note" className={NOTE_CLASS}>{READ_ONLY_NOTE}</p>}
       {controller.conflict && (
         <div role="alert" className="flex items-center gap-3 text-[13px] text-[var(--status-danger)]">
           <span>{SETTINGS_CONFLICT}</span>

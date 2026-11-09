@@ -56,11 +56,7 @@ function renderReadyContent(props: Omit<Props, "pools"> & { pools: ProjectPool[]
         if (pool) props.changeOperation(pool, operation, enabled)
       },
       operationPending: props.operationPending,
-      renderPool: (item) => {
-        const provider = providers.find((provider) => provider.providerType === item.provider)
-        const costs = Object.values(provider?.callCostUsd ?? {})
-        return <ProjectPoolCell pool={pools.find((pool) => pool.provider_type === item.provider)} free={costs.length > 0 && costs.every((cost) => cost != null && Number(cost) === 0)} />
-      },
+      renderPool: (item, operation) => <ProjectPoolCell pool={pools.find((pool) => pool.provider_type === item.provider)} operation={operation} />,
       renderMenu: (item) => item.keyless
         ? isOwner && <RowActionsMenu label={`Actions for ${item.name}`} actions={[
           { key: "add", label: "Add a key for higher limits", onSelect: () => props.add(item.provider) },

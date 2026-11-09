@@ -29,7 +29,7 @@ const testDir = import.meta.dirname
 const failoverSource = readFileSync(path.resolve(testDir, "./SettingsFailover.tsx"), "utf8")
 const settingsViewSource = readFileSync(path.resolve(testDir, "./SettingsView.tsx"), "utf8")
 const providersSource = readFileSync(path.resolve(testDir, "./SettingsProviders.tsx"), "utf8")
-const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
+const indexCssSource = readFileSync(path.resolve(testDir, "../../../index.css"), "utf8")
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 

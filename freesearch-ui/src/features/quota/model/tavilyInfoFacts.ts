@@ -1,6 +1,6 @@
 import type { ProviderAuthLimits } from "@/domains/dashboard"
 import type { ProviderInfoFact } from "./providerInfoTypes"
-import { callsText } from "./crdDisplay"
+import { callsText } from "./usdDisplay"
 import { multiplyDecimal } from "./manualQuotaMath"
 import { groupDigits } from "./numberText"
 import { formatTavilyPopoverAmount } from "./tavilyCredits"

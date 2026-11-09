@@ -59,7 +59,7 @@ function canPoll(key: KeyBalance): boolean {
 
 function refreshControl(providerName: string, busy: boolean, onRefresh: () => void) {
   return (
-    <Button type="button" variant="outline" size="form" disabled={busy}
+    <Button type="button" variant="outline" size="sm" disabled={busy}
       onClick={onRefresh} aria-label={`Refresh ${providerName} balances`}>
       <RefreshCw aria-hidden="true" className="size-3.5" />
       {busy ? "Refreshing…" : "Refresh"}
@@ -74,10 +74,47 @@ function placedRefresh(input: { enabled: boolean; keys: KeyBalance[]; providerNa
   return input.target ? createPortal(button, input.target) : button
 }
 
+function tableState(input: {
+  keys: KeyBalance[]; refreshable: boolean; providerName: string;
+  sync: { busy: boolean; note: string } | null; onRefresh: () => void
+}) {
+  const button = input.refreshable && input.keys.length > 0
+    ? refreshControl(input.providerName, input.sync?.busy === true, input.onRefresh) : null
+  const status = input.sync && !input.sync.busy ? <span role="status">{input.sync.note}</span> : null
+  return { status, button }
+}
+
+function balanceError(reload: () => void) {
+  return <span role="alert" className="text-[12px] text-[var(--status-danger)]">
+    Key balances unavailable <button type="button" onClick={reload} className="underline">Retry</button>
+  </span>
+}
+
+function standardBalances(input: {
+  keys: KeyBalance[]; refreshKeys: KeyBalance[]; providerName: string; refreshable: boolean
+  compact: boolean; target: HTMLElement | null; sync: { busy: boolean; note: string } | null
+  expanded: boolean; setExpanded: (value: boolean) => void; now: number; onRefresh: () => void
+}) {
+  const { keys, refreshKeys, providerName, refreshable, compact, target, sync, expanded, setExpanded, now, onRefresh } = input
+  if (keys.length === 0) return compact ? <div className="grid grid-cols-2 gap-4"><span>—</span><span>—</span></div> : null
+  return (
+    <div aria-label={`${providerName} key balances`} className="space-y-2 text-[12px]">
+      {placedRefresh({ enabled: refreshable, keys: refreshKeys, providerName, busy: sync?.busy === true, target, onRefresh })}
+      {sync && !sync.busy && <p role="status">{sync.note}</p>}
+      {keys.length > 3 && (
+        <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="text-[var(--muted)] underline">
+          {expanded ? "Hide" : "Show"} {keys.length} keys
+        </button>
+      )}
+      {keyList(keys, expanded, now, compact)}
+    </div>
+  )
+}
+
 export function KeyBalances(props: KeyBalancesProps) {
   const { providerId, providerName, accountId, isAdmin, email, refreshDashboard } = props
   const refreshable = useContext(KeyBalancesRefreshScope)
-  const { compact, actionsTarget } = useContext(KeyBalancesLayoutScope)
+  const { compact, actionsTarget, renderTable } = useContext(KeyBalancesLayoutScope)
   const target = actionsTarget
   const [now] = useState(() => Date.now())
   const [expanded, setExpanded] = useState(false)
@@ -101,29 +138,20 @@ export function KeyBalances(props: KeyBalancesProps) {
   }
 
   if (resource.status === "loading") {
-    return <p role="status" className="text-[12px] text-[var(--muted)]">Loading key balances...</p>
+    const loading = <span role="status" className="text-[12px] text-[var(--muted)]">Loading key balances...</span>
+    return renderTable ? renderTable([], loading, null) : loading
   }
   if (resource.status === "error") {
-    return (
-      <p role="alert" className="text-[12px] text-[var(--status-danger)]">
-        Key balances unavailable <button type="button" onClick={() => void resource.reload()} className="underline">Retry</button>
-      </p>
-    )
+    const error = balanceError(() => void resource.reload())
+    return renderTable ? renderTable([], error, null) : error
   }
   const keys = resource.data
-  if (keys.length === 0) return compact ? <div className="grid grid-cols-2 gap-4"><span>—</span><span>—</span></div> : null
   const refreshKeys = refreshableKeys(keys, isAdmin, email)
-  return (
-    <div aria-label={`${providerName} key balances`} className="space-y-2 text-[12px]">
-      {placedRefresh({ enabled: refreshable, keys: refreshKeys, providerName, busy: sync?.busy === true,
-        target, onRefresh: () => void refresh(refreshKeys) })}
-      {sync && !sync.busy && <p role="status">{sync.note}</p>}
-      {keys.length > 3 && (
-        <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="text-[var(--muted)] underline">
-          {expanded ? "Hide" : "Show"} {keys.length} keys
-        </button>
-      )}
-      {keyList(keys, expanded, now, compact)}
-    </div>
-  )
+  if (renderTable) {
+    const { status, button } = tableState({ keys: refreshKeys, refreshable, providerName, sync,
+      onRefresh: () => void refresh(refreshKeys) })
+    return renderTable(keys, status, button)
+  }
+  return standardBalances({ keys, refreshKeys, providerName, refreshable, compact, target, sync, expanded, setExpanded, now,
+    onRefresh: () => void refresh(refreshKeys) })
 }

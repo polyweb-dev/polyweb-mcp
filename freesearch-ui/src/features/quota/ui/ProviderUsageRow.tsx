@@ -3,6 +3,9 @@ import { useMemo, useState } from "react"
 import type { ReactNode } from "react"
 import { ProviderLogo } from "@/shared/ui/ProviderLogo"
 import { Tag } from "@/shared/ui/Tag"
+import { formatDateTime, formatRelativeTime } from "@/shared/lib/formatTime"
+import type { KeyBalance } from "../model/keyBalances"
+import { nativeLeftText } from "../model/numberText"
 import { manualDefaults, rowBalance, hideRowRefresh } from "../model/providerUsageFacts"
 import type { DashboardQuota, ProviderLimits } from "@/domains/dashboard"
 import type { ProviderConfig } from "@/domains/providers"
@@ -36,6 +39,51 @@ export interface ProviderUsageRowProps {
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
 }
 
+function keyBalanceText(key: KeyBalance | null, fallback: string | null, refreshable: boolean): string {
+  const amount = key?.balance?.remaining == null ? null : nativeLeftText(key.balance.remaining, key.balance.unit)
+  if (amount !== null) return amount
+  if (fallback !== null) return fallback
+  return key && refreshable && !key.balance?.observedAt ? "Not refreshed yet" : "—"
+}
+
+function keyRefreshTime(key: KeyBalance | null, now: number): ReactNode {
+  const observedAt = key?.balance?.observedAt
+  const timestamp = observedAt ? Date.parse(observedAt) : NaN
+  return <span title={observedAt ? formatDateTime(observedAt) : undefined}>
+    {observedAt && Number.isFinite(timestamp) ? formatRelativeTime(timestamp, now) : "—"}
+  </span>
+}
+
+interface TableRowsInput {
+  keys: KeyBalance[]
+  keyStatus: ReactNode
+  refresh: ReactNode
+  identity: ReactNode
+  actions: ReactNode
+  fallback: string | null
+  refreshable: boolean
+  now: number
+}
+
+function keyTableRows(input: TableRowsInput): ReactNode {
+  const rows: (KeyBalance | null)[] = input.keys.length ? input.keys : [null]
+  return rows.map((key, index) => (
+    <tr key={key?.keyId ?? "empty"}>
+      {index === 0 && <td rowSpan={rows.length} className="align-middle">{input.identity}</td>}
+      <td className="align-middle">{key?.label ?? input.keyStatus ?? "—"}</td>
+      <td className="align-middle text-[var(--muted)]">
+        {keyBalanceText(key, input.keys.length <= 1 ? input.fallback : null, input.refreshable)}
+      </td>
+      <td className="align-middle text-[var(--muted)]">{keyRefreshTime(key, input.now)}</td>
+      {index === 0 && <td rowSpan={rows.length} className="align-middle">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {input.refresh}{input.actions}{input.keys.length > 0 && input.keyStatus}
+        </div>
+      </td>}
+    </tr>
+  ))
+}
+
 /**
  * One compact row of a provider that reports no usage: the logo, the name,
  * one quiet status, Refresh when the provider can be read, and the same `…`
@@ -43,8 +91,8 @@ export interface ProviderUsageRowProps {
  */
 export function ProviderUsageRow(props: ProviderUsageRowProps): ReactNode {
   const { providerId, providerName, limits, view, refreshDashboard, manualEligible } = props
-  const [actionsTarget, setActionsTarget] = useState<HTMLElement | null>(null)
   const [modal, setModal] = useState<CardModal>(null)
+  const [now] = useState(() => Date.now())
   const [, setPaired] = useState(false)
   const controller = useProviderLimits({ providerId, limits, refreshDashboard, historyOpen: modal === "history" })
   const manualState = useManualQuota(providerId, manualEligible)
@@ -55,29 +103,7 @@ export function ProviderUsageRow(props: ProviderUsageRowProps): ReactNode {
   const note = view.refreshable ? refreshNote(controller, view.reports) : null
   const estimates = cardEstimates(providerId, props.latestQuota, view.model, manualState.estimate)
   const oauthActions = props.renderOAuthActions?.({ providerId, providerName, ...estimates, onPairedChange: setPaired })
-  return (
-    <tr>
-      <td className="px-4 py-3 align-top">
-      <div className="flex min-h-8 items-center gap-3">
-      <ProviderLogo providerId={providerId} name={providerName} />
-      <h4 className="min-w-0 truncate text-[13px] font-medium text-[var(--text-strong)]">{providerName}</h4>
-      <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--muted)]">{status}</span>
-      {free && <Tag tone="neutral">Free</Tag>}
-      <div ref={setActionsTarget} className="flex items-center gap-2" />
-      <ProviderCardActions
-        providerName={providerName}
-        syncing={controller.syncing}
-        updatedAt={controller.updatedAt}
-        onSync={() => void controller.syncNow()}
-        refreshSkipped={hideRowRefresh(view, controller, props.keyBalances != null)}
-        syncNote={note === status ? null : note}
-        oauthActions={oauthActions}
-      />
-      <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={view.auth}
-        {...(view.nativeDisplay === null ? {} : { nativeDisplay: view.nativeDisplay })} />
-      <ProviderCardMenu providerName={providerName} manualEligible={manualEligible && !free} budgetAllowed={!free} onOpenModal={setModal} />
-      </div>
-      <ProviderCardModals
+  const modals = <ProviderCardModals
         providerId={providerId}
         providerName={providerName}
         modal={modal}
@@ -96,13 +122,29 @@ export function ProviderUsageRow(props: ProviderUsageRowProps): ReactNode {
         refreshDashboard={refreshDashboard}
         onClose={() => setModal(null)}
       />
-      </td>
-      <td colSpan={2} className="px-4 py-3 align-top">
-        <KeyBalancesLayoutScope.Provider value={{ compact: true, actionsTarget }}>
-          <KeyBalancesRefreshScope.Provider value={view.refreshable}>{props.keyBalances ?? "—"}</KeyBalancesRefreshScope.Provider>
-        </KeyBalancesLayoutScope.Provider>
-      </td>
-
-    </tr>
+  const identity = <><div className="flex items-center gap-2">
+    <ProviderLogo providerId={providerId} name={providerName} />
+    <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={view.auth} inlineLabel
+      {...(view.nativeDisplay === null ? {} : { nativeDisplay: view.nativeDisplay })} />
+    {free && <Tag tone="neutral">Free</Tag>}
+  </div>{modals}</>
+  const actions = <>
+    <ProviderCardActions providerName={providerName} syncing={controller.syncing}
+      updatedAt={controller.updatedAt} onSync={() => void controller.syncNow()}
+      refreshSkipped={hideRowRefresh(view, controller, props.keyBalances != null)}
+      syncNote={note === status ? null : note} oauthActions={oauthActions} />
+    <ProviderCardMenu providerName={providerName} manualEligible={manualEligible && !free}
+      budgetAllowed={!free} historyAllowed={!(free && view.auth.rate_progress.some((entry) => entry.source === "local_attempts"))}
+      onOpenModal={setModal} />
+  </>
+  const renderTable = (keys: KeyBalance[], keyStatus: ReactNode, refresh: ReactNode) => {
+    if (view.keyless && keys.length === 0 && keyStatus == null) return null
+    const fallback = view.keyless || (keys.length === 0 && props.keyBalances != null) ? null : status
+    return keyTableRows({ keys, keyStatus, refresh, identity, actions, fallback, refreshable: view.refreshable, now })
+  }
+  return props.keyBalances == null ? renderTable([], null, null) : (
+    <KeyBalancesLayoutScope.Provider value={{ compact: true, actionsTarget: null, renderTable }}>
+      <KeyBalancesRefreshScope.Provider value={view.refreshable}>{props.keyBalances}</KeyBalancesRefreshScope.Provider>
+    </KeyBalancesLayoutScope.Provider>
   )
 }

@@ -100,9 +100,11 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
     </TableCell>
     <TableCell className={CELL}>
       <div className="tabular-nums text-[12px] text-[var(--muted)]">
-        <div>Search: {callCost(provider, "search")}</div>
-        <div>Fetch: {callCost(provider, "fetch")}</div>
-        {provider.capabilities.includes("keyless_tier") && <div>Free without a key</div>}
+        {callCost(provider, "search") === "Free" && callCost(provider, "fetch") === "Free" ? <div>Free</div> : <>
+          <div>Search: {callCost(provider, "search")}</div>
+          <div>Fetch: {callCost(provider, "fetch")}</div>
+          {provider.capabilities.includes("keyless_tier") && <div>Free without a key</div>}
+        </>}
       </div>
     </TableCell>
     {renderHealthCell({ provider, canEdit, testing, lastResult, now, onOpenTest })}

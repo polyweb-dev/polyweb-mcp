@@ -94,7 +94,10 @@ export function usageTotalsView(totals: readonly ProjectUsageTotal[], order?: Pr
   return {
     rows: [...byKey.values()],
     total,
-    columns: COLUMN_ORDER.filter((column) => usesColumn(total, column)),
+    columns: COLUMN_ORDER.filter((column) =>
+      usesColumn(total, column) &&
+      (column !== "requests" || [...byKey.values()].some((row) => row.requests !== null && row.requests !== row.calls))
+    ),
   }
 }
 
@@ -119,7 +122,7 @@ export function usageAmountText(amounts: UsageAmounts, column: UsageAmountColumn
 }
 
 export const USAGE_COLUMN_LABELS: Readonly<Record<UsageAmountColumn, string>> = {
-  usd: "Reported cost (USD)",
+  usd: "Cost",
   requests: "Billed requests",
   credits: "Provider credits",
   other: "Other units",

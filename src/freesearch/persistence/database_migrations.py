@@ -189,6 +189,9 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
             "last_tier_observed_at",
         }
     ),
+    "provider_budgets": frozenset(
+        {"provider", "auth_mode", "period", "search_crd_text", "fetch_crd_text", "version"}
+    ),
     "provider_crd_grants": frozenset(
         {
             "provider",
@@ -292,6 +295,7 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     "provider_limit_admissions": frozenset(
         {
             "attempt_id",
+            "grant_window_start",
             "provider",
             "operation",
             "auth_mode",

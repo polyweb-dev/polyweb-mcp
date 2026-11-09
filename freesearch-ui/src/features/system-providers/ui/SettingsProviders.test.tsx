@@ -79,33 +79,33 @@ const settingsModalSource = readFileSync(
   path.resolve(testDir, "./ProviderTestModal.tsx"),
   "utf8"
 )
-const removedModalShimPath = path.resolve(testDir, "../common/Modal.tsx")
-const removedDialogShimPath = path.resolve(testDir, "../ui/dialog.tsx")
-const removedTableShimPath = path.resolve(testDir, "../ui/table.tsx")
+const removedModalShimPath = path.resolve(testDir, "../../../components/common/Modal.tsx")
+const removedDialogShimPath = path.resolve(testDir, "../../../components/ui/dialog.tsx")
+const removedTableShimPath = path.resolve(testDir, "../../../components/ui/table.tsx")
 const settingsFeatureSource = [
   settingsSource,
   settingsModalSource,
   readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "../../shared/ui/ReorderHandle.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "../../../shared/ui/ReorderHandle.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
-const appSource = readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8")
+const appSource = readFileSync(path.resolve(testDir, "../../../App.tsx"), "utf8")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
   "utf8"
 )
 const sidebarSource = readFileSync(
-  path.resolve(testDir, "../layout/Sidebar.tsx"),
+  path.resolve(testDir, "../../../components/layout/Sidebar.tsx"),
   "utf8"
 )
 const routesNavSource = readFileSync(
-  path.resolve(testDir, "../../app/layout/SidebarNavList.tsx"),
+  path.resolve(testDir, "../../../app/layout/SidebarNavList.tsx"),
   "utf8"
 )
-const routeTableSource = readFileSync(path.resolve(testDir, "../../app/routes.ts"), "utf8")
+const routeTableSource = readFileSync(path.resolve(testDir, "../../../app/routes.ts"), "utf8")
 
 const SEED_PROVIDER_NAMES = [
   "Brave Search",
@@ -341,8 +341,7 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
   it("shows read-only per-operation costs without system order controls", async () => {
     const stub = renderSettings()
     await waitForProviders()
-    expect(cellFor("Keenable", "Cost per call")).toHaveTextContent("Search: Free")
-    expect(cellFor("Keenable", "Cost per call")).toHaveTextContent("Fetch: Free")
+    expect(cellFor("Keenable", "Cost per call")).toHaveTextContent(/^Free$/)
     expect(cellFor("Firecrawl", "Cost per call")).toHaveTextContent("Search: $0.0076")
     expect(cellFor("Firecrawl", "Cost per call")).toHaveTextContent("Fetch: $0.0038")
     expect(cellFor("Brave Search", "Cost per call")).toHaveTextContent("Fetch: Not supported")
@@ -839,27 +838,27 @@ const settingsFeatureSource = [
   readFileSync(path.resolve(testDir, "./ProviderTestModal.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderTestModalDetail.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "../../shared/ui/ReorderHandle.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "../../../shared/ui/ReorderHandle.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
-const tableSource = readFileSync(path.resolve(testDir, "../../shared/ui/table.tsx"), "utf8")
-const removedTableShimPath = path.resolve(testDir, "../ui/table.tsx")
+const tableSource = readFileSync(path.resolve(testDir, "../../../shared/ui/table.tsx"), "utf8")
+const removedTableShimPath = path.resolve(testDir, "../../../components/ui/table.tsx")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green). Fleet-telemetry pins live in
 // SettingsProviders.p1-final.test.tsx.
-const appSource = readFileSync(path.resolve(testDir, "../../App.tsx"), "utf8")
-const routesSource = readFileSync(path.resolve(testDir, "../../app/routes.ts"), "utf8")
+const appSource = readFileSync(path.resolve(testDir, "../../../App.tsx"), "utf8")
+const routesSource = readFileSync(path.resolve(testDir, "../../../app/routes.ts"), "utf8")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
   "utf8"
 )
-const sidebarSource = readFileSync(path.resolve(testDir, "../layout/Sidebar.tsx"), "utf8")
+const sidebarSource = readFileSync(path.resolve(testDir, "../../../components/layout/Sidebar.tsx"), "utf8")
 const routesNavSource = readFileSync(
-  path.resolve(testDir, "../../app/layout/SidebarNavList.tsx"),
+  path.resolve(testDir, "../../../app/layout/SidebarNavList.tsx"),
   "utf8"
 )
-const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
+const indexCssSource = readFileSync(path.resolve(testDir, "../../../index.css"), "utf8")
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 
@@ -1537,10 +1536,10 @@ const settingsModalSource = readFileSync(
   "utf8"
 )
 const settingsPrioritySource = readFileSync(
-  path.resolve(testDir, "../../shared/ui/ReorderHandle.tsx"),
+  path.resolve(testDir, "../../../shared/ui/ReorderHandle.tsx"),
   "utf8"
 )
-const removedButtonShimPath = path.resolve(testDir, "../ui/button.tsx")
+const removedButtonShimPath = path.resolve(testDir, "../../../components/ui/button.tsx")
 const settingsFeatureSource = [
   settingsSource,
   settingsRowSource,
@@ -1551,7 +1550,7 @@ const settingsFeatureSource = [
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
-const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
+const indexCssSource = readFileSync(path.resolve(testDir, "../../../index.css"), "utf8")
 
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 
@@ -1968,14 +1967,14 @@ const settingsSource = readFileSync(path.resolve(testDir, "./SettingsProviders.t
 // Slice 4: row/modal/priority siblings own their sources; assertions run
 // against the new owners plus the union of the registry feature owners.
 const settingsPrioritySource = readFileSync(
-  path.resolve(testDir, "../../shared/ui/ReorderHandle.tsx"),
+  path.resolve(testDir, "../../../shared/ui/ReorderHandle.tsx"),
   "utf8"
 )
 const settingsModalSource = readFileSync(
   path.resolve(testDir, "./ProviderTestModal.tsx"),
   "utf8"
 )
-const removedButtonShimPath = path.resolve(testDir, "../ui/button.tsx")
+const removedButtonShimPath = path.resolve(testDir, "../../../components/ui/button.tsx")
 const settingsFeatureSource = [
   settingsSource,
   settingsPrioritySource,
@@ -1986,7 +1985,7 @@ const settingsFeatureSource = [
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
-const indexCssSource = readFileSync(path.resolve(testDir, "../../index.css"), "utf8")
+const indexCssSource = readFileSync(path.resolve(testDir, "../../../index.css"), "utf8")
 // P1-FINAL (blessed inversion): ProviderMatrix.tsx is DELETED by the merge —
 // no test may read it (the file is gone Green).
 const failoverSource = readFileSync(path.resolve(testDir, "./SettingsFailover.tsx"), "utf8")
@@ -2615,9 +2614,9 @@ describe("SettingsProviders Tavily rate-tier removed from Settings registry", ()
   })
 
   it("Usage card still owns the compact Tavily tier select", () => {
-    const tierSrc = readFileSync(path.resolve(import.meta.dirname, "./TavilyRateTierSelect.tsx"), "utf8")
+    const tierSrc = readFileSync(path.resolve(import.meta.dirname, "../../quota/ui/TavilyRateTierSelect.tsx"), "utf8")
     expect(tierSrc).toContain("compact")
-    const quotaSrc = readFileSync(path.resolve(import.meta.dirname, "../quota/QuotaAnalytics.tsx"), "utf8")
+    const quotaSrc = readFileSync(path.resolve(import.meta.dirname, "../../quota/ui/QuotaAnalytics.tsx"), "utf8")
     expect(quotaSrc).toContain("renderRateTier")
     expect(quotaSrc).toContain("TavilyRateTierSelect")
     expect(quotaSrc).toContain("compact")

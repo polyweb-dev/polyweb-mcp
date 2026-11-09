@@ -13,8 +13,8 @@ describe("catalog pricing", () => {
     const tavily = { callCostUsd: { search: "0.008", fetch: "0.0016" }, keylessCallCostUsd: { search: "0", fetch: "0" } }
     expect(providerCallCost(tavily, "search")).toBe("$0.0080")
     expect(providerCallCost(tavily, "fetch")).toBe("$0.0016")
-    expect(providerCallCost(tavily, "search", true)).toBe("Free without a key")
-    expect(providerCallCost(tavily, "fetch", true)).toBe("Free without a key")
+    expect(providerCallCost(tavily, "search", true)).toBe("Free")
+    expect(providerCallCost(tavily, "fetch", true)).toBe("Free")
     expect(providerCallCost({ callCostUsd: { search: 0 } }, "search", true)).toBe("—")
   })
 

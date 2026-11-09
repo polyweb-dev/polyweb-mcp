@@ -5,7 +5,7 @@
  */
 
 import type { DashboardQuota, ProviderAuthLimits } from "@/domains/dashboard"
-import { usdBalanceToCRD, type CreditCardModel } from "./crdCardModel"
+import { type CreditCardModel } from "./usdCardModel"
 import { pairedSnapshotOf, type QuotaRowEstimates } from "./quotaRowModel"
 import type { ManualQuotaEstimate } from "./useManualQuota"
 
@@ -30,14 +30,14 @@ export function cardEstimates(
     hasUsableEstimate:
       model.percentRemaining !== null ||
       manualEstimate !== null ||
-      model.remainingCRD !== null ||
+      model.remainingUsd !== null ||
       vendorBalance ||
       vendorPercent,
     pairedSnapshot: pairedSnapshotOf(providerId, latestQuota),
   }
 }
 
-export interface BalanceFallback { usd: string; crd: string | null; allowanceCRD: string | null }
+export interface BalanceFallback { usd: string; allowanceUsd: string | null }
 
 function fallbackSourceOk(providerId: string, source: string | undefined): boolean {
   if (providerId === YOUCOM_PROVIDER) return source === "authoritative" || source === "estimated"
@@ -47,21 +47,20 @@ function fallbackSourceOk(providerId: string, source: string | undefined): boole
 /**
  * OAuth balance fallback of one card: the Parallel Account-API balance and the
  * You.com cents balance live in the dashboard quota row, not in the limits
- * model. A remaining-only snapshot yields the raw USD with its CRD equivalent
+ * model. A remaining-only snapshot yields the raw USD with its Usd equivalent
  * and no allowance, so the card shows the amount alone.
  */
 export function balanceFallbackOf(
   providerId: string,
   model: CreditCardModel,
   latestQuota: DashboardQuota | undefined,
-  auth: ProviderAuthLimits,
 ): BalanceFallback | null {
-  if (model.remainingCRD !== null || latestQuota === undefined) return null
+  if (model.remainingUsd !== null || latestQuota === undefined) return null
   if (!fallbackSourceOk(providerId, latestQuota.source)) return null
   if (latestQuota.remaining === null || latestQuota.remaining.trim() === "") return null
   if (latestQuota.limit !== null || latestQuota.remainingPercent != null) return null
   const usd = latestQuota.remaining
-  return { usd, crd: usdBalanceToCRD(usd, auth), allowanceCRD: null }
+  return { usd, allowanceUsd: null }
 }
 
 /** The confirmed minute ceiling of one Tavily key environment. */

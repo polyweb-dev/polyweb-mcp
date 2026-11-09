@@ -63,9 +63,10 @@ function rowLabel(stage: TraceStage): ReactNode {
         {/* The recorded stage stays announced even when the badge replaces it. */}
         <span className="sr-only">{stage.label}</span>
         {" "}
-        <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
-        {" "}
-        <span>request</span>
+        <span className="min-w-0 truncate">
+          <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
+          {" request"}
+        </span>
         {outcomeNote(stage)}
       </span>
     )
@@ -104,11 +105,7 @@ function latencySummary(summary: TraceLatencySummary, hasAttempts: boolean): Rea
   if (!hasAttempts) {
     return (
       <p className="text-[12px] text-[var(--muted)]">
-        Time outside provider calls{" "}
-        <span className="tnum text-[var(--text-strong)]">
-          {formatLatency(summary.outsideProvidersMs)}
-        </span>
-        . Provider phases were not recorded for this trace.
+        Provider phases were not recorded for this trace
       </p>
     )
   }
@@ -120,7 +117,6 @@ function latencySummary(summary: TraceLatencySummary, hasAttempts: boolean): Rea
         {summary.betweenProvidersMs > 0 &&
           summaryCell("Between providers", summary.betweenProvidersMs)}
         {summaryCell("After providers", summary.afterProvidersMs)}
-        {summaryCell("Outside provider calls", summary.outsideProvidersMs)}
       </dl>
     </div>
   )

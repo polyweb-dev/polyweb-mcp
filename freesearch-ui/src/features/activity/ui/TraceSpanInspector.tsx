@@ -7,6 +7,7 @@ import {
 import { providerIdentity } from "@/domains/providers"
 import { formatDateTime, formatLatency } from "@/shared/lib/formatTime"
 import { JsonViewer } from "@/shared/ui/JsonViewer"
+import { AdvancedSection } from "@/shared/ui/AdvancedSection"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import {
   traceEventLabel,
@@ -56,7 +57,7 @@ function titleNode(stage: TraceStage): ReactNode {
     return (
       <span className="flex min-w-0 flex-wrap items-center gap-2">
         <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-4" />
-        {" "}
+        <span className="sr-only"> </span>
         <span>request</span>
       </span>
     )
@@ -143,16 +144,7 @@ function payloadSection({ title, events, spanId, traceStartedAt }: PayloadSectio
 
 function technicalSection(stage: TraceStage): ReactNode {
   return (
-    <details className="group min-w-0 border-t border-[var(--border-subtle)] pt-3">
-      <summary className="flex list-none cursor-pointer items-center gap-2 text-[12px] text-[var(--muted)]">
-        <span
-          aria-hidden="true"
-          className="inline-flex size-4 shrink-0 items-center justify-center text-[14px] transition-transform motion-reduce:transition-none group-open:rotate-90"
-        >
-          ›
-        </span>
-        Technical identifiers
-      </summary>
+    <AdvancedSection label="Technical identifiers">
       <dl className="mt-2 grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
         {metaRow("Span name", stage.name)}
         {metaRow("Stage label", stage.label)}
@@ -165,7 +157,7 @@ function technicalSection(stage: TraceStage): ReactNode {
         {stage.events.length > 0 &&
           metaRow("Events", stage.events.map((event) => event.name).join(", "))}
       </dl>
-    </details>
+    </AdvancedSection>
   )
 }
 
@@ -206,17 +198,13 @@ export function TraceSpanInspector({ stage, trace }: TraceSpanInspectorProps) {
       {timingSection(stage)}
       <TraceSpanFacts events={stage.events} />
       {stage.events.length > 0 && (
-        <details className="group min-w-0 border-t border-[var(--border-subtle)] pt-3">
-          <summary className="flex list-none cursor-pointer items-center gap-2 text-[12px] text-[var(--muted)]">
-            <span aria-hidden="true" className="inline-flex size-4 shrink-0 items-center justify-center text-[14px] transition-transform motion-reduce:transition-none group-open:rotate-90">›</span>
-            Show raw data
-          </summary>
+        <AdvancedSection label="Show raw data">
           <div className="mt-3 space-y-3">
             {payloadSection({ title: "Request", events: requestEvents, spanId: stage.spanId, traceStartedAt: trace.startedAt })}
             {payloadSection({ title: "Response", events: responseEvents, spanId: stage.spanId, traceStartedAt: trace.startedAt })}
             {payloadSection({ title: "Events", events: otherEvents, spanId: stage.spanId, traceStartedAt: trace.startedAt })}
           </div>
-        </details>
+        </AdvancedSection>
       )}
       {technicalSection(stage)}
       <TraceScopeDetails trace={trace} />

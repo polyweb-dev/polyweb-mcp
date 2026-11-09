@@ -2,10 +2,9 @@ import { useState, type ReactNode } from "react"
 import { Button } from "@/shared/ui/button"
 import { formatDateTime, formatRelativeTime } from "@/shared/lib/formatTime"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/ui/table"
-import type { CRDConversionProfile, LimitAuditEvent } from "@/domains/dashboard"
-import { dollarText } from "../model/crdDisplay"
-import { multiplyDecimal } from "../model/manualQuotaMath"
-import { DEFAULT_TAVILY_PROFILE, formatCreditAmount, tavilyCRDToCredits } from "../model/tavilyCredits"
+import type { UsdConversionProfile, LimitAuditEvent } from "@/domains/dashboard"
+import { dollarText } from "../model/usdDisplay"
+import { DEFAULT_TAVILY_PROFILE, formatCreditAmount, tavilyUsdToCredits } from "../model/tavilyCredits"
 import { operationLabel, reasonLabel, sourceLabel } from "../model/quotaLabels"
 import { newestFirst } from "../model/timeText"
 import { groupDigits, nativeUnitLabel } from "../model/numberText"
@@ -17,7 +16,7 @@ export interface LimitHistoryProps {
   error: string | null
   hasMore: boolean
   onLoadMore: () => Promise<void>
-  profile?: CRDConversionProfile
+  profile?: UsdConversionProfile
   nativeUnit?: string | null
 }
 
@@ -37,24 +36,23 @@ function nativeUnitText(event: LimitAuditEvent, fallback: string | null): string
 }
 
 function usdFromLedger(value: string): string {
-  return groupDigits(dollarText(multiplyDecimal(value, "0.001") ?? "0"))
+  return groupDigits(dollarText(value))
 }
 
 function nativeText(value: string, unit: string): string {
-  if (unit.toUpperCase() === "CRD") return usdFromLedger(value)
   if (unit.toUpperCase() === "USD") return "$" + Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   if (unit.toUpperCase() === "FREE") return "Free"
   return groupDigits(value) + " " + nativeUnitLabel(unit)
 }
 
-function balanceText(event: LimitAuditEvent, side: "old" | "new", profile: CRDConversionProfile | null, nativeUnit: string | null): string {
+function balanceText(event: LimitAuditEvent, side: "old" | "new", profile: UsdConversionProfile | null, nativeUnit: string | null): string {
   const native = event.reason === "grant" ? null : side === "old" ? event.old_native : event.new_native
   const unit = nativeUnitText(event, nativeUnit)
   if (native !== null && unit !== null) return nativeText(native, unit)
-  const amount = side === "old" ? event.old_crd : event.new_crd
+  const amount = side === "old" ? event.old_usd : event.new_usd
   if (amount === null) return "Not recorded"
   if (event.provider === "tavily" && event.reason !== "grant") {
-    const credits = tavilyCRDToCredits(amount, profile ?? DEFAULT_TAVILY_PROFILE)
+    const credits = tavilyUsdToCredits(amount, profile ?? DEFAULT_TAVILY_PROFILE)
     if (credits !== null) return formatCreditAmount(credits)
   }
   return usdFromLedger(amount)
@@ -79,13 +77,13 @@ function changeText(event: LimitAuditEvent, nativeUnit: string | null): string {
     return "−$" + Number(event.native_debit).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })
   }
   if (event.native_debit !== null && unit !== null) return "−" + nativeText(event.native_debit, unit)
-  return event.crd_debit === null ? "Not recorded" : "−" + usdFromLedger(event.crd_debit)
+  return event.debit_usd === null ? "Not recorded" : "−" + usdFromLedger(event.debit_usd)
 }
 
 export function LimitHistory({ providerName, events, loading, error, hasMore, onLoadMore, profile, nativeUnit = null }: LimitHistoryProps): ReactNode {
   const [now] = useState(Date.now)
   const rows = newestFirst(events)
-  const hasChanges = events.some((event) => event.crd_debit !== null || event.native_debit !== null)
+  const hasChanges = events.some((event) => event.debit_usd !== null || event.native_debit !== null)
   return (
     <section aria-label={"Recorded changes for " + providerName} className="space-y-2">
       {loading && events.length === 0 && <p className="text-[12px] text-[var(--muted)]" role="status">Loading history…</p>}

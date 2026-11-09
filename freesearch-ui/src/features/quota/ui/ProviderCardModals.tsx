@@ -9,7 +9,7 @@ import { profileOf, type TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { saveManualQuotaFor, type ManualQuotaOverlay } from "../model/useManualQuota"
 import type { ProviderLimitsController } from "../model/useProviderLimits"
 import type { ManualQuotaDefaults } from "../model/useQuotaForm"
-import { CRDGrantForm } from "./CRDGrantForm"
+import { UsdGrantForm } from "./UsdGrantForm"
 import { LimitHistoryModal } from "./LimitHistoryModal"
 import { ManualQuotaModal } from "./ManualQuotaModal"
 import type { CardModal } from "./ProviderCardMenu"
@@ -39,7 +39,7 @@ export interface ProviderCardModalsProps {
 function grantKey(auth: ProviderAuthLimits): string {
   const grants = auth.grants
   if (grants === null) return auth.auth_mode + "-none"
-  return auth.auth_mode + "-" + grants.version + "-" + grants.period_start
+  return auth.auth_mode + "-" + grants.version + "-" + grants.period
 }
 
 /**
@@ -84,7 +84,7 @@ function grantModal(input: ProviderCardModalsProps): ReactNode {
   const { providerId, providerName, controller, auth } = input
   return (
     <ManualQuotaModal mode="grant" open providerId={providerId} providerName={providerName} onClose={input.onClose}>
-      <CRDGrantForm
+      <UsdGrantForm
         key={grantKey(auth)}
         providerName={providerName}
         authMode={auth.auth_mode}
@@ -93,7 +93,6 @@ function grantModal(input: ProviderCardModalsProps): ReactNode {
         saving={controller.saving}
         saveError={controller.saveError}
         staleVersion={controller.staleVersion}
-        referenceUSDPerCRD={auth.search?.conversion_profile.reference_usd_per_crd ?? "0.001"}
         {...(input.nativeDisplay !== null ? { nativeDisplay: input.nativeDisplay } : {})}
         onSave={controller.saveGrant}
         onClose={input.onClose}
@@ -105,7 +104,7 @@ function grantModal(input: ProviderCardModalsProps): ReactNode {
 
 function historyModal(input: ProviderCardModalsProps): ReactNode {
   const { controller } = input
-  // The history view converts a CRD-only Tavily amount with the live rail
+  // The history view converts a Usd-only Tavily amount with the live rail
   // profile, the same auth every other dialog of this card reads.
   const profile = profileOf(input.auth)
   return (

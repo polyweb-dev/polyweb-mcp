@@ -1,4 +1,3 @@
-import { ledgerView } from "./usdWire"
 /**
  * Public decoders for the provider limit wire contract.
  *
@@ -12,7 +11,7 @@ import {
   AUTH_MODES,
   amount,
   count,
-  decodeCRDView,
+  decodeUsdView,
   decodeEvent,
   decodeGrants,
   decodeRateWindow,
@@ -29,7 +28,7 @@ import {
   text,
 } from "./limitsWireFields"
 import type {
-  CRDUsageTotal,
+  UsdUsageTotal,
   LimitHistoryPage,
   NativePool,
   ProviderAuthLimits,
@@ -97,7 +96,7 @@ export function decodeDetail(value: unknown): ProviderLimitDetail | null {
     last_sync_at: maybeText(item.last_sync_at),
     stale: flag(item.stale, false),
     price_version: text(item.price_version),
-    crd_split_note: maybeText(item.crd_split_note),
+    balance_split_note: maybeText(item.balance_split_note),
     rate_windows: mapItems(item.rate_windows, decodeRateWindow),
     retry_after_seconds: retryAfterSeconds(item.retry_after_seconds),
     tier_split_known: flag(item.tier_split_known, true),
@@ -118,7 +117,7 @@ function decodeAuth(value: unknown): ProviderAuthLimits | null {
     unknown_tiers: mapItems(item.unknown_tiers, decodeTier),
     tier_split_known: flag(item.tier_split_known, true),
     aggregate_pool: decodePool(item.aggregate_pool),
-    crd_views: mapItems(item.crd_views, decodeCRDView),
+    usd_views: mapItems(item.usd_views, decodeUsdView),
     rate_progress: mapItems(item.rate_progress, decodeRateProgress),
     grants: decodeGrants(item.grants),
     detail: decodeDetail(item.detail),
@@ -144,7 +143,6 @@ function decodeProvider(value: unknown): ProviderLimits | null {
 
 /** Decode one limit response, a dashboard array, or a dashboard field. */
 export function decodeProviderLimits(value: unknown): ProviderLimits[] {
-  value = ledgerView(value)
   if (Array.isArray(value)) return mapItems(value, decodeProvider)
   const item = raw(value)
   if (!item) return []
@@ -154,18 +152,16 @@ export function decodeProviderLimits(value: unknown): ProviderLimits[] {
 }
 
 export function decodeLimitHistory(value: unknown): LimitHistoryPage {
-  value = ledgerView(value)
   const item = raw(value)
   if (!item) return { events: [], next_cursor: null }
   return { events: mapItems(item.events, decodeEvent), next_cursor: maybeText(item.next_cursor) }
 }
 
 /** Accept the bare array or the dashboard field that wraps it. */
-export function decodeCRDUsageTotals(value: unknown): CRDUsageTotal[] {
-  value = ledgerView(value)
+export function decodeUsdUsageTotals(value: unknown): UsdUsageTotal[] {
   const item = raw(value)
-  if (item !== null && Array.isArray(item.crd_usage_totals)) {
-    return mapItems(item.crd_usage_totals, decodeUsageTotal)
+  if (item !== null && Array.isArray(item.spend_totals)) {
+    return mapItems(item.spend_totals, decodeUsageTotal)
   }
   return mapItems(value, decodeUsageTotal)
 }

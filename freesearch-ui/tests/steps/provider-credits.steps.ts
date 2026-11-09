@@ -5,7 +5,7 @@ import {
   braveCreditLimits,
   braveCreditLimitsAfterDebit,
   bravePlusTavilyLimits,
-  setStubbedCrdTotals,
+  setStubbedUsdTotals,
   setStubbedHistory,
   setStubbedProviderLimits,
   setStubbedProviderPatchReadbackRaw,
@@ -26,20 +26,13 @@ import {
   bravePlusParallelLimits,
 } from "./backendStub"
 
-const EXPECTED_CRD_TEXT: Record<string, string> = {
-  "0": "0 CRD",
-  "0.04": "<0.1 CRD",
-  "0.599": "≈0.6 CRD",
-  "4.5": "4.5 CRD",
-}
-
 /**
  * CARD-3 provider credit units (provider-credits.feature @ui7).
  *
  * All backend traffic is stubbed. Dashboard credit state is mutable
  * per scenario through the backendStub setters. Assertions use role and
  * label selectors, never layout selectors or sleeps. The card shows the
- * credit fraction ("4500 / 5000 CRD" split spans, never a "CRD left"
+ * credit fraction ("4500 / 5000 Usd" split spans, never a "Usd left"
  * label), four leading actions, a source subtitle, and an info popover
  * with the call cost, call count, rate limit, last sync, usage page,
  * and vendor detail.
@@ -59,7 +52,7 @@ function braveOneSearchUse(): unknown[] {
     {
       provider: "brave",
       operation: "search",
-      normalized_crd: "5",
+      spend_usd: "0.005",
       attempt_count: 1,
       volume_count: 1,
     },
@@ -71,7 +64,7 @@ function braveFractionalUse(): unknown[] {
     {
       provider: "brave",
       operation: "search",
-      normalized_crd: "11",
+      spend_usd: "0.011",
       attempt_count: 3,
       volume_count: 3,
     },
@@ -110,13 +103,13 @@ function freeLimits(): unknown[] {
   const auths = (entry.auths as Array<Record<string, unknown>>).map((auth) => ({
     ...auth,
     aggregate_pool: null,
-    crd_views: [
+    usd_views: [
       {
         state: "unmetered",
         operation: "search",
-        remaining_crd: null,
-        local_remaining_crd: null,
-        request_cost_crd: null,
+        remaining_usd: null,
+        local_remaining_usd: null,
+        request_cost_usd: null,
         shared_pool_id: null,
         possible_standard_calls: null,
         price_version: null,
@@ -125,9 +118,9 @@ function freeLimits(): unknown[] {
       {
         state: "unavailable",
         operation: "fetch",
-        remaining_crd: null,
-        local_remaining_crd: null,
-        request_cost_crd: null,
+        remaining_usd: null,
+        local_remaining_usd: null,
+        request_cost_usd: null,
         shared_pool_id: null,
         possible_standard_calls: null,
         price_version: null,
@@ -187,9 +180,9 @@ function tavilyExhaustedWithRateLimits(): unknown[] {
 function tavilyLongZeroDecimalLimits(): unknown[] {
   const entries = cloneLimits(tavilyCreditLimits())
   const auth = keyedAuth(entries[0] as Record<string, unknown>)
-  const views = auth.crd_views as Array<Record<string, unknown>>
-  views[0] = { ...views[0], request_cost_crd: "8.000000000" }
-  views[1] = { ...views[1], request_cost_crd: "1.600000000" }
+  const views = auth.usd_views as Array<Record<string, unknown>>
+  views[0] = { ...views[0], request_cost_usd: "0.008000000" }
+  views[1] = { ...views[1], request_cost_usd: "0.001600000" }
   const search = auth.search as Record<string, unknown>
   const fetch = auth.fetch as Record<string, unknown>
   auth.search = {
@@ -218,13 +211,13 @@ function tavilyUnknownLimits(): unknown[] {
   auth.aggregate_pool = null
   auth.free_tiers = []
   auth.paid_tiers = []
-  auth.crd_views = [
+  auth.usd_views = [
     {
       state: "unknown",
       operation: "search",
-      remaining_crd: null,
-      local_remaining_crd: null,
-      request_cost_crd: null,
+      remaining_usd: null,
+      local_remaining_usd: null,
+      request_cost_usd: null,
       shared_pool_id: null,
       possible_standard_calls: null,
       price_version: null,
@@ -233,9 +226,9 @@ function tavilyUnknownLimits(): unknown[] {
     {
       state: "unknown",
       operation: "fetch",
-      remaining_crd: null,
-      local_remaining_crd: null,
-      request_cost_crd: null,
+      remaining_usd: null,
+      local_remaining_usd: null,
+      request_cost_usd: null,
       shared_pool_id: null,
       possible_standard_calls: null,
       price_version: null,
@@ -283,11 +276,11 @@ Given("the stubbed provider limits show {string}", async ({}, kind: string) => {
 })
 
 Given("the stubbed credit totals show {string}", async ({}, kind: string) => {
-  if (kind === "Brave no use") setStubbedCrdTotals(braveNoUse())
-  else if (kind === "Brave one search use") setStubbedCrdTotals(braveOneSearchUse())
-  else if (kind === "Brave fractional use") setStubbedCrdTotals(braveFractionalUse())
-  else if (kind === "Tavily no use") setStubbedCrdTotals([])
-  else if (kind === "Tavily search and extract use") setStubbedCrdTotals(tavilyUseTotals())
+  if (kind === "Brave no use") setStubbedUsdTotals(braveNoUse())
+  else if (kind === "Brave one search use") setStubbedUsdTotals(braveOneSearchUse())
+  else if (kind === "Brave fractional use") setStubbedUsdTotals(braveFractionalUse())
+  else if (kind === "Tavily no use") setStubbedUsdTotals([])
+  else if (kind === "Tavily search and extract use") setStubbedUsdTotals(tavilyUseTotals())
   else throw new Error(`Unknown credit totals kind: ${kind}`)
 })
 
@@ -336,7 +329,7 @@ When("I open the credit manual entry for {string}", async ({ page }, provider: s
 
 When("I open the credit grant for {string}", async ({ page }, provider: string) => {
   await openCardMenuItem(page, provider, "Budget limit")
-  await expect(page.getByText("Search budget (CRD)")).toBeVisible()
+  await expect(page.getByText("Search budget (USD)")).toBeVisible()
 })
 
 When("I open the credit history for {string}", async ({ page }, provider: string) => {
@@ -362,15 +355,15 @@ Then("the Brave credit bar should show {string} percent", async ({ page }, value
 
 Then("the Brave card should show {string}", async ({ page }, value: string) => {
   const card = providerQuotaSurface(page, "Brave")
-  const fraction = value.match(/(\d[\d.,]*)\s*\/\s*(\d[\d.,]*)\s*CRD/)
+  const fraction = value.match(/(\d[\d.,]*)\s*\/\s*(\d[\d.,]*)\s*Usd/)
   if (fraction !== null) {
     const remaining = fraction[1] as string
     const total = fraction[2] as string
     await expect(card.getByText(remaining, { exact: true })).toBeVisible()
     await expect(card.getByText(`/ ${total}`, { exact: true })).toBeVisible()
-    await expect(card.getByText("CRD", { exact: true }).first()).toBeVisible()
+    await expect(card.getByText("USD", { exact: true }).first()).toBeVisible()
     const normalized = ((await card.textContent()) ?? "").replace(/\s+/g, "")
-    expect(normalized).toContain(remaining + "/" + total + "CRD")
+    expect(normalized).toContain(remaining + "/" + total + "USD")
     return
   }
   await expect(card).toContainText(value)
@@ -397,7 +390,7 @@ Then("the credit details should show {string}", async ({ page }, text: string) =
   await expect(page.getByText(text, { exact: false }).first()).toBeVisible()
 })
 
-Then("the Brave CRD value should carry {string} hover text", async ({ page }, text: string) => {
+Then("the Brave USD value should carry {string} hover text", async ({ page }, text: string) => {
   const card = providerQuotaSurface(page, "Brave")
   const value = card.locator('span[title="' + text + '"]')
   await expect(value.first()).toBeVisible()
@@ -416,9 +409,6 @@ Then("the Brave card should show no credit bar", async ({ page }) => {
   await expect(card.getByRole("progressbar", { name: barName("Brave") })).toHaveCount(0)
 })
 
-Then("the formatted CRD amount {string} should be {string}", async ({}, raw: string, text: string) => {
-  expect(EXPECTED_CRD_TEXT[raw]).toBe(text)
-})
 
 Then("the price note should show {string}", async ({ page }, text: string) => {
   await expect(page.locator("main")).toContainText(text)
@@ -568,7 +558,7 @@ Then("the credit details should not show {string}", async ({ page }, text: strin
 
 When("I open the Tavily credit grant", async ({ page }) => {
   await openCardMenuItem(page, "Tavily", "Budget limit")
-  await expect(page.getByText("Search budget (credits)")).toBeVisible()
+  await expect(page.getByText("Search budget (USD)")).toBeVisible()
 })
 
 Then("the {string} grant field should show {string}", async ({ page }, label: string, value: string) => {

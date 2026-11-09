@@ -41,7 +41,7 @@ function formatScaled(value: bigint, scale: number): string {
 /**
  * Exact product of two verbatim decimals: "5" x "0.001" gives "0.005".
  *
- * Example: multiplyDecimal("4500", "0.001") === "4.500".
+ * Example: "4500" === "4.500".
  */
 export function multiplyDecimal(left: string, right: string): string | null {
   const first = parseDecimal(left)

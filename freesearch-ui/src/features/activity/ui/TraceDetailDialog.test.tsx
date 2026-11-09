@@ -492,7 +492,7 @@ describe("TraceDetailDialog inspector workspace", () => {
     expect(screen.getByRole("region", { name: "Trace timeline" })).toBeInTheDocument()
     expect(within(switcher).queryByRole("button", { name: "Request data" })).not.toBeInTheDocument()
     const details = screen.getByRole("region", { name: /details/i })
-    expect(within(details).getAllByText("Provider request").length).toBeGreaterThan(0)
+    expect(within(details).getByRole("button", { name: "Show raw data" })).toBeInTheDocument()
     expect(
       screen.getByText("Select a stage to see its timing and recorded data")
     ).toBeInTheDocument()

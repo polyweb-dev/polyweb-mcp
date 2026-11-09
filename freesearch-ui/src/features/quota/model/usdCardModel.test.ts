@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest"
-import type { CRDUsageTotal, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
+import type { UsdUsageTotal, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
 import {
   activeAuth,
   creditCardModel,
   operationAvailable,
   priceNoteRows,
-} from "./crdCardModel"
+} from "./usdCardModel"
 
 /**
  * UI7 card model: one funds bar from the aggregate pool, exact USD
@@ -15,7 +15,6 @@ import {
 
 function profile(overrides: Record<string, unknown> = {}) {
   return {
-    reference_usd_per_crd: "0.001",
     native_usd_per_unit: "1",
     cost_basis: "priced_native_use",
     price_version: "v2026-09",
@@ -87,13 +86,13 @@ function braveAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLim
       stale: false,
       manual_anchor: false,
     },
-    crd_views: [
+    usd_views: [
       {
         state: "finite",
         operation: "search",
-        remaining_crd: "4500",
-        local_remaining_crd: null,
-        request_cost_crd: "5",
+        remaining_usd: "4.5",
+        local_remaining_usd: null,
+        request_cost_usd: "0.005",
         shared_pool_id: "brave:keyed:usd",
         possible_standard_calls: "900",
         price_version: "v2026-09",
@@ -102,9 +101,9 @@ function braveAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLim
       {
         state: "unavailable",
         operation: "fetch",
-        remaining_crd: null,
-        local_remaining_crd: null,
-        request_cost_crd: null,
+        remaining_usd: null,
+        local_remaining_usd: null,
+        request_cost_usd: null,
         shared_pool_id: null,
         possible_standard_calls: null,
         price_version: null,
@@ -164,26 +163,26 @@ describe("activeAuth", () => {
 })
 
 describe("creditCardModel", () => {
-  it("derives 4500 CRD, 4.500 USD, and 90 percent from a USD 5 allowance (UI7-02, UI7-03)", () => {
+  it("derives 4500 Usd, 4.500 USD, and 90 percent from a USD 5 allowance (UI7-02, UI7-03)", () => {
     const model = creditCardModel({ auth: braveAuth(), usageTotals: [] })
     expect(model.state).toBe("finite")
-    expect(model.remainingCRD).toBe("4500")
-    expect(model.allowanceCRD).toBe("5000")
+    expect(model.remainingUsd).toBe("4.500")
+    expect(model.allowanceUsd).toBe("5.000")
     expect(model.percentRemaining).toBe(90)
-    expect(model.remainingUSD).toBe("4.500")
+
     expect(model.poolIds).toEqual(["brave:keyed:usd"])
   })
 
-  it("derives 4495 CRD, 4.495 USD, and 89.9 percent after one 5-CRD debit (UI7-03)", () => {
+  it("derives 4495 Usd, 4.495 USD, and 89.9 percent after one 5-Usd debit (UI7-03)", () => {
     const auth = braveAuth({
       aggregate_pool: { ...(braveAuth().aggregate_pool as unknown as Record<string, unknown>), remaining: "4.495" } as never,
-      crd_views: [
+      usd_views: [
         {
           state: "finite",
           operation: "search",
-          remaining_crd: "4495",
-          local_remaining_crd: null,
-          request_cost_crd: "5",
+          remaining_usd: "4.495",
+          local_remaining_usd: null,
+          request_cost_usd: "0.005",
           shared_pool_id: "brave:keyed:usd",
           possible_standard_calls: "899",
           price_version: "v2026-09",
@@ -192,9 +191,9 @@ describe("creditCardModel", () => {
         {
           state: "unavailable",
           operation: "fetch",
-          remaining_crd: null,
-          local_remaining_crd: null,
-          request_cost_crd: null,
+          remaining_usd: null,
+          local_remaining_usd: null,
+          request_cost_usd: null,
           shared_pool_id: null,
           possible_standard_calls: null,
           price_version: null,
@@ -203,25 +202,25 @@ describe("creditCardModel", () => {
       ],
     })
     const model = creditCardModel({ auth, usageTotals: [] })
-    expect(model.remainingCRD).toBe("4495")
-    expect(model.remainingUSD).toBe("4.495")
+    expect(model.remainingUsd).toBe("4.495")
+
     expect(model.percentRemaining).toBe(89.9)
   })
 
   it("values priced use from exact totals without float error (UI7-03)", () => {
-    const totals: CRDUsageTotal[] = [
-      { provider: "brave", operation: "search", normalized_crd: "5", attempt_count: 1, volume_count: 1 },
-      { provider: "brave", operation: "search", normalized_crd: "6", attempt_count: 1, volume_count: 1 },
+    const totals: UsdUsageTotal[] = [
+      { provider: "brave", operation: "search", spend_usd: "0.005", attempt_count: 1, volume_count: 1 },
+      { provider: "brave", operation: "search", spend_usd: "0.006", attempt_count: 1, volume_count: 1 },
     ]
     const model = creditCardModel({ auth: braveAuth(), usageTotals: totals })
-    expect(model.pricedUseUSD).toBe("0.011")
+    expect(model.pricedUseUsd).toBe("0.011")
   })
 
   it("counts each shared pool once and never adds views (UI7-02)", () => {
     const auth = braveAuth({ aggregate_pool: null })
     const model = creditCardModel({ auth, usageTotals: [] })
-    expect(model.remainingCRD).toBe("4500")
-    expect(model.allowanceCRD).toBe(null)
+    expect(model.remainingUsd).toBe("4.5")
+    expect(model.allowanceUsd).toBe(null)
     expect(model.percentRemaining).toBe(null)
     expect(model.poolIds).toEqual(["brave:keyed:usd"])
   })
@@ -230,20 +229,20 @@ describe("creditCardModel", () => {
     const auth = braveAuth({ aggregate_pool: null })
     const model = creditCardModel({ auth, usageTotals: [] })
     expect(model.state).toBe("finite")
-    expect(model.remainingCRD).toBe("4500")
+    expect(model.remainingUsd).toBe("4.5")
     expect(model.percentRemaining).toBe(null)
   })
 
   it("reports unmetered without a fake bar or USD balance (UI7-02)", () => {
     const auth = braveAuth({
       aggregate_pool: null,
-      crd_views: [
+      usd_views: [
         {
           state: "unmetered",
           operation: "search",
-          remaining_crd: null,
-          local_remaining_crd: null,
-          request_cost_crd: null,
+          remaining_usd: null,
+          local_remaining_usd: null,
+          request_cost_usd: null,
           shared_pool_id: null,
           possible_standard_calls: null,
           price_version: null,
@@ -253,9 +252,9 @@ describe("creditCardModel", () => {
     })
     const model = creditCardModel({ auth, usageTotals: [] })
     expect(model.state).toBe("unmetered")
-    expect(model.remainingCRD).toBe(null)
+    expect(model.remainingUsd).toBe(null)
     expect(model.percentRemaining).toBe(null)
-    expect(model.remainingUSD).toBe(null)
+
   })
 
   it("marks a manual anchor with Estimated and Balance entry (UI7-07)", () => {
@@ -268,7 +267,7 @@ describe("creditCardModel", () => {
 })
 
 describe("priceNoteRows", () => {
-  it("lists Brave search at 0.005 USD and 5 CRD with no fetch row (UI7-04, UI7-06)", () => {
+  it("lists Brave search at 0.005 USD and 5 Usd with no fetch row (UI7-04, UI7-06)", () => {
     const limits = {
       provider: "brave",
       active_auth_mode: "keyed",
@@ -284,8 +283,8 @@ describe("priceNoteRows", () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].provider).toBe("brave")
     expect(rows[0].operation).toBe("search")
-    expect(rows[0].usdPerCall).toBe("0.005")
-    expect(rows[0].crdPerCall).toBe("5 credits")
+    expect(rows[0].usdPerCall).toBe("$0.0050")
+    expect(rows[0].usdPerCall).toBe("$0.0050")
     expect(rows[0].priceVersion).toBe("v2026-09")
 
     const documentedRows = priceNoteRows({
@@ -304,37 +303,37 @@ describe("priceNoteRows", () => {
       documentedRows.find((row) => row.provider === provider && row.operation === operation)
     expect(documentedRows).toHaveLength(14)
     expect(documentedRow("keenable", "search")).toMatchObject({
-      usdPerCall: "0.004", crdPerCall: "4 credits", free: true,
+      usdPerCall: "$0.0040", free: true,
     })
     expect(documentedRow("tinyfish", "fetch")).toMatchObject({
-      usdPerCall: null, crdPerCall: null, free: true,
+      usdPerCall: null, free: true,
     })
     expect(documentedRow("tavily", "search")).toMatchObject({
-      usdPerCall: "0.008", crdPerCall: "8 credits", free: false,
+      usdPerCall: "$0.0080", free: false,
     })
     expect(documentedRow("tavily", "fetch")).toMatchObject({
-      usdPerCall: "0.0016", crdPerCall: "1.6 credits", free: false,
+      usdPerCall: "$0.0016", free: false,
     })
     expect(documentedRow("exa", "fetch")).toMatchObject({
-      usdPerCall: "0.001", crdPerCall: "1 credit", priceBasis: "per page, per content type",
+      usdPerCall: "$0.0010", priceBasis: "per page, per content type",
     })
     expect(documentedRow("firecrawl", "search")).toMatchObject({
-      usdPerCall: "0.0076", crdPerCall: "7.6 credits", free: false,
+      usdPerCall: "$0.0076", free: false,
     })
     expect(documentedRow("firecrawl", "search")?.priceBasis).toContain("Hobby reference")
     expect(documentedRow("firecrawl", "fetch")).toMatchObject({
-      usdPerCall: "0.0038", crdPerCall: "3.8 credits", free: false,
+      usdPerCall: "$0.0038", free: false,
     })
     expect(documentedRow("parallel", "search")).toMatchObject({
-      usdPerCall: "0.001", crdPerCall: "1 credit",
+      usdPerCall: "$0.0010",
     })
     expect(documentedRow("youcom", "fetch")).toMatchObject({
-      usdPerCall: "0.001", crdPerCall: "1 credit",
+      usdPerCall: "$0.0010",
     })
 
     const zeroCostAuth = braveAuth({
       search: { ...searchRecord(), budget: { model: "none", usd_per_call: "0", priced: false } } as never,
-      crd_views: [{ ...braveAuth().crd_views[0], request_cost_crd: "0" }],
+      usd_views: [{ ...braveAuth().usd_views[0], request_cost_usd: "0" }],
     })
     const zeroCostRows = priceNoteRows({
       providers: [{ id: "custom", name: "Custom", hasKey: true, capabilities: ["search"] }] as never,
@@ -348,13 +347,13 @@ describe("priceNoteRows", () => {
       }] as never,
     })
     expect(zeroCostRows[0]).toMatchObject({
-      usdPerCall: "0.000", crdPerCall: "0 credits", free: true,
+      usdPerCall: "$0.0000", free: true,
     })
 
     const tinyPositiveAuth = braveAuth({
-      crd_views: [{
-        ...braveAuth().crd_views[0],
-        request_cost_crd: "0.000000000000000000000000000000000001",
+      usd_views: [{
+        ...braveAuth().usd_views[0],
+        request_cost_usd: "0.000000000000000000000000000000000000001",
       }],
     })
     const tinyPositiveRows = priceNoteRows({
@@ -377,25 +376,25 @@ describe("polish provenance (Item 4+5)", () => {
     const auth = braveAuth({
       aggregate_pool: { ...(braveAuth().aggregate_pool as unknown as Record<string, unknown>), manual_anchor: true } as never,
     })
-    const totals: CRDUsageTotal[] = [
-      { provider: "brave", operation: "search", normalized_crd: "5", attempt_count: 1, volume_count: 1 },
-      { provider: "brave", operation: "search", normalized_crd: "6", attempt_count: 1, volume_count: 1 },
+    const totals: UsdUsageTotal[] = [
+      { provider: "brave", operation: "search", spend_usd: "0.005", attempt_count: 1, volume_count: 1 },
+      { provider: "brave", operation: "search", spend_usd: "0.006", attempt_count: 1, volume_count: 1 },
     ]
     const model = creditCardModel({ auth, usageTotals: totals })
     expect(model.provenanceNote).toBe("Estimated · Provider balance")
-    expect(model.remainingUSD).toBe("4.500")
-    expect(model.pricedUseUSD).toBe("0.011")
+
+    expect(model.pricedUseUsd).toBe("0.011")
   })
 
   it("shows Vendor headers provenance for a vendor pool while keeping exact amounts", () => {
-    const totals: CRDUsageTotal[] = [
-      { provider: "brave", operation: "search", normalized_crd: "5", attempt_count: 1, volume_count: 1 },
-      { provider: "brave", operation: "search", normalized_crd: "6", attempt_count: 1, volume_count: 1 },
+    const totals: UsdUsageTotal[] = [
+      { provider: "brave", operation: "search", spend_usd: "0.005", attempt_count: 1, volume_count: 1 },
+      { provider: "brave", operation: "search", spend_usd: "0.006", attempt_count: 1, volume_count: 1 },
     ]
     const model = creditCardModel({ auth: braveAuth(), usageTotals: totals })
     expect(model.provenanceNote).toContain("Vendor headers")
     expect(model.provenanceNote as string).not.toContain("vendor_headers")
-    expect(model.remainingUSD).toBe("4.500")
-    expect(model.pricedUseUSD).toBe("0.011")
+
+    expect(model.pricedUseUsd).toBe("0.011")
   })
 })

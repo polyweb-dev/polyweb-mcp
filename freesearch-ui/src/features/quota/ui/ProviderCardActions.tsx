@@ -43,7 +43,7 @@ export function ProviderCardActions({
         <Button
           type="button"
           variant="outline"
-          size="form"
+          size="sm"
           disabled={syncing}
           aria-label={"Refresh limits for " + providerName}
           onClick={onSync}

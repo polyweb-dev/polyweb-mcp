@@ -14,11 +14,11 @@ import { toBackendId } from "@/services/api/mappers"
 import { ApiError, errorMessage } from "@/shared/api/http"
 import { decodeLimitHistory } from "@/domains/dashboard"
 import type {
-  CRDGrantPayload,
+  UsdGrantPayload,
   LimitAuditEvent,
   ProviderLimits,
 } from "@/domains/dashboard"
-import { activeAuth } from "./crdCardModel"
+import { activeAuth } from "./usdCardModel"
 import { bodyOf, skippedFor, syncText, withTimeout, NO_USAGE_ENDPOINT, NO_CREDENTIAL } from "./providerRefresh"
 
 const STALE_VERSION_TEXT =
@@ -36,7 +36,7 @@ export interface ProviderLimitsController {
   saving: boolean
   saveError: string | null
   staleVersion: boolean
-  saveGrant: (payload: CRDGrantPayload) => Promise<boolean>
+  saveGrant: (payload: UsdGrantPayload) => Promise<boolean>
   syncing: boolean
   syncNote: string | null
   /** The last refresh said the provider reports no usage, so the card hides its refresh action. */
@@ -211,7 +211,7 @@ export function useProviderLimits(input: ProviderLimitsInput): ProviderLimitsCon
   }, [refreshDashboard])
 
   const saveGrant = useCallback(
-    async (payload: CRDGrantPayload): Promise<boolean> => {
+    async (payload: UsdGrantPayload): Promise<boolean> => {
       setSave({ saving: true, saveError: null, staleVersion: false })
       try {
         await saveBudget(backendId, payload)

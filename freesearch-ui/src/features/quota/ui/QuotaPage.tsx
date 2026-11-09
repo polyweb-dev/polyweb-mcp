@@ -40,7 +40,7 @@ export function QuotaPage({
   const {
     providers,
     providerLimits,
-    crdUsageTotals,
+    usdUsageTotals,
     dashboardQuotas,
     usageLoading,
     usageError,
@@ -72,7 +72,7 @@ export function QuotaPage({
       <ProviderLimitsCards
         providers={providers}
         providerLimits={providerLimits}
-        crdUsageTotals={crdUsageTotals}
+        usdUsageTotals={usdUsageTotals}
         refreshDashboard={refreshDashboard}
         manualEligible={manualEligible}
         {...(refreshableProviders !== undefined ? { refreshableProviders } : {})}
@@ -82,7 +82,7 @@ export function QuotaPage({
         {...(renderRateTier !== undefined ? { renderRateTier } : {})}
       />
 
-      <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} />
+      <UsageTotals usdUsageTotals={usdUsageTotals} providers={providers} />
 
     </div>
   )

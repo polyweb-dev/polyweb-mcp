@@ -61,9 +61,9 @@ describe("TraceInspectionWorkspace", () => {
 
     const inspector = screen.getByRole("region", { name: /details/i })
     expect(within(inspector).getByLabelText("Recorded facts")).toHaveTextContent("Results3")
-    const rawData = within(inspector).getByText("Show raw data").closest("details")!
-    expect(rawData).not.toHaveAttribute("open")
-    await user.click(within(inspector).getByText("Show raw data"))
+    const rawData = within(inspector).getByRole("button", { name: "Show raw data" })
+    expect(rawData).toHaveAttribute("aria-expanded", "false")
+    await user.click(rawData)
     expect(within(inspector).getAllByText("Provider request").length).toBeGreaterThan(0)
     expect(within(inspector).getByLabelText("Provider request attributes")).toHaveTextContent(
       "What is the latest financial news?"
@@ -89,7 +89,7 @@ describe("TraceInspectionWorkspace", () => {
     expect(container.contains(split)).toBe(true)
     expect(split.className).toMatch(/lg:grid-cols-/)
     expect(detail).toBeInTheDocument()
-    expect(within(detail).getAllByText("Provider request").length).toBeGreaterThan(0)
+    expect(within(detail).getByRole("button", { name: "Show raw data" })).toBeInTheDocument()
 
     const providerRow = within(screen.getByRole("list", { name: "Trace trajectory" })).getByRole(
       "button",
@@ -101,6 +101,7 @@ describe("TraceInspectionWorkspace", () => {
     expect(within(trajectory).queryByText(/Provider steps|Other recorded steps|Recorded substeps/)).not.toBeInTheDocument()
 
     await user.click(providerRow)
+    await user.click(within(detail).getByRole("button", { name: "Show raw data" }))
     expect(within(detail).getByLabelText("Provider response attributes")).toHaveTextContent(
       '"result_count": 3'
     )
@@ -272,6 +273,7 @@ describe("TraceInspectionWorkspace", () => {
 
     const article = screen.getByRole("article")
     expect(article.querySelector("pre")?.textContent).toBe(content)
+    expect(within(article).getByText(`${content.length.toLocaleString("en-US")} characters`)).toBeInTheDocument()
     expect(within(article).queryByRole("button", { name: /show full content/i })).not.toBeInTheDocument()
     expect(vi.fn()).not.toHaveBeenCalled()
   })

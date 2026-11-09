@@ -69,7 +69,6 @@ const REASON_TEXT: Record<string, string> = {
 /** One text per native unit of a pool id. */
 const UNIT_TEXT: Record<string, string> = {
   credit: "credits",
-  crd: "USD",
   free: "free",
   request: "requests",
   token: "tokens",

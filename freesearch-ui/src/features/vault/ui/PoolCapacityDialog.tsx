@@ -10,9 +10,11 @@ import { ConfirmDialog } from "@/shared/ui/ConfirmDialog"
 import { Field } from "@/shared/ui/Field"
 import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
+import { NumericField } from "@/shared/ui/NumericField"
 import { ProviderLogo } from "@/shared/ui/ProviderLogo"
 import { Select } from "@/shared/ui/select"
 import { TextField } from "@/shared/ui/TextField"
+import { Switch } from "@/shared/ui/Switch"
 import { useFreeProvider } from "../model/useFreeProvider"
 import { PoolBudgetFields } from "./PoolBudgetFields"
 
@@ -105,9 +107,9 @@ function renderOperationRates({ separate, setSeparate, selected, searchRate, set
   setFetchRate: (value: string) => void
 }) {
   return <div className="space-y-3">
-    <Checkbox checked={separate} onChange={setSeparate} label="Limit Search and Fetch separately" />
-    {separate && selected.includes("search") && <TextField id="search-rate" label="Search requests" type="number" min="1" value={searchRate} onChange={setSearchRate} />}
-    {separate && selected.includes("fetch") && <TextField id="fetch-rate" label="Fetch requests" type="number" min="1" value={fetchRate} onChange={setFetchRate} />}
+    <Switch checked={separate} onChange={setSeparate} label="Limit Search and Fetch separately" />
+    {separate && selected.includes("search") && <NumericField id="search-rate" label="Search requests" min="1" value={searchRate} onChange={setSearchRate} />}
+    {separate && selected.includes("fetch") && <NumericField id="fetch-rate" label="Fetch requests" min="1" value={fetchRate} onChange={setFetchRate} />}
   </div>
 }
 
@@ -195,7 +197,7 @@ export function PoolCapacityDialog({ item, pool, projects, onClose, onSaved }: {
           <TextField id="pool-label" label="Pool name" type="text" value={name} onChange={setLabel} />
           {renderOperations(item, selected, setSelected)}
           <div className="grid grid-cols-2 gap-3">
-            {!separate && <TextField id="pool-rate" label="Request rate" type="number" min="1" value={rate} onChange={setRate} />}
+            {!separate && <NumericField id="pool-rate" label="Request rate" min="1" value={rate} onChange={setRate} />}
             <Field id="pool-window" label="Rate unit"><Select id="pool-window" value={String(windowSeconds)} onValueChange={(value) => setWindowSeconds(Number(value))}
               options={[{ value: "1", label: "Per second" }, { value: "60", label: "Per minute" }, { value: "3600", label: "Per hour" }]} /></Field>
           </div>
@@ -209,4 +211,3 @@ export function PoolCapacityDialog({ item, pool, projects, onClose, onSaved }: {
     </>
   )
 }
-

@@ -1,6 +1,6 @@
 """USD transport contracts. The persisted ledger retains its exact credit units."""
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from freesearch.models import provider_limits as ledger
+from freesearch.models.budget_period import BudgetPeriod
 from freesearch.models.contracts import ContractModel, UnitKind
 from freesearch.models.credentials import CredentialAuthMode
 
@@ -25,6 +26,8 @@ def project_usd(value: Any) -> Any:
     result: dict[str, Any] = {}
     for raw_key, item in value.items():
         key = str(raw_key)
+        if key in ("period_start", "period_end") and "search_granted_crd" in value:
+            continue
         if key == "reference_usd_per_crd":
             continue
         if key == "price_version" and item == ledger.CRD_PRICE_VERSION:
@@ -177,8 +180,7 @@ class USDHistoryPage(USDContract):
 class USDGrantsSummary(USDContract):
     provider: str
     auth_mode: ledger.AuthMode
-    period_start: date
-    period_end: date
+    period: BudgetPeriod = "month"
     version: int = 1
     search_granted_usd: ledger.ExactDecimal = Decimal("0")
     search_consumed_usd: ledger.ExactDecimal = Decimal("0")
@@ -239,8 +241,7 @@ class USDBudgetPayload(ContractModel):
     """Provider-wide search and fetch ceilings in decimal USD."""
 
     version: int = Field(default=0, ge=0)
-    period_start: date
-    period_end: date
+    period: BudgetPeriod = "month"
     search_usd: ledger.ExactDecimal = Decimal("0")
     fetch_usd: ledger.ExactDecimal = Decimal("0")
 
@@ -248,8 +249,7 @@ class USDBudgetPayload(ContractModel):
         """Convert USD to the existing persisted credit unit once on write."""
         return ledger.CRDGrantPayload(
             version=self.version,
-            period_start=self.period_start,
-            period_end=self.period_end,
+            period=self.period,
             search_crd=self.search_usd / ledger.CRD_USD_REFERENCE,
             fetch_crd=self.fetch_usd / ledger.CRD_USD_REFERENCE,
         )

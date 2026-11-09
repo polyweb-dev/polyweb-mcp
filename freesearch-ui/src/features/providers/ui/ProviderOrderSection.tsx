@@ -6,11 +6,11 @@ import { reorderProviderPriority } from "@/shared/lib/reorderProviderPriority"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/EmptyState"
 import { PillTabs } from "@/shared/ui/PillTabs"
-import { PillTabsList } from "@/shared/ui/PillTabsList"
 import { PillTabsPanel } from "@/shared/ui/PillTabsPanel"
 import { Section } from "@/shared/ui/Section"
 import { Switch } from "@/shared/ui/Switch"
 import { Tag } from "@/shared/ui/Tag"
+import { TabsList, TabsTrigger } from "@/shared/ui/tabs"
 import { useProviderOrder } from "../model/useProviderOrder"
 import type { ProviderOrderContext } from "../model/providerOrderContext"
 import { ProviderOrderRows } from "./ProviderOrderRows"
@@ -82,9 +82,15 @@ export function ProviderOrderSection({ context }: { context: ProviderOrderContex
         }}
         options={[{ value: "search", label: `Search ${data.search.providers.length}` }, { value: "fetch", label: `Fetch ${data.fetch.providers.length}` }]}>
         <div className="flex items-center justify-between gap-4">
-          <PillTabsList />
+          <TabsList variant="pill" aria-label="Provider order operations">
+            {(["search", "fetch"] as const).map((tab) => <TabsTrigger key={tab} value={tab}
+              id={`provider-order-tab-${tab}`} aria-controls={`provider-order-panel-${tab}`}>
+              {tab === "search" ? "Search" : "Fetch"}{" "}
+              <span className="rounded bg-[var(--raised)] px-1 tabular-nums text-[var(--muted)]">{data[tab].providers.length}</span>
+            </TabsTrigger>)}
+          </TabsList>
           <div className="flex h-8 items-center gap-3">
-            {undo?.operation === operation && <Button variant="secondary" disabled={pending} onClick={() => void save(operation, { strategy: undo.strategy }, null)}>Undo</Button>}
+            {undo?.operation === operation && <Button variant="outline" size="sm" disabled={pending} onClick={() => void save(operation, { strategy: undo.strategy }, null)}>Undo</Button>}
             {order.providers.length > 0 && <ProviderOrderToolbar operation={operation} order={order} disabled={!canConfigure || pending} pending={pending} onChange={change} />}
           </div>
         </div>
@@ -92,7 +98,7 @@ export function ProviderOrderSection({ context }: { context: ProviderOrderContex
           <div className="space-y-3 pt-3">
             {!canServe && <div role="status" className="flex items-center justify-between gap-3 rounded border border-[var(--border-subtle)] bg-[var(--raised)] px-3 py-2 text-[13px]">
               <span>No provider can serve {opLabel} in this project</span>
-              {context.isOwner && context.addCapacity && <Button variant="outline" onClick={context.addCapacity}>Add capacity</Button>}
+              {context.isOwner && context.addCapacity && <Button variant="outline" size="sm" onClick={context.addCapacity}>Add capacity</Button>}
             </div>}
             {order.providers.length === 0 ? <EmptyState title={`No provider serves ${opLabel}`}
               description={<>No pool of this project allows {opLabel}{!context.isOwner && `. Ask ${context.owner ?? "the provider owner"} to allow ${opLabel} in a pool`}</>}

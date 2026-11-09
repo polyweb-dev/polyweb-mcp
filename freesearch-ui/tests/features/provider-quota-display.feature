@@ -1,6 +1,6 @@
 @stub @quota
 Feature: Provider quota display stays honest
-  The usage view renders one credit bar per card with the exact CRD fraction.
+  The usage view renders one credit bar per card with the exact USD fraction.
   Unknown fields stay hidden and invented balances never appear.
   Manual entry keeps its action-only controls. Parallel OAuth is managed in
   Keys and pools, which the Quotas page links to.
@@ -16,11 +16,11 @@ Feature: Provider quota display stays honest
     When I navigate directly to "/system/quotas"
     Then I should see the "Quotas" heading
     And the Brave credit bar should show "90" percent
-    And the Brave card should show "4,500 / 5,000 CRD"
-    And the Brave CRD value should carry "$4.5 left" hover text
+    And the Brave card should show "4,500 / 5,000 USD"
+    And the Brave USD value should carry "$4.5 left" hover text
     And the Brave card subtitle should contain "Reported by provider"
     And the Brave key balance shows "Brave work" and "$1,234.50 left"
-    And the usage view should not show "CRD left"
+    And the usage view should not show "USD left"
     And the usage view should not show "∞"
     And the usage view should not show "n/a"
 

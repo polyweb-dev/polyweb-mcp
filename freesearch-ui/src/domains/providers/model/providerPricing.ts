@@ -26,6 +26,5 @@ export function formatCallCost(cost: string | number | null | undefined): string
 
 export function providerCallCost(provider: ProviderPricing | undefined, operation: Operation, keyless = false): string {
   const cost = keyless ? provider?.keylessCallCostUsd?.[operation] : provider?.callCostUsd?.[operation]
-  const price = formatCallCost(cost)
-  return keyless && price === "Free" ? "Free without a key" : price
+  return formatCallCost(cost)
 }

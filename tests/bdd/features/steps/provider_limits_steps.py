@@ -8,7 +8,7 @@ B04-B06, B11-B13, B19-B27, B33, B37-B41. Rev5 K=0.001 exact Decimal math.
 
 import asyncio
 import tempfile
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -542,8 +542,7 @@ def step_grant(context: Any) -> None:
             SYNTH,
             GrantPayload(
                 version=0,
-                period_start=date(2026, 3, 1),
-                period_end=date(2026, 4, 1),
+                period="month",
                 search_crd=Decimal("10"),
                 fetch_crd=Decimal("4"),
             ),
@@ -1485,8 +1484,7 @@ def step_brave_fetch_grant_422(context: Any) -> None:
             "/api/v1/providers/brave/budgets/keyed",
             json={
                 "version": 0,
-                "period_start": "2026-03-01",
-                "period_end": "2026-04-01",
+                "period": "month",
                 "search_usd": "0.010",
                 "fetch_usd": "0.004",
             },
@@ -1682,8 +1680,7 @@ def step_brave_grant(context: Any) -> None:
             "brave",
             GrantPayload(
                 version=0,
-                period_start=date(2026, 3, 1),
-                period_end=date(2026, 4, 1),
+                period="month",
                 search_crd=Decimal("10"),
                 fetch_crd=Decimal("0"),
             ),
@@ -2971,8 +2968,7 @@ def step_tavily_funds_state(context: Any, state: str) -> None:
                 "tavily",
                 GrantPayload(
                     version=0,
-                    period_start=date(2026, 3, 1),
-                    period_end=date(2027, 12, 31),
+                    period="month",
                     search_crd=Decimal("8"),
                     fetch_crd=Decimal("0"),
                 ),
@@ -3100,9 +3096,8 @@ def step_tavily_grant(context: Any) -> None:
             "tavily",
             GrantPayload(
                 version=0,
-                period_start=date(2026, 3, 1),
-                period_end=date(2026, 4, 1),
-                search_crd=Decimal("10"),
+                period="month",
+                search_crd=Decimal("20"),
                 fetch_crd=Decimal("4"),
             ),
             AuthMode.KEYED,
@@ -3120,7 +3115,7 @@ def step_tavily_grant(context: Any) -> None:
 def step_tavily_grant_audit(context: Any) -> None:
     auth = context.tavily_saved.auth(AuthMode.KEYED)
     assert auth is not None
-    assert auth.grants.search_granted_crd == Decimal("10")
+    assert auth.grants.search_granted_crd == Decimal("20")
     assert auth.grants.fetch_granted_crd == Decimal("4")
     reasons = [e.reason for e in context.tavily_history.events]
     assert "grant" in reasons

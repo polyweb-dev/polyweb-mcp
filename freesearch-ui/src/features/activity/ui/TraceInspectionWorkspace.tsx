@@ -153,6 +153,7 @@ function resultsView({ trace, output, mode, providerLabel, providerId, selection
   const results = searchOutput(output)
   const shared = {
     output,
+    input: trace.input,
     mode,
     providerId,
     results: results?.results ?? [],

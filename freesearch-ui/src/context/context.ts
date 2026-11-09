@@ -5,7 +5,7 @@ import type {
 } from "@/domains/providers"
 import type { FallbackConfig } from "@/domains/routing"
 import type {
-  CRDUsageTotal,
+  UsdUsageTotal,
   DashboardQuota,
   ProviderLimits,
   UsageEvent,
@@ -31,7 +31,7 @@ export interface FreeSearchContextType {
   usageTotals: UsageTotal[]
   dashboardQuotas: DashboardQuota[]
   providerLimits: ProviderLimits[]
-  crdUsageTotals: CRDUsageTotal[]
+  usdUsageTotals: UsdUsageTotal[]
   quotaAvailable: boolean
   dashboardNotice: string | null
   toasts: ToastNotification[]

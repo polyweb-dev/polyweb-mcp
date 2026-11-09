@@ -90,7 +90,7 @@ export function ActivityPage() {
         title="Activity"
         description="Every search and fetch this project ran"
         actions={
-          <Button variant="outline" size="form" onClick={controller.refresh}>
+          <Button variant="outline" size="sm" onClick={controller.refresh}>
             <RefreshCw aria-hidden="true" />
             Refresh
           </Button>

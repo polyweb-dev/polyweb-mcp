@@ -11,8 +11,8 @@ import {
   projectsContextFixture,
   systemAccessFixture,
 } from "@/test/accessFixtures"
-import { SettingsView } from "@/components/settings/SettingsView"
-import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
+import { SettingsView } from "@/features/system-providers/ui/SettingsView"
+import { QuotaAnalytics } from "@/features/quota/ui/QuotaAnalytics"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import {
   allProvidersFixture,
@@ -327,7 +327,7 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(dialog.textContent).toMatch(/Endpoint/)
     cleanup()
 
-    // The usage table shows USD costs, and a null p95 stays blank.
+    // The usage table shows USD costs and an em dash for a null p95.
     const nullBraveProviders = allProvidersFixture().map((entry) =>
       entry.provider_id === "brave" ? { ...entry, latency_p95_ms: null } : entry
     )
@@ -342,11 +342,10 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     expect(within(usage).getByText("Known cost")).toBeInTheDocument()
     expect(within(usage).getByText("p95")).toBeInTheDocument()
     expect(usage.textContent).not.toContain("∞")
-    const usageSection = document.querySelector(
-      'section[aria-labelledby="usage-totals-heading"]'
-    )
-    expect(usageSection).not.toBeNull()
-    expect(usageSection!.textContent).not.toContain("—")
+    const braveRow = within(usage).getByRole("row", { name: /Brave Search/ })
+    expect(within(braveRow).getByText("$0.60")).toBeInTheDocument()
+    expect(within(braveRow).getByText("3")).toBeInTheDocument()
+    expect(within(braveRow).getByText("—")).toBeInTheDocument()
     expect(document.querySelector('[data-testid^="quota-remaining-percent-"]')).toBeNull()
   })
 
@@ -398,7 +397,7 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     renderUsage(dashboard)
     const table = await screen.findByRole("table", { name: "Usage totals" })
     const braveRow = within(table).getByRole("row", { name: /Brave Search/ })
-    expect(within(braveRow).getByText("$0.005")).toBeInTheDocument()
+    expect(within(braveRow).getByText("$0.01")).toBeInTheDocument()
     expect(screen.queryByText("How credit units are priced")).toBeNull()
     expect(screen.getByText("Allowance left")).toBeInTheDocument()
 

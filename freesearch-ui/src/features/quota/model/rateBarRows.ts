@@ -1,5 +1,5 @@
 import type { RateBarView, RateProgressView } from "@/domains/dashboard"
-import { callsText, formatQuotaCount, rateBarModel } from "./crdDisplay"
+import { callsText, formatQuotaCount, rateBarModel } from "./usdDisplay"
 import { groupDigits } from "./numberText"
 
 /** One shown rate row: the bar view and its known count text. */

@@ -9,7 +9,7 @@ const info: ProviderInfo = { facts: [{ label: "Search cost (USD)", value: "$0.00
 describe("quota catalog prices", () => {
   it("replaces stale Keenable rail prices with the catalog prices", () => {
     expect(catalogQuotaInfo(info, provider, "keyless")).toMatchObject({ creditNote: "Free tier", facts: [
-      { label: "Search cost (USD)", value: "Free" }, { label: "Fetch cost (USD)", value: "Free" },
+      { label: "Search cost", value: "Free" }, { label: "Fetch cost", value: "Free" },
     ] })
   })
   it("uses keyed and keyless prices from their respective catalog entries", () => {

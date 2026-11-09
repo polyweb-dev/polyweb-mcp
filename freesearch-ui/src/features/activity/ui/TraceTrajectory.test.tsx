@@ -160,7 +160,7 @@ describe("TraceTrajectory", () => {
       .reduce((sum, stage) => sum + stage.durationMs, 0)
     expect(activeMs).toBeGreaterThan(0)
     expect(activeMs).toBeLessThan(durationSum)
-    expect(screen.getByText("Outside provider calls")).toBeInTheDocument()
+    expect(screen.queryByText("Outside provider calls")).not.toBeInTheDocument()
   })
 
   it("carries the inset focus ring on trajectory rows and the ms unit outside the axis", () => {
