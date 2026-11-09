@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react"
 import {
   motion,
   useMotionValue,
@@ -7,15 +7,25 @@ import {
   useTransform,
   type MotionValue,
 } from "motion/react"
+import { SiteFooter } from "./components/Footer"
+import { HeroBeams } from "./components/HeroBeams"
 import { Nav } from "./components/Nav"
-import { Reveal, Revealed } from "./components/Reveal"
+import { Reveal } from "./components/Reveal"
 import { RosetteScene } from "./components/RosetteScene"
 import { RoutingScene } from "./components/RoutingScene"
+import { AboutPage } from "./pages/About"
+import { FetchApiPage } from "./pages/FetchApi"
+import { McpPage } from "./pages/Mcp"
+import { NotFoundPage } from "./pages/NotFound"
+import { ProjectsPage } from "./pages/Projects"
+import { ProvidersPage } from "./pages/Providers"
+import { SearchApiPage } from "./pages/SearchApi"
+import { SecurityPage } from "./pages/Security"
+import { SelfHostingPage } from "./pages/SelfHosting"
+import { GITHUB } from "./links"
+import { useMobile } from "./useMobile"
 
-import logo from "./assets/polyweb.webp"
-import heroPrism from "./assets/hero-prism.webp"
 import projectsWide from "./assets/projects-wide.webp"
-import selfhostWide from "./assets/selfhost-wide.webp"
 
 import brave from "./assets/brave.webp"
 import exa from "./assets/exa.webp"
@@ -25,8 +35,6 @@ import parallel from "./assets/parallel.webp"
 import tavily from "./assets/tavily.webp"
 import tinyfish from "./assets/tinyfish.webp"
 import youcom from "./assets/youcom.webp"
-
-const GITHUB = "https://github.com/polyweb-dev/polyweb"
 
 const PROVIDERS: Array<[string, string]> = [
   ["Brave Search", brave],
@@ -43,16 +51,7 @@ function Hero() {
   return (
     <div className="section-night" id="top" data-theme="night">
       <section className="hero" aria-label="Polyweb introduction">
-        <img
-          className="hero-img"
-          src={heroPrism}
-          alt="A beam of light splitting through a glass prism into eight beams"
-          width={3136}
-          height={1344}
-          fetchPriority="high"
-        />
-        <div className="hero-fade-x" aria-hidden="true" />
-        <div className="hero-fade-b" aria-hidden="true" />
+        <HeroBeams />
         <div className="container">
           <div className="hero-content">
             <Reveal>
@@ -106,21 +105,27 @@ const GAUGES: Array<{
   value: number
   of: number
   fill: number
+  drain: number
   label: string
 }> = [
-  { name: "Brave Search", src: brave, value: 642, of: 1000, fill: 0.64, label: "credits left this month" },
-  { name: "Tavily", src: tavily, value: 818, of: 1000, fill: 0.82, label: "credits left this month" },
-  { name: "Exa", src: exa, value: 231, of: 500, fill: 0.46, label: "credits left this month" },
-  { name: "Keenable", src: keenable, value: 412, of: 1000, fill: 0.41, label: "requests left this hour · keyless" },
+  { name: "Brave Search", src: brave, value: 642, of: 1000, fill: 0.64, drain: 0.06, label: "credits left this month" },
+  { name: "Tavily", src: tavily, value: 818, of: 1000, fill: 0.82, drain: 0.09, label: "credits left this month" },
+  { name: "Exa", src: exa, value: 231, of: 500, fill: 0.46, drain: 0.07, label: "credits left this month" },
+  { name: "Keenable", src: keenable, value: 412, of: 1000, fill: 0.41, drain: 0.10, label: "requests left this hour · keyless" },
 ]
 
 const GAUGE_R = 118
 const GAUGE_C = 2 * Math.PI * GAUGE_R
 
 function Gauge({ g, progress }: { g: (typeof GAUGES)[number]; progress: MotionValue<number> }) {
-  const dash = useTransform(progress, [0, 1], [0, g.fill * GAUGE_C], { clamp: true })
+  const fillT = useTransform(progress, [0, 0.4], [0, 1], { clamp: true })
+  const drainT = useTransform(progress, [0.5, 0.95], [0, g.drain], { clamp: true })
+  const level = useTransform([fillT, drainT] as MotionValue<number>[], (v) => {
+    return (v[0] as number) * (1 - (v[1] as number))
+  })
+  const dash = useTransform(level, (l) => l * g.fill * GAUGE_C)
   const dasharray = useTransform(dash, (d) => `${d} ${GAUGE_C}`)
-  const num = useTransform(progress, (v) => String(Math.round(v * g.value)))
+  const num = useTransform(level, (l) => String(Math.round(l * g.value)))
   return (
     <div className="gauge">
       <svg viewBox="0 0 264 264" aria-hidden="true">
@@ -145,12 +150,14 @@ function Gauge({ g, progress }: { g: (typeof GAUGES)[number]; progress: MotionVa
 function Credits() {
   const ref = useRef<HTMLDivElement>(null)
   const reduced = useReducedMotion()
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start 0.85", "start 0.35"] })
+  const mobile = useMobile()
+  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end end"] })
   const done = useMotionValue(1)
-  const progress = reduced ? done : scrollYProgress
+  const progress = reduced || mobile ? done : scrollYProgress
   return (
-    <section className="section section-night" data-theme="night" aria-label="Credits and limits">
-      <div className="container" ref={ref} style={{ textAlign: "center" }}>
+    <div className="pin-wrap credits-wrap section-night" ref={ref} data-theme="night" aria-label="Credits and limits">
+      <div className="pin-sticky">
+      <div className="container" style={{ textAlign: "center" }}>
         <Reveal>
           <h2 className="headline">
             <span className="hero-line">Know what</span>
@@ -169,7 +176,8 @@ function Credits() {
           ))}
         </div>
       </div>
-    </section>
+      </div>
+    </div>
   )
 }
 
@@ -212,32 +220,21 @@ const MEMBERS = [
   ["MK", "mara.kovacs@acme.co", "Admin"],
   ["JW", "jon.wells@acme.co", "Member"],
   ["AS", "aisha.syed@acme.co", "Member"],
-  ["TB", "tom.baier@acme.co", "Member"],
-  ["LN", "lena.nakamura@acme.co", "Admin"],
-  ["RO", "ravi.okafor@acme.co", "Member"],
 ]
-const KEY_TEXT = "fs_live_7Hk2xQ9mR4vN"
+const KEY_TEXT = "fs_live_7Hk2xQ9m"
 const KEY_PREFIX = "fs_live_"
 
-function KeyField() {
-  const ref = useRef<HTMLDivElement>(null)
-  const reduced = useReducedMotion()
-  const { scrollYProgress } = useScroll({
-    target: ref,
-    offset: ["start 0.85", "end 0.35"],
-  })
-  const done = useMotionValue(1)
-  const progress = reduced ? done : scrollYProgress
-  const typedN = useTransform(progress, [0, 0.35], [0, KEY_TEXT.length], {
+function KeyField({ progress }: { progress: MotionValue<number> }) {
+  const typedN = useTransform(progress, [0.2, 0.5], [0, KEY_TEXT.length], {
     clamp: true,
   })
   const maskN = useTransform(
     progress,
-    [0.5, 0.85],
+    [0.5, 0.7],
     [0, KEY_TEXT.length - KEY_PREFIX.length],
     { clamp: true }
   )
-  const copyOn = useTransform(progress, [0.88, 0.95], [0, 1], { clamp: true })
+  const copyOn = useTransform(progress, [0.73, 0.78], [0, 1], { clamp: true })
   const copyOff = useTransform(copyOn, (v) => 1 - v)
   const chars = useTransform([typedN, maskN] as MotionValue<number>[], (v) => {
     const t = Math.round(v[0] as number)
@@ -249,7 +246,7 @@ function KeyField() {
       .join("")
   })
   return (
-    <div ref={ref} style={{ marginTop: "auto", marginBottom: "auto" }}>
+    <div style={{ marginTop: "auto", marginBottom: "auto" }}>
       <div className="key-field key-field-big">
         <motion.span className="key-live">{chars}</motion.span>
         <span className="key-copy">
@@ -267,59 +264,93 @@ const EVENTS = [
   ["search", brave, "Brave Search · answered"],
   ["fetch", firecrawl, "Firecrawl · answered"],
   ["search", exa, "Exa · answered"],
-  ["fetch", tavily, "Tavily · answered"],
 ]
 
-function Bento() {
+function PinRow({
+  progress,
+  from,
+  to,
+  className,
+  children,
+}: {
+  progress: MotionValue<number>
+  from: number
+  to: number
+  className: string
+  children: ReactNode
+}) {
+  const opacity = useTransform(progress, [from, to], [0, 1], { clamp: true })
+  const y = useTransform(progress, [from, to], [10, 0])
   return (
-    <section className="section-paper" data-theme="paper" aria-label="Projects">
-      <div className="bento">
-        <Revealed>
+    <motion.div className={className} style={{ opacity, y }}>
+      {children}
+    </motion.div>
+  )
+}
+
+function Bento() {
+  const ref = useRef<HTMLDivElement>(null)
+  const reduced = useReducedMotion()
+  const mobile = useMobile("(max-width: 860px)")
+  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end end"] })
+  const done = useMotionValue(1)
+  const progress = reduced || mobile ? done : scrollYProgress
+  return (
+    <div className="pin-wrap bento-wrap section-paper" ref={ref} data-theme="paper" aria-label="Projects">
+      <div className="pin-sticky">
+        <div className="bento">
           <div className="bento-tile">
-            <h3 className="bento-title">Members and roles</h3>
+            <h3 className="bento-title">Members</h3>
             <div>
               {MEMBERS.map(([ini, mail, role], i) => (
-                <div className="member-row" key={mail} style={{ transitionDelay: `${i * 90}ms` }}>
+                <PinRow key={mail} progress={progress} from={0.05 + i * 0.08} to={0.13 + i * 0.08} className="member-row">
                   <span className="member-avatar">{ini}</span>
                   <span className="member-mail">{mail}</span>
                   <span className="role-pill">{role}</span>
-                </div>
+                </PinRow>
               ))}
             </div>
           </div>
-        </Revealed>
-        <Revealed>
           <div className="bento-tile bento-tile-center">
             <h3 className="bento-title">Keys shown once</h3>
-            <KeyField />
-            <p className="key-note">Shown once. Only a verifier is stored.</p>
+            <KeyField progress={progress} />
           </div>
-        </Revealed>
-        <Revealed>
           <div className="bento-tile">
-            <h3 className="bento-title">Activity you can trust</h3>
+            <h3 className="bento-title">Activity</h3>
             <div className="timeline">
               {EVENTS.map(([tag, src, meta], i) => (
-                <div className="timeline-row" key={String(meta)} style={{ transitionDelay: `${i * 90}ms` }}>
+                <PinRow key={String(meta)} progress={progress} from={0.45 + i * 0.11} to={0.56 + i * 0.11} className="timeline-row">
                   <span className="timeline-dot" aria-hidden="true" />
                   <span className="timeline-tag">{tag}</span>
                   <img src={src as string} alt="" />
                   <span className="timeline-meta">{meta}</span>
-                </div>
+                </PinRow>
               ))}
             </div>
           </div>
-        </Revealed>
+        </div>
       </div>
-    </section>
+    </div>
   )
 }
 
 /* ---------- shared capacity ---------- */
 
 function Capacity() {
+  const ref = useRef<HTMLDivElement>(null)
+  const reduced = useReducedMotion()
+  const mobile = useMobile()
+  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end end"] })
+  const done = useMotionValue(1)
+  const progress = reduced || mobile ? done : scrollYProgress
+  const s1 = useTransform(progress, [0.05, 0.3], [0, 1], { clamp: true })
+  const s2 = useTransform(progress, [0.25, 0.5], [0, 1], { clamp: true })
+  const s3 = useTransform(progress, [0.45, 0.65], [0, 1], { clamp: true })
+  const s4 = useTransform(progress, [0.65, 0.85], [0, 1], { clamp: true })
+  const meta = useTransform(progress, [0.82, 0.92], [0, 1], { clamp: true })
   return (
-    <section className="section section-paper" data-theme="paper" aria-label="Shared capacity">
+    <div className="pin-wrap capacity-wrap section-paper" ref={ref} data-theme="paper" aria-label="Shared capacity">
+      <div className="pin-sticky">
       <div className="container">
         <Reveal>
           <h2 className="headline">Share one key fairly</h2>
@@ -330,33 +361,34 @@ function Capacity() {
             system administrators change pools and allocations
           </p>
         </Reveal>
-        <Revealed className="pool-big">
+        <div className="pool-big">
           <div className="pool-big-labels">
-            <span className="pool-big-label" style={{ width: "40%" }}>
+            <motion.span className="pool-big-label" style={{ width: "40%", opacity: s1 }}>
               Research <span className="pool-fig">strict cap 400</span>
-            </span>
-            <span className="pool-big-label" style={{ width: "35%" }}>
+            </motion.span>
+            <motion.span className="pool-big-label" style={{ width: "35%", opacity: s2 }}>
               Support <span className="pool-fig">strict cap 350</span>
-            </span>
-            <span className="pool-big-label" style={{ width: "25%" }}>
+            </motion.span>
+            <motion.span className="pool-big-label" style={{ width: "25%", opacity: s3 }}>
               Growth <span className="pool-fig">150 + loan</span>
-            </span>
+            </motion.span>
           </div>
-          <div className="pool-total">1,000 requests per minute</div>
+          <motion.div className="pool-total" style={{ opacity: meta }}>1,000 requests per minute</motion.div>
           <div className="pool-big-bar">
-            <div className="pool-big-seg" style={{ width: "40%" }} />
-            <div className="pool-big-seg" style={{ width: "35%" }} />
-            <div className="pool-big-seg" style={{ width: "15%" }} />
+            <motion.div className="pool-big-seg" style={{ width: "40%", scaleX: s1 }} />
+            <motion.div className="pool-big-seg" style={{ width: "35%", scaleX: s2 }} />
+            <motion.div className="pool-big-seg" style={{ width: "15%", scaleX: s3 }} />
             <div className="pool-big-unused" style={{ width: "10%" }}>
-              <div className="pool-big-loan" />
+              <motion.div className="pool-big-loan" style={{ scaleX: s4 }} />
             </div>
           </div>
-          <p className="pool-loan-note">
+          <motion.p className="pool-loan-note" style={{ opacity: meta }}>
             Loan · borrows idle capacity, up to a max rate
-          </p>
-        </Revealed>
+          </motion.p>
+        </div>
       </div>
-    </section>
+      </div>
+    </div>
   )
 }
 
@@ -375,7 +407,7 @@ const AGENT_LINES = [
 ]
 
 function AgentLine({ index, kind, text, progress }: { index: number; kind: string; text: string; progress: MotionValue<number> }) {
-  const opacity = useTransform(progress, [0.08 + index * 0.09, 0.15 + index * 0.09], [0, 1], { clamp: true })
+  const opacity = useTransform(progress, [0.05 + index * 0.0775, 0.125 + index * 0.0775], [0, 1], { clamp: true })
   return (
     <motion.div className={`agents-line-${kind}`} style={{ opacity }}>
       {text}
@@ -386,12 +418,16 @@ function AgentLine({ index, kind, text, progress }: { index: number; kind: strin
 function Agents() {
   const ref = useRef<HTMLDivElement>(null)
   const reduced = useReducedMotion()
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start 0.8", "start 0.2"] })
+  const mobile = useMobile()
+  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end end"] })
   const done = useMotionValue(1)
-  const progress = reduced ? done : scrollYProgress
+  const progress = reduced || mobile ? done : scrollYProgress
+  const glowOpacity = useTransform(progress, [0, 0.3], [0, 1], { clamp: true })
   return (
-    <section className="section section-night" id="agents" data-theme="night" aria-label="For agents">
-      <div className="container" ref={ref}>
+    <div className="section-night" id="agents" data-theme="night" aria-label="For agents">
+      <div className="pin-wrap agents-pin" ref={ref}>
+      <div className="pin-sticky">
+      <div className="container">
         <Reveal>
           <h2 className="headline">Built for agents</h2>
         </Reveal>
@@ -401,56 +437,37 @@ function Agents() {
             keys. An agent searches and fetches inside its own project scopes
           </p>
         </Reveal>
-        <div className="agents-window">
-          <div className="agents-titlebar" aria-hidden="true">
-            <span className="agents-dot" />
-            <span className="agents-dot" />
-            <span className="agents-dot" />
-          </div>
-          <div className="agents-body">
-            {AGENT_LINES.map(([kind, text], i) => (
-              <AgentLine key={i} index={i} kind={kind} text={text} progress={progress} />
-            ))}
+        <div className="agents-stage">
+          <motion.div
+            className="agents-glow"
+            style={{ opacity: glowOpacity }}
+            aria-hidden="true"
+          />
+          <div className="agents-window">
+            <div className="agents-titlebar" aria-hidden="true">
+              <span className="agents-dot" />
+              <span className="agents-dot" />
+              <span className="agents-dot" />
+            </div>
+            <div className="agents-body">
+              {AGENT_LINES.map(([kind, text], i) => (
+                <AgentLine key={i} index={i} kind={kind} text={text} progress={progress} />
+              ))}
+            </div>
           </div>
         </div>
-        <Reveal delay={0.2}>
-          <pre className="code-block agents-curl">{`curl http://<host>:8001/search \\
-  -H "Authorization: Bearer fs_live_..." \\
-  -H "Content-Type: application/json" \\
-  -d '{"query": "latest climate research", "limit": 10}'`}</pre>
-        </Reveal>
       </div>
-    </section>
+      </div>
+      </div>
+    </div>
   )
 }
 
 /* ---------- self-host ---------- */
 
 function SelfHost() {
-  const ref = useRef<HTMLElement>(null)
-  const reduced = useReducedMotion()
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start end", "end start"] })
-  const done = useMotionValue(0)
-  const progress = reduced ? done : scrollYProgress
-  const scale = useTransform(progress, [0, 1], [1.15, 1])
   return (
-    <div className="section-night" id="self-host" data-theme="night" ref={ref as never}>
-      <section className="selfhost-wrap" aria-label="Self-hosted">
-        <motion.img
-          className="selfhost-img"
-          src={selfhostWide}
-          alt="A small graphite server box lit by a desk lamp at night"
-          style={{ scale }}
-        />
-        <div className="selfhost-fade" aria-hidden="true" />
-        <div className="container">
-          <div className="selfhost-content">
-            <Reveal>
-              <h2 className="cta-head">Runs on your hardware</h2>
-            </Reveal>
-          </div>
-        </div>
-      </section>
+    <div className="section-night" id="self-host" data-theme="night">
       <div className="selfhost-points">
         <Reveal>
           <div className="selfhost-point">
@@ -525,7 +542,7 @@ function FinalCta() {
         <div className="container cta-inner">
           <CtaRosette progress={progress} />
           <Reveal>
-            <h2 className="cta-head">Point one API at every provider</h2>
+            <h2 className="cta-head">One API. Every provider.</h2>
           </Reveal>
           <Reveal delay={0.12}>
             <div className="cta-buttons">
@@ -539,35 +556,92 @@ function FinalCta() {
           </Reveal>
         </div>
       </section>
-      <footer className="footer">
-        <div className="footer-inner">
-          <img src={logo} alt="" width={20} height={20} />
-          <span>© Polyweb</span>
-          <a href={GITHUB} target="_blank" rel="noreferrer" style={{ marginLeft: "auto" }}>
-            github.com/polyweb-dev/polyweb
-          </a>
-        </div>
-      </footer>
     </div>
   )
 }
 
-export function App() {
+/* ---------- router ---------- */
+
+const PAGES: Record<string, ComponentType> = {
+  about: AboutPage,
+  "search-api": SearchApiPage,
+  "fetch-api": FetchApiPage,
+  mcp: McpPage,
+  providers: ProvidersPage,
+  projects: ProjectsPage,
+  "self-hosting": SelfHostingPage,
+  security: SecurityPage,
+}
+
+function routeFromHash(hash: string): string | null {
+  if (!hash.startsWith("#/")) return null
+  const key = hash.slice(2).replace(/\/+$/, "")
+  return key || null
+}
+
+function Home() {
   return (
     <>
-      <Nav />
-      <main>
-        <Hero />
-        <RosetteScene />
-        <RoutingScene />
-        <Credits />
-        <ProjectsReveal />
-        <Bento />
-        <Capacity />
-        <Agents />
-        <SelfHost />
-        <FinalCta />
-      </main>
+      <Hero />
+      <RosetteScene />
+      <RoutingScene />
+      <Credits />
+      <ProjectsReveal />
+      <Bento />
+      <Capacity />
+      <Agents />
+      <SelfHost />
+      <FinalCta />
+    </>
+  )
+}
+
+export function App() {
+  const [hash, setHash] = useState(() => window.location.hash)
+  const lastHash = useRef(window.location.hash)
+  const pendingAnchor = useRef<string | null>(null)
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const h = window.location.hash
+      const wasPage = lastHash.current.startsWith("#/")
+      lastHash.current = h
+      if (routeFromHash(h) !== null) {
+        pendingAnchor.current = null
+      } else if (wasPage) {
+        pendingAnchor.current = h.startsWith("#/") ? "" : h.slice(1)
+      }
+      setHash(h)
+    }
+    window.addEventListener("hashchange", onHashChange)
+    return () => window.removeEventListener("hashchange", onHashChange)
+  }, [])
+
+  const route = routeFromHash(hash)
+
+  useEffect(() => {
+    if (route !== null) {
+      window.scrollTo(0, 0)
+      return
+    }
+    if (pendingAnchor.current !== null) {
+      const id = pendingAnchor.current
+      pendingAnchor.current = null
+      if (id) {
+        document.getElementById(id)?.scrollIntoView()
+      } else {
+        window.scrollTo(0, 0)
+      }
+    }
+  }, [route])
+
+  const Page = route !== null ? (PAGES[route] ?? NotFoundPage) : null
+
+  return (
+    <>
+      <Nav page={route !== null} />
+      <main>{Page ? <Page /> : <Home />}</main>
+      <SiteFooter />
     </>
   )
 }

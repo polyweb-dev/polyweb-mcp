@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react"
 import logo from "../assets/polyweb.webp"
+import { GITHUB } from "../links"
 
-const GITHUB = "https://github.com/polyweb-dev/polyweb"
-
-export function Nav() {
-  const [theme, setTheme] = useState<"night" | "paper">("night")
+export function Nav({ page = false }: { page?: boolean }) {
+  const [observed, setObserved] = useState<"night" | "paper">("night")
+  const theme = page ? "night" : observed
 
   useEffect(() => {
+    if (page) return
     const sections = document.querySelectorAll<HTMLElement>("[data-theme]")
     const visible = new Map<Element, number>()
     const pick = () => {
@@ -25,7 +26,7 @@ export function Nav() {
         }
       }
       if (best) {
-        setTheme(
+        setObserved(
           (best as HTMLElement).dataset.theme === "paper" ? "paper" : "night"
         )
       }
@@ -42,7 +43,7 @@ export function Nav() {
     )
     sections.forEach((s) => observer.observe(s))
     return () => observer.disconnect()
-  }, [])
+  }, [page])
 
   return (
     <header className={`nav nav-${theme}`}>
@@ -55,6 +56,7 @@ export function Nav() {
           <a href="#features">Features</a>
           <a href="#agents">For agents</a>
           <a href="#self-host">Self-host</a>
+          <a href="#/search-api">Docs</a>
         </nav>
         <a
           className="button button-secondary-dark button-nav"
