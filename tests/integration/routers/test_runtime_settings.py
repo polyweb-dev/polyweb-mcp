@@ -18,11 +18,17 @@ from freesearch.configuration.provider_config import (
 )
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
-from freesearch.models.users import UserRole
+from freesearch.persistence.database_migrations import DatabaseResetRequired
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.conftest import FakeAdapter
-from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_system_admin_login,
+    temp_email,
+)
+from tests.fixtures.execution import seed_app_bound_project, seed_execution_project
 
 CANONICAL_ALPHA_ORDER = [
     "brave",
@@ -40,15 +46,15 @@ CANONICAL_ALPHA_ORDER = [
 async def test_fresh_database_has_today_defaults_and_alphabetical_tie_break(
     tmp_path: Path, auth_secret: str
 ) -> None:
-    """AC-10: a new DB preserves enabled/100/closed and canonical tie order."""
+    """A new DB exposes enabled providers in canonical order with closed circuits."""
     # Use one system administrator account: system.settings.read is the live
     # replacement for the retired developer reader role.
     repository = await SQLiteRepository.open(tmp_path / "fresh.db")
     try:
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-fresh"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-fresh")
             )
             headers = raw_auth_headers(pair["access_token"])
             providers = client.get("/api/v1/providers", headers=headers)
@@ -57,7 +63,7 @@ async def test_fresh_database_has_today_defaults_and_alphabetical_tie_break(
         assert providers.status_code == 200
         body = providers.json()
         assert [item["provider_id"] for item in body] == CANONICAL_ALPHA_ORDER
-        assert all(item["enabled"] is True and item["priority"] == 100 for item in body)
+        assert all(item["enabled"] is True and "priority" not in item for item in body)
         assert all(item["enable_mask"] == 7 for item in body)
         for item in body:
             expected_support = 3 if item["provider_id"] == "brave" else 7
@@ -66,7 +72,6 @@ async def test_fresh_database_has_today_defaults_and_alphabetical_tie_break(
         assert routing.status_code == 200
         assert routing.json() == {
             "fallback_policy": "chained",
-            "cost_optimization_preset": "balanced",
             "max_attempts": 3,
         }
     finally:
@@ -114,8 +119,8 @@ async def test_partial_legacy_record_decodes_before_persisted_merge(
         app = create_app([adapter], repository=repository)
 
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-legacy"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-legacy")
             )
             headers = raw_auth_headers(pair["access_token"])
             item = client.get("/api/v1/providers/exa", headers=headers)
@@ -142,8 +147,8 @@ async def test_stale_support_mask_is_reconciled_to_system_map(
         app = create_app([], repository=repository)
 
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-reconcile"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-reconcile")
             )
             headers = raw_auth_headers(pair["access_token"])
             item = client.get("/api/v1/providers/brave", headers=headers)
@@ -186,11 +191,23 @@ async def test_locked_reconcile_write_keeps_strict_search_at_200(
         app = create_app([adapter], repository=repository)
 
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-locked"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-locked")
             )
             headers = raw_auth_headers(pair["access_token"])
-            search = client.post("/search", json={"query": "locked write"}, headers=headers)
+            pid = str(
+                (
+                    await seed_app_bound_project(
+                        repository,
+                        user_id=account_id_from_pair(pair),
+                        app=app,
+                        monkeypatch=monkeypatch,
+                    )
+                ).project_id
+            )
+            search = client.post(
+                "/search", json={"project_id": pid, "query": "locked write"}, headers=headers
+            )
             item = client.get("/api/v1/providers/exa", headers=headers)
 
         assert search.status_code == 200
@@ -228,8 +245,8 @@ async def test_released_lock_persists_reconciled_support_mask(
         app = create_app([], repository=repository)
 
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-released"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-released")
             )
             headers = raw_auth_headers(pair["access_token"])
             first = client.get("/api/v1/providers/exa", headers=headers)
@@ -269,24 +286,36 @@ async def test_corrupt_persisted_provider_config_falls_back_to_defaults_without_
         app = create_app([adapter], repository=repository)
 
         with TestClient(app, raise_server_exceptions=False) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-corrupt"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-corrupt")
             )
             headers = raw_auth_headers(pair["access_token"])
+            pid = str(
+                (
+                    await seed_app_bound_project(
+                        repository,
+                        user_id=account_id_from_pair(pair),
+                        app=app,
+                        monkeypatch=monkeypatch,
+                    )
+                ).project_id
+            )
             item = client.get("/api/v1/providers/exa", headers=headers)
             listing = client.get("/api/v1/providers", headers=headers)
-            search = client.post("/search", json={"query": "corrupt settings"}, headers=headers)
+            search = client.post(
+                "/search", json={"project_id": pid, "query": "corrupt settings"}, headers=headers
+            )
 
         assert item.status_code == 200
         assert item.json()["enabled"] is True
         assert item.json()["enable_mask"] == 7
         assert item.json()["support_mask"] == 7
-        assert item.json()["priority"] == 100
+        assert "priority" not in item.json()
         assert listing.status_code == 200
         exa = next(entry for entry in listing.json() if entry["provider_id"] == "exa")
         assert exa["enabled"] is True
         assert exa["enable_mask"] == 7
-        assert exa["priority"] == 100
+        assert "priority" not in exa
         assert search.status_code == 200
         assert search.json()["provider"] == "exa"
     finally:
@@ -298,7 +327,7 @@ async def test_invalid_non_access_field_preserves_valid_stored_access(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """An invalid priority falls back for that field but keeps stored access."""
-    from freesearch.routers.control import effective_provider_config
+    from freesearch.services.provider_runtime import effective_provider_config
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)
@@ -318,8 +347,8 @@ async def test_invalid_non_access_field_preserves_valid_stored_access(
 
 
 @pytest.mark.asyncio
-async def test_legacy_usage_table_is_upgraded_additively_on_open(tmp_path: Path) -> None:
-    """AC-8/AC-10: opening a legacy usage table preserves rows and defaults fields."""
+async def test_legacy_usage_table_is_refused_unchanged_on_open(tmp_path: Path) -> None:
+    """TASK-000040: a legacy usage table is refused with a reset message and kept intact."""
     database = tmp_path / "legacy.db"
     with sqlite3.connect(database) as connection:
         connection.execute(
@@ -343,29 +372,19 @@ async def test_legacy_usage_table_is_upgraded_additively_on_open(tmp_path: Path)
             """
         )
         connection.commit()
+    before = database.read_bytes()
 
-    repository = await SQLiteRepository.open(database)
-    try:
-        events = await repository.list_usage()
-        assert events == [
-            UsageEvent(
-                provider="exa",
-                operation=UsageOperation.SEARCH,
-                units=Decimal("1"),
-                observed_at=datetime(2026, 1, 1, tzinfo=UTC),
-                request_id=None,
-                metadata={},
-                latency_ms=None,
-                status=UsageStatus.SUCCESS,
-            )
-        ]
+    # Alpha baseline: an unversioned database with tables is never adopted;
+    # it is refused before any write, and its legacy rows stay in place.
+    with pytest.raises(DatabaseResetRequired, match="unversioned"):
+        await SQLiteRepository.open(database)
 
-        async with repository._engine.connect() as connection:
-            columns = await connection.exec_driver_sql("PRAGMA table_info(usage_events)")
-            names = {row[1] for row in columns.fetchall()}
-        assert {"latency_ms", "status"} <= names
-    finally:
-        await repository.close()
+    assert database.read_bytes() == before
+    with sqlite3.connect(database) as connection:
+        names = {row[1] for row in connection.execute("PRAGMA table_info(usage_events)")}
+        rows = connection.execute("SELECT id, provider FROM usage_events").fetchall()
+    assert not {"project_id", "actor_type", "actor_id"} & names
+    assert rows == [(1, "exa")]
 
 
 @pytest.mark.asyncio
@@ -388,7 +407,8 @@ async def test_provider_latency_p95_uses_nearest_rank_over_last_100_non_null(
                     observed_at=start + timedelta(seconds=latency),
                     latency_ms=latency,
                     status=UsageStatus.SUCCESS,
-                )
+                ),
+                attribution=await seed_execution_project(repository),
             )
         # The newest row has no latency and must not displace a non-null sample.
         await repository.record_usage(
@@ -399,14 +419,13 @@ async def test_provider_latency_p95_uses_nearest_rank_over_last_100_non_null(
                 observed_at=start + timedelta(seconds=1_000),
                 latency_ms=None,
                 status=UsageStatus.SUCCESS,
-            )
+            ),
+            attribution=await seed_execution_project(repository),
         )
 
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-p95b"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, repository, temp_email("runtime-p95b"))
             headers = raw_auth_headers(pair["access_token"])
             providers = client.get("/api/v1/providers", headers=headers)
 
@@ -427,8 +446,8 @@ async def test_empty_latency_sample_reports_none(tmp_path: Path, auth_secret: st
     try:
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-empty"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, repository, temp_email("runtime-empty")
             )
             headers = raw_auth_headers(pair["access_token"])
             providers = client.get("/api/v1/providers", headers=headers)
@@ -456,13 +475,12 @@ async def test_legacy_recent_usage_projection_has_new_fields_with_compatibility_
                 observed_at=datetime(2026, 1, 1, tzinfo=UTC),
                 latency_ms=None,
                 status=UsageStatus.SUCCESS,
-            )
+            ),
+            attribution=await seed_execution_project(repository),
         )
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("runtime-proj"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, repository, temp_email("runtime-proj"))
             headers = raw_auth_headers(pair["access_token"])
             stats = client.get("/stats", headers=headers)
             dashboard = client.get("/dashboard", headers=headers)

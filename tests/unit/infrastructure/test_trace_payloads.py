@@ -39,7 +39,7 @@ class _RecordingRuntime:
 
 
 def _search_pair() -> tuple[SearchRequest, SearchResponse]:
-    request = SearchRequest(query="consensus")
+    request = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="consensus")
     response = SearchResponse(
         query="consensus",
         provider="keenable",
@@ -56,7 +56,9 @@ def _search_pair() -> tuple[SearchRequest, SearchResponse]:
 
 
 def _fetch_pair() -> tuple[FetchRequest, FetchResponse]:
-    request = FetchRequest(url="https://example.com/page")
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/page"
+    )
     response = FetchResponse(
         provider="keenable",
         document=FetchedDocument(
@@ -149,7 +151,8 @@ def test_annotate_root_error_marks_type_and_message() -> None:
 
     (attributes,) = runtime.annotations
     assert attributes[TraceAttribute.ERROR_TYPE] == "RuntimeError"
-    assert attributes[TraceAttribute.ERROR_MESSAGE] == "provider exploded"
+    assert "error.message" not in attributes
+    assert "provider exploded" not in str(attributes)
 
 
 def test_output_projection_keeps_provider_contracts() -> None:

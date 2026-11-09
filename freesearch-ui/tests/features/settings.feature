@@ -1,64 +1,36 @@
-Feature: Settings workbench
-  Settings separates provider routing controls, write-only credentials, and failover policy.
-  Against the live backend all assertions are backend-tolerant: key
-  fingerprints are asserted as bullets-present-only, never as exact masks.
-  (The @stub credential scenarios below may assert the stub's deterministic
-  fingerprint — they run against the page.route fixture, never the live backend.)
+Feature: Provider settings workbench
+  System Providers is a catalog with the fallback policy under it. Provider
+  secrets are managed separately in Account > Keys and pools.
 
   Background:
     Given I navigate to the web application
-    When I select the "Settings" header tab
-    Then I should see the "Settings" heading
+    When I navigate directly to "/system/providers"
+    Then I should see the "Providers" heading
 
   @smoke
-  Scenario: Settings has only provider, key, and failover tabs
-    Then the settings page should expose exactly 3 sub-tabs
+  Scenario: System Providers has no Keys or Cache tab and the registry has no secret input
+    Then the settings page should not expose a "Keys" tab
     And the settings page should not expose a "Cache" tab
     And the settings page should not expose an "Add provider" button
+    And the settings page should expose no secret input
 
   @stub
-  Scenario: Provider operation state survives switching settings tabs
-    When I open the "Providers" settings tab
+  Scenario: Provider operation state survives a page reload
+    When I view the provider catalog
     And I turn the "Brave Search" "Search" operation off
     Then the "Brave Search" "Search" operation should be off
-    When I open the "Keys" settings tab
-    And I open the "Providers" settings tab
+    When I reload the page
     Then the "Brave Search" "Search" operation should remain off
 
   @stub
-  Scenario: Provider priority arrows stop at registry boundaries
-    When I open the "Providers" settings tab
-    Then the first provider row upward priority arrow should be disabled
-    And the last provider row downward priority arrow should be disabled
-
-  @smoke @stub
-  Scenario: Save a credential as a masked stored key
-    When I open the "Keys" settings tab
-    Then the keys tab should show a masked fingerprint containing bullets
-    And the keys tab should not contain "Copy", "Burn", "Reveal", or "shown once"
-    When I save the key "yc_live_secret_key_6789" for "You.com"
-    Then the "You.com" key card should show a stored key indicator
-    And the "You.com" key fingerprint should be "YOU_••••••••a1b2"
-    And the "You.com" key input should be empty
+  Scenario: System Providers is a catalog without order controls
+    When I view the provider catalog
+    Then the provider catalog has no order controls
 
   @stub
-  Scenario: Delete a stored credential from the key vault
-    When I open the "Keys" settings tab
-    Then the key cards should expose at least one "Delete" button
-    When I save the key "yc_live_secret_key_6789" for "You.com"
-    Then the "You.com" key status should be "Stored"
-    When I delete the key for "You.com"
-    Then the "You.com" key status should be "Missing"
-    And the "You.com" key fingerprint should be "—"
-
-  @stub
-  Scenario: Failover policy exposes a vertical switch stack with descriptions
-    When I open the "Failover" settings tab
-    Then the failover switch "Fallback chaining" should be visible
-    And the failover switch "Failover on rate limit (429)" should be visible
-    And the failover switch "Failover on timeout" should be visible
-    And the failover switch "Failover on server error (5xx)" should be visible
-    And each failover switch should expose a description
-    And the failover operation switches should be vertically stacked
-    And the failover row "Cascade depth" should be visible
-    And the failover row "Timeout budget" should be visible
+  Scenario: The fallback policy sits under the provider table, with no Failover tab
+    When I view the provider catalog
+    Then the settings page should not expose a "Failover" tab
+    And the failover switch "Fallback" should be visible
+    And the failover row "Max attempts" should be visible
+    And the failover tab should not show the removed per-condition switches

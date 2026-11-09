@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { CircleUserRound, Layers, Sparkles } from "lucide-react"
+import { CircleUserRound, Layers, Route } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { ProviderBadge } from "./ProviderBadge"
 import { Select, type SelectOption } from "./select"
@@ -16,6 +16,8 @@ export interface ProviderSelectProps {
   onValueChange: (value: string) => void
   disabled?: boolean
   className?: string
+  ariaLabel?: string
+  ariaDescribedBy?: string
 }
 
 /** The size and the color of every entry mark. */
@@ -25,11 +27,11 @@ const MARK_CLASS = "size-4 shrink-0 text-[var(--muted)]"
 const MARK_CLASS_SELECTED = "size-4 shrink-0"
 
 /**
- * The thematic mark of each routing entry. Auto arbitration shows the
- * arbitration spark; All Providers shows the fused provider layers.
+ * The thematic mark of each routing entry. Auto arbitration shows the route
+ * the router picks; All Providers shows the fused provider layers.
  */
 const SENTINEL_MARKS: Record<string, LucideIcon> = {
-  auto: Sparkles,
+  auto: Route,
   all: Layers,
 }
 
@@ -78,6 +80,8 @@ export function ProviderSelect({
   onValueChange,
   disabled,
   className,
+  ariaLabel,
+  ariaDescribedBy,
 }: ProviderSelectProps): ReactNode {
   /** The entry of the shown value; an unknown value shows its own id. */
   const shownOf = (current: string): SelectOption =>
@@ -91,6 +95,8 @@ export function ProviderSelect({
       onValueChange={onValueChange}
       disabled={disabled}
       className={className}
+      ariaLabel={ariaLabel}
+      ariaDescribedBy={ariaDescribedBy}
       renderValue={(current) => pickerRow(shownOf(current))}
       renderOption={(option, state) => pickerRow(option, state.selected)}
     />

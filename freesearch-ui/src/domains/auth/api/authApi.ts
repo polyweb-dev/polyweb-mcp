@@ -18,9 +18,9 @@ import {
   setAccessToken,
   withCookieLock,
 } from "@/shared/api/session"
-import { isUserRole } from "../model/types"
 import type {
   AuthCredentials,
+  AuthProviderKind,
   BrowserAccessResponse,
   RegistrationCredentials,
   UserAccount,
@@ -30,7 +30,6 @@ const LOGIN_PATH = "/auth/jwt/login"
 const REGISTER_PATH = "/auth/register"
 const REFRESH_PATH = "/auth/jwt/refresh"
 const ME_PATH = "/users/me"
-const ACCOUNT_PATH = "/api/v1/users"
 
 const FORM_CONTENT_TYPE = { "Content-Type": "application/x-www-form-urlencoded" }
 
@@ -81,26 +80,60 @@ function decodeAccessResponse(value: unknown): BrowserAccessResponse {
   }
 }
 
-/** Decode one safe account projection. */
+/** Decode one optional profile text: absent and `null` read as `null`. */
+function optionalText(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null
+  return typeof value === "string" ? value : undefined
+}
+
+function decodeProvider(value: unknown): AuthProviderKind | null {
+  if (value === undefined) return "local"
+  return value === "local" || value === "workos" ? value : null
+}
+
+type AccountProfile = Pick<
+  UserAccount,
+  "auth_provider_id" | "username" | "first_name" | "last_name"
+>
+
+/** Decode the optional profile fields, or `null` when one has the wrong type. */
+function decodeProfile(record: Record<string, unknown>): AccountProfile | null {
+  const providerId = optionalText(record.auth_provider_id)
+  const username = optionalText(record.username)
+  const firstName = optionalText(record.first_name)
+  const lastName = optionalText(record.last_name)
+  if (
+    providerId === undefined ||
+    username === undefined ||
+    firstName === undefined ||
+    lastName === undefined
+  ) {
+    return null
+  }
+  return { auth_provider_id: providerId, username, first_name: firstName, last_name: lastName }
+}
+
+/**
+ * Decode one safe account projection.
+ *
+ * The account carries no role: the shell reads authority from the live access
+ * descriptors instead. Unknown extra fields are ignored and never copied.
+ */
 function decodeAccount(value: unknown): UserAccount {
   const record = asRecord(value)
   if (record === null) throw invalidResponse()
-  const id = record.id
-  const email = record.email
-  const role = record.role
-  const isActive = record.is_active
-  const isSuperuser = record.is_superuser
-  const isVerified = record.is_verified
+  const { id, email, is_active: isActive, is_verified: isVerified } = record
   if (typeof id !== "string" || !id || typeof email !== "string" || !email) throw invalidResponse()
-  if (!isUserRole(role)) throw invalidResponse()
-  if (typeof isActive !== "boolean") throw invalidResponse()
-  if (typeof isSuperuser !== "boolean" || typeof isVerified !== "boolean") throw invalidResponse()
+  if (typeof isActive !== "boolean" || typeof isVerified !== "boolean") throw invalidResponse()
+  const provider = decodeProvider(record.auth_provider)
+  const profile = decodeProfile(record)
+  if (provider === null || profile === null) throw invalidResponse()
   return {
     id,
     email,
-    role,
+    auth_provider: provider,
+    ...profile,
     is_active: isActive,
-    is_superuser: isSuperuser,
     is_verified: isVerified,
   }
 }
@@ -138,32 +171,16 @@ export async function login(credentials: AuthCredentials): Promise<BrowserAccess
 /**
  * Create one account on the public route. The route returns no credential.
  *
- * The selected role travels in the body. An omitted role stays Agent on the
- * server, so an old caller keeps its current contract.
+ * The body holds the email and the password only: the backend rejects any
+ * role or account-type field, and authority comes from explicit assignments.
  */
 export async function registerAccount(input: RegistrationCredentials): Promise<UserAccount> {
   const body = await requestJson<unknown>(REGISTER_PATH, {
     auth: "public",
     method: "POST",
-    body: JSON.stringify({ email: input.email, password: input.password, role: input.role }),
+    body: JSON.stringify({ email: input.email, password: input.password }),
   })
   return decodeAccount(body)
-}
-
-/**
- * Create one standalone account through the authenticated provisioning route.
- *
- * The call uses the caller's own access credential, so only an Admin reaches the
- * route. The response is the safe projection of the new account, and it holds no
- * credential: the caller's session stays unchanged.
- */
-export async function provisionAccount(input: RegistrationCredentials): Promise<UserAccount> {
-  return decodeAccount(
-    await requestJson<unknown>(ACCOUNT_PATH, {
-      method: "POST",
-      body: JSON.stringify({ email: input.email, password: input.password, role: input.role }),
-    })
-  )
 }
 
 /** Rotate the refresh cookie into one access credential. */

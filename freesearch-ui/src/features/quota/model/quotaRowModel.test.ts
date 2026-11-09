@@ -17,7 +17,6 @@ function quotaProvider(id: string): ProviderConfig {
     globalEnabled: true,
     searchEnabled: true,
     fetchEnabled: true,
-    priority: 2,
     healthStatus: "healthy",
     circuitBreaker: "closed",
     consecutiveFailures: 0,

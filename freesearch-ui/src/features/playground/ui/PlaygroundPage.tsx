@@ -1,35 +1,35 @@
 import { PillTabs } from "@/shared/ui/PillTabs"
 import { PillTabsPanel } from "@/shared/ui/PillTabsPanel"
 import { usePlaygroundController } from "../model/usePlaygroundController"
+import type { PlaygroundScope } from "../model/usePlaygroundController"
+import { PageHeader } from "@/shared/ui/PageHeader"
 import { FetchSection } from "./FetchSection"
 import { SearchSection } from "./SearchSection"
 
-const PLAYGROUND_VIEW_OPTIONS = [
-  { value: "search", label: "Search" },
-  { value: "fetch", label: "Fetch" },
-] as const
-
-/** Search playground page: Search/Fetch pill views over one controller. */
-export function PlaygroundPage() {
-  const controller = usePlaygroundController()
+/**
+ * Search playground page: Search/Fetch pill views over one controller. A mode
+ * the caller lacks permission for stays visible but disabled.
+ */
+export function PlaygroundPage({ scope }: { scope: PlaygroundScope }) {
+  const controller = usePlaygroundController(scope)
+  const viewOptions = [
+    { value: "search", label: "Search", disabled: !controller.canSearch },
+    { value: "fetch", label: "Fetch", disabled: !controller.canFetch },
+  ]
   return (
     <PillTabs
-      options={PLAYGROUND_VIEW_OPTIONS}
+      options={viewOptions}
       value={controller.mode}
       onValueChange={(value) => controller.switchMode(value as "search" | "fetch")}
       ariaLabel="Playground view"
       idPrefix="playground"
-      className="flex flex-1 flex-col space-y-8"
+      className="flex flex-1 flex-col space-y-6"
     >
       {/* Page heading */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-[var(--border-subtle)]">
-        <div>
-          <h2 className="text-[var(--text-strong)]">Search Playground</h2>
-          <p className="text-[13px] text-[var(--muted)] mt-0.5">
-            Run queries and fetches across the provider fleet with live arbitration.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title="Playground"
+        description="Run search and fetch through this project's providers"
+      />
 
       <PillTabsPanel value="search" className="flex flex-1 flex-col space-y-8">
         <SearchSection controller={controller} />

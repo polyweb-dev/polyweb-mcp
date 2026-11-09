@@ -18,7 +18,7 @@ function searchResult(overrides: Partial<SearchResult> = {}): SearchResult {
 
 /**
  * ResultInspector (PLAN §5): a thin adapter to the shared inspector. The
- * Playground match score stays a percentage under the Attributed label, with
+ * Playground match score stays a percentage under the Provider label, with
  * the target URL before the snippet summary.
  */
 describe("ResultInspector", () => {
@@ -26,7 +26,7 @@ describe("ResultInspector", () => {
     const { container } = render(<ResultInspector result={searchResult()} />)
     const html = container.innerHTML
 
-    const attributedIndex = html.indexOf("Attributed")
+    const attributedIndex = html.indexOf("Provider")
     const scoreIndex = html.indexOf("Score")
     const urlIndex = html.indexOf("Target URL")
     const snippetIndex = html.indexOf("Snippet summary")
@@ -60,10 +60,6 @@ describe("ResultInspector", () => {
   it("shows the empty state when no result is selected", () => {
     render(<ResultInspector result={null} />)
 
-    expect(
-      screen.getByText(
-        "Select a search result from the list to inspect full metadata and snippet extraction."
-      )
-    ).toBeInTheDocument()
+    expect(screen.getByText("Select a result to see its details")).toBeInTheDocument()
   })
 })

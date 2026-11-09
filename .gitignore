@@ -18,6 +18,7 @@ coverage/
 *.db*
 *.pnpm-store/
 .runtime-tmp/
+/.gitea-packages/
 FEEDBACK/
 .tmp/
 .secret_key
@@ -27,3 +28,6 @@ FEEDBACK/
 .agents/communication/
 .archive/
 test_reports/
+
+# Vitest cache
+/freesearch-ui/.vitest/

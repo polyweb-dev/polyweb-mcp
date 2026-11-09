@@ -370,7 +370,7 @@ class ExaAdapter(ProviderAdapter):
         if self._hydrated_month == month_start:
             return None
         latest = await repository.latest_quota(self.name)
-        events = await repository.list_usage(provider=self.name)
+        events = await repository.list_provider_usage(provider=self.name)
         current = [
             event
             for event in events

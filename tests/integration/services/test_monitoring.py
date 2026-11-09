@@ -6,15 +6,14 @@ provider network or credentials are involved.
 """
 
 import asyncio
-import gc
 import inspect
 import json
-import time
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
@@ -23,7 +22,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr, ValidationError
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import _quota_state_changed, close_adapters, create_server
+from freesearch.mcp.server import close_adapters, create_server
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -41,33 +40,50 @@ from freesearch.models.contracts import (
     UnitKind,
     UsageEvent,
     UsageOperation,
+    UsageStatus,
 )
 from freesearch.models.provider_limits import (
     AuthMode,
     BudgetBlock,
     BudgetModel,
     CRDPriceProfile,
-    CRDUsageTotal,
     LimitCallContext,
     LimitOperation,
     NativeUsageSnapshot,
     ProviderLimitRecord,
     RateBlock,
 )
-from freesearch.models.users import UserRole
+from freesearch.models.quota_api import USDUsageTotal
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services import monitoring
-from freesearch.services.parallel_oauth import clear_oauth_poll_state
+from freesearch.services import parallel_oauth as oauth_module
+from freesearch.services.monitoring import (
+    clear_quota_poll_cache,
+    effective_quotas_batch,
+    refresh_quotas,
+)
 from freesearch.services.provider_limits import ProviderLimitsService
+from freesearch.services.provider_runtime import _quota_state_changed
+from tests.fixtures.api_keys import key_for_account, mcp_project_key
 from tests.fixtures.auth import (
+    account_id_from_pair,
     http_jwt_service,
-    mcp_account_token,
     raw_auth_headers,
     register_and_login,
-    register_promote_login,
+    register_system_admin_login,
     temp_email,
 )
+from tests.fixtures.database_lifecycle import unlink_with_retries
+from tests.fixtures.execution import (
+    FIXTURE_ACTOR,
+    bound_credential_id,
+    install_adapter_map,
+    seed_app_bound_project,
+    seed_execution_project,
+    seed_provider_bindings,
+)
+from tests.fixtures.usage_ledger import all_usage_events
 
 
 class _StubAdapter(ProviderAdapter):
@@ -171,9 +187,25 @@ class _HydratingStubAdapter(_StubAdapter):
 
 
 class _FailingTelemetryRepository:
-    """Write-only repository double that makes telemetry persistence fail."""
+    """Repository double that makes only telemetry persistence fail.
 
-    async def record_usage(self, event: UsageEvent) -> None:
+    Everything else (scope resolution, routing reads) delegates to the real
+    repository swapped in by the test.
+    """
+
+    def __init__(self, inner: SQLiteRepository) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    async def record_usage(
+        self,
+        event: UsageEvent,
+        *,
+        attribution: Any = None,
+        trace_id: str | None = None,
+    ) -> None:
         raise OSError("telemetry database unavailable")
 
     async def record_health(self, health: ProviderHealth) -> None:
@@ -183,10 +215,10 @@ class _FailingTelemetryRepository:
 class _ReadFailingRepository:
     """Repository double whose monitoring reads consistently fail."""
 
-    async def usage_totals(self, *, since: datetime | None = None) -> list[Any]:
+    async def installation_usage_totals(self, *, since: datetime | None = None) -> list[Any]:
         raise OSError("monitoring read unavailable")
 
-    async def recent_usage(self, *, limit: int = 20) -> list[UsageEvent]:
+    async def recent_installation_usage(self, *, limit: int = 20) -> list[UsageEvent]:
         raise OSError("monitoring read unavailable")
 
     async def latest_quota(
@@ -205,10 +237,10 @@ class _LeakyRepository:
         self._event = event
         self._health = health
 
-    async def usage_totals(self, *, since: datetime | None = None) -> list[Any]:
+    async def installation_usage_totals(self, *, since: datetime | None = None) -> list[Any]:
         return []
 
-    async def recent_usage(self, *, limit: int = 20) -> list[UsageEvent]:
+    async def recent_installation_usage(self, *, limit: int = 20) -> list[UsageEvent]:
         return [self._event]
 
     async def latest_quota(
@@ -218,28 +250,6 @@ class _LeakyRepository:
 
     async def latest_health(self, provider: str) -> ProviderHealth | None:
         return self._health if provider == self._health.provider else None
-
-
-def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
-    """Remove a test database after Windows releases delayed SQLite handles.
-
-    Mirrors the BDD harness helper: retry only PermissionError with a bounded
-    pause, propagate every other error immediately, and re-raise once the
-    bound is exhausted instead of silently leaking the file.
-    """
-
-    for attempt in range(attempts):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            gc.collect()
-            time.sleep(0.05)
-        else:
-            return
 
 
 @pytest_asyncio.fixture
@@ -253,9 +263,8 @@ async def repository(tmp_path: Path) -> AsyncIterator[SQLiteRepository]:
         # Public eviction helpers only: cached quota/OAuth poll state is keyed
         # by id(repository), and a recycled id must never inherit a stale entry.
         monitoring.clear_quota_poll_cache(db)
-        clear_oauth_poll_state(db)
-        _unlink_with_retries(db_path)
-        _unlink_with_retries(Path(f"{db_path}.migration.lock"))
+        unlink_with_retries(db_path)
+        unlink_with_retries(Path(f"{db_path}.migration.lock"))
 
 
 def _event(
@@ -297,7 +306,7 @@ _DASHBOARD_KEYS = {
     "latest_quota",
     "latest_health",
     "generated_at",
-    "crd_usage_totals",
+    "spend_totals",
     "provider_limits",
 }
 
@@ -307,7 +316,7 @@ _STATS_KEYS = {
     "recent_usage",
     "latest_quota",
     "latest_health",
-    "crd_usage_totals",
+    "spend_totals",
 }
 
 
@@ -330,7 +339,7 @@ def _assert_dashboard_contract_keys(body: Any) -> None:
     assert isinstance(body, dict)
     assert set(body) == _DASHBOARD_KEYS
     assert body["notice"] == monitoring.MONITORING_NOTICE
-    assert isinstance(body["crd_usage_totals"], list)
+    assert isinstance(body["spend_totals"], list)
     assert isinstance(body["provider_limits"], list)
 
 
@@ -342,6 +351,7 @@ def _assert_stats_contract_keys(body: Any) -> None:
 async def test_rest_search_persists_usage_and_healthy_health(
     repository: SQLiteRepository,
     auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _StubAdapter("rest-provider", fetch_units=None)
     app = create_app([adapter], repository=repository)
@@ -353,15 +363,25 @@ async def test_rest_search_persists_usage_and_healthy_health(
         assert anonymous.headers["www-authenticate"] == "Bearer"
         # Use one Agent account for the search call.
         pair = register_and_login(client, temp_email("monitor-search"))
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "offline"},
+            json={"project_id": pid, "query": "offline"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
     assert response.status_code == 200
     assert response.json()["provider"] == "rest-provider"
-    assert await repository.list_usage() == [
+    assert await all_usage_events(repository) == [
         UsageEvent(
             provider="rest-provider",
             operation=UsageOperation.SEARCH,
@@ -370,7 +390,13 @@ async def test_rest_search_persists_usage_and_healthy_health(
             metadata={"credits": 3, "tokens": 12, "latency_ms": 8.5},
         )
     ]
-    assert await repository.latest_health("rest-provider") == ProviderHealth(
+    # A2: health is an observation of the credential that served the call.
+    credential_id = await bound_credential_id(
+        repository, project_id=UUID(pid), provider="rest-provider"
+    )
+    assert await repository.latest_health(
+        "rest-provider", credential_id=credential_id
+    ) == ProviderHealth(
         provider="rest-provider",
         status=HealthStatus.HEALTHY,
         checked_at=adapter.search_at,
@@ -396,9 +422,11 @@ async def test_usage_write_rejection_does_not_skip_healthy_health(
         usage=usage,
     )
 
-    await monitoring.record_response_telemetry(repository, response)
+    await monitoring.record_response_telemetry(
+        repository, response, attribution=await seed_execution_project(repository)
+    )
 
-    assert await repository.list_usage() == []
+    assert await all_usage_events(repository) == []
     assert await repository.latest_health("usage-rejected") == ProviderHealth(
         provider="usage-rejected",
         status=HealthStatus.HEALTHY,
@@ -420,9 +448,11 @@ async def test_numeric_exa_usage_persists_with_healthy_health(
     )
     response = SearchResponse(query="exa", results=[], provider="exa", usage=usage)
 
-    await monitoring.record_response_telemetry(repository, response)
+    await monitoring.record_response_telemetry(
+        repository, response, attribution=await seed_execution_project(repository)
+    )
 
-    assert await repository.list_usage() == [usage]
+    assert await all_usage_events(repository) == [usage]
     assert await repository.latest_health("exa") == ProviderHealth(
         provider="exa",
         status=HealthStatus.HEALTHY,
@@ -434,6 +464,7 @@ async def test_numeric_exa_usage_persists_with_healthy_health(
 async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
     repository: SQLiteRepository,
     auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _StubAdapter("shared-provider")
     rest_app = create_app([adapter], repository=repository)
@@ -444,9 +475,19 @@ async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
         assert anonymous.headers["www-authenticate"] == "Bearer"
         # Use one Agent account for the fetch call.
         pair = register_and_login(client, temp_email("monitor-fetch"))
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=rest_app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         rest_response = client.post(
             "/fetch",
-            json={"url": "https://example.com/rest"},
+            json={"project_id": pid, "url": "https://example.com/rest"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
@@ -454,10 +495,13 @@ async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
         [adapter],
         repository=repository,
         auth_service=http_jwt_service(repository),
-        stdio_token=SecretStr(pair["access_token"]),
+        # A1: MCP takes a project key, issued by the human project admin.
+        stdio_token=(await key_for_account(repository, account_id_from_pair(pair), UUID(pid))).key,
     )
-    mcp_search = await server.call_tool("search", {"request": {"query": "mcp"}})
-    mcp_fetch = await server.call_tool("fetch", {"request": {"url": "https://example.com/mcp"}})
+    mcp_search = await server.call_tool("search", {"request": {"project_id": pid, "query": "mcp"}})
+    mcp_fetch = await server.call_tool(
+        "fetch", {"request": {"project_id": pid, "url": "https://example.com/mcp"}}
+    )
 
     assert rest_response.status_code == 200
     assert isinstance(mcp_search[0], Sequence)
@@ -467,7 +511,9 @@ async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
     assert mcp_search[1]["provider"] == "shared-provider"
     assert mcp_search[1]["usage"]["operation"] == "search"
     assert mcp_fetch[1]["usage"]["operation"] == "fetch"
-    usage_pairs = [(event.operation.value, event.units) for event in await repository.list_usage()]
+    usage_pairs = [
+        (event.operation.value, event.units) for event in await all_usage_events(repository)
+    ]
     assert sorted(usage_pairs) == sorted(
         [
             (UsageOperation.FETCH.value, Decimal("2.50")),
@@ -475,13 +521,18 @@ async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
             (UsageOperation.FETCH.value, Decimal("2.50")),
         ]
     )
-    shared_health = await repository.latest_health("shared-provider")
+    shared_health = await repository.latest_health(
+        "shared-provider",
+        credential_id=await bound_credential_id(
+            repository, project_id=UUID(pid), provider="shared-provider"
+        ),
+    )
     assert shared_health is not None
     assert shared_health.status is HealthStatus.HEALTHY
 
 
 async def test_usage_none_still_records_healthy_health(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository, auth_secret: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     adapter = _StubAdapter("health-only", search_units=None, fetch_units=None)
     app = create_app([adapter], repository=repository)
@@ -493,16 +544,31 @@ async def test_usage_none_still_records_healthy_health(
         assert anonymous.status_code == 401
         # Use one Agent account for the search call.
         pair = register_and_login(client, temp_email("monitor-health"))
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "no usage"},
+            json={"project_id": pid, "query": "no usage"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
     end = datetime.now(UTC) + timedelta(seconds=1)
     assert response.status_code == 200
-    assert await repository.list_usage() == []
-    health = await repository.latest_health("health-only")
+    assert await all_usage_events(repository) == []
+    health = await repository.latest_health(
+        "health-only",
+        credential_id=await bound_credential_id(
+            repository, project_id=UUID(pid), provider="health-only"
+        ),
+    )
     assert health is not None
     assert health.provider == "health-only"
     assert health.status is HealthStatus.HEALTHY
@@ -513,6 +579,7 @@ async def test_usage_none_still_records_healthy_health(
 async def test_fetch_without_usage_uses_document_fetched_at_for_health(
     repository: SQLiteRepository,
     auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _StubAdapter("fetch-health-only", search_units=None, fetch_units=None)
     app = create_app([adapter], repository=repository)
@@ -523,16 +590,31 @@ async def test_fetch_without_usage_uses_document_fetched_at_for_health(
         assert anonymous.status_code == 401
         # Use one Agent account for the fetch call.
         pair = register_and_login(client, temp_email("monitor-fetch-health"))
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/fetch",
-            json={"url": "https://example.com/no-usage"},
+            json={"project_id": pid, "url": "https://example.com/no-usage"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
     assert response.status_code == 200
     assert response.json()["usage"] is None
-    assert await repository.list_usage() == []
-    assert await repository.latest_health("fetch-health-only") == ProviderHealth(
+    assert await all_usage_events(repository) == []
+    credential_id = await bound_credential_id(
+        repository, project_id=UUID(pid), provider="fetch-health-only"
+    )
+    assert await repository.latest_health(
+        "fetch-health-only", credential_id=credential_id
+    ) == ProviderHealth(
         provider="fetch-health-only",
         status=HealthStatus.HEALTHY,
         checked_at=adapter.fetch_at,
@@ -543,39 +625,87 @@ async def test_fetch_without_usage_uses_document_fetched_at_for_health(
 async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_errors(
     repository: SQLiteRepository,
     auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rest_app = create_app(
-        [_StubAdapter("rest-failure", fail_search=True)],
-        repository=repository,
-    )
+    rest_adapter = _StubAdapter("rest-failure", fail_search=True)
+    mcp_adapter = _StubAdapter("mcp-failure", fail_search=True)
+    secrets: dict[str, str] = {}
+    rest_app = create_app([rest_adapter], repository=repository)
     with TestClient(rest_app, raise_server_exceptions=False) as client:
         # Anonymous calls need a 401 challenge.
         anonymous = client.post("/search", json={"query": "failure"})
         assert anonymous.status_code == 401
         # Use one Agent account for the search call.
         pair = register_and_login(client, temp_email("monitor-failure"))
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=rest_app,
+                    secrets=secrets,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         rest_response = client.post(
             "/search",
-            json={"query": "failure"},
+            json={"project_id": pid, "query": "failure"},
             headers=raw_auth_headers(pair["access_token"]),
         )
 
     assert rest_response.status_code == 500
-    rest_health = await repository.latest_health("rest-failure")
+    rest_health = await repository.latest_health(
+        "rest-failure",
+        credential_id=await bound_credential_id(
+            repository, project_id=UUID(pid), provider="rest-failure"
+        ),
+    )
     assert rest_health is not None
     assert rest_health.provider == "rest-failure"
     assert rest_health.status is HealthStatus.DEGRADED
     assert rest_health.message is None
 
+    # The MCP leg gets its own binding only now, so the REST call above could
+    # never have routed to it; the REST binding is disabled so the MCP call
+    # reaches exactly the MCP adapter, as the original two-composition test did.
+    from freesearch.mcp.server import _encrypted_store
+    from freesearch.persistence.bindings import ProjectBindingRepository
+
+    async with repository.session() as session:
+        bindings = ProjectBindingRepository(session)
+        for binding in await bindings.list_for_project(project_id=UUID(pid)):
+            assert await bindings.set_enabled_operations(
+                project_id=UUID(pid),
+                binding_id=binding.id,
+                operations=frozenset(),
+                expected_version=binding.version,
+            )
+        await session.commit()
+    await seed_provider_bindings(
+        repository,
+        project_id=UUID(pid),
+        actor_id=account_id_from_pair(pair),
+        store=_encrypted_store(repository),
+        providers=("mcp-failure",),
+        secrets=secrets,
+    )
+    install_adapter_map(monkeypatch, [rest_adapter, mcp_adapter], secrets=secrets)
     mcp_server = create_server(
-        [_StubAdapter("mcp-failure", fail_search=True)],
+        [mcp_adapter],
         repository=repository,
         auth_service=http_jwt_service(repository),
-        stdio_token=SecretStr(pair["access_token"]),
+        # A1: MCP takes a project key, issued by the human project admin.
+        stdio_token=(await key_for_account(repository, account_id_from_pair(pair), UUID(pid))).key,
     )
     with pytest.raises(ToolError, match="adapter exploded"):
-        await mcp_server.call_tool("search", {"request": {"query": "failure"}})
-    mcp_health = await repository.latest_health("mcp-failure")
+        await mcp_server.call_tool("search", {"request": {"project_id": pid, "query": "failure"}})
+    mcp_health = await repository.latest_health(
+        "mcp-failure",
+        credential_id=await bound_credential_id(
+            repository, project_id=UUID(pid), provider="mcp-failure"
+        ),
+    )
     assert mcp_health is not None
     assert mcp_health.provider == "mcp-failure"
     assert mcp_health.status is HealthStatus.DEGRADED
@@ -585,6 +715,7 @@ async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_error
 async def test_telemetry_failure_never_breaks_rest_request(
     repository: SQLiteRepository,
     auth_secret: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _StubAdapter("telemetry-down")
     # Log in on the real repository first, then swap in the failure seam.
@@ -598,8 +729,20 @@ async def test_telemetry_failure_never_breaks_rest_request(
         # Use one Agent account for the search call.
         pair = register_and_login(client, temp_email("monitor-telemetry"))
         headers = raw_auth_headers(pair["access_token"])
-        app.state.repository = _FailingTelemetryRepository()
-        response = client.post("/search", json={"query": "still works"}, headers=headers)
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
+        app.state.repository = _FailingTelemetryRepository(repository)
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "still works"}, headers=headers
+        )
 
     assert response.status_code == 200
     assert response.json()["provider"] == "telemetry-down"
@@ -626,8 +769,10 @@ async def test_privacy_gate_blocks_sensitive_keys_allows_benign_telemetry(
 
     for invalid_event in invalid_events:
         with pytest.raises(ValueError):
-            await repository.record_usage(invalid_event)
-        assert await repository.list_usage() == []
+            await repository.record_usage(
+                invalid_event, attribution=await seed_execution_project(repository)
+            )
+        assert await all_usage_events(repository) == []
     benign = _event(
         "private",
         UsageOperation.SEARCH,
@@ -635,8 +780,8 @@ async def test_privacy_gate_blocks_sensitive_keys_allows_benign_telemetry(
         observed_at,
         metadata={"note": "secret-free note", "url_count": 4},
     )
-    await repository.record_usage(benign)
-    assert await repository.list_usage() == [benign]
+    await repository.record_usage(benign, attribution=await seed_execution_project(repository))
+    assert await all_usage_events(repository) == [benign]
 
 
 async def test_privacy_gate_rejects_credential_aliases(
@@ -669,9 +814,10 @@ async def test_privacy_gate_rejects_credential_aliases(
     for metadata in invalid_metadatas:
         with pytest.raises(ValueError):
             await repository.record_usage(
-                _event("private", UsageOperation.SEARCH, "1", observed_at, metadata=metadata)
+                _event("private", UsageOperation.SEARCH, "1", observed_at, metadata=metadata),
+                attribution=await seed_execution_project(repository),
             )
-        assert await repository.list_usage() == []
+        assert await all_usage_events(repository) == []
 
 
 async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
@@ -685,7 +831,7 @@ async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
         _event("beta", UsageOperation.SEARCH, "3", t0 + timedelta(seconds=3)),
     ]
     for event in events:
-        await repository.record_usage(event)
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
     await repository.record_quota(_quota("alpha", QuotaSource.AUTHORITATIVE, t0))
     await repository.record_quota(_quota("beta", QuotaSource.OBSERVED, t0 + timedelta(seconds=1)))
     await repository.record_health(_health("alpha", HealthStatus.HEALTHY, t0))
@@ -703,10 +849,10 @@ async def test_collect_stats_shape_ordering_grouping_and_quota_provenance(
         "recent_usage",
         "latest_quota",
         "latest_health",
-        "crd_usage_totals",
+        "spend_totals",
     }
     assert stats.notice == monitoring.MONITORING_NOTICE
-    assert stats.crd_usage_totals == []
+    assert stats.spend_totals == []
     assert [
         (total.provider, total.operation, total.total_units, total.event_count)
         for total in stats.usage_totals
@@ -764,6 +910,7 @@ async def test_crd_usage_totals_sum_exact_success_volume_only(
     for attempt in ("totals-1", "totals-2"):
         admission = await limits.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="totals-provider",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -777,6 +924,7 @@ async def test_crd_usage_totals_sum_exact_success_volume_only(
         )
     released = await limits.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="totals-provider",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
@@ -791,11 +939,11 @@ async def test_crd_usage_totals_sum_exact_success_volume_only(
 
     stats = await monitoring.collect_stats(repository, adapter_names=(), limits=limits)
 
-    assert stats.crd_usage_totals == [
-        CRDUsageTotal(
+    assert stats.spend_totals == [
+        USDUsageTotal(
             provider="totals-provider",
             operation=LimitOperation.SEARCH,
-            normalized_crd=Decimal("10"),
+            spend_usd=Decimal("0.010"),
             attempt_count=2,
             volume_count=2,
         )
@@ -867,7 +1015,8 @@ async def test_stats_endpoint_omits_sensitive_keys_end_to_end(
             observed_at=observed_at,
             request_id="r-9",
             metadata={"credits": 1},
-        )
+        ),
+        attribution=await seed_execution_project(repository),
     )
     app = create_app([], repository=repository)
 
@@ -876,9 +1025,7 @@ async def test_stats_endpoint_omits_sensitive_keys_end_to_end(
         anonymous = client.get("/stats")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats read.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-stats"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-stats"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/stats", headers=headers)
 
@@ -912,7 +1059,8 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
                 UsageOperation.SEARCH,
                 "0.000001",
                 t0 + timedelta(seconds=index),
-            )
+            ),
+            attribution=await seed_execution_project(repository),
         )
     app = create_app([_StubAdapter("alpha")], repository=repository)
 
@@ -921,9 +1069,7 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
         anonymous = client.get("/stats?limit=0")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-clamp"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-clamp"))
         headers = raw_auth_headers(pair["access_token"])
         low = client.get("/stats?limit=0", headers=headers)
         high = client.get("/stats?limit=1000", headers=headers)
@@ -936,9 +1082,9 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
         "recent_usage",
         "latest_quota",
         "latest_health",
-        "crd_usage_totals",
+        "spend_totals",
     }
-    assert low.json()["crd_usage_totals"] == []
+    assert low.json()["spend_totals"] == []
     assert len(low.json()["recent_usage"]) == 1
     assert len(high.json()["recent_usage"]) == monitoring.MAX_RECENT_LIMIT
     assert (
@@ -949,9 +1095,11 @@ async def test_stats_endpoint_clamps_recent_limit_and_returns_contract_shape(
 
 def test_dashboard_route_declares_pydantic_response_model(auth_secret: str) -> None:
     app = create_app([_StubAdapter("response-model")], repository=None)
-    dashboard_route = next(route for route in app.routes if route.path == "/dashboard")
-
-    assert dashboard_route.response_model is _dashboard_response_model()
+    schema = app.openapi()
+    response = schema["paths"]["/dashboard"]["get"]["responses"]["200"]
+    assert response["content"]["application/json"]["schema"]["$ref"].endswith(
+        f"/{_dashboard_response_model().__name__}"
+    )
 
 
 async def test_no_repository_stats_and_dashboard_reads_are_empty_200(
@@ -987,8 +1135,8 @@ async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
         anonymous = client.get("/stats")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-read-fail"), UserRole.DEVELOPER
+        pair = await register_system_admin_login(
+            client, repository, temp_email("monitor-read-fail")
         )
         headers = raw_auth_headers(pair["access_token"])
         app.state.repository = failing
@@ -1002,7 +1150,7 @@ async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
         "recent_usage": [],
         "latest_quota": [],
         "latest_health": [],
-        "crd_usage_totals": [],
+        "spend_totals": [],
     }
     assert dashboard.status_code == 200
     assert "application/json" in dashboard.headers["content-type"]
@@ -1013,7 +1161,7 @@ async def test_monitoring_read_failures_return_empty_stats_and_json_dashboard(
     assert dashboard_body["recent_usage"] == []
     assert dashboard_body["latest_quota"] == []
     assert dashboard_body["latest_health"] == []
-    assert dashboard_body["crd_usage_totals"] == []
+    assert dashboard_body["spend_totals"] == []
     # provider_limits is catalog-driven, not a monitoring read: the read-failure
     # seam leaves the eight canonical providers visible while stats stay empty.
     assert {item["provider"] for item in dashboard_body["provider_limits"]} == {
@@ -1069,7 +1217,7 @@ def test_dashboard_response_contract_is_strict_and_decimal_round_trip() -> None:
     }
     assert dashboard_model.model_config.get("extra") == "forbid"
     assert dashboard.provider_limits == []
-    assert dashboard.crd_usage_totals == []
+    assert dashboard.spend_totals == []
     assert dashboard.model_dump() == {**payload, "provider_limits": []}
     assert dashboard.usage_totals[0].total_units == Decimal("123.456789")
     assert dashboard.recent_usage[0].units == Decimal("0.000001")
@@ -1086,9 +1234,13 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
     auth_secret: str,
 ) -> None:
     observed_at = datetime(2026, 1, 1, tzinfo=UTC)
-    await repository.record_usage(_event("alpha", UsageOperation.SEARCH, "1.25", observed_at))
     await repository.record_usage(
-        _event("beta", UsageOperation.FETCH, "2.5", observed_at + timedelta(seconds=1))
+        _event("alpha", UsageOperation.SEARCH, "1.25", observed_at),
+        attribution=await seed_execution_project(repository),
+    )
+    await repository.record_usage(
+        _event("beta", UsageOperation.FETCH, "2.5", observed_at + timedelta(seconds=1)),
+        attribution=await seed_execution_project(repository),
     )
     await repository.record_quota(_quota("alpha", QuotaSource.AUTHORITATIVE, observed_at))
     await repository.record_quota(
@@ -1109,9 +1261,7 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
         anonymous = client.get("/stats")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-match"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-match"))
         headers = raw_auth_headers(pair["access_token"])
         stats_response = client.get("/stats", headers=headers)
         dashboard_response = client.get("/dashboard", headers=headers)
@@ -1130,7 +1280,7 @@ async def test_dashboard_endpoint_matches_stats_and_preserves_quota_provenance(
         for key, value in dashboard_body.items()
         if key not in ("generated_at", "provider_limits")
     } == stats_body
-    assert dashboard_body["crd_usage_totals"] == stats_body["crd_usage_totals"] == []
+    assert dashboard_body["spend_totals"] == stats_body["spend_totals"] == []
     assert isinstance(dashboard_body["provider_limits"], list)
     catalog_records = await repository.limits.list_records()
     expected_cards = len({record.provider for record in catalog_records})
@@ -1172,8 +1322,8 @@ async def test_dashboard_endpoint_accepts_canonical_quota_computed_fields(
         anonymous = client.get("/dashboard")
         assert anonymous.status_code == 401
         # Use one Developer account for the dashboard read.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-canonical"), UserRole.DEVELOPER
+        pair = await register_system_admin_login(
+            client, repository, temp_email("monitor-canonical")
         )
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/dashboard", headers=headers)
@@ -1197,7 +1347,8 @@ async def test_dashboard_endpoint_clamps_recent_limit_and_orders_newest_first(
                 UsageOperation.SEARCH,
                 "0.000001",
                 observed_at + timedelta(seconds=index),
-            )
+            ),
+            attribution=await seed_execution_project(repository),
         )
     app = create_app([_StubAdapter("limit-provider")], repository=repository)
 
@@ -1206,9 +1357,7 @@ async def test_dashboard_endpoint_clamps_recent_limit_and_orders_newest_first(
         anonymous = client.get("/dashboard?limit=0")
         assert anonymous.status_code == 401
         # Use one Developer account for the dashboard reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-limit"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-limit"))
         headers = raw_auth_headers(pair["access_token"])
         low = client.get("/dashboard?limit=0", headers=headers)
         high = client.get("/dashboard?limit=1000", headers=headers)
@@ -1246,7 +1395,8 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
             observed_at=observed_at,
             request_id=private_query,
             metadata={"credits": 1},
-        )
+        ),
+        attribution=await seed_execution_project(repository),
     )
     await repository.record_health(
         ProviderHealth(
@@ -1267,9 +1417,7 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
         anonymous = client.get("/stats")
         assert anonymous.status_code == 401
         # Use one Developer account for the stats reads.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-privacy"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-privacy"))
         headers = raw_auth_headers(pair["access_token"])
         stats_response = client.get("/stats", headers=headers)
         dashboard_response = client.get("/dashboard", headers=headers)
@@ -1281,8 +1429,8 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
     dashboard_body = dashboard_response.json()
     _assert_dashboard_contract_keys(dashboard_body)
     _assert_stats_contract_keys(stats_body)
-    assert stats_body["crd_usage_totals"] == []
-    assert dashboard_body["crd_usage_totals"] == []
+    assert stats_body["spend_totals"] == []
+    assert dashboard_body["spend_totals"] == []
     assert isinstance(dashboard_body["provider_limits"], list)
     catalog_records = await repository.limits.list_records()
     expected_cards = len({record.provider for record in catalog_records})
@@ -1354,7 +1502,6 @@ async def test_dashboard_generated_at_is_utc_and_non_decreasing_on_empty_reposit
 async def test_app_owned_repository_lifespan_creates_and_closes_database(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, auth_secret: str
 ) -> None:
-    monkeypatch.setattr("freesearch.routers.api.build_adapters", lambda _client: [])
     closed: list[SQLiteRepository] = []
     real_close = SQLiteRepository.close
 
@@ -1380,6 +1527,8 @@ async def test_app_lifespan_hydrates_local_quota_before_first_dashboard_read(
     auth_secret: str,
 ) -> None:
     adapter = _HydratingStubAdapter("keenable")
+    # Explicit local observer publication, independent of denied execution requests.
+    await repository.record_quota(await adapter.hydrate_quota(repository))
     app = create_app([adapter], repository=repository)
 
     with TestClient(app) as client:
@@ -1387,9 +1536,7 @@ async def test_app_lifespan_hydrates_local_quota_before_first_dashboard_read(
         anonymous = client.get("/dashboard")
         assert anonymous.status_code == 401
         # Use one Developer account for the dashboard read.
-        pair = await register_promote_login(
-            client, repository, temp_email("monitor-hydrate"), UserRole.DEVELOPER
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("monitor-hydrate"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/dashboard", headers=headers)
 
@@ -1436,7 +1583,6 @@ def test_quota_hydration_refreshes_an_expired_rolling_window() -> None:
 async def test_server_owned_repository_lifespan_creates_and_closes_database(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr("freesearch.mcp.server.build_adapters", lambda _client: [])
     closed: list[SQLiteRepository] = []
     real_close = SQLiteRepository.close
 
@@ -1455,6 +1601,45 @@ async def test_server_owned_repository_lifespan_creates_and_closes_database(
     assert type(closed[0]) is SQLiteRepository
 
 
+async def _bound_key_credentials(
+    repository: SQLiteRepository,
+    prefix: str,
+    monkeypatch: pytest.MonkeyPatch,
+    factory: Any = None,
+) -> tuple[Any, SecretStr, str]:
+    """Real project/key/binding; every lazy generation validates its exact secret."""
+    from freesearch.mcp.server import _encrypted_store
+
+    service, key = await mcp_project_key(repository, prefix)
+    secrets: dict[str, str] = {}
+    from tests.fixtures.project_order import seed_order_pools
+
+    await seed_order_pools(
+        repository,
+        project_id=key.project_id,
+        actor_id=key.owner.id,
+        store=_encrypted_store(repository),
+        providers=("x",),
+        secrets=secrets,
+        operations={"x": frozenset({"search", "fetch"})},
+    )
+
+    def adapter_factory(name: str) -> Any:
+        if name != "x":
+            return None
+
+        def build(client: Any, api_key: Any = None) -> ProviderAdapter:
+            assert api_key is not None and api_key.get_secret_value() == secrets["x"]
+            return (
+                factory(name)(client, api_key=api_key) if factory is not None else _StubAdapter("x")
+            )
+
+        return build
+
+    monkeypatch.setattr("freesearch.services.execution.adapter_factory", adapter_factory)
+    return service, key.key, str(key.project_id)
+
+
 @pytest.mark.parametrize("exit_order", [("a", "b"), ("b", "a")])
 async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
     monkeypatch: pytest.MonkeyPatch,
@@ -1465,14 +1650,10 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
     # Seed one account before the open spy goes in, so the spy counts only
     # the server generation. The service repository stays open for the test.
     service_repository = await SQLiteRepository.open(database)
-    service, token, _email = await mcp_account_token(service_repository, "mcp-overlap")
-    stdio_credential = SecretStr(token.get_secret_value())
-    monkeypatch.setattr(
-        "freesearch.mcp.server.adapter_factory",
-        lambda name: (
-            (lambda client, api_key=None: _StubAdapter("x")) if name == "keenable" else None
-        ),
+    service, token, pid = await _bound_key_credentials(
+        service_repository, "mcp-overlap", monkeypatch
     )
+    stdio_credential = SecretStr(token.get_secret_value())
     opened: list[SQLiteRepository] = []
     real_open = SQLiteRepository.open
 
@@ -1508,13 +1689,17 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
 
         assert len(opened) == 1
         repository = opened[0]
-        first_result = await server.call_tool("search", {"request": {"query": "session a"}})
-        second_result = await server.call_tool("search", {"request": {"query": "session b"}})
+        first_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session a"}}
+        )
+        second_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session b"}}
+        )
         assert first_result[1]["provider"] == "x"
         assert second_result[1]["provider"] == "x"
         assert [
             (event.provider, event.operation, event.units)
-            for event in await repository.list_usage()
+            for event in await all_usage_events(repository)
         ] == [
             ("x", UsageOperation.SEARCH, Decimal("1.25")),
             ("x", UsageOperation.SEARCH, Decimal("1.25")),
@@ -1530,8 +1715,10 @@ async def test_server_owned_lifespan_refcounted_across_overlapping_sessions(
             units=Decimal("2"),
             observed_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
         )
-        await repository.record_usage(between_event)
-        ledger = await repository.list_usage()
+        await repository.record_usage(
+            between_event, attribution=await seed_execution_project(repository)
+        )
+        ledger = await all_usage_events(repository)
         assert len(ledger) == 3
         assert between_event in ledger
         assert sorted(
@@ -1563,7 +1750,7 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
     build_clients: list[Any] = []
 
     def factory_spy(name: str) -> Any:
-        if name != "keenable":
+        if name != "x":
             return None
 
         def build(client: Any, api_key: Any = None) -> ProviderAdapter:
@@ -1574,7 +1761,6 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
 
         return build
 
-    monkeypatch.setattr("freesearch.mcp.server.adapter_factory", factory_spy)
     opened: list[SQLiteRepository] = []
     real_open = SQLiteRepository.open
 
@@ -1594,14 +1780,18 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
     monkeypatch.setattr(SQLiteRepository, "close", close_spy)
     database = tmp_path / "seq.db"
     service_repository = await real_open(database)
-    service, token, _email = await mcp_account_token(service_repository, "mcp-sequential")
+    service, token, pid = await _bound_key_credentials(
+        service_repository, "mcp-sequential", monkeypatch, factory=factory_spy
+    )
     stdio_credential = SecretStr(token.get_secret_value())
     server = create_server(
         None, database=database, auth_service=service, stdio_token=stdio_credential
     )
 
     async with server._mcp_server.lifespan(server):
-        first_result = await server.call_tool("search", {"request": {"query": "session one"}})
+        first_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session one"}}
+        )
         assert first_result[1]["provider"] == "x"
         assert first_result[1]["usage"]["provider"] == "x"
         assert first_result[1]["usage"]["operation"] == "search"
@@ -1611,7 +1801,9 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
     assert len(closed) == 1
 
     async with server._mcp_server.lifespan(server):
-        second_result = await server.call_tool("search", {"request": {"query": "session two"}})
+        second_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session two"}}
+        )
         assert second_result[1]["provider"] == "x"
         assert second_result[1]["usage"]["provider"] == "x"
         assert second_result[1]["usage"]["operation"] == "search"
@@ -1625,7 +1817,7 @@ async def test_server_owned_lifespan_sequential_sessions_reuse_fresh_generation(
 
     inspection_repository = await real_open(database)
     try:
-        usage = await inspection_repository.list_usage()
+        usage = await all_usage_events(inspection_repository)
     finally:
         await real_close(inspection_repository)
 
@@ -1643,7 +1835,7 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
     build_clients: list[Any] = []
 
     def factory_spy(name: str) -> Any:
-        if name != "keenable":
+        if name != "x":
             return None
 
         def build(client: Any, api_key: Any = None) -> ProviderAdapter:
@@ -1654,7 +1846,6 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
 
         return build
 
-    monkeypatch.setattr("freesearch.mcp.server.adapter_factory", factory_spy)
     opened: list[SQLiteRepository] = []
     real_open = SQLiteRepository.open
 
@@ -1684,7 +1875,9 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
     monkeypatch.setattr("freesearch.mcp.server.close_adapters", close_adapters_spy)
     database = tmp_path / "race.db"
     service_repository = await real_open(database)
-    service, token, _email = await mcp_account_token(service_repository, "mcp-race")
+    service, token, pid = await _bound_key_credentials(
+        service_repository, "mcp-race", monkeypatch, factory=factory_spy
+    )
     stdio_credential = SecretStr(token.get_secret_value())
     server = create_server(
         None, database=database, auth_service=service, stdio_token=stdio_credential
@@ -1700,7 +1893,9 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
         await lifespans["b"].__aenter__()
         entered.add("b")
 
-        first_result = await server.call_tool("search", {"request": {"query": "session a"}})
+        first_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session a"}}
+        )
         assert first_result[1]["provider"] == "x"
         assert first_result[1]["usage"]["operation"] == "search"
         assert first_result[1]["usage"]["units"] == "1.25"
@@ -1714,14 +1909,16 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
 
         await lifespans["c"].__aenter__()
         entered.add("c")
-        assert build_count == 2
+        assert build_count == 1
         assert len(opened) == 2
 
         teardown_gate.set()
         await teardown_task
         exited.add("b")
 
-        second_result = await server.call_tool("search", {"request": {"query": "session c"}})
+        second_result = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "session c"}}
+        )
         assert second_result[1]["provider"] == "x"
         assert second_result[1]["usage"]["operation"] == "search"
         assert second_result[1]["usage"]["units"] == "1.25"
@@ -1744,7 +1941,7 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
 
     inspection_repository = await real_open(tmp_path / "race.db")
     try:
-        usage = await inspection_repository.list_usage()
+        usage = await all_usage_events(inspection_repository)
     finally:
         await real_close(inspection_repository)
 
@@ -1778,8 +1975,8 @@ async def test_injected_repository_remains_open_after_app_lifespan(
             units=Decimal("1"),
             observed_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
-        await repository.record_usage(event)
-        assert await repository.list_usage() == [event]
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
+        assert await all_usage_events(repository) == [event]
         assert closed == []
     finally:
         await real_close(repository)
@@ -1809,8 +2006,8 @@ async def test_injected_repository_remains_open_after_server_lifespan(
             units=Decimal("2"),
             observed_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
-        await repository.record_usage(event)
-        assert await repository.list_usage() == [event]
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
+        assert await all_usage_events(repository) == [event]
         assert closed == []
     finally:
         await real_close(repository)
@@ -1818,7 +2015,9 @@ async def test_injected_repository_remains_open_after_server_lifespan(
 
 def test_resolve_database_path_prefers_environment_then_argument_then_default(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     env_path = Path.cwd() / "from-env.db"
     argument_path = Path.cwd() / "from-argument.db"
     monkeypatch.setenv("FREESEARCH_DB", str(env_path))
@@ -1833,7 +2032,9 @@ async def test_telemetry_helpers_swallow_repository_exceptions(
     repository: SQLiteRepository,
 ) -> None:
     adapter = _StubAdapter("helper-provider")
-    response = await adapter.search(SearchRequest(query="helper"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="helper")
+    )
     assert response.usage is not None
 
     class _BrokenRepository:
@@ -1844,9 +2045,11 @@ async def test_telemetry_helpers_swallow_repository_exceptions(
             raise RuntimeError("write failed")
 
     broken = _BrokenRepository()
-    await monitoring.record_response_telemetry(broken, response)
+    await monitoring.record_response_telemetry(
+        broken, response, attribution=await seed_execution_project(repository)
+    )
     await monitoring.record_failure_telemetry(broken, provider="helper-provider")
-    assert await repository.list_usage() == []
+    assert await all_usage_events(repository) == []
 
 
 def test_monitoring_module_contains_no_html_renderer_or_template_runtime() -> None:
@@ -1862,10 +2065,16 @@ def test_monitoring_module_contains_no_html_renderer_or_template_runtime() -> No
         assert forbidden not in source
 
 
-async def test_cancelled_tracked_call_releases_admission(
+async def test_cancelled_tracked_call_after_dispatch_keeps_admission_consumed(
     repository: SQLiteRepository,
 ) -> None:
-    """A cancelled tracked call re-raises CancelledError and releases admission (F6)."""
+    """A cancelled tracked call re-raises CancelledError and keeps its admission (F6, A2).
+
+    Formerly ``test_cancelled_tracked_call_releases_admission``. A2 AC6 reverses
+    the refund: once the vendor call was dispatched, a cancellation cannot prove
+    the upstream did not consume capacity, so the attempt stays debited as
+    uncertain and is never released back to the pool.
+    """
     from freesearch.configuration.provider_limits import provider_limit_defaults
     from freesearch.models.contracts import CostEstimate
     from freesearch.models.provider_limits import NativeUsageSnapshot
@@ -1897,9 +2106,7 @@ async def test_cancelled_tracked_call_releases_admission(
         async def fetch(self, request: FetchRequest) -> FetchResponse:
             raise NotImplementedError
 
-        async def estimate_cost(
-            self, request: SearchRequest | FetchRequest
-        ) -> CostEstimate:
+        async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
             return CostEstimate(
                 provider="tavily", operation=UsageOperation.SEARCH, units=Decimal("1")
             )
@@ -1935,14 +2142,33 @@ async def test_cancelled_tracked_call_releases_admission(
         return admission
 
     service.admit = _capturing_admit  # type: ignore[method-assign]
+    attribution = await seed_execution_project(repository)
+    request = SearchRequest(project_id=attribution.project_id, query="q", limit=1)
     task = asyncio.create_task(
         tracked_call(
             repository,
             adapter,
-            lambda running: running.search(SearchRequest(query="q", limit=1)),
+            lambda running: running.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1)
+            ),
             operation=UsageOperation.SEARCH,
-            request=SearchRequest(query="q", limit=1),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1
+            ),
             limits=service,
+            attribution=attribution,
+            # Revision 0002: every admission carries the verified actor.
+            context=LimitCallContext(
+                provider="tavily",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id=uuid4().hex,
+                request=request,
+                requested_at=fixed_at,
+                project_id=attribution.project_id,
+                actor_type=attribution.actor_type,
+                actor_id=attribution.actor_id,
+            ),
         )
     )
     await asyncio.wait_for(entered.wait(), timeout=5)
@@ -1951,13 +2177,362 @@ async def test_cancelled_tracked_call_releases_admission(
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=5)
 
-    async def _wait_released():  # type: ignore[no-untyped-def]
+    async def _wait_settled():  # type: ignore[no-untyped-def]
         while True:
             stored = await repository.limits.get_admission(captured[0])
             assert stored is not None
-            if stored.state == "released":
+            if stored.state != "reserved":
                 return stored
             await asyncio.sleep(0)
 
-    released = await asyncio.wait_for(_wait_released(), timeout=5)
-    assert released.state == "released"
+    settled = await asyncio.wait_for(_wait_settled(), timeout=5)
+    assert settled.state != "released", (
+        "a cancellation after dispatch refunded the admission; uncertain consumption "
+        "must stay debited"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Moved from tests/unit/services/test_monitoring.py (RT-12).
+#
+# These cases open a real migrated SQLite database and write real usage/quota
+# rows, so they are integration tests. Titles, bodies, parametrized ids and
+# assertions are unchanged; only the module-wide ``autouse`` poll-state reset
+# became an explicit ``usefixtures`` on the moved cases so it cannot alter the
+# pre-existing tests in this module. Original module docstring:
+#
+#   Unit tests for batched soft-zero quotas and bounded quota polling.
+#   Offline only: temp-file ``SQLiteRepository`` databases and stub adapters;
+#   only adapter quota work and the optional OAuth boundary are doubled. The
+#   ``refresh_quotas`` service itself always runs for real. Every timestamp is
+#   fixed UTC and every quota value is an explicit ``Decimal``. Each case clears
+#   quota poll state (monitoring and OAuth) first and relies on the
+#   ``monkeypatch`` fixture for restore.
+# ---------------------------------------------------------------------------
+
+FIXED_AT = datetime(2026, 4, 2, 12, 0, 0, tzinfo=UTC)
+
+
+@pytest.fixture
+def _clean_poll_state() -> Any:
+    """Clear monitoring and OAuth quota poll state before each case."""
+
+    clear_quota_poll_cache()
+    yield
+    clear_quota_poll_cache()
+
+
+@pytest_asyncio.fixture
+async def repo(tmp_path):  # type: ignore[no-untyped-def]
+    """Open an isolated temp-file repository and close it after the case."""
+
+    repository = await SQLiteRepository.open(tmp_path / "monitoring-unit.db")
+    try:
+        yield repository
+    finally:
+        await repository.close()
+
+
+def _soft_zero_snapshot(
+    provider: str,
+    observed_at: datetime,
+    *,
+    source: QuotaSource = QuotaSource.ESTIMATED,
+    remaining: str = "0",
+    limit: str = "100",
+    metadata: dict[str, Any] | None = None,
+) -> QuotaSnapshot:
+    return QuotaSnapshot(
+        provider=provider,
+        source=source,
+        remaining=Decimal(remaining),
+        limit=Decimal(limit),
+        observed_at=observed_at,
+        metadata=dict(metadata) if metadata is not None else {},
+    )
+
+
+def _usage_event(
+    provider: str, observed_at: datetime, *, status: UsageStatus = UsageStatus.SUCCESS
+) -> UsageEvent:
+    return UsageEvent(
+        provider=provider,
+        operation=UsageOperation.SEARCH,
+        units=Decimal("1"),
+        observed_at=observed_at,
+        status=status,
+    )
+
+
+def _counting_record(
+    monkeypatch: pytest.MonkeyPatch, repository: SQLiteRepository, writes: list[QuotaSnapshot]
+) -> None:
+    """Record every quota persistence for ``repository``."""
+
+    original = repository.record_quota
+
+    async def _counting_record_quota(snapshot: QuotaSnapshot) -> None:
+        writes.append(snapshot)
+        await original(snapshot)
+
+    monkeypatch.setattr(repository, "record_quota", _counting_record_quota)
+
+
+@pytest.mark.usefixtures("_clean_poll_state")
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "earlier_success",
+        "equal_timestamp",
+        "later_failure",
+        "multiple_later_successes",
+        "hard_zero",
+        "degenerate_limit_zero",
+    ],
+)
+async def test_effective_quotas_batch_soft_zero(
+    repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch, scenario: str
+) -> None:
+    """A parallel soft zero clears only after a strictly later success."""
+
+    writes: list[QuotaSnapshot] = []
+    _counting_record(monkeypatch, repo, writes)
+
+    if scenario == "multiple_later_successes":
+        providers = ["parallel", "exa"]
+        for provider in providers:
+            await repo.record_quota(
+                _soft_zero_snapshot(provider, FIXED_AT, metadata={"origin": "vendor-poll"})
+            )
+            await repo.record_usage(
+                _usage_event(provider, FIXED_AT + timedelta(minutes=30)),
+                attribution=await seed_execution_project(repo),
+            )
+            await repo.record_usage(
+                _usage_event(provider, FIXED_AT + timedelta(hours=1)),
+                attribution=await seed_execution_project(repo),
+            )
+        writes.clear()
+
+        result = await effective_quotas_batch(repo, providers)
+
+        assert set(result) == {"parallel", "exa"}
+        for provider in providers:
+            cleared = result[provider]
+            assert cleared.remaining is None
+            assert cleared.limit == Decimal("100")
+            assert cleared.source is QuotaSource.ESTIMATED
+            assert cleared.observed_at == FIXED_AT + timedelta(hours=1)
+            assert cleared.metadata == {"origin": "vendor-poll", "soft_zero": False}
+        assert len(writes) == 2
+
+        repeat = await effective_quotas_batch(repo, providers)
+
+        assert len(writes) == 2
+        assert repeat == result
+        return
+
+    provider = "parallel"
+    if scenario == "earlier_success":
+        await repo.record_quota(_soft_zero_snapshot(provider, FIXED_AT))
+        await repo.record_usage(
+            _usage_event(provider, FIXED_AT - timedelta(hours=1)),
+            attribution=await seed_execution_project(repo),
+        )
+    elif scenario == "equal_timestamp":
+        await repo.record_quota(_soft_zero_snapshot(provider, FIXED_AT))
+        await repo.record_usage(
+            _usage_event(provider, FIXED_AT), attribution=await seed_execution_project(repo)
+        )
+    elif scenario == "later_failure":
+        await repo.record_quota(_soft_zero_snapshot(provider, FIXED_AT))
+        await repo.record_usage(
+            _usage_event(provider, FIXED_AT + timedelta(hours=1), status=UsageStatus.FAILURE),
+            attribution=await seed_execution_project(repo),
+        )
+    elif scenario == "hard_zero":
+        await repo.record_quota(
+            _soft_zero_snapshot(provider, FIXED_AT, source=QuotaSource.AUTHORITATIVE)
+        )
+        await repo.record_usage(
+            _usage_event(provider, FIXED_AT + timedelta(hours=1)),
+            attribution=await seed_execution_project(repo),
+        )
+    elif scenario == "degenerate_limit_zero":
+        await repo.record_quota(_soft_zero_snapshot(provider, FIXED_AT, remaining="0", limit="0"))
+    else:  # pragma: no cover - parametrized ids are fixed above
+        raise AssertionError(f"unknown scenario {scenario!r}")
+    writes.clear()
+
+    result = await effective_quotas_batch(repo, [provider])
+
+    assert set(result) == {provider}
+    snapshot = result[provider]
+    if scenario == "degenerate_limit_zero":
+        assert snapshot.remaining is None
+        assert snapshot.limit is None
+        assert snapshot.reset_at is None
+    else:
+        assert snapshot.remaining == Decimal("0")
+        assert snapshot.limit == Decimal("100")
+        assert snapshot.source is (
+            QuotaSource.AUTHORITATIVE if scenario == "hard_zero" else QuotaSource.ESTIMATED
+        )
+    assert writes == []
+
+
+@pytest.mark.usefixtures("_clean_poll_state")
+async def test_effective_quotas_batch_failures_preserve_snapshot(
+    repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Usage and quota store errors never fail the batch quota read."""
+
+    assert await effective_quotas_batch(None, ["parallel"]) == {}
+    assert await effective_quotas_batch(repo, []) == {}
+
+    await repo.record_quota(_soft_zero_snapshot("parallel", FIXED_AT))
+    await repo.record_usage(
+        _usage_event("parallel", FIXED_AT + timedelta(hours=1)),
+        attribution=await seed_execution_project(repo),
+    )
+
+    async def _failing_list_usage(*args: Any, **kwargs: Any) -> list[UsageEvent]:
+        raise RuntimeError("usage store down")
+
+    monkeypatch.setattr(repo, "list_provider_usage", _failing_list_usage)
+    preserved = await effective_quotas_batch(repo, ["parallel"])
+
+    assert preserved["parallel"].remaining == Decimal("0")
+    assert preserved["parallel"].limit == Decimal("100")
+
+    monkeypatch.undo()
+
+    async def _failing_record(snapshot: QuotaSnapshot) -> None:
+        raise RuntimeError("quota store down")
+
+    monkeypatch.setattr(repo, "record_quota", _failing_record)
+    after_write_failure = await effective_quotas_batch(repo, ["parallel"])
+
+    assert after_write_failure["parallel"].remaining == Decimal("0")
+    assert after_write_failure["parallel"].limit == Decimal("100")
+
+
+class BlockingQuotaAdapter(ProviderAdapter):
+    """Quota-capable adapter double that blocks inside ``quota()`` until released."""
+
+    def __init__(self, name: str = "tavily") -> None:
+        self._name = name
+        self._capabilities = ProviderCapabilities(search=True, fetch=False, quota=True)
+        self.quota_calls = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return self._capabilities
+
+    async def search(self, request: SearchRequest) -> SearchResponse:
+        return SearchResponse(query=request.query, provider=self._name, results=[])
+
+    async def fetch(self, request: FetchRequest) -> FetchResponse:
+        raise NotImplementedError
+
+    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
+        raise NotImplementedError
+
+    async def quota(self) -> QuotaSnapshot | None:
+        self.quota_calls += 1
+        self.started.set()
+        await asyncio.wait_for(self.release.wait(), timeout=10)
+        return QuotaSnapshot(
+            provider=self._name,
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal("50"),
+            limit=Decimal("100"),
+            observed_at=datetime.now(UTC),
+        )
+
+
+class FailingQuotaAdapter(ProviderAdapter):
+    """Quota-capable adapter double whose network work always fails."""
+
+    def __init__(self, name: str = "brave") -> None:
+        self._name = name
+        self._capabilities = ProviderCapabilities(search=True, fetch=False, quota=True)
+        self.quota_calls = 0
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return self._capabilities
+
+    async def search(self, request: SearchRequest) -> SearchResponse:
+        return SearchResponse(query=request.query, provider=self._name, results=[])
+
+    async def fetch(self, request: FetchRequest) -> FetchResponse:
+        raise NotImplementedError
+
+    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
+        raise NotImplementedError
+
+    async def quota(self) -> QuotaSnapshot | None:
+        self.quota_calls += 1
+        raise RuntimeError("quota network down")
+
+
+@pytest.mark.usefixtures("_clean_poll_state")
+async def test_concurrent_quota_poll_uses_one_network_call(
+    repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrent polls share one provider request; TTL and backoff reuse it."""
+
+    oauth_calls: list[int] = []
+
+    async def _no_oauth(self: Any, access_token: Any) -> None:
+        oauth_calls.append(1)
+        return None
+
+    monkeypatch.setattr(oauth_module.ParallelOAuthClient, "get_balance", _no_oauth)
+
+    adapter = BlockingQuotaAdapter()
+    first = asyncio.create_task(refresh_quotas(repo, [adapter]))
+    try:
+        await asyncio.wait_for(adapter.started.wait(), timeout=10)
+        second = asyncio.create_task(refresh_quotas(repo, [adapter]))
+        await asyncio.sleep(0)
+        assert adapter.quota_calls == 1
+
+        adapter.release.set()
+        first_result, second_result = await asyncio.wait_for(
+            asyncio.gather(first, second), timeout=10
+        )
+    finally:
+        adapter.release.set()
+
+    assert adapter.quota_calls == 1
+    assert len(first_result) == 1
+    assert len(second_result) == 1
+    assert first_result[0].remaining == Decimal("50")
+    assert second_result[0].remaining == Decimal("50")
+
+    third_result = await refresh_quotas(repo, [adapter])
+
+    assert adapter.quota_calls == 1
+    assert len(third_result) == 1
+    assert third_result[0].remaining == Decimal("50")
+
+    failing = FailingQuotaAdapter()
+    first_failure = await refresh_quotas(repo, [failing])
+    second_failure = await refresh_quotas(repo, [failing])
+
+    assert first_failure == []
+    assert second_failure == []
+    assert failing.quota_calls == 1
+    assert oauth_calls == []

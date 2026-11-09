@@ -8,23 +8,39 @@ API process and an MCP process never poll the same provider twice at once.
 One provider failure stays independent of the other providers: the last known
 balance survives, the pool records a safe error code and a stale state, and the
 next attempt uses bounded backoff.
+
+Provider keys live in DB-stored credentials, so the installation-wide service
+usually holds no provider-name adapter. A manual sync for such a provider is
+delegated to ``credential_sync``, which polls each active system credential
+under its own observation scope.
 """
 
 import asyncio
 import logging
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import select
+
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.models.contracts import QuotaSnapshot, QuotaSource
+from freesearch.models.credentials import CredentialAuthMode
 from freesearch.models.provider_limits import (
     AuthMode,
     LimitOperation,
+    NativePool,
+    ProviderObservationScope,
     SyncClaim,
     SyncResult,
     UsageSyncRequest,
+    VaultKeyUsage,
 )
+from freesearch.models.schema_enums import OAuthGrantStatus
+from freesearch.persistence.credentials import ProviderCredentialRow
 from freesearch.persistence.limit_repository import LimitRepository
+from freesearch.persistence.oauth_grants import CredentialOAuthGrantRow
+from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
 
 logger = logging.getLogger(__name__)
@@ -40,6 +56,48 @@ MAX_BACKOFF_SECONDS = 600
 _THROTTLED_PROVIDERS: dict[str, int] = {"tavily": TAVILY_MIN_SECONDS}
 
 
+async def add_vault_key_auth_status(
+    repository: SQLiteRepository, keys: list[VaultKeyUsage]
+) -> list[VaultKeyUsage]:
+    """Add secret-free authentication state to the admin's key observations."""
+
+    if not keys:
+        return []
+    async with repository.session() as session:
+        rows = await session.execute(
+            select(
+                ProviderCredentialRow.id,
+                ProviderCredentialRow.auth_mode,
+                CredentialOAuthGrantRow.status,
+            )
+            .outerjoin(
+                CredentialOAuthGrantRow,
+                CredentialOAuthGrantRow.credential_id == ProviderCredentialRow.id,
+            )
+            .where(ProviderCredentialRow.id.in_([str(key.key_id) for key in keys]))
+        )
+        states = {key_id: (CredentialAuthMode(mode), status) for key_id, mode, status in rows}
+    result = []
+    for key in keys:
+        state = states.get(str(key.key_id))
+        if state is None:
+            continue
+        mode, status = state
+        result.append(
+            key.model_copy(
+                update={
+                    "auth_mode": mode,
+                    "oauth_connected": (
+                        status == OAuthGrantStatus.CONNECTED.value
+                        if mode is CredentialAuthMode.OAUTH
+                        else None
+                    ),
+                }
+            )
+        )
+    return result
+
+
 def _sync_interval_seconds() -> int:
     raw = os.environ.get("FREESEARCH_LIMIT_SYNC_SECONDS")
     try:
@@ -51,6 +109,11 @@ def _sync_interval_seconds() -> int:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+#: Delegate for a provider without a provider-name adapter: sync its active
+#: credentials, or return ``None`` when the composition cannot resolve any.
+CredentialSync = Callable[[str, datetime], Awaitable[SyncResult | None]]
 
 
 class LimitSyncService:
@@ -66,14 +129,21 @@ class LimitSyncService:
         interval_seconds: int | None = None,
         owner: str | None = None,
         enabled: bool = True,
+        scope: ProviderObservationScope | None = None,
+        quota_repository: SQLiteRepository | None = None,
+        credential_sync: CredentialSync | None = None,
     ) -> None:
         self._repository = repository
         self._limits = limits
         self._adapters = adapters
+        self._credential_sync = credential_sync
         self._clock = clock or _utc_now
         self._interval = interval_seconds or _sync_interval_seconds()
         self._owner = owner or f"sync-{os.getpid()}"
         self._enabled = enabled
+        self._scope = scope
+        self._quota_repository = quota_repository
+        self._claim_pool_id: str | None = None
         self._failures: dict[str, int] = {}
         self._throttle_until: dict[str, datetime] = {}
 
@@ -124,16 +194,26 @@ class LimitSyncService:
         throttle = self._throttle_until.get(provider)
         if throttle is not None and now < throttle:
             return _skipped(provider, now, "cadence")
+        delegated = await self._delegate(provider, now)
+        if delegated is not None and not (
+            delegated.status == "skipped" and delegated.reason == "no_credential"
+        ):
+            return delegated
         adapter = self._adapter_for(provider)
         if adapter is None:
-            return _skipped(provider, now, "no_adapter")
+            return delegated if delegated is not None else _skipped(provider, now, "no_adapter")
         # The claim lease must outlive the 30-second outer usage timeout the
         # adapter applies to its usage request, so throttled providers keep a
         # lease floor higher than the request timeout.
         lease_floor = (
             TAVILY_LEASE_SECONDS if provider in _THROTTLED_PROVIDERS else DEFAULT_LEASE_SECONDS
         )
+        if self._scope is not None:
+            self._claim_pool_id = await self._prepare_scoped_pool(provider, adapter)
+            if self._claim_pool_id is None:
+                return _skipped(provider, now, "no_native_pool")
         claim = SyncClaim(
+            pool_id=self._claim_pool_id,
             provider=provider,
             owner=self._owner,
             now=now,
@@ -186,7 +266,17 @@ class LimitSyncService:
                 next_sync_at=now + timedelta(seconds=self._interval),
                 reason="no_usage_endpoint",
             )
+        if self._scope is not None:
+            snapshot = snapshot.model_copy(
+                update={
+                    "pool_id": self._scope.native_pool_id(snapshot.pool_id),
+                    "credential_generation": self._scope.credential_generation,
+                    "credential_id": self._scope.credential_id,
+                    "upstream_pool_id": self._scope.upstream_pool_id,
+                }
+            )
         changed = await self._repository.apply_snapshot(snapshot) if self._repository else False
+        await self._record_scoped_quota(snapshot.pool_id)
         await self._complete(provider, "synced", now, error_code=snapshot.error_code)
         self._failures.pop(provider, None)
         return SyncResult(
@@ -257,10 +347,63 @@ class LimitSyncService:
                 error_code=error_code,
                 stale=status == "failed",
                 reason=reason,
-            )
+            ),
+            pool_id=self._claim_pool_id,
         )
         if provider in _THROTTLED_PROVIDERS:
             self._throttle_until[provider] = now + timedelta(seconds=delay)
+
+    async def _prepare_scoped_pool(self, provider: str, adapter: ProviderAdapter) -> str | None:
+        """Anchor the cross-process polling lease on the resolved funds identity."""
+        assert self._repository is not None and self._scope is not None
+        base_id = self._limits.observation_pool_id(provider, _adapter_auth_mode(adapter))
+        base = await self._repository.get_pool(base_id) if base_id is not None else None
+        if base is None:
+            return None
+        pool_id = self._scope.native_pool_id(base.pool_id)
+        await self._repository.ensure_pool(
+            NativePool(
+                pool_id=pool_id,
+                provider=provider,
+                auth_mode=base.auth_mode,
+                native_unit=base.native_unit,
+                credential_generation=self._scope.credential_generation,
+            )
+        )
+        return pool_id
+
+    async def _record_scoped_quota(self, pool_id: str) -> None:
+        """Project accepted native truth onto the same scoped routing snapshot."""
+        if self._scope is None or self._quota_repository is None or self._repository is None:
+            return
+        pool = await self._repository.get_pool(pool_id)
+        if pool is None or pool.stale or pool.observed_at is None:
+            return
+        await self._quota_repository.record_quota(
+            QuotaSnapshot(
+                provider=pool.provider,
+                source=QuotaSource.AUTHORITATIVE,
+                remaining=pool.remaining,
+                limit=pool.allowance,
+                reset_at=pool.reset_at,
+                observed_at=pool.observed_at,
+                unit_kind=pool.native_unit,
+                metadata={"native_sync": True},
+            ),
+            credential_id=self._scope.credential_id,
+            pool_id=self._scope.upstream_pool_id,
+            credential_generation=self._scope.credential_generation,
+        )
+
+    async def _delegate(self, provider: str, now: datetime) -> SyncResult | None:
+        """Sync a provider without a provider-name adapter through its credentials.
+
+        Only the installation-wide service delegates; a credential-scoped
+        service already holds the one adapter it was built for.
+        """
+        if self._scope is not None or self._credential_sync is None:
+            return None
+        return await self._credential_sync(provider, now)
 
     def _adapter_for(self, provider: str) -> ProviderAdapter | None:
         for adapter in self._adapters():
@@ -271,10 +414,14 @@ class LimitSyncService:
     async def _credential_generation(self, provider: str) -> int:
         """Return the stored credential generation used to reject stale results."""
 
+        if self._scope is not None:
+            return self._scope.credential_generation
         if self._repository is None:
             return 0
         pools = await self._repository.list_pools(provider)
-        return max((pool.credential_generation for pool in pools), default=0)
+        return max(
+            (pool.credential_generation for pool in pools if "#" not in pool.pool_id), default=0
+        )
 
 
 def _adapter_auth_mode(adapter: ProviderAdapter) -> AuthMode:

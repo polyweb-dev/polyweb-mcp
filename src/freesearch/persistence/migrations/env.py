@@ -39,7 +39,7 @@ def _engine() -> Engine:
     if database_path is None:
         raise RuntimeError(
             "Direct online Alembic execution is disabled; use freesearch-db upgrade "
-            "so backup, locking, and preflight validation are applied"
+            "so locking, the reset check, and schema validation are applied"
         )
     return create_engine(URL.create("sqlite", database=str(database_path)), poolclass=pool.NullPool)
 
@@ -48,7 +48,9 @@ def run_migrations_online() -> None:
     """Run migrations against the configured SQLite database."""
 
     connectable = _engine()
-    with connectable.connect() as connection:
+    with connectable.begin() as connection:
+        # SQLite's legacy transaction mode otherwise commits DDL piecemeal.
+        connection.exec_driver_sql("BEGIN")
         _configure(connection)
     connectable.dispose()
 

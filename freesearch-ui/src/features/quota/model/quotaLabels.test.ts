@@ -18,19 +18,19 @@ import {
 
 describe("quotaLabels controls", () => {
   it("keeps the balance entry control name exact", () => {
-    expect(BALANCE_ENTRY).toBe("Provider Balance")
+    expect(BALANCE_ENTRY).toBe("Provider balance")
   })
 
   it("keeps the spend cap control name exact", () => {
-    expect(SPEND_CAP).toBe("Budget Limit")
+    expect(SPEND_CAP).toBe("Budget limit")
   })
 
   it("keeps the balance entry note exact", () => {
-    expect(BALANCE_ENTRY_NOTE).toBe("Records the balance the vendor dashboard shows, as an estimate.")
+    expect(BALANCE_ENTRY_NOTE).toBe("Enter the current balance from the provider dashboard")
   })
 
   it("keeps the spend cap note exact", () => {
-    expect(SPEND_CAP_NOTE).toBe("Sets a local credit-unit ceiling that adds no vendor funds.")
+    expect(SPEND_CAP_NOTE).toBe("Stops this provider when the budget is used")
   })
 
   it("states both controls in the split note", () => {
@@ -40,7 +40,7 @@ describe("quotaLabels controls", () => {
 
   it("keeps the split note exact", () => {
     expect(CONTROL_SPLIT_NOTE).toBe(
-      "Provider Balance records the vendor dashboard balance as an estimate. Budget Limit sets a local credit-unit ceiling.",
+      "Provider balance records the vendor dashboard balance as an estimate. Budget limit sets a local USD ceiling",
     )
   })
 })
@@ -51,12 +51,12 @@ describe("quotaLabels sourceLabel", () => {
     expect(sourceLabel("local")).toBe("Local use")
     expect(sourceLabel("local_daily_estimate")).toBe("Daily estimate (UTC)")
     expect(sourceLabel("local_ledger")).toBe("Local ledger")
-    expect(sourceLabel("manual_anchor")).toBe("Provider Balance")
+    expect(sourceLabel("manual_anchor")).toBe("Provider balance")
   })
 
   it("labels every operator and vendor source key", () => {
     expect(sourceLabel("operator")).toBe("Operator action")
-    expect(sourceLabel("operator_grant")).toBe("Budget Limit")
+    expect(sourceLabel("operator_grant")).toBe("Budget limit")
     expect(sourceLabel("vendor_api")).toBe("Vendor API")
     expect(sourceLabel("vendor_headers")).toBe("Vendor headers")
   })
@@ -77,11 +77,11 @@ describe("quotaLabels sourceLabel", () => {
 
 describe("quotaLabels reasonLabel", () => {
   it("labels the spend cap reason", () => {
-    expect(reasonLabel("grant")).toBe("Budget Limit")
+    expect(reasonLabel("grant")).toBe("Budget limit")
   })
 
   it("labels the balance entry reason", () => {
-    expect(reasonLabel("manual_anchor")).toBe("Provider Balance")
+    expect(reasonLabel("manual_anchor")).toBe("Provider balance")
   })
 
   it("returns no text for an absent reason", () => {

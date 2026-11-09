@@ -4,8 +4,11 @@ title: Collect username, first name, and last name during signup
 status: To Do
 assignee: []
 created_date: 2026-10-15 22:19
+updated_date: '2026-10-26T09:48:00Z'
 labels: []
-dependencies: []
+dependencies:
+  - TASK-000040
+  - TASK-000041
 type: feature
 ordinal: 10000
 ---
@@ -21,3 +24,15 @@ Signup should collect the user identity fields needed for account profiles.
 - [ ] #1 Signup collects username, first name, and last name.
 - [ ] #2 The submitted values are validated and saved to the user profile.
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-10-26T09:48:00Z
+
+---
+
+2026-10-25: The username, first name and last name columns land in the settled schema (TASK-000040). This card keeps the signup API and UI work, after TASK-000041 removes the account-role choice from signup.
+
+---
+<!-- COMMENTS:END -->

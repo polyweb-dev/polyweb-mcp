@@ -93,6 +93,8 @@ class Settings(BaseSettings):
     user_agent: str = "FreeSearch/0.1"
     encryption_key: SecretStr | None = Field(default=None, repr=False)
     encryption_key_file: Path = DEFAULT_KEY_FILE
+    encryption_retired_key_files: list[Path] = Field(default_factory=list)
+    encryption_retired_keys: list[SecretStr] = Field(default_factory=list, repr=False)
 
     # Account and token settings. ``auth_jwt_secret`` is required at auth
     # composition, not at settings construction, so unrelated reads (monitoring,
@@ -138,7 +140,7 @@ class Settings(BaseSettings):
             raise ValueError("auth refresh lifetime must exceed the access lifetime")
         return self
 
-    @field_validator("auth_issuer_url", "mcp_resource_url")
+    @field_validator("auth_issuer_url", "mcp_resource_url", "execution_authority_url")
     @classmethod
     def _http_url(cls, value: str | None) -> str | None:
         """Accept only absolute HTTP or HTTPS override URLs.
@@ -200,6 +202,24 @@ class Settings(BaseSettings):
 
     # Projects architecture rollout gate. Defaults to preview mode.
     projects_rollout_state: ProjectRolloutState = ProjectRolloutState.PROJECTS_PREVIEW
+
+    # Execution authority (TASK-000045). The API hosts the one fair scheduler
+    # for shared pools; a standalone MCP server forwards to it with the
+    # original verified credential, deadline, and trace context. Empty means
+    # no forwarding target is configured: the production MCP launch then fails
+    # closed unless ``execution_mcp_standalone`` explicitly opts into the
+    # exclusive single-runtime (local authority) deployment.
+    execution_authority_url: str | None = None
+    execution_forward_timeout_seconds: float = Field(default=30.0, gt=0)
+    execution_request_timeout_seconds: float = Field(default=300.0, gt=0)
+    execution_mcp_standalone: bool = False
+    execution_queue_max_wait_ms: int = Field(default=5000, ge=0)
+    execution_queue_max_requests: int = Field(default=100, ge=0)
+    execution_queue_max_bytes: int = Field(default=1_000_000, ge=0)
+    execution_queue_max_concurrency: int = Field(default=100, ge=1)
+    execution_project_max_concurrency: int = Field(default=100, ge=1)
+    execution_authority_lease_seconds: float = Field(default=30.0, gt=0)
+    execution_authority_recovery_seconds: float = Field(default=5.0, ge=0)
 
 
 def require_transport_port(settings: Settings, *, transport: str) -> int:

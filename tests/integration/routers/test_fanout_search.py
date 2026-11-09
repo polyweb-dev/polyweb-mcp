@@ -32,7 +32,14 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from tests.fixtures.auth import raw_auth_headers, register_and_login, temp_email
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_and_login,
+    temp_email,
+)
+from tests.fixtures.execution import allow_full_trace_capture, seed_app_bound_project
+from tests.fixtures.usage_ledger import all_usage_events
 
 
 @pytest.fixture
@@ -101,6 +108,7 @@ class FakeSearchAdapter(ProviderAdapter):
 
 
 async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -140,10 +148,20 @@ async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-fuse"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         # Fanout search with fanout=True
         response = client.post(
             "/search",
-            json={"query": "test query", "fanout": True, "limit": 10},
+            json={"project_id": pid, "query": "test query", "fanout": True, "limit": 10},
             headers=headers,
         )
 
@@ -166,13 +184,14 @@ async def test_fanout_search_runs_all_providers_in_parallel_and_fuses_results(
     assert first["snippet"] == "Longer, richer snippet from Brave about consensus page"
 
     # Verify telemetry was recorded for both providers in repository
-    events = await repository.list_usage()
+    events = await all_usage_events(repository)
     provider_names = {e.provider for e in events}
     assert "exa" in provider_names
     assert "brave" in provider_names
 
 
 async def test_fanout_search_via_routing_mode_fanout(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -190,9 +209,19 @@ async def test_fanout_search_via_routing_mode_fanout(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-mode"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "query", "routing": {"mode": "fanout"}},
+            json={"project_id": pid, "query": "query", "routing": {"mode": "fanout"}},
             headers=headers,
         )
 
@@ -206,6 +235,7 @@ async def test_fanout_search_via_routing_mode_fanout(
 
 
 async def test_fanout_search_tolerates_individual_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -227,9 +257,19 @@ async def test_fanout_search_tolerates_individual_provider_failure(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-tolerate"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "test query", "fanout": True},
+            json={"project_id": pid, "query": "test query", "fanout": True},
             headers=headers,
         )
 
@@ -242,6 +282,7 @@ async def test_fanout_search_tolerates_individual_provider_failure(
 
 
 async def test_fanout_search_when_all_providers_fail_returns_500(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -254,9 +295,19 @@ async def test_fanout_search_when_all_providers_fail_returns_500(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-allfail"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "test query", "fanout": True},
+            json={"project_id": pid, "query": "test query", "fanout": True},
             headers=headers,
         )
 
@@ -267,6 +318,7 @@ async def test_fanout_search_when_all_providers_fail_returns_500(
 
 
 async def test_fanout_search_without_any_adapter_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -280,9 +332,19 @@ async def test_fanout_search_without_any_adapter_returns_503(
         )
         pair = register_and_login(client, temp_email("fanout-empty"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "test query", "fanout": True},
+            json={"project_id": pid, "query": "test query", "fanout": True},
             headers=headers,
         )
 
@@ -291,6 +353,7 @@ async def test_fanout_search_without_any_adapter_returns_503(
 
 
 async def test_fanout_search_honors_provider_allow_list(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -309,9 +372,20 @@ async def test_fanout_search_honors_provider_allow_list(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-allow"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/search",
             json={
+                "project_id": pid,
                 "query": "allow-list query",
                 "fanout": True,
                 "routing": {"mode": "fanout", "providers": ["p1"]},
@@ -328,6 +402,7 @@ async def test_fanout_search_honors_provider_allow_list(
 
 
 async def test_single_provider_require_does_not_fanout(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -346,9 +421,20 @@ async def test_single_provider_require_does_not_fanout(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-require"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/search",
             json={
+                "project_id": pid,
                 "query": "explicit provider query",
                 "routing": {"mode": "require", "providers": ["p2"]},
             },
@@ -363,6 +449,7 @@ async def test_single_provider_require_does_not_fanout(
 
 
 async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -383,9 +470,19 @@ async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-water"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
             "/search",
-            json={"query": "waterfall trace query", "fanout": True},
+            json={"project_id": pid, "query": "waterfall trace query", "fanout": True},
             headers=headers,
         )
 
@@ -400,7 +497,7 @@ async def test_fanout_search_returns_waterfall_and_records_activity_telemetry(
         assert item["results_count"] == 1
         assert item["latency_ms"] >= 0
 
-    recent = await repository.recent_usage(limit=10)
+    recent = await repository.recent_installation_usage(limit=10)
     aggregated_events = [e for e in recent if e.provider == "aggregated"]
     assert len(aggregated_events) == 1
     assert aggregated_events[0].status.value == "success"
@@ -419,6 +516,7 @@ def _trace_id_of(response: object) -> str:
 
 
 async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -434,17 +532,30 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
             )
         ],
     )
+    await allow_full_trace_capture(repository)
     app = create_app([failing, working], repository=repository)
 
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-partial"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "partial query", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "partial query", "fanout": True},
+            headers=headers,
         )
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "partial"
     assert detail["input"] == "partial query"
@@ -466,6 +577,7 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
 
 
 async def test_fanout_success_trace_has_one_root_and_two_provider_children(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -478,18 +590,31 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
         "p2",
         [SearchResult(title="P2", url=AnyHttpUrl("https://example.com/2"), snippet="2")],
     )
+    await allow_full_trace_capture(repository)
     app = create_app([p1, p2], repository=repository)
 
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-ok"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "fanout query", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "fanout query", "fanout": True},
+            headers=headers,
         )
         assert response.status_code == 200
         assert response.json()["provider"] == "aggregated"
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "success"
     assert detail["result_count"] == 2
@@ -499,23 +624,37 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
 
 
 async def test_fanout_all_fail_writes_error_trace_without_results(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
     # Use one Agent account for search and trace reads.
     first = FakeSearchAdapter("flaky-a", fail=True)
     second = FakeSearchAdapter("flaky-b", fail=True)
+    await allow_full_trace_capture(repository)
     app = create_app([first, second], repository=repository)
 
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-doom"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "doomed query", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "doomed query", "fanout": True},
+            headers=headers,
         )
         assert response.status_code == 500
         trace_id = _trace_id_of(response)
-        detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+        detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
 
     assert detail["outcome"] == "error"
     assert detail["output"] is None
@@ -526,6 +665,7 @@ async def test_fanout_all_fail_writes_error_trace_without_results(
 
 
 async def test_fanout_excludes_search_off_provider_without_call(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -545,8 +685,20 @@ async def test_fanout_excludes_search_off_provider_without_call(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-scope"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "fanout scope", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "fanout scope", "fanout": True},
+            headers=headers,
         )
 
     assert response.status_code == 200
@@ -557,6 +709,7 @@ async def test_fanout_excludes_search_off_provider_without_call(
 
 
 async def test_fanout_with_no_eligible_candidate_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
@@ -579,8 +732,20 @@ async def test_fanout_with_no_eligible_candidate_returns_503(
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("fanout-nocand"))
         headers = raw_auth_headers(pair["access_token"])
+        pid = str(
+            (
+                await seed_app_bound_project(
+                    repository,
+                    user_id=account_id_from_pair(pair),
+                    app=app,
+                    monkeypatch=monkeypatch,
+                )
+            ).project_id
+        )
         response = client.post(
-            "/search", json={"query": "no candidate", "fanout": True}, headers=headers
+            "/search",
+            json={"project_id": pid, "query": "no candidate", "fanout": True},
+            headers=headers,
         )
 
     assert response.status_code == 503
@@ -590,19 +755,19 @@ async def test_fanout_with_no_eligible_candidate_returns_503(
 
 
 async def _reset_fanout_caches() -> None:
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     clear_config_cache()
     clear_quota_poll_cache()
 
 
 async def test_pinned_fanout_reads_only_subset(
-    repository: SQLiteRepository, auth_secret: str
+    monkeypatch: pytest.MonkeyPatch, repository: SQLiteRepository, auth_secret: str
 ) -> None:
     """M4: fanout with providers=[A,B] queries only the subset (batch name lists)."""
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     await _reset_fanout_caches()
     try:
@@ -622,6 +787,7 @@ async def test_pinned_fanout_reads_only_subset(
         quota_names: list[list[str]] = []
         orig_health = SQLiteRepository.latest_health_batch
         orig_quota = SQLiteRepository.latest_quota_batch
+        orig_scoped_quota = SQLiteRepository.latest_quota
 
         async def _spy_health(self: SQLiteRepository, providers: list[str]) -> dict:  # type: ignore[no-untyped-def]
             health_names.append(list(providers))
@@ -631,15 +797,33 @@ async def test_pinned_fanout_reads_only_subset(
             quota_names.append(list(providers))
             return await orig_quota(self, providers)
 
+        # A2: quota is read per bound credential, not as a global name batch;
+        # every scoped read is recorded under its provider name.
+        async def _spy_scoped_quota(self: SQLiteRepository, provider: str, **kwargs):  # type: ignore[no-untyped-def]
+            quota_names.append([provider])
+            return await orig_scoped_quota(self, provider, **kwargs)
+
         SQLiteRepository.latest_health_batch = _spy_health  # type: ignore[method-assign]
         SQLiteRepository.latest_quota_batch = _spy_quota  # type: ignore[method-assign]
+        SQLiteRepository.latest_quota = _spy_scoped_quota  # type: ignore[method-assign]
         try:
             with TestClient(app) as client:
                 pair = register_and_login(client, temp_email("fanout-pinned"))
                 headers = raw_auth_headers(pair["access_token"])
+                pid = str(
+                    (
+                        await seed_app_bound_project(
+                            repository,
+                            user_id=account_id_from_pair(pair),
+                            app=app,
+                            monkeypatch=monkeypatch,
+                        )
+                    ).project_id
+                )
                 response = client.post(
                     "/search",
                     json={
+                        "project_id": pid,
                         "query": "pinned subset",
                         "fanout": True,
                         "routing": {"mode": "fanout", "providers": ["p1", "p2"]},
@@ -649,29 +833,32 @@ async def test_pinned_fanout_reads_only_subset(
         finally:
             SQLiteRepository.latest_health_batch = orig_health  # type: ignore[method-assign]
             SQLiteRepository.latest_quota_batch = orig_quota  # type: ignore[method-assign]
+            SQLiteRepository.latest_quota = orig_scoped_quota  # type: ignore[method-assign]
         assert response.status_code == 200
         data = response.json()
         assert data["participating_providers"] == ["p1", "p2"]
         assert [a.search_calls for a in adapters] == [1, 1, 0, 0]
         assert health_names, "expected at least one health batch"
-        assert quota_names, "expected at least one quota batch"
+        assert quota_names, "expected at least one quota read"
         for seen in health_names:
             assert set(seen) <= {"p1", "p2"}, f"health batch leaked: {seen}"
         for seen in quota_names:
             assert set(seen) <= {"p1", "p2"}, f"quota batch leaked: {seen}"
         assert any(set(seen) == {"p1", "p2"} for seen in health_names)
+        assert {name for seen in quota_names for name in seen} == {"p1", "p2"}
     finally:
         clear_config_cache()
         clear_quota_poll_cache()
 
 
 async def test_fanout_partial_failure_detailed_contract(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
     """E7: one failure preserves results, waterfall, RRF output, and partial trace."""
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     await _reset_fanout_caches()
     try:
@@ -686,12 +873,25 @@ async def test_fanout_partial_failure_detailed_contract(
                 )
             ],
         )
+        await allow_full_trace_capture(repository)
         app = create_app([failing, working], repository=repository)
         with TestClient(app) as client:
             pair = register_and_login(client, temp_email("fanout-partial2"))
             headers = raw_auth_headers(pair["access_token"])
+            pid = str(
+                (
+                    await seed_app_bound_project(
+                        repository,
+                        user_id=account_id_from_pair(pair),
+                        app=app,
+                        monkeypatch=monkeypatch,
+                    )
+                ).project_id
+            )
             response = client.post(
-                "/search", json={"query": "partial query", "fanout": True}, headers=headers
+                "/search",
+                json={"project_id": pid, "query": "partial query", "fanout": True},
+                headers=headers,
             )
             assert response.status_code == 200
             data = response.json()
@@ -712,7 +912,7 @@ async def test_fanout_partial_failure_detailed_contract(
                 "reliable_provider",
             ]
             trace_id = response.headers["x-trace-id"]
-            detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+            detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
         assert detail["outcome"] == "partial"
         assert detail["output"]["kind"] == "search_results"
         assert len(detail["output"]["results"]) == 1
@@ -732,23 +932,37 @@ async def test_fanout_partial_failure_detailed_contract(
 
 
 async def test_fanout_all_fail_first_error_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
     auth_secret: str,
 ) -> None:
     """E7: all-fail gives REST 500 with the first candidate error in order."""
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     await _reset_fanout_caches()
     try:
         first = FakeSearchAdapter("flaky-a", fail=True)
         second = FakeSearchAdapter("flaky-b", fail=True)
+        await allow_full_trace_capture(repository)
         app = create_app([first, second], repository=repository)
         with TestClient(app) as client:
             pair = register_and_login(client, temp_email("fanout-doom2"))
             headers = raw_auth_headers(pair["access_token"])
+            pid = str(
+                (
+                    await seed_app_bound_project(
+                        repository,
+                        user_id=account_id_from_pair(pair),
+                        app=app,
+                        monkeypatch=monkeypatch,
+                    )
+                ).project_id
+            )
             response = client.post(
-                "/search", json={"query": "doomed query", "fanout": True}, headers=headers
+                "/search",
+                json={"project_id": pid, "query": "doomed query", "fanout": True},
+                headers=headers,
             )
             assert response.status_code == 500
             detail_text = response.json()["detail"]
@@ -756,7 +970,9 @@ async def test_fanout_all_fail_first_error_deterministic(
             assert "flaky-a" in detail_text
             trace_id = response.headers.get("x-trace-id")
             if trace_id is not None:
-                detail = client.get(f"/api/v1/traces/{trace_id}", headers=headers).json()
+                detail = client.get(
+                    f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers
+                ).json()
                 assert detail["outcome"] == "error"
                 providers = [s for s in detail["spans"] if s["name"] == "freesearch.provider"]
                 assert len(providers) == 2

@@ -352,7 +352,6 @@ describe("mergeProviderStatus", () => {
     expect(merged.name).toBe("Tavily")
     expect(merged.baseUrl).toBe("https://api.tavily.com")
     expect(merged.globalEnabled).toBe(true)
-    expect(merged.priority).toBe(3)
     expect(merged.circuitBreaker).toBe("closed")
     expect(merged.healthStatus).toBe("healthy")
     expect(merged.latencyP95Ms).toBe(130)

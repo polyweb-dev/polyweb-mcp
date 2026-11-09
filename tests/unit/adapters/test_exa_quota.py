@@ -62,7 +62,9 @@ class _MockRepository:
         self._events = events or []
         self._latest = latest_quota
 
-    async def list_usage(self, provider: str, since: datetime | None = None) -> list[UsageEvent]:
+    async def list_provider_usage(
+        self, provider: str, since: datetime | None = None
+    ) -> list[UsageEvent]:
         return [
             e
             for e in self._events
@@ -186,7 +188,9 @@ async def test_search_accumulates_exact_usd_spend() -> None:
     sdk: _FakeSDK = adapter._sdk
     sdk.search_response = _make_search_response(0.007)
 
-    response = await adapter.search(SearchRequest(query="ai news"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="ai news")
+    )
     assert response.usage is not None
     assert response.usage.units == Decimal("0.007")
     assert response.usage.unit_kind is UnitKind.USD
@@ -200,7 +204,9 @@ async def test_search_accumulates_exact_usd_spend() -> None:
 
     # Second search
     sdk.search_response = _make_search_response(0.005)
-    response2 = await adapter.search(SearchRequest(query="more news"))
+    response2 = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="more news")
+    )
     snapshot2 = adapter.quota_after_success(response2)
     assert snapshot2 is not None
     assert snapshot2.remaining == Decimal("9.988")
@@ -213,7 +219,9 @@ async def test_spend_clamped_at_zero_when_exceeding_budget() -> None:
     sdk: _FakeSDK = adapter._sdk
     sdk.search_response = _make_search_response(0.015)
 
-    response = await adapter.search(SearchRequest(query="test"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test")
+    )
     snapshot = adapter.quota_after_success(response)
     assert snapshot is not None
     assert snapshot.remaining == Decimal("0")
@@ -284,7 +292,9 @@ async def test_subsequent_success_clears_soft_zero() -> None:
 
     sdk: _FakeSDK = adapter._sdk
     sdk.search_response = _make_search_response(0.005)
-    response = await adapter.search(SearchRequest(query="test"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test")
+    )
 
     snapshot = adapter.quota_after_success(response)
     assert snapshot is not None
@@ -401,7 +411,9 @@ async def test_search_fallback_prices_base_for_ten_or_fewer_results() -> None:
         [_fallback_result(1), _fallback_result(2), _fallback_result(3)]
     )
 
-    response = await adapter.search(SearchRequest(query="fallback"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="fallback")
+    )
 
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.SEARCH
@@ -418,7 +430,9 @@ async def test_search_fallback_prices_zero_results_at_base() -> None:
     sdk: _FakeSDK = adapter._sdk
     sdk.search_response = _make_costless_search_response([])
 
-    response = await adapter.search(SearchRequest(query="empty"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="empty")
+    )
 
     assert response.usage is not None
     assert response.usage.units == Decimal("0.007")
@@ -433,7 +447,9 @@ async def test_search_fallback_prices_results_over_ten() -> None:
         [_fallback_result(index) for index in range(12)]
     )
 
-    response = await adapter.search(SearchRequest(query="many"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="many")
+    )
 
     assert response.usage is not None
     assert response.usage.units == Decimal("0.009")
@@ -452,7 +468,9 @@ async def test_search_fallback_prices_non_empty_summaries_only() -> None:
         ]
     )
 
-    response = await adapter.search(SearchRequest(query="summaries"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="summaries")
+    )
 
     assert response.usage is not None
     assert response.usage.units == Decimal("0.008")
@@ -467,7 +485,9 @@ async def test_search_fallback_math_is_decimal_exact() -> None:
         [_fallback_result(index, summary=f"Summary {index}.") for index in range(12)]
     )
 
-    response = await adapter.search(SearchRequest(query="exact"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="exact")
+    )
 
     assert response.usage is not None
     assert isinstance(response.usage.units, Decimal)
@@ -482,7 +502,9 @@ async def test_measured_cost_beats_fallback_regardless_of_counts() -> None:
     sdk.search_response = _make_search_response(0.0042)
     sdk.search_response.results.extend(_fallback_result(index) for index in range(1, 12))
 
-    response = await adapter.search(SearchRequest(query="measured"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="measured")
+    )
 
     assert response.usage is not None
     assert response.usage.units == Decimal("0.0042")
@@ -497,7 +519,9 @@ async def test_contents_fallback_prices_single_text_page() -> None:
     sdk: _FakeSDK = adapter._sdk
     sdk.contents_response = _make_costless_contents_response([_fallback_result(1, summary=None)])
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/1"))
+    response = await adapter.fetch(
+        FetchRequest(project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/1")
+    )
 
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.FETCH
@@ -515,7 +539,9 @@ async def test_contents_fallback_prices_every_returned_page() -> None:
         [_fallback_result(1), _fallback_result(2), _fallback_result(3)]
     )
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/2"))
+    response = await adapter.fetch(
+        FetchRequest(project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/2")
+    )
 
     assert response.usage is not None
     assert response.usage.units == Decimal("0.003")
@@ -527,11 +553,15 @@ async def test_fallback_spend_accumulates_into_monthly_sum() -> None:
     adapter = _make_adapter(budget=Decimal("10.00"))
     sdk: _FakeSDK = adapter._sdk
     sdk.search_response = _make_costless_search_response([_fallback_result(1)])
-    first = await adapter.search(SearchRequest(query="one"))
+    first = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="one")
+    )
     adapter.quota_after_success(first)
 
     sdk.search_response = _make_search_response(0.005)
-    second = await adapter.search(SearchRequest(query="two"))
+    second = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="two")
+    )
     snapshot = adapter.quota_after_success(second)
 
     assert snapshot.metadata["spend_usd"] == Decimal("0.012")
@@ -557,7 +587,9 @@ async def test_manual_credits_minus_spend_clamps_at_zero() -> None:
     sdk: _FakeSDK = adapter._sdk
     sdk.search_response = _make_search_response(0.015)
 
-    response = await adapter.search(SearchRequest(query="over"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="over")
+    )
     snapshot = adapter.quota_after_success(response)
 
     assert snapshot.limit == Decimal("0.010")
@@ -579,7 +611,9 @@ async def test_set_manual_credits_round_trip_preserves_spend() -> None:
     adapter = _make_adapter(budget=Decimal("10.00"))
     sdk: _FakeSDK = adapter._sdk
     sdk.search_response = _make_search_response(0.007)
-    response = await adapter.search(SearchRequest(query="spend"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="spend")
+    )
     adapter.quota_after_success(response)
 
     adapter.set_manual_starting_credits(Decimal("5.00"))

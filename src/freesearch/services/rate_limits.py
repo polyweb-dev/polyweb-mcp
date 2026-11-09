@@ -14,12 +14,16 @@ import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.models.provider_limits import (
     AuthMode,
     Confidence,
     LimitCallContext,
     LimitOperation,
+    LimitStoreUnavailable,
     ProviderLimitRecord,
     RateAdmission,
     RateDenial,
@@ -47,6 +51,16 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _scope_suffix(credential_id: UUID | None, upstream_pool_id: UUID | None) -> str | None:
+    """Return the rate-bucket isolation suffix of one attempt, when scoped."""
+
+    if upstream_pool_id is not None:
+        return f"pool:{upstream_pool_id}"
+    if credential_id is not None:
+        return f"cred:{credential_id}"
+    return None
+
+
 class RateLimitService:
     """Enforce documented rate windows from durable observations and attempts."""
 
@@ -67,29 +81,56 @@ class RateLimitService:
         self._records = list(records)
 
     async def admit(self, context: LimitCallContext) -> RateAdmission:
-        """Decide rate capacity for one attempt without consuming anything."""
+        """Decide rate capacity for one attempt without consuming anything.
+
+        All windows share one read session and one observation query, so the
+        number of database round-trips does not grow with the window count.
+        """
 
         now = context.requested_at
         reservations: list[RateReservation] = []
         denials: list[RateDenial] = []
         retry_after: int | None = None
-        for window in self._windows(context):
-            reservation, denial, wait = await self._check_window(context, window, now)
-            if denial is not None:
-                denials.append(denial)
-                retry_after = wait if retry_after is None else min(retry_after, wait)
-                continue
-            if reservation is not None:
-                reservations.append(reservation)
+        if self._repository is not None:
+            async with self._repository.session() as session:
+                observations = await self._repository.list_observations(
+                    context.provider, session=session
+                )
+                for window in self._windows(context):
+                    reservation, denial, wait = await self._check_window(
+                        context,
+                        window,
+                        now,
+                        session=session,
+                        observations=observations,
+                    )
+                    if denial is not None:
+                        denials.append(denial)
+                        retry_after = wait if retry_after is None else min(retry_after, wait)
+                        continue
+                    if reservation is not None:
+                        reservations.append(reservation)
+        else:
+            for window in self._windows(context):
+                reservation, denial, wait = await self._check_window(context, window, now)
+                if denial is not None:
+                    denials.append(denial)
+                    retry_after = wait if retry_after is None else min(retry_after, wait)
+                    continue
+                if reservation is not None:
+                    reservations.append(reservation)
         return RateAdmission(
             admitted=not denials,
             provider=context.provider,
             auth_mode=context.auth_mode,
             attempt_id=context.attempt_id,
+            operation=context.operation,
             reservations=reservations if not denials else [],
             denials=denials,
             retry_after_seconds=retry_after,
             source="local",
+            actor_type=context.actor_type,
+            actor_id=context.actor_id,
         )
 
     async def record_attempt(self, admission: RateAdmission, attempted_at: datetime) -> None:
@@ -101,16 +142,26 @@ class RateLimitService:
 
         if self._repository is None or not admission.admitted:
             return
+        actor_type, actor_id = admission.actor_type, admission.actor_id
+        if actor_type is None or actor_id is None:
+            # Durable rate rows always carry the verified actor; an
+            # unattributed attempt is refused, never stored anonymously.
+            if admission.reservations:
+                raise LimitStoreUnavailable(admission.provider)
+            return
         for reservation in admission.reservations:
             await self._repository.record_rate_attempt(
                 attempt_id=admission.attempt_id,
                 bucket_id=reservation.bucket_id,
                 provider=admission.provider,
                 auth_mode=admission.auth_mode,
-                operation=self._operation_for(admission.provider, reservation.bucket_id),
+                operation=admission.operation
+                or self._operation_for(admission.provider, reservation.bucket_id),
                 window=reservation.window,
                 units=reservation.units,
                 attempted_at=attempted_at,
+                actor_type=actor_type,
+                actor_id=actor_id,
             )
 
     async def observe(self, observation: RateObservation) -> None:
@@ -151,15 +202,21 @@ class RateLimitService:
         return measured
 
     async def record_vendor_cooldown(
-        self, provider: str, auth_mode: AuthMode, retry_after_seconds: int, attempted_at: datetime
+        self,
+        provider: str,
+        auth_mode: AuthMode,
+        retry_after_seconds: int,
+        attempted_at: datetime,
+        *,
+        credential_id: UUID | None = None,
+        upstream_pool_id: UUID | None = None,
     ) -> None:
         """Record one vendor 429 cooldown as rate state, never as budget state.
 
-        The rail's documented minute bucket is resolved from the catalog, so
-        every operation's ``Retry-After`` delay lands on the shared bucket. A
-        repository that is absent, or a rail whose records declare no numeric
-        minute bucket, records nothing, and a storage failure never breaks
-        the caller.
+        The rail's documented minute bucket is resolved from the catalog, then
+        scoped to the credential (or shared pool) that received the 429. The
+        cooldown observation therefore gates only the affected credential; an
+        unrelated credential of the same provider stays admitted.
         """
 
         if self._repository is None or retry_after_seconds < 0:
@@ -168,6 +225,15 @@ class RateLimitService:
         if resolved is None:
             return
         bucket_id, window = resolved
+        catalog_bucket_id = bucket_id
+        suffix = _scope_suffix(credential_id, upstream_pool_id)
+        if suffix is not None:
+            bucket_id = f"{bucket_id}#{suffix}"
+        # A scoped vendor 429 is a real "no capacity until Retry-After"
+        # observation for that credential or shared pool. The unscoped legacy
+        # path keeps the catalog headroom so existing provider-wide reads are
+        # unchanged.
+        remaining = Decimal("0") if suffix is not None else window.remaining
         try:
             await self._repository.observe_rate(
                 RateObservation(
@@ -177,10 +243,10 @@ class RateLimitService:
                     window=window.window,
                     unit=window.unit,
                     limit=window.limit,
-                    remaining=window.remaining,
+                    remaining=remaining,
                     reset_at=attempted_at + timedelta(seconds=retry_after_seconds),
                     observed_at=attempted_at,
-                    operation=self._operation_for(provider, bucket_id),
+                    operation=self._operation_for(provider, catalog_bucket_id),
                     source="vendor_retry_after",
                     confidence=Confidence.OBSERVED,
                 )
@@ -207,13 +273,19 @@ class RateLimitService:
             if (view.bucket_id, view.window) not in seen
         ]
         for view in extra:
-            view.remaining = await self._local_remaining(view, instant)
+            view.remaining = await self._local_remaining(provider, view, instant)
         return sorted([*stored, *extra], key=lambda view: (view.bucket_id, view.window))
 
     # ------------------------------------------------------------- internals
 
     def _windows(self, context: LimitCallContext) -> list[RateWindow]:
-        """Return the documented windows that apply to one attempt."""
+        """Return the documented windows that apply to one attempt.
+
+        A credential-scoped or shared-pool attempt reads and counts a scoped
+        bucket id, so one credential's vendor cooldown never blocks an
+        unrelated credential. A roster-wide observation keeps the catalog
+        bucket and applies to every attempt.
+        """
 
         windows: list[RateWindow] = []
         for record in self._records:
@@ -225,10 +297,23 @@ class RateLimitService:
             ):
                 continue
             windows.extend(record.rate.windows)
-        return _unique_windows(windows)
+        scoped = _unique_windows(windows)
+        suffix = _scope_suffix(context.credential_id, context.upstream_pool_id)
+        if suffix is None:
+            return scoped
+        return [
+            window.model_copy(update={"bucket_id": f"{window.bucket_id}#{suffix}"})
+            for window in scoped
+        ]
 
     async def _check_window(
-        self, context: LimitCallContext, window: RateWindow, now: datetime
+        self,
+        context: LimitCallContext,
+        window: RateWindow,
+        now: datetime,
+        *,
+        session: AsyncSession | None = None,
+        observations: Sequence[RateObservation] | None = None,
     ) -> tuple[RateReservation | None, RateDenial | None, int]:
         """Check one window and return its reservation, denial, and wait time.
 
@@ -240,7 +325,11 @@ class RateLimitService:
             return None, None, 0
         units = _UNITS_PER_ATTEMPT
         limit, remaining, observed_at, reset_at = await self._capacity(
-            context.provider, window, now
+            context.provider,
+            window,
+            now,
+            session=session,
+            observations=observations,
         )
         if limit is None and remaining is None:
             # No published numeric limit: the window is tracked, not enforced.
@@ -264,12 +353,18 @@ class RateLimitService:
         return reservation, None, 0
 
     async def _capacity(
-        self, provider: str, window: RateWindow, now: datetime
+        self,
+        provider: str,
+        window: RateWindow,
+        now: datetime,
+        *,
+        session: AsyncSession | None = None,
+        observations: Sequence[RateObservation] | None = None,
     ) -> tuple[Decimal | None, Decimal | None, datetime | None, datetime | None]:
         """Return limit, remaining, observation instant, and reset of one window."""
 
         limit, remaining, reset_at, observation = await self._window_capacity(
-            provider, window, now
+            provider, window, now, session=session, observations=observations
         )
         return (
             limit,
@@ -279,7 +374,13 @@ class RateLimitService:
         )
 
     async def _window_capacity(
-        self, provider: str, window: RateWindow, now: datetime
+        self,
+        provider: str,
+        window: RateWindow,
+        now: datetime,
+        *,
+        session: AsyncSession | None = None,
+        observations: Sequence[RateObservation] | None = None,
     ) -> tuple[Decimal | None, Decimal | None, datetime | None, RateObservation | None]:
         """Return limit, remaining, reset, and the durable observation of one window.
 
@@ -290,12 +391,13 @@ class RateLimitService:
 
         if self._repository is None:
             return (window.limit, None, window.reset_at, None)
-        observation = await self._latest_observation(provider, window)
+        observation = await self._latest_observation(provider, window, observations=observations)
         used = await self._repository.count_attempts(
             window.bucket_id,
             window=window.window,
             now=now,
             since=observation.observed_at if observation is not None else None,
+            session=session,
         )
         if observation is not None and observation.remaining is not None:
             return (
@@ -342,13 +444,22 @@ class RateLimitService:
         )
 
     async def _latest_observation(
-        self, provider: str, window: RateWindow
+        self,
+        provider: str,
+        window: RateWindow,
+        *,
+        observations: Sequence[RateObservation] | None = None,
     ) -> RateObservation | None:
         if self._repository is None:
             return None
+        candidates = (
+            observations
+            if observations is not None
+            else await self._repository.list_observations(provider)
+        )
         matching = [
             observation
-            for observation in await self._repository.list_observations(provider)
+            for observation in candidates
             if observation.bucket_id == window.bucket_id and observation.window is window.window
         ]
         if not matching:
@@ -364,21 +475,20 @@ class RateLimitService:
             if record.rate is None:
                 continue
             window = next(
-                (
-                    item
-                    for item in record.rate.windows
-                    if item.window is RateWindowName.MINUTE
-                ),
+                (item for item in record.rate.windows if item.window is RateWindowName.MINUTE),
                 None,
             )
             if window is not None:
                 return (window.bucket_id, window)
         return None
 
-    async def _local_remaining(self, view: RateProgressView, now: datetime) -> Decimal | None:
+    async def _local_remaining(
+        self, provider: str, view: RateProgressView, now: datetime
+    ) -> Decimal | None:
         if self._repository is None or view.limit is None:
             return None
-        used = await self._repository.count_attempts(
+        used = await self._repository.count_catalog_attempts(
+            provider,
             view.bucket_id,
             window=RateWindowName(view.window),
             now=now,

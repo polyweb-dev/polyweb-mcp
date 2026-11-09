@@ -72,11 +72,20 @@ describe("FetchResult", () => {
   it("shows document metadata with byte length and execution time", () => {
     render(<FetchResult result={fetchResponse()} copied={false} onCopy={() => {}} />)
 
-    expect(screen.getByText("Document Metadata")).toBeInTheDocument()
+    expect(screen.getByText("Document metadata")).toBeInTheDocument()
     expect(screen.getByText("Parity document")).toBeInTheDocument()
     expect(screen.getByText("https://example.com/parity-doc")).toBeInTheDocument()
     expect(screen.getByText("15 bytes")).toBeInTheDocument()
-    expect(screen.getByText("120ms")).toBeInTheDocument()
+    // Shared latency format ("120 ms"; the space lands with the shared formatter).
+    expect(screen.getByText(/^120 ?ms$/)).toBeInTheDocument()
+    expect(screen.getByText("Parsed markdown")).toBeInTheDocument()
+    // The read-only source URL is a link, not an input-like box.
+    expect(screen.getByRole("link", { name: "https://example.com/parity-doc" })).toHaveAttribute(
+      "href",
+      "https://example.com/parity-doc"
+    )
+    // The backend never sends an HTTP status, so no always-empty row is shown.
+    expect(screen.queryByText("Status code")).not.toBeInTheDocument()
   })
 
   it("hands the markdown to onCopy and confirms the copied state", async () => {

@@ -521,7 +521,7 @@ class ParallelAdapter(ProviderAdapter):
         if self._hydrated_seed == self._free_seed and self._hydrated_month == month_start:
             return None
         snapshot = await repository.latest_quota(self.name)
-        events = await repository.list_usage(provider=self.name)
+        events = await repository.list_provider_usage(provider=self.name)
         current_events = [
             event
             for event in events

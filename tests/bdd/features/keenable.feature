@@ -3,6 +3,8 @@ Feature: Keenable Provider Adapter Integration
   I want to interact with the Keenable search provider
   So that I can perform free, keyless live web searches while tracking hourly request usage
 
+  # @live scenarios run only when selected explicitly: uv run behave --tags=@live (default_tags excludes @live).
+
   @live @keenable @search
   Scenario: Live keyless search queries Keenable and returns structured results
     Given the Keenable adapter is ready for keyless search
@@ -27,3 +29,11 @@ Feature: Keenable Provider Adapter Integration
     When I perform a live Keenable search for "open data documentation" with limit 1
     Then the Keenable search response should use provider "keenable"
     And the Keenable search response should report correct total count
+    And the live Keenable request should use the keyed private endpoint
+
+  @live @keenable @keenable-keyed @fetch
+  Scenario: Live keyed fetch uses the Keenable API key
+    Given the Keenable adapter is ready for keyed search
+    When I perform a live Keenable fetch for "https://example.com" with max 1000 chars
+    Then the Keenable fetch response should contain non-empty content within 1000 chars
+    And the live Keenable fetch should use the keyed private endpoint

@@ -4,8 +4,6 @@ Synthetic providers only. Covers leases, reservations, audit, idempotence,
 manual anchors, and stale-generation rejection. No vendor I/O.
 """
 
-import gc
-import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -32,25 +30,10 @@ from freesearch.models.provider_limits import (
     SyncResult,
 )
 from freesearch.persistence.storage import SQLiteRepository
+from tests.fixtures.database_lifecycle import unlink_with_retries
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
-
-
-def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
-    """Remove a test database after Windows releases delayed SQLite handles."""
-
-    for attempt in range(attempts):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
-        except PermissionError:
-            if attempt == attempts - 1:
-                raise
-            gc.collect()
-            time.sleep(0.05)
-        else:
-            return
 
 
 @pytest_asyncio.fixture
@@ -62,7 +45,7 @@ async def limits_repo(tmp_path: Path):
     finally:
         await repo.close()
         for extra in (db_path, Path(f"{db_path}.migration.lock")):
-            _unlink_with_retries(extra)
+            unlink_with_retries(extra)
 
 
 def _record(provider: str = "synth") -> ProviderLimitRecord:
@@ -155,6 +138,7 @@ async def test_stale_generation_rejected(limits_repo) -> None:
 
 async def test_reserve_finalize_release_exactly_once(limits_repo) -> None:
     admission = LimitAdmission(
+        **FIXTURE_ACTOR,
         attempt_id="adm-1",
         provider="synth",
         operation=LimitOperation.SEARCH,
@@ -310,6 +294,7 @@ async def test_finalize_exact_payment_is_not_an_overspend(limits_repo) -> None:
     )
     await limits_repo.reserve(
         LimitAdmission(
+            **FIXTURE_ACTOR,
             attempt_id="exact-1",
             provider="synth",
             operation=LimitOperation.SEARCH,
@@ -361,6 +346,7 @@ async def test_finalize_real_overspend_stays_visible(limits_repo) -> None:
     )
     await limits_repo.reserve(
         LimitAdmission(
+            **FIXTURE_ACTOR,
             attempt_id="over-1",
             provider="synth",
             operation=LimitOperation.SEARCH,
@@ -407,9 +393,7 @@ async def test_tavily_reserve_rechecks_rate_and_funds_atomically(limits_repo) ->
         and r.operation is LimitOperation.SEARCH
         and r.auth_mode is AuthMode.KEYED
     )
-    await limits_repo.seed_records(
-        [r for r in provider_limit_defaults() if r.provider == "tavily"]
-    )
+    await limits_repo.seed_records([r for r in provider_limit_defaults() if r.provider == "tavily"])
     await limits_repo.ensure_pool(
         NativePool(
             pool_id="tavily:keyed:credit",
@@ -434,6 +418,7 @@ async def test_tavily_reserve_rechecks_rate_and_funds_atomically(limits_repo) ->
 
     def _admission(attempt: str) -> LimitAdmission:
         return LimitAdmission(
+            **FIXTURE_ACTOR,
             attempt_id=attempt,
             provider="tavily",
             operation=LimitOperation.SEARCH,

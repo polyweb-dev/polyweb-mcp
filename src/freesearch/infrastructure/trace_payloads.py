@@ -63,17 +63,19 @@ def _search_results_payload(response: SearchResponse) -> list[TraceSearchResult]
 
 
 def _annotate_root_error(observability: ObservabilityRuntime, error: BaseException) -> None:
-    """Mark the root span as failed with a low-cardinality type and message.
+    """Mark the root span as failed with a low-cardinality error type.
 
     FastAPI turns an unhandled handler failure into a response inside the app, so
     the root span would otherwise look successful; annotating the error keeps
-    the Activity row honest (and the failing child keeps the exception event).
+    the Activity row honest (and the failing child keeps the sanitized exception
+    event). The exception message and stack trace are deliberately not attached:
+    either can embed a query, a provider response body, or a credential, and
+    traces are persisted.
     """
 
     observability.annotate_root(
         {
             TraceAttribute.ERROR_TYPE: error_type_of(error),
-            TraceAttribute.ERROR_MESSAGE: str(error),
         }
     )
 

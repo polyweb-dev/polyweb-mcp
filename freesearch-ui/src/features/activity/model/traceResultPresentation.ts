@@ -22,6 +22,15 @@ const SCORE_LABELS = {
 
 const CONTRIBUTOR_SEPARATOR = ","
 
+/** Remove common Markdown formatting from a plain-text result excerpt. */
+export function plainTraceSnippet(snippet: string): string {
+  return snippet
+    .replace(/!?\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^\s{0,3}[-*+]\s+/gm, "")
+    .replace(/(\*\*|__|~~|`)(.*?)\1/g, "$2")
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1$2")
+}
+
 /**
  * Contributor ids of a fused result. The fusion projection stores them as one
  * comma-separated `source` text, so this adapter trims, normalizes, and

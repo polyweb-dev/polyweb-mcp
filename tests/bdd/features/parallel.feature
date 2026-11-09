@@ -3,6 +3,8 @@ Feature: Parallel Provider Adapter Integration
   I want to interact with the Parallel search provider
   So that I can perform live web searches and fetch web pages
 
+  # @live scenarios run only when selected explicitly: uv run behave --tags=@live (default_tags excludes @live).
+
   Background:
     Given a configured Parallel adapter
 

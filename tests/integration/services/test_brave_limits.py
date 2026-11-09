@@ -8,7 +8,7 @@ Plan: monthly headers as budget, search 5 CRDs, manual fallback, funds 402.
 import gc
 import time
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -36,8 +36,11 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
+
+
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
     """Remove a test database after Windows releases delayed SQLite handles."""
 
@@ -128,7 +131,9 @@ async def test_sync_monthly_headers_update_budget_only(repository: SQLiteReposit
     try:
         service = _service(repository)
         await service.initialize()
-        await adapter.search(SearchRequest(query="q", limit=2))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
         sync = LimitSyncService(
             repository.limits, service, lambda: [adapter], clock=lambda: FIXED_AT
         )
@@ -164,6 +169,7 @@ async def test_zero_funds_deny_with_non_retryable_402(repository: SQLiteReposito
     try:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="brave",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -174,7 +180,7 @@ async def test_zero_funds_deny_with_non_retryable_402(repository: SQLiteReposito
         raise AssertionError("admission must deny")
     except LimitDeniedError as exc:
         assert exc.status_code == 402
-        assert exc.error.code == "crd_exhausted"
+        assert exc.error.code == "budget_exhausted"
         assert exc.error.retryable is False
         assert exc.error.details.get("origin") == "local"
 
@@ -206,8 +212,7 @@ async def test_grant_and_history_audit(repository: SQLiteRepository) -> None:
         "brave",
         GrantPayload(
             version=0,
-            period_start=date(2026, 3, 1),
-            period_end=date(2026, 4, 1),
+            period="month",
             search_crd=Decimal("10"),
             fetch_crd=Decimal("0"),
         ),
@@ -240,6 +245,7 @@ async def test_two_successes_debit_exact_ten(repository: SQLiteRepository) -> No
     for attempt in ("brave-s1", "brave-s2"):
         admission = await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="brave",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -265,7 +271,9 @@ async def test_provider_view_search_finite_fetch_unavailable(
     try:
         service = _service(repository)
         await service.initialize()
-        await adapter.search(SearchRequest(query="q", limit=2))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        )
         snapshot = await adapter.usage_snapshot(
             UsageSyncRequest(provider="brave", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT)
         )

@@ -27,6 +27,8 @@ export interface BackendFetchProviderOptions {
 }
 
 export interface BackendSearchRequest {
+  /** Project of the call; the human session must be an active member. */
+  project_id: string
   query: string
   limit: number
   mode?: "turbo" | "fast" | "basic" | "advanced" | null
@@ -84,6 +86,8 @@ export interface BackendSearchResponse {
 }
 
 export interface BackendFetchRequest {
+  /** Project of the call; the human session must be an active member. */
+  project_id: string
   url: string
   max_chars: number | null
   routing: BackendRoutingPreference

@@ -192,4 +192,16 @@ describe("Switch contract", () => {
     const thumbOn = screen.getByRole("switch", { name: "Demo" }).querySelector("span")
     expect(thumbOn?.className).toContain("translate-x-[14px]")
   })
+
+  it("keeps the on color visible when disabled", () => {
+    const { rerender } = render(<Switch checked disabled onChange={() => {}} ariaLabel="Demo" />)
+    const sw = screen.getByRole("switch", { name: "Demo" })
+    expect(sw).toBeChecked()
+    expect(sw).toBeDisabled()
+    expect(sw).toHaveClass("bg-[var(--signal)]", "disabled:opacity-70")
+    expect(sw.parentElement).not.toHaveClass("opacity-45")
+    rerender(<Switch checked={false} disabled onChange={() => {}} ariaLabel="Demo" />)
+    expect(sw).not.toBeChecked()
+    expect(sw).toHaveClass("bg-transparent", "disabled:opacity-45")
+  })
 })

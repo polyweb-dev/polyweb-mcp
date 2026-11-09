@@ -17,8 +17,13 @@ from freesearch.adapters.firecrawl import FirecrawlAdapter
 from freesearch.adapters.keenable import KeenableAdapter
 from freesearch.adapters.parallel import ParallelAdapter
 from freesearch.adapters.tavily import TavilyAdapter
+from freesearch.adapters.tinyfish import TinyfishAdapter
 from freesearch.infrastructure.http import create_async_client
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from freesearch.infrastructure.secrets import (
+    PROVIDER_ENV_VARS,
+    ProviderName,
+    provider_env_var_names,
+)
 
 _LIVE_GATE = "FREESEARCH_RUN_LIVE"
 
@@ -29,10 +34,15 @@ def _harness_env_key(provider: ProviderName) -> str | None:
     This is explicitly NOT production resolution: vault-only production code
     never reads ``FREESEARCH_*`` at runtime. The harness reads the env only
     to decide whether a ``@live`` scenario can run and to inject the key
-    explicitly via the adapter ``api_key`` seam.
+    explicitly via the adapter ``api_key`` seam. The canonical variable wins
+    over legacy spellings, and a blank value counts as absent.
     """
 
-    return os.environ.get(PROVIDER_ENV_VARS[provider])
+    for name in provider_env_var_names(provider):
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()
+    return None
 
 
 def before_all(context: Any) -> None:
@@ -44,6 +54,7 @@ def before_all(context: Any) -> None:
     context.has_parallel_key = _harness_env_key(ProviderName.PARALLEL) is not None
     context.has_youcom_key = _harness_env_key(ProviderName.YOU) is not None
     context.has_keenable_key = _harness_env_key(ProviderName.KEENABLE) is not None
+    context.has_tinyfish_key = _harness_env_key(ProviderName.TINYFISH) is not None
 
 
 def before_scenario(context: Any, scenario: Any) -> None:
@@ -56,6 +67,9 @@ def before_scenario(context: Any, scenario: Any) -> None:
        offline path never constructs live adapters. Live provider quota
        scenarios (``@live @quota``) are exempted so they fall through to live
        adapter construction and exercise the real vendor quota endpoints.
+       Routing-latency scenarios (``@latency``, offline and ``@live``) also
+       take this path: they serve their own adapters from their steps, and
+       ``@live @latency`` gates each provider on its own harness key there.
     2. A ``@live @keenable`` scenario runs only when ``FREESEARCH_RUN_LIVE=1``;
        otherwise it is skipped before any resource setup, keeping offline BDD
        runs network-safe (Keenable is keyless, so no key check can gate it).
@@ -76,6 +90,7 @@ def before_scenario(context: Any, scenario: Any) -> None:
         or _has_fanout_tag(scenario)
         or _has_limits_tag(scenario)
         or _has_users_tag(scenario)
+        or _has_latency_tag(scenario)
         or (_has_quota_tag(scenario) and not _has_live_tag(scenario))
         or (_has_tinyfish_tag(scenario) and not _has_live_tag(scenario))
     ):
@@ -141,8 +156,12 @@ def _adapter_for(client: Any, scenario: Any) -> Any:
         return ParallelAdapter(client, api_key=_explicit_api_key(ProviderName.PARALLEL))
     if _has_firecrawl_tag(scenario):
         return FirecrawlAdapter(client, api_key=_explicit_api_key(ProviderName.FIRECRAWL))
-    if _has_keenable_tag(scenario) or _has_keenable_keyed_tag(scenario):
+    if _has_keenable_keyed_tag(scenario):
         return KeenableAdapter(client, api_key=_explicit_api_key(ProviderName.KEENABLE))
+    if _has_keenable_tag(scenario):
+        return KeenableAdapter(client, api_key=None)
+    if _has_tinyfish_live_tag(scenario):
+        return TinyfishAdapter(client, api_key=_explicit_api_key(ProviderName.TINYFISH))
     if _has_brave_tag(scenario):
         return BraveAdapter(client, api_key=_explicit_api_key(ProviderName.BRAVE))
     if _is_exa_scenario(scenario):
@@ -185,6 +204,8 @@ def _missing_live_key_reason(context: Any, scenario: Any) -> str | None:
         return _absent_key_reason(
             context, "has_keenable_key", ProviderName.KEENABLE, "Keenable keyed"
         )
+    if _has_tinyfish_live_tag(scenario):
+        return _absent_key_reason(context, "has_tinyfish_key", ProviderName.TINYFISH, "Tinyfish")
     if _has_brave_tag(scenario):
         return _absent_key_reason(context, "has_brave_key", ProviderName.BRAVE, "Brave")
     if _is_tavily_scenario(scenario):
@@ -204,7 +225,7 @@ def _is_tavily_scenario(scenario: Any) -> bool:
     ``@quota``) carry no provider tag, so a tag check alone cannot gate them.
     Instead, for a ``@live`` scenario this predicate is the exact complement of
     every other provider selection in ``_adapter_for`` - parallel, firecrawl,
-    keenable, keenable-keyed, brave - plus the Exa feature check and the
+    keenable, keenable-keyed, tinyfish-live, brave - plus the Exa feature check and the
     separately gated ``@youcom`` path.
 
     The ``@live`` requirement is what keeps the gate live-only: an ordinary
@@ -219,6 +240,7 @@ def _is_tavily_scenario(scenario: Any) -> bool:
         or _has_firecrawl_tag(scenario)
         or _has_keenable_tag(scenario)
         or _has_keenable_keyed_tag(scenario)
+        or _has_tinyfish_live_tag(scenario)
         or _has_brave_tag(scenario)
         or _is_exa_scenario(scenario)
         or _has_youcom_tag(scenario)
@@ -226,23 +248,27 @@ def _is_tavily_scenario(scenario: Any) -> bool:
 
 
 def after_scenario(context: Any, scenario: Any) -> None:
-    """Clean up adapter resources, test repositories, and the async event loop."""
-    cleanups = getattr(context, "enc_cleanups", [])
-    context.enc_cleanups = []
-    for cleanup in cleanups:
-        with suppress(Exception):
-            cleanup()
-    repository = getattr(context, "repository", None)
+    """Close every client/session before disposing and deleting its temporary DB."""
     loop = getattr(context, "loop", None)
+    if loop is not None:
+        from freesearch.mcp.server import shutdown_injected_observability
+
+        for session, server in reversed(getattr(context, "_bdd_mcp_sessions", [])):
+            loop.run_until_complete(session.__aexit__(None, None, None))
+            loop.run_until_complete(shutdown_injected_observability(server))
+        for case in reversed(getattr(context, "_bdd_oauth_cases", [])):
+            loop.run_until_complete(case.close())
+    for name in ("monitor_client", "test_client", "client", "otel_client", "enc_client"):
+        client = getattr(context, name, None)
+        if client is not None and callable(getattr(client, "__exit__", None)):
+            with suppress(Exception):
+                client.__exit__(None, None, None)
+    repository = getattr(context, "repository", None)
     if repository is not None and loop is not None and callable(getattr(repository, "close", None)):
         loop.run_until_complete(repository.close())
-    adapter = getattr(context, "adapter", None)
-    if adapter is not None and callable(getattr(adapter, "aclose", None)):
-        context.loop.run_until_complete(adapter.aclose())
-    youcom_adapter = getattr(context, "youcom_adapter", None)
-    if youcom_adapter is not None and callable(getattr(youcom_adapter, "aclose", None)):
-        context.loop.run_until_complete(youcom_adapter.aclose())
-    for tavily_adapter_attr in (
+    resource_names = (
+        "adapter",
+        "youcom_adapter",
         "tavily_keyless_adapter",
         "tavily_keyed_adapter",
         "tavily_cost_adapter",
@@ -254,23 +280,36 @@ def after_scenario(context: Any, scenario: Any) -> None:
         "tavily_retry_adapter",
         "tavily_variant_adapter",
         "tavily_sched_adapter",
-    ):
-        tavily_adapter = getattr(context, tavily_adapter_attr, None)
-        if tavily_adapter is not None and callable(getattr(tavily_adapter, "aclose", None)):
-            with suppress(Exception):
-                context.loop.run_until_complete(tavily_adapter.aclose())
-    for tavily_client in getattr(context, "tavily_caller_clients", None) or []:
-        if callable(getattr(tavily_client, "aclose", None)):
-            with suppress(Exception):
-                context.loop.run_until_complete(tavily_client.aclose())
-    if getattr(context, "http_client", None) is not None:
-        context.loop.run_until_complete(context.http_client.aclose())
-    if getattr(context, "loop", None) is not None:
-        context.loop.close()
+        "http_client",
+        "brave_client",
+        "exa_client",
+        "firecrawl_client",
+        "keenable_client",
+        "parallel_client",
+    )
+    resources = [getattr(context, name, None) for name in resource_names]
+    resources.extend(getattr(context, "tavily_caller_clients", []) or [])
+    seen = set()
+    for resource in resources:
+        if resource is None or id(resource) in seen:
+            continue
+        seen.add(id(resource))
+        if loop is not None and callable(getattr(resource, "aclose", None)):
+            loop.run_until_complete(resource.aclose())
+    patcher = getattr(context, "_execution_patcher", None)
+    if patcher is not None:
+        patcher.undo()
+    # Directory cleanup and env restoration happen only after all DB users close.
+    cleanups = getattr(context, "enc_cleanups", [])
+    context.enc_cleanups = []
+    for cleanup in cleanups:
+        cleanup()
+    if loop is not None:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
     database_path = getattr(context, "database_path", None)
-    migration_lock_path = f"{database_path}.migration.lock" if database_path else None
-    for test_path in (database_path, migration_lock_path):
-        if test_path is not None:
+    if database_path is not None:
+        for test_path in (database_path, f"{database_path}.migration.lock"):
             _unlink_with_retries(test_path)
     temp_directory = getattr(context, "temp_directory", None)
     if temp_directory is not None:
@@ -399,6 +438,28 @@ def _tags_include_users(tags: Iterable[Any]) -> bool:
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "users" for tag in tags)
 
 
+def _has_latency_tag(scenario: Any) -> bool:
+    """Return True for routing-latency scenarios, including feature-level tags.
+
+    The latency tag sits on the feature (features/routing_latency.feature and
+    features/live/routing_latency_live.feature); detection reads the effective
+    tag set, mirroring the monitoring/control helpers.
+    """
+
+    effective_tags = getattr(scenario, "effective_tags", None)
+    if effective_tags:
+        return _tags_include_latency(effective_tags)
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return _tags_include_latency((*tags, *feature_tags))
+
+
+def _tags_include_latency(tags: Iterable[Any]) -> bool:
+    """Return True when ``tags`` carries 'latency' (str or Tag forms)."""
+
+    return any(str(getattr(tag, "name", tag)).lstrip("@") == "latency" for tag in tags)
+
+
 def _has_youcom_tag(scenario: Any) -> bool:
     """Return True when the scenario carries the 'youcom' tag (str or Tag forms)."""
     tags = getattr(scenario, "tags", None)
@@ -429,6 +490,16 @@ def _has_keenable_keyed_tag(scenario: Any) -> bool:
     if not tags:
         return False
     return any(str(getattr(tag, "name", tag)).lstrip("@") == "keenable-keyed" for tag in tags)
+
+
+def _has_tinyfish_live_tag(scenario: Any) -> bool:
+    """Identify live Tinyfish scenarios, including feature-level tags."""
+    tags = getattr(scenario, "tags", None) or ()
+    feature_tags = getattr(getattr(scenario, "feature", None), "tags", None) or ()
+    return any(
+        str(getattr(tag, "name", tag)).lstrip("@") == "tinyfish-live"
+        for tag in (*tags, *feature_tags)
+    )
 
 
 def _has_tinyfish_tag(scenario: Any) -> bool:

@@ -1,36 +1,64 @@
 /**
- * Application route table. Workspace route identifiers live here in app
- * routing, not in the visual Sidebar component. Redirects (root, legacy
- * /providers, unknown paths) stay verbatim in DashboardShell's Routes
- * table so the legacy targets are pinned exactly once.
+ * Application route table. Workspace route identifiers and the project
+ * section registry live here in app routing, not in the visual Sidebar
+ * component. Former global paths and their targets live once in
+ * `LEGACY_GLOBAL_REDIRECTS`; DashboardShell renders them as redirects.
  *
  * One permission helper serves both the navigation filter and the route gate,
- * so a hidden link and a rejected direct URL can never disagree.
+ * so a hidden link and a rejected direct URL can never disagree. Every gate
+ * reads an effective-permission descriptor from the API, never a role.
  */
-import type { UserRole } from "@/domains/auth"
+import { PROJECT_PERMISSIONS, SYSTEM_PERMISSIONS, hasPermission } from "@/domains/projects"
+import type { PermissionAccess } from "@/domains/projects"
 
 export type TabId =
-  | "playground"
-  | "routing"
   | "quotas"
-  | "activity"
   | "settings"
+  | "projects"
   | "account"
-  | "adminUsers"
+  | "accountKeys"
 
 export const TAB_PATHS: Record<TabId, string> = {
-  playground: "/playground",
-  routing: "/routing",
-  quotas: "/usage",
-  activity: "/activity",
-  settings: "/settings",
+  quotas: "/system/quotas",
+  settings: "/system/providers",
+  projects: "/projects",
   account: "/account",
-  adminUsers: "/admin/users",
+  accountKeys: "/account/keys",
+}
+
+/**
+ * Former global paths that moved. Each one redirects to its new page.
+ */
+export const LEGACY_GLOBAL_REDIRECTS: Readonly<Record<string, string>> = {
+  "/settings": TAB_PATHS.settings,
+  "/usage": TAB_PATHS.quotas,
+  "/providers": TAB_PATHS.settings,
+  "/system/credentials": TAB_PATHS.accountKeys,
+  "/system/capacity": TAB_PATHS.accountKeys,
+  "/system/keys": TAB_PATHS.accountKeys,
+  "/system/accounts": TAB_PATHS.projects,
+  "/admin/users": TAB_PATHS.projects,
+}
+
+/** Resolve former provider credentials tabs before their query strings are dropped. */
+export function legacyKeysDestination(pathname: string, search: string): string | null {
+  const path = pathname.replace(/\/+$/, "").toLowerCase()
+  const tab = new URLSearchParams(search).get("tab")
+  if (tab !== "keys" && tab !== "credentials") return null
+  const projectSettings = /^(\/p\/[^/]+)\/settings$/i.exec(pathname.replace(/\/+$/, ""))
+  if (projectSettings) return `${projectSettings[1]}/providers`
+  return ["/settings", "/providers", TAB_PATHS.settings].includes(path) ? TAB_PATHS.accountKeys : null
 }
 
 /** Public account routes. They stay outside the protected workspace. */
 export const LOGIN_PATH = "/login"
 export const REGISTER_PATH = "/register"
+
+/** Workspace entry: it resolves to the last valid project, else the list. */
+export const WORKSPACE_ENTRY_PATH = "/"
+
+/** Projects overview route of the workspace. */
+export const PROJECTS_PATH = TAB_PATHS.projects
 
 export interface WorkspaceRoute {
   id: TabId
@@ -38,33 +66,166 @@ export interface WorkspaceRoute {
 }
 
 export const workspaceRoutes: WorkspaceRoute[] = [
-  { id: "playground", path: TAB_PATHS.playground },
-  { id: "routing", path: TAB_PATHS.routing },
   { id: "quotas", path: TAB_PATHS.quotas },
-  { id: "activity", path: TAB_PATHS.activity },
   { id: "settings", path: TAB_PATHS.settings },
+  { id: "projects", path: TAB_PATHS.projects },
   { id: "account", path: TAB_PATHS.account },
-  { id: "adminUsers", path: TAB_PATHS.adminUsers },
+  { id: "accountKeys", path: TAB_PATHS.accountKeys },
 ]
 
 /**
- * Roles allowed on each workspace route. These permissions preserve the shipped
- * backend policy: an Agent cannot read provider controls or routing policy, and
- * only an Admin reaches the role control screen.
+ * System permissions each global route needs, any of them (any-of); `null`
+ * means always open.
+ *
+ * Quotas and providers read the global control plane, which the
+ * backend gates on `system.settings.read`. System Providers also opens with
+ * `system.credentials.manage`. Playground and activity live under projects.
  */
-const ROUTE_ROLES: Record<TabId, readonly UserRole[]> = {
-  playground: ["admin", "developer", "agent"],
-  activity: ["admin", "developer", "agent"],
-  account: ["admin", "developer", "agent"],
-  routing: ["admin", "developer"],
-  quotas: ["admin", "developer"],
-  settings: ["admin", "developer"],
-  adminUsers: ["admin"],
+const ROUTE_PERMISSIONS: Record<TabId, readonly string[] | null> = {
+  projects: null,
+  account: null,
+  accountKeys: [SYSTEM_PERMISSIONS.vaultManage],
+  quotas: [SYSTEM_PERMISSIONS.settingsRead],
+  settings: [SYSTEM_PERMISSIONS.settingsRead, SYSTEM_PERMISSIONS.credentialsManage],
 }
 
-/** Return whether one role may open one workspace route. */
-export function canAccessRoute(id: TabId, role: UserRole): boolean {
-  return ROUTE_ROLES[id].includes(role)
+/** Return whether one global route waits for the system access descriptor. */
+export function isGatedRoute(id: TabId): boolean {
+  return ROUTE_PERMISSIONS[id] !== null
+}
+
+/** Return whether the system access descriptor opens one global route. */
+export function canAccessRoute(
+  id: TabId,
+  systemAccess: PermissionAccess | null | undefined
+): boolean {
+  const permissions = ROUTE_PERMISSIONS[id]
+  return (
+    permissions === null ||
+    permissions.some((permission) => hasPermission(systemAccess, permission))
+  )
+}
+
+/** Identifier of one project-scoped section. */
+export type ProjectSectionId =
+  | "overview"
+  | "playground"
+  | "activity"
+  | "usage"
+  | "providers"
+  | "settings"
+  | "members"
+  | "apiKeys"
+
+/** One entry of the project section registry. */
+export interface ProjectSection {
+  id: ProjectSectionId
+  /** Path segment under `/p/:projectId`; `""` is the overview. */
+  segment: string
+  /** Sidebar label and accessible name of the section link. */
+  label: string
+  /**
+   * Project permissions that open the section, any of them (any-of), from the
+   * project access descriptor.
+   */
+  permissions: readonly string[]
+}
+
+/** Project section registry, in sidebar order. */
+export const PROJECT_SECTIONS: readonly ProjectSection[] = [
+  { id: "overview", segment: "", label: "Overview", permissions: [PROJECT_PERMISSIONS.read] },
+  {
+    id: "playground",
+    segment: "playground",
+    label: "Playground",
+    permissions: [PROJECT_PERMISSIONS.searchExecute, PROJECT_PERMISSIONS.fetchExecute],
+  },
+  {
+    id: "activity",
+    segment: "activity",
+    label: "Activity",
+    permissions: [PROJECT_PERMISSIONS.tracesRead],
+  },
+  { id: "usage", segment: "usage", label: "Usage", permissions: [PROJECT_PERMISSIONS.usageRead] },
+  {
+    id: "providers",
+    segment: "providers",
+    label: "Providers",
+    permissions: [PROJECT_PERMISSIONS.providersRead],
+  },
+  {
+    id: "settings",
+    segment: "settings",
+    label: "Settings",
+    permissions: [PROJECT_PERMISSIONS.settingsRead],
+  },
+  {
+    id: "members",
+    segment: "members",
+    label: "Members",
+    permissions: [PROJECT_PERMISSIONS.membersRead],
+  },
+  {
+    id: "apiKeys",
+    segment: "api-keys",
+    label: "API keys",
+    permissions: [PROJECT_PERMISSIONS.tokensManage],
+  },
+]
+
+/**
+ * Former global paths of sections that moved under projects. Each one
+ * redirects to the same section of the validated last project.
+ */
+export const LEGACY_SECTION_PATHS: Readonly<Record<string, ProjectSectionId>> = {
+  "/playground": "playground",
+  "/activity": "activity",
+  "/routing": "providers",
+  "/system/routing": "providers",
+}
+
+const PROJECT_UUID_RE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
+const PROJECT_PREFIX_RE = /^\/p\/([^/]+)(?:\/(.*))?$/
+
+function sectionBySegment(segment: string): ProjectSection | undefined {
+  return PROJECT_SECTIONS.find((section) => section.segment === segment)
+}
+
+/** Return the workspace path of one project at one registered section. */
+export function projectPath(projectId: string, section: ProjectSectionId = "overview"): string {
+  const segment = PROJECT_SECTIONS.find((entry) => entry.id === section)?.segment ?? ""
+  return segment === "" ? `/p/${projectId}` : `/p/${projectId}/${segment}`
+}
+
+/** Return the project id of any `/p/:projectId/...` path, or `null`. */
+export function projectIdFromPath(pathname: string): string | null {
+  const id = PROJECT_PREFIX_RE.exec(pathname)?.[1]
+  return id === undefined || id === "" ? null : id
+}
+
+/** Return the project and the registered section of a path, or `null`. */
+export function parseProjectPath(
+  pathname: string
+): { projectId: string; section: ProjectSectionId } | null {
+  const match = PROJECT_PREFIX_RE.exec(pathname)
+  const projectId = match?.[1]
+  if (match === null || projectId === undefined) return null
+  const section = sectionBySegment(match[2] ?? "")
+  return section === undefined ? null : { projectId, section: section.id }
+}
+
+/** Return whether the project access descriptor opens one project section. */
+export function canAccessProjectSection(
+  id: ProjectSectionId,
+  access: PermissionAccess | null | undefined
+): boolean {
+  const section = PROJECT_SECTIONS.find((entry) => entry.id === id)
+  return (
+    section !== undefined &&
+    section.permissions.some((permission) => hasPermission(access, permission))
+  )
 }
 
 /**
@@ -72,11 +233,15 @@ export function canAccessRoute(id: TabId, role: UserRole): boolean {
  *
  * A relative path, an unknown path, a protocol-relative URL, and an absolute
  * URL are all rejected, so a login link can never forward the browser to
- * another origin.
+ * another origin. A project path must name a UUID and a registered section.
  */
 export function isInternalPath(value: string | null | undefined): value is string {
   if (!value || !value.startsWith("/") || value.startsWith("//")) return false
-  return Object.values(TAB_PATHS).includes(value)
+  if (Object.values(TAB_PATHS).includes(value)) return true
+  if (Object.keys(LEGACY_SECTION_PATHS).includes(value)) return true
+  if (Object.keys(LEGACY_GLOBAL_REDIRECTS).includes(value)) return true
+  const parsed = parseProjectPath(value)
+  return parsed !== null && PROJECT_UUID_RE.test(parsed.projectId)
 }
 
 /** Return the login URL that remembers one internal destination, or login. */
@@ -85,7 +250,7 @@ export function loginPathFor(pathname: string): string {
   return `${LOGIN_PATH}?returnTo=${encodeURIComponent(pathname)}`
 }
 
-/** Return the destination of a validated `returnTo` value, or the playground. */
+/** Return the destination of a validated `returnTo` value, or the workspace entry. */
 export function returnDestination(value: string | null | undefined): string {
-  return isInternalPath(value) ? value : TAB_PATHS.playground
+  return isInternalPath(value) ? value : WORKSPACE_ENTRY_PATH
 }

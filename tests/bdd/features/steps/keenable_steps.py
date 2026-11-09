@@ -1,25 +1,26 @@
 """Step definitions for Keenable BDD live scenarios."""
 
-import os
 from decimal import Decimal
 from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import HttpUrl
 
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
+from freesearch.models.provider_limits import AuthMode
+from tests.bdd.features.environment import _harness_env_key
 
 
 @given("the Keenable adapter is ready for keyless search")
 def step_given_keenable_adapter(context: Any) -> None:
-    """Verify the Keenable adapter was selected by the environment hooks."""
+    """Verify the hooks built a keyless Keenable adapter, even when a key is set."""
     assert context.adapter is not None, "Keenable adapter was not initialized."
     assert context.adapter.name == "keenable", (
         f"Expected Keenable adapter, got '{context.adapter.name}'"
     )
-    assert os.environ.get(PROVIDER_ENV_VARS[ProviderName.KEENABLE]) is None, (
-        "Keyless live scenario requires FREESEARCH_KEENABLE_API_KEY to be absent."
+    assert context.adapter.limit_auth_mode is AuthMode.KEYLESS, (
+        "Keyless live scenario must run on the keyless public tier."
     )
 
 
@@ -31,7 +32,9 @@ def step_when_live_keenable_search(context: Any, query: str, limit: int) -> None
         context.live_request = request
 
     context.http_client.event_hooks["request"].append(capture)
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     context.search_response = context.loop.run_until_complete(context.adapter.search(request))
 
 
@@ -101,8 +104,11 @@ def step_given_keenable_keyed_adapter(context: Any) -> None:
     assert context.adapter.name == "keenable", (
         f"Expected Keenable adapter, got '{context.adapter.name}'"
     )
-    assert os.environ.get(PROVIDER_ENV_VARS[ProviderName.KEENABLE]) is not None, (
+    assert _harness_env_key(ProviderName.KEENABLE) is not None, (
         "Keyed live scenario requires FREESEARCH_KEENABLE_API_KEY to be configured."
+    )
+    assert context.adapter.limit_auth_mode is AuthMode.KEYED, (
+        "Keyed live scenario must run on the keyed private tier."
     )
 
 
@@ -114,7 +120,9 @@ def step_when_live_keenable_fetch(context: Any, url: str, max_chars: int) -> Non
         context.live_fetch_request = request
 
     context.http_client.event_hooks["request"].append(capture)
-    request = FetchRequest(url=HttpUrl(url), max_chars=max_chars)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=HttpUrl(url), max_chars=max_chars
+    )
     context.fetch_url = str(request.url)
     context.fetch_max_chars = max_chars
     context.fetch_response = context.loop.run_until_complete(context.adapter.fetch(request))
@@ -164,3 +172,19 @@ def step_then_keenable_fetch_public_request(context: Any) -> None:
     assert request.headers["X-Keenable-Title"] == "freesearch"
     assert "X-API-Key" not in request.headers
     assert "Authorization" not in request.headers
+
+
+@then("the live Keenable request should use the keyed private endpoint")
+def step_then_keenable_keyed_request(context: Any) -> None:
+    """Verify the live search wire request used Keenable's keyed endpoint."""
+    request = context.live_request
+    assert request.url.path == "/v1/search"
+    assert "X-API-Key" in request.headers
+
+
+@then("the live Keenable fetch should use the keyed private endpoint")
+def step_then_keenable_keyed_fetch_request(context: Any) -> None:
+    """Verify the live fetch wire request used Keenable's keyed endpoint."""
+    request = context.live_fetch_request
+    assert request.url.path == "/v1/fetch"
+    assert "X-API-Key" in request.headers

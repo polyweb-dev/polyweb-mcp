@@ -39,9 +39,23 @@ Given("the auth bootstrap reports an anonymous session", async ({ page }) => {
   })
 })
 
+/** Parsed bodies of the account-creation requests the UI sent (per scenario). */
+const registrationBodies: unknown[] = []
+
+function parsedBody(route: import("@playwright/test").Route): unknown {
+  const raw = route.request().postData()
+  try {
+    return raw === null ? null : (JSON.parse(raw) as unknown)
+  } catch {
+    return raw
+  }
+}
+
 Given("the auth backend rejects registration with the password rule", async ({ page }) => {
+  registrationBodies.length = 0
   await page.route("**/auth/register", (route) => {
     if (route.request().method() !== "POST") return route.fallback()
+    registrationBodies.push(parsedBody(route))
     return json(
       route,
       {
@@ -128,4 +142,35 @@ Then("the auth screen shows exactly one page title", async ({ page }) => {
 
 Then("the login screen shows the configuration state text", async ({ page }) => {
   await expect(page.getByRole("alert")).toHaveText(CONFIG_STATE)
+})
+
+/**
+ * No account-type choice: no radio, select, listbox or role wording inside the
+ * page content. Authority comes from project and system role assignments,
+ * never from the account itself.
+ */
+async function expectNoAccountTypeChoice(scope: import("@playwright/test").Locator): Promise<void> {
+  await expect(scope.getByRole("radio")).toHaveCount(0)
+  await expect(scope.getByRole("combobox")).toHaveCount(0)
+  await expect(scope.getByRole("listbox")).toHaveCount(0)
+  await expect(scope.getByText(/\b(role|account type)\b/i)).toHaveCount(0)
+}
+
+/** The request body is exactly {email, password}: no role and no extra field. */
+function expectEmailAndPasswordOnly(body: unknown, email: string): void {
+  expect(body).not.toBeNull()
+  expect(typeof body).toBe("object")
+  const record = body as Record<string, unknown>
+  expect(Object.keys(record).sort()).toEqual(["email", "password"])
+  expect(record.email).toBe(email)
+  expect(typeof record.password).toBe("string")
+}
+
+Then("the register screen offers no account-type choice", async ({ page }) => {
+  await expectNoAccountTypeChoice(page.locator("form"))
+})
+
+Then("the registration request carried only email and password", async () => {
+  expect(registrationBodies).toHaveLength(1)
+  expectEmailAndPasswordOnly(registrationBodies[0], "weak-rule@example.com")
 })

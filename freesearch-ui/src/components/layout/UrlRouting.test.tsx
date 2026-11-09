@@ -17,6 +17,14 @@ import {
 } from "@/test/authFixtures"
 import type { UserAccount } from "@/domains/auth"
 import {
+  PROJECT_ADMIN_PERMISSIONS,
+  PROJECT_ALPHA_ID,
+  answerWorkspaceAccess,
+  personaSystemPermissions,
+  projectFixture,
+} from "@/test/accessFixtures"
+import { answerProjectProviders } from "@/test/projectPlayground"
+import {
   allProvidersFixture,
   routingConfigFixture,
   dashboardFixture,
@@ -35,8 +43,9 @@ import {
  *   untouched. freesearch-ui/ ONLY.
  *
  * P1-FINAL (blessed inversion, NOT a regression): the standalone Providers
- * page is retired into the Settings Providers tab — five workspace routes,
- * no /providers view, legacy /providers redirects to /settings.
+ * page is retired into the System Providers page — no /providers view;
+ * legacy /providers and /settings redirect to /system/providers, /usage to
+ * /system/quotas. System credentials and capacity redirect to the account vault.
  *
  * AC mapping:
  *   C4-1  router install + URL changes on nav (link click moves location).
@@ -47,21 +56,30 @@ import {
  *         tests/features/app-shell-routing.feature).
  *   C4-5  sidebar active sync (hrefs + aria-current), collapse/drawer/
  *         persistence preserved.
- *   C4-6  PillTabs switching (Routing, Settings, Playground) leaves the
- *         location unchanged.
+ *   C4-6  Playground PillTabs switching leaves the location path unchanged.
  *   C4-7  no regression: flex-row shell, provider views, PillTabs gold
  *         standard.
  */
 
 function LocationProbe() {
   const location = useLocation()
-  return <div data-testid="test-location">{location.pathname}</div>
+  return <div data-testid="test-location">{`${location.pathname}${location.search}`}</div>
 }
 
 async function renderAt(route: string, account: UserAccount = adminAccountFixture()) {
   installImmediateLocks()
   installFakeChannel()
   const backendHandler: FetchHandler = (req) => {
+    const access = answerWorkspaceAccess(req, {
+      systemPermissions: account.id === adminAccountFixture().id
+        ? [...personaSystemPermissions(account), "vault.manage"]
+        : personaSystemPermissions(account),
+      projects: [projectFixture()],
+      projectPermissions: { [PROJECT_ALPHA_ID]: PROJECT_ADMIN_PERMISSIONS },
+    })
+    if (access !== null) return access
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -79,6 +97,9 @@ async function renderAt(route: string, account: UserAccount = adminAccountFixtur
     </MemoryRouter>
   )
   await screen.findByRole("navigation", { name: "Primary" })
+  // The project selector renders once the system access and the project list
+  // have loaded, so every permitted link is present from here on.
+  await screen.findByRole("navigation", { name: "Projects" })
   return result
 }
 
@@ -115,13 +136,11 @@ async function expectView(label: string, heading: string, path: string) {
 }
 
 const ROUTE_TABLE: Array<{ link: string; heading: string; path: string }> = [
-  { link: "Playground", heading: "Search Playground", path: "/playground" },
-  { link: "Routing", heading: "Routing", path: "/routing" },
-  { link: "Usage", heading: "Usage", path: "/usage" },
-  { link: "Activity", heading: "Activity", path: "/activity" },
-  { link: "Settings", heading: "Settings", path: "/settings" },
+  { link: "Providers", heading: "Providers", path: "/system/providers" },
+  { link: "Quotas", heading: "Quotas", path: "/system/quotas" },
+  { link: "Projects", heading: "Projects", path: "/projects" },
+  { link: "Keys and pools", heading: "Keys and pools", path: "/account/keys" },
   { link: "Account", heading: "Account", path: "/account" },
-  { link: "Admin", heading: "Account roles", path: "/admin/users" },
 ]
 
 beforeEach(() => {
@@ -136,14 +155,14 @@ afterEach(() => {
 
 describe("C4-1: router install + URL changes on nav", () => {
   it("clicking a sidebar link moves the router location and swaps the view", async () => {
-    await renderAt("/playground")
-    await expectView("Playground", "Search Playground", "/playground")
-    await followLink("Routing")
-    await expectView("Routing", "Routing", "/routing")
+    await renderAt("/account")
+    await expectView("Account", "Account", "/account")
+    await followLink("Quotas")
+    await expectView("Quotas", "Quotas", "/system/quotas")
   })
 
   it("every sidebar link advertises its exact route href", async () => {
-    await renderAt("/playground")
+    await renderAt("/account")
     const nav = screen.getByRole("navigation", { name: "Primary" })
     for (const { link, path } of ROUTE_TABLE) {
       expect(
@@ -154,47 +173,33 @@ describe("C4-1: router install + URL changes on nav", () => {
 })
 
 describe("C4-2: route table + / redirect + catch-all", () => {
-  it("root path redirects to /playground", async () => {
+  it("root path lands on /projects when no last project is remembered", async () => {
     await renderAt("/")
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Search Playground" })
-      ).toBeInTheDocument()
-    })
-    expect(testPath()).toBe("/playground")
+    await expectView("Projects", "Projects", "/projects")
   })
 
-  it("unknown paths fall back to /playground", async () => {
+  it("unknown paths fall back to the project-first landing", async () => {
     await renderAt("/no-such-view")
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Search Playground" })
-      ).toBeInTheDocument()
-    })
-    expect(testPath()).toBe("/playground")
+    await expectView("Projects", "Projects", "/projects")
   })
 
-  it("legacy /providers redirects to the merged Settings registry", async () => {
+  it("legacy /providers redirects to the System Providers page", async () => {
     await renderAt("/providers")
-    // Redirect plus Settings registry render under full-suite parallel load:
+    // Redirect plus Providers registry render under full-suite parallel load:
     // budget above the default 1000ms (assertion unchanged).
     await waitFor(
       () => {
-        expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+        expect(within(screen.getByRole("main")).getByRole("heading", { name: "Providers" })).toBeInTheDocument()
       },
       { timeout: 5000 }
     )
-    expect(testPath()).toBe("/settings")
+    expect(testPath()).toBe("/system/providers")
   })
 
-  it("there is no /quotas route — quotas renders at /usage", async () => {
+  it("there is no /quotas route — quotas renders at /system/quotas", async () => {
     await renderAt("/quotas")
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Search Playground" })
-      ).toBeInTheDocument()
-    })
-    expect(testPath()).toBe("/playground")
+    await expectView("Projects", "Projects", "/projects")
+    expect(within(screen.getByRole("main")).queryByRole("heading", { name: "Quotas" })).toBeNull()
   })
 })
 
@@ -206,24 +211,32 @@ describe("C4-3: deep links render their view", () => {
       await expectView(link, heading, path)
     }
   )
+
+  it("deep-link /system/credentials redirects to Keys and pools", async () => {
+    await renderAt("/system/credentials")
+    await expectView("Keys and pools", "Keys and pools", "/account/keys")
+    expect(within(screen.getByRole("main")).queryByRole("tablist")).not.toBeInTheDocument()
+    expect(await screen.findByRole("button", { name: "Add key" })).toBeInTheDocument()
+    expect(
+      within(screen.getByRole("navigation", { name: "Primary" })).queryByRole("link", { name: "System credentials" })
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe("C4-4: navigation restores view + exactly one current marker", () => {
   it("sequential navigation keeps view, URL, and marker in sync", async () => {
-    await renderAt("/settings")
-    await expectView("Settings", "Settings", "/settings")
-    await followLink("Routing")
-    await expectView("Routing", "Routing", "/routing")
-    await followLink("Usage")
-    await expectView("Usage", "Usage", "/usage")
-    await followLink("Settings")
-    await expectView("Settings", "Settings", "/settings")
+    await renderAt("/system/providers")
+    await expectView("Providers", "Providers", "/system/providers")
+    await followLink("Quotas")
+    await expectView("Quotas", "Quotas", "/system/quotas")
+    await followLink("Providers")
+    await expectView("Providers", "Providers", "/system/providers")
   })
 })
 
 describe("C4-5: sidebar active sync, collapse/drawer/persistence preserved", () => {
   it("exactly one link is current after every navigation", async () => {
-    await renderAt("/playground")
+    await renderAt("/account")
     for (const { link, heading, path } of ROUTE_TABLE) {
       await followLink(link)
       await waitFor(() => {
@@ -244,94 +257,84 @@ describe("C4-5: sidebar active sync, collapse/drawer/persistence preserved", () 
 
   it("collapse toggle still works without touching the URL", async () => {
     const user = userEvent.setup()
-    await renderAt("/routing")
-    await expectView("Routing", "Routing", "/routing")
+    await renderAt("/system/quotas")
+    await expectView("Quotas", "Quotas", "/system/quotas")
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })
     )
     expect((document.querySelector("aside") as HTMLElement).className).toMatch(
       /w-16/
     )
-    expect(testPath()).toBe("/routing")
+    expect(testPath()).toBe("/system/quotas")
     expect(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
         "link",
-        { name: "Routing", exact: true }
+        { name: "Quotas", exact: true }
       )
     ).toHaveAttribute("aria-current", "page")
   })
 
   it("selecting a drawer item navigates and closes the drawer", async () => {
     const user = userEvent.setup()
-    await renderAt("/playground")
-    await expectView("Playground", "Search Playground", "/playground")
+    await renderAt("/account")
+    await expectView("Account", "Account", "/account")
     await user.click(
       screen.getByRole("button", { name: "Open navigation", exact: true })
     )
     expect(screen.getByRole("dialog")).toBeInTheDocument()
     await user.click(
       within(screen.getByRole("dialog")).getByRole("link", {
-        name: "Activity",
+        name: "Quotas",
         exact: true,
       })
     )
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
-    await expectView("Activity", "Activity", "/activity")
+    await expectView("Quotas", "Quotas", "/system/quotas")
   })
 
   it("collapse persistence key survives the router migration", async () => {
     const user = userEvent.setup()
-    await renderAt("/playground")
+    await renderAt("/account")
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })
     )
     expect(window.localStorage.getItem("freesearch.sidebar.collapsed")).toBe("1")
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe("/account")
   })
 })
 
-describe("C4-6: PillTabs switching leaves the URL unchanged", () => {
-  it("Routing pill tabs switch panels without pushing history", async () => {
-    const user = userEvent.setup()
-    await renderAt("/routing")
-    await expectView("Routing", "Routing", "/routing")
-    for (const tab of ["Simulator"]) {
-      await user.click(screen.getByRole("tab", { name: tab, exact: true }))
-      expect(testPath()).toBe("/routing")
-    }
-    await user.click(screen.getByRole("tab", { name: "Strategy", exact: true }))
-    expect(testPath()).toBe("/routing")
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Routing" })).toBeInTheDocument()
-    })
-  })
-
-  it("Settings pill tabs switch panels without pushing history", async () => {
-    const user = userEvent.setup()
-    await renderAt("/settings")
-    await expectView("Settings", "Settings", "/settings")
-    for (const tab of ["Keys", "Failover"]) {
-      await user.click(screen.getByRole("tab", { name: tab, exact: true }))
-      expect(testPath()).toBe("/settings")
-    }
-    await user.click(screen.getByRole("tab", { name: "Providers", exact: true }))
-    expect(testPath()).toBe("/settings")
+describe("C4-6: PillTabs switching leaves the URL path unchanged", () => {
+  it("redirects the former Providers keys query to the vault", async () => {
+    await renderAt("/system/providers?tab=keys")
+    await expectView("Keys and pools", "Keys and pools", "/account/keys")
+    expect(within(screen.getByRole("main")).queryByRole("tablist")).not.toBeInTheDocument()
   })
 
   it("Playground Search/Fetch tabs switch without pushing history", async () => {
     const user = userEvent.setup()
-    await renderAt("/playground")
-    await expectView("Playground", "Search Playground", "/playground")
+    const playgroundPath = `/p/${PROJECT_ALPHA_ID}/playground`
+    await renderAt(playgroundPath)
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", { name: "Playground" })
+      ).toBeInTheDocument()
+    })
+    expect(
+      within(screen.getByRole("navigation", { name: "Project" })).getByRole("link", {
+        name: "Playground",
+        exact: true,
+      })
+    ).toHaveAttribute("aria-current", "page")
     await user.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe(playgroundPath)
     await user.click(screen.getByRole("tab", { name: "Search", exact: true }))
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe(playgroundPath)
   })
 })
 
 describe("C4-7: no regression — shell, providers, views", () => {
   it("shell keeps the flex-row aside+main layout with no header", async () => {
-    await renderAt("/playground")
+    await renderAt("/routing")
     const aside = document.querySelector("aside")
     expect(aside).not.toBeNull()
     expect((aside!.parentElement as HTMLElement).className).toMatch(/flex-row/)
@@ -339,73 +342,52 @@ describe("C4-7: no regression — shell, providers, views", () => {
     expect(document.querySelector("header")).toBeNull()
   })
 
-  it("legacy /providers URL redirects into the merged Settings registry", async () => {
+  it("legacy /providers URL redirects into the System Providers registry", async () => {
     await renderAt("/providers")
-    // Redirect plus Settings registry render under full-suite parallel load:
+    // Redirect plus Providers registry render under full-suite parallel load:
     // budget above the default 1000ms (assertion unchanged).
     await waitFor(
       () => {
-        expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+        expect(within(screen.getByRole("main")).getByRole("heading", { name: "Providers" })).toBeInTheDocument()
       },
       { timeout: 5000 },
     )
-    await expectView("Settings", "Settings", "/settings")
+    await expectView("Providers", "Providers", "/system/providers")
     await waitFor(() => {
       expect(screen.getByText("Brave Search")).toBeInTheDocument()
     })
   })
 
-  it("Routing + Settings PillTabs gold standard is intact", async () => {
-    await renderAt("/routing")
-    await expectView("Routing", "Routing", "/routing")
-    const routingPills = document.querySelector(
-      '[data-slot="tabs-list"][data-variant="pill"]'
-    )
-    expect(routingPills).not.toBeNull()
-    expect(
-      within(routingPills as HTMLElement)
-        .getAllByRole("tab")
-        .map((t) => t.textContent)
-    ).toEqual(["Strategy", "Simulator"])
-
-    await followLink("Settings")
-    await expectView("Settings", "Settings", "/settings")
-    const settingsPills = within(screen.getByRole("main")).getByRole("tablist")
-    expect(
-      within(settingsPills as HTMLElement)
-        .getAllByRole("tab")
-        .map((t) => t.textContent)
-    ).toEqual(["Providers", "Keys", "Failover"])
+  it("Providers retains its catalog without a legacy tab list", async () => {
+    await renderAt("/system/providers")
+    await expectView("Providers", "Providers", "/system/providers")
+    expect(within(screen.getByRole("main")).queryByRole("tablist")).not.toBeInTheDocument()
+    expect(await screen.findByText("Brave Search")).toBeInTheDocument()
   })
 })
 
-describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
-  it("admin direct /admin/users URL renders the creation screen", async () => {
+describe("Retired Accounts route", () => {
+  it("redirects the old URL for a system administrator", async () => {
     await renderAt("/admin/users", adminAccountFixture())
-    await expectView("Admin", "Account roles", "/admin/users")
-    expect(screen.getByLabelText("Email")).toBeInTheDocument()
-    expect(screen.getByLabelText("Account role")).toBeInTheDocument()
+    await expectView("Projects", "Projects", "/projects")
+    expect(screen.queryByRole("button", { name: "New account" })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Account role")).not.toBeInTheDocument()
     expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
   })
 
-  it("agent sees no Admin link and direct /admin/users URL renders no creation form", async () => {
-    await renderAt("/playground", agentAccountFixture())
+  it("a caller without system permissions sees no Accounts link", async () => {
+    await renderAt("/account", agentAccountFixture())
     expect(
       within(screen.getByRole("navigation", { name: "Primary" })).queryByRole(
         "link",
-        { name: "Admin", exact: true }
+        { name: "Accounts", exact: true }
       )
     ).not.toBeInTheDocument()
   })
 
-  it("agent direct /admin/users URL is rejected without the creation form", async () => {
+  it("a direct /admin/users URL without system.settings.write redirects to the landing", async () => {
     await renderAt("/admin/users", agentAccountFixture())
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Search Playground" })
-      ).toBeInTheDocument()
-    })
-    expect(testPath()).toBe("/playground")
+    await expectView("Projects", "Projects", "/projects")
     expect(screen.queryByLabelText("Account role")).not.toBeInTheDocument()
     expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
   })

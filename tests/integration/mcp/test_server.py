@@ -7,6 +7,7 @@ closed to an empty list without keys, which the no-provider guard surfaces.
 
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 import pytest
@@ -16,8 +17,14 @@ from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
+from freesearch.adapters.registry import adapter_factory
 from freesearch.infrastructure.secrets import ProviderName
-from freesearch.mcp.server import _ADAPTERS, build_adapters, close_adapters, create_server
+from freesearch.mcp.server import (
+    _ADAPTERS,
+    _encrypted_store,
+    close_adapters,
+    create_server,
+)
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -29,8 +36,10 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
+from freesearch.persistence.settings import ProjectSettingsRepository
 from freesearch.persistence.storage import SQLiteRepository
-from tests.fixtures.auth import mcp_account_token
+from tests.fixtures.api_keys import mcp_project_key
+from tests.fixtures.execution import install_adapter_map, seed_provider_bindings
 
 
 class _StubAdapter(ProviderAdapter):
@@ -93,48 +102,83 @@ async def repository(tmp_path: Path) -> SQLiteRepository:
 
 
 async def _authed_server(
-    repository: SQLiteRepository, adapters: list[ProviderAdapter], prefix: str
-) -> FastMCP:
-    """Build one tool server with a real account and its explicit stdio credential."""
+    repository: SQLiteRepository,
+    adapters: list[ProviderAdapter],
+    prefix: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[FastMCP, str]:
+    """Build one tool server with a real project API key as its stdio credential."""
 
-    service, token, _email = await mcp_account_token(repository, prefix)
-    return create_server(
+    service, key = await mcp_project_key(repository, prefix)
+    secrets: dict[str, str] = {}
+    await seed_provider_bindings(
+        repository,
+        project_id=key.project_id,
+        actor_id=key.owner.id,
+        store=_encrypted_store(repository),
+        providers=tuple(adapter.name for adapter in adapters),
+        secrets=secrets,
+    )
+    install_adapter_map(monkeypatch, adapters, secrets=secrets)
+    server = create_server(
         adapters,
         repository=repository,
         auth_service=service,
-        stdio_token=SecretStr(token.get_secret_value()),
+        stdio_token=SecretStr(key.raw),
     )
+    return server, str(key.project_id)
 
 
-async def test_search_routes_to_only_search_adapter(repository: SQLiteRepository) -> None:
-    server = await _authed_server(repository, [_StubAdapter("brave", fetch=False)], "tool-search")
-    response = await server.call_tool("search", {"request": {"query": "python asyncio"}})
+async def test_search_routes_to_only_search_adapter(
+    monkeypatch: pytest.MonkeyPatch, repository: SQLiteRepository
+) -> None:
+    server, pid = await _authed_server(
+        repository,
+        [_StubAdapter("brave", fetch=False)],
+        "tool-search",
+        monkeypatch=monkeypatch,
+    )
+    response = await server.call_tool(
+        "search", {"request": {"project_id": pid, "query": "python asyncio"}}
+    )
     assert response[1]["provider"] == "brave"
     assert response[1]["query"] == "python asyncio"
 
 
-async def test_fetch_routes_to_fetch_capable_adapter(repository: SQLiteRepository) -> None:
-    server = await _authed_server(repository, [_StubAdapter("youcom")], "tool-fetch")
-    response = await server.call_tool("fetch", {"request": {"url": "https://example.com/page"}})
+async def test_fetch_routes_to_fetch_capable_adapter(
+    monkeypatch: pytest.MonkeyPatch, repository: SQLiteRepository
+) -> None:
+    server, pid = await _authed_server(
+        repository, [_StubAdapter("youcom")], "tool-fetch", monkeypatch=monkeypatch
+    )
+    response = await server.call_tool(
+        "fetch", {"request": {"project_id": pid, "url": "https://example.com/page"}}
+    )
     assert response[1]["provider"] == "youcom"
     assert response[1]["document"]["content"] == "youcom content"
 
 
-async def test_search_without_any_adapter_raises(repository: SQLiteRepository) -> None:
-    server = await _authed_server(repository, [], "tool-empty")
+async def test_search_without_any_adapter_raises(
+    monkeypatch: pytest.MonkeyPatch, repository: SQLiteRepository
+) -> None:
+    server, pid = await _authed_server(repository, [], "tool-empty", monkeypatch=monkeypatch)
     with pytest.raises(ToolError, match="no provider is configured"):
-        await server.call_tool("search", {"request": {"query": "anything"}})
+        await server.call_tool("search", {"request": {"project_id": pid, "query": "anything"}})
 
 
 async def test_search_fanout_runs_multiple_adapters_and_fuses(
+    monkeypatch: pytest.MonkeyPatch,
     repository: SQLiteRepository,
 ) -> None:
-    server = await _authed_server(
+    server, pid = await _authed_server(
         repository,
         [_StubAdapter("brave", fetch=False), _StubAdapter("exa", fetch=False)],
         "tool-fanout",
+        monkeypatch=monkeypatch,
     )
-    response = await server.call_tool("search", {"request": {"query": "python", "fanout": True}})
+    response = await server.call_tool(
+        "search", {"request": {"project_id": pid, "query": "python", "fanout": True}}
+    )
     data = response[1]
     assert data["provider"] == "aggregated"
     assert set(data["participating_providers"]) == {"brave", "exa"}
@@ -164,9 +208,11 @@ async def test_close_adapters_cleans_up() -> None:
 async def test_build_adapters_includes_keyless_keenable() -> None:
     client = httpx.AsyncClient()
     try:
-        adapters = build_adapters(client)
-        names = [adapter.name for adapter in adapters]
-        assert "keenable" in names
+        factory = adapter_factory("keenable")
+        assert factory is not None
+        adapter = factory(client)
+        assert adapter.name == "keenable"
+        assert adapter.capabilities.search is True
     finally:
         await client.aclose()
 
@@ -182,7 +228,13 @@ async def test_build_adapters_skips_failing_factory_keeps_others(
     client = httpx.AsyncClient()
     try:
         with caplog.at_level("WARNING"):
-            names = [adapter.name for adapter in build_adapters(client)]
+            broken = adapter_factory("exa")
+            assert broken is not None
+            with pytest.raises(RuntimeError, match="boom"):
+                broken(client)
+            surviving = adapter_factory("keenable")
+            assert surviving is not None
+            names = [surviving(client).name]
     finally:
         await client.aclose()
     assert "exa" not in names and "keenable" in names
@@ -209,9 +261,14 @@ def test_create_server_stateless_http_flag() -> None:
     assert server_stateless.settings.stateless_http is True
 
 
-def test_main_cli_dispatch(monkeypatch: pytest.MonkeyPatch, auth_secret: str) -> None:
+def test_main_cli_dispatch(
+    monkeypatch: pytest.MonkeyPatch, auth_secret: str, tmp_path: Path
+) -> None:
     import freesearch.mcp.server as server_module
     from freesearch.mcp.server import main
+
+    # main() runs the pre-start database check: never against the checkout DB.
+    monkeypatch.setenv("FREESEARCH_DB", str(tmp_path / "main-dispatch.db"))
 
     calls: list[tuple[str, bool, int | None]] = []
 
@@ -251,37 +308,51 @@ class _MaskStub(_StubAdapter):
         return await super().fetch(request)
 
 
-async def test_mcp_search_respects_global_mask_off(tmp_path: Path) -> None:
+async def test_mcp_search_respects_global_mask_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     repository = await SQLiteRepository.open(tmp_path / "mcp-mask.db")
     try:
         await repository.set_runtime_setting(
             "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
         )
         adapter = _MaskStub("exa")
-        server = await _authed_server(repository, [adapter], "mcp-mask-off")
+        server, pid = await _authed_server(
+            repository, [adapter], "mcp-mask-off", monkeypatch=monkeypatch
+        )
 
         with pytest.raises(ToolError, match="no eligible provider"):
-            await server.call_tool("search", {"request": {"query": "global off"}})
+            await server.call_tool(
+                "search", {"request": {"project_id": pid, "query": "global off"}}
+            )
 
         assert adapter.search_calls == 0
     finally:
         await repository.close()
 
 
-async def test_mcp_fetch_respects_fetch_bit_off(tmp_path: Path) -> None:
+async def test_mcp_fetch_respects_fetch_bit_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     repository = await SQLiteRepository.open(tmp_path / "mcp-fetch.db")
     try:
         await repository.set_runtime_setting(
             "provider.exa", {"config": {"enable_mask": 3, "support_mask": 7, "priority": 100}}
         )
         adapter = _MaskStub("exa")
-        server = await _authed_server(repository, [adapter], "mcp-fetch-off")
+        server, pid = await _authed_server(
+            repository, [adapter], "mcp-fetch-off", monkeypatch=monkeypatch
+        )
 
-        search = await server.call_tool("search", {"request": {"query": "search on"}})
+        search = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "search on"}}
+        )
         assert search[1]["provider"] == "exa"
 
         with pytest.raises(ToolError, match="no eligible provider"):
-            await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+            await server.call_tool(
+                "fetch", {"request": {"project_id": pid, "url": "https://example.com"}}
+            )
 
         assert adapter.search_calls == 1
         assert adapter.fetch_calls == 0
@@ -289,13 +360,19 @@ async def test_mcp_fetch_respects_fetch_bit_off(tmp_path: Path) -> None:
         await repository.close()
 
 
-async def test_mcp_reads_fresh_masks_after_startup_without_restart(tmp_path: Path) -> None:
+async def test_mcp_reads_fresh_masks_after_startup_without_restart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     repository = await SQLiteRepository.open(tmp_path / "mcp-fresh.db")
     try:
         adapter = _MaskStub("exa")
-        server = await _authed_server(repository, [adapter], "mcp-fresh")
+        server, pid = await _authed_server(
+            repository, [adapter], "mcp-fresh", monkeypatch=monkeypatch
+        )
 
-        first = await server.call_tool("search", {"request": {"query": "before"}})
+        first = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "before"}}
+        )
         assert first[1]["provider"] == "exa"
 
         await repository.set_runtime_setting(
@@ -303,20 +380,26 @@ async def test_mcp_reads_fresh_masks_after_startup_without_restart(tmp_path: Pat
         )
 
         with pytest.raises(ToolError, match="no eligible provider"):
-            await server.call_tool("search", {"request": {"query": "after"}})
+            await server.call_tool("search", {"request": {"project_id": pid, "query": "after"}})
 
         assert adapter.search_calls == 1
     finally:
         await repository.close()
 
 
-async def test_mcp_preserves_injected_noncanonical_names(tmp_path: Path) -> None:
+async def test_mcp_preserves_injected_noncanonical_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     repository = await SQLiteRepository.open(tmp_path / "mcp-injected.db")
     try:
         adapter = _MaskStub("test_provider")
-        server = await _authed_server(repository, [adapter], "mcp-injected")
+        server, pid = await _authed_server(
+            repository, [adapter], "mcp-injected", monkeypatch=monkeypatch
+        )
 
-        response = await server.call_tool("search", {"request": {"query": "injected"}})
+        response = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "injected"}}
+        )
 
         assert response[1]["provider"] == "test_provider"
         assert adapter.search_calls == 1
@@ -324,7 +407,9 @@ async def test_mcp_preserves_injected_noncanonical_names(tmp_path: Path) -> None
         await repository.close()
 
 
-async def test_mcp_fanout_excludes_masked_provider(tmp_path: Path) -> None:
+async def test_mcp_fanout_excludes_masked_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     repository = await SQLiteRepository.open(tmp_path / "mcp-fanout.db")
     try:
         await repository.set_runtime_setting(
@@ -332,10 +417,12 @@ async def test_mcp_fanout_excludes_masked_provider(tmp_path: Path) -> None:
         )
         off = _MaskStub("exa")
         on = _MaskStub("brave", fetch=False)
-        server = await _authed_server(repository, [off, on], "mcp-fanout-mask")
+        server, pid = await _authed_server(
+            repository, [off, on], "mcp-fanout-mask", monkeypatch=monkeypatch
+        )
 
         response = await server.call_tool(
-            "search", {"request": {"query": "fanout", "fanout": True}}
+            "search", {"request": {"project_id": pid, "query": "fanout", "fanout": True}}
         )
 
         assert response[1]["participating_providers"] == ["brave"]
@@ -346,8 +433,8 @@ async def test_mcp_fanout_excludes_masked_provider(tmp_path: Path) -> None:
 
 
 async def _reset_mcp_caches() -> None:
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     clear_config_cache()
     clear_quota_poll_cache()
@@ -399,6 +486,7 @@ class _QuotaStub(_StubAdapter):
 
 
 async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """M4 MCP: unknown REQUIRE raises ToolError without touching other providers."""
@@ -409,7 +497,9 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
     try:
         first = _MaskStub("exa")
         second = _MaskStub("brave")
-        server = await _authed_server(repository, [first, second], "mcp-require-unknown")
+        server, pid = await _authed_server(
+            repository, [first, second], "mcp-require-unknown", monkeypatch=monkeypatch
+        )
         health_calls: list[list[str]] = []
         quota_calls: list[list[str]] = []
         orig_h = _Repo.latest_health_batch
@@ -431,6 +521,7 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
                     "search",
                     {
                         "request": {
+                            "project_id": pid,
                             "query": "ghost",
                             "routing": {"mode": "require", "providers": ["ghost"]},
                         }
@@ -441,6 +532,7 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
                     "fetch",
                     {
                         "request": {
+                            "project_id": pid,
                             "url": "https://example.com",
                             "routing": {"mode": "require", "providers": ["ghost"]},
                         }
@@ -456,21 +548,25 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
         assert health_calls == []
         assert quota_calls == []
 
-        empty = await _authed_server(repository, [], "mcp-require-empty")
+        empty, pid = await _authed_server(
+            repository, [], "mcp-require-empty", monkeypatch=monkeypatch
+        )
         with pytest.raises(ToolError, match="no provider is configured"):
-            await empty.call_tool("search", {"request": {"query": "anything"}})
+            await empty.call_tool("search", {"request": {"project_id": pid, "query": "anything"}})
 
         await repository.set_runtime_setting(
             "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
         )
-        from freesearch.routers.control import clear_config_cache as _clear
+        from freesearch.services.provider_runtime import clear_config_cache as _clear
 
         _clear(repository)
-        masked = await _authed_server(repository, [_MaskStub("exa")], "mcp-require-masked")
+        masked, pid = await _authed_server(
+            repository, [_MaskStub("exa")], "mcp-require-masked", monkeypatch=monkeypatch
+        )
         with pytest.raises(ToolError, match="no eligible provider"):
-            await masked.call_tool("search", {"request": {"query": "masked"}})
+            await masked.call_tool("search", {"request": {"project_id": pid, "query": "masked"}})
     finally:
-        from freesearch.routers.control import clear_config_cache as _clear2
+        from freesearch.services.provider_runtime import clear_config_cache as _clear2
 
         _clear2()
         from freesearch.services.monitoring import clear_quota_poll_cache as _cq
@@ -479,7 +575,9 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
         await repository.close()
 
 
-async def test_mcp_auto_and_prefer_inspect_all_eligible(tmp_path: Path) -> None:
+async def test_mcp_auto_and_prefer_inspect_all_eligible(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """M4 MCP: AUTO and PREFER batch reads cover every eligible provider."""
     from freesearch.persistence.storage import SQLiteRepository as _Repo
 
@@ -487,7 +585,9 @@ async def test_mcp_auto_and_prefer_inspect_all_eligible(tmp_path: Path) -> None:
     repository = await _Repo.open(tmp_path / "mcp-auto-inspect.db")
     try:
         adapters = [_MaskStub("exa"), _MaskStub("brave"), _MaskStub("tavily")]
-        server = await _authed_server(repository, adapters, "mcp-auto-inspect")
+        server, pid = await _authed_server(
+            repository, adapters, "mcp-auto-inspect", monkeypatch=monkeypatch
+        )
         seen: list[list[str]] = []
         orig = _Repo.latest_health_batch
 
@@ -497,12 +597,15 @@ async def test_mcp_auto_and_prefer_inspect_all_eligible(tmp_path: Path) -> None:
 
         _Repo.latest_health_batch = _spy  # type: ignore[method-assign]
         try:
-            first = await server.call_tool("search", {"request": {"query": "auto"}})
+            first = await server.call_tool(
+                "search", {"request": {"project_id": pid, "query": "auto"}}
+            )
             assert first[1]["provider"] in {"exa", "brave", "tavily"}
             prefer = await server.call_tool(
                 "search",
                 {
                     "request": {
+                        "project_id": pid,
                         "query": "prefer",
                         "routing": {"mode": "prefer", "providers": ["brave"]},
                     }
@@ -515,7 +618,7 @@ async def test_mcp_auto_and_prefer_inspect_all_eligible(tmp_path: Path) -> None:
         for batch in seen:
             assert set(batch) == {"exa", "brave", "tavily"}
     finally:
-        from freesearch.routers.control import clear_config_cache as _clear
+        from freesearch.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
         from freesearch.services.monitoring import clear_quota_poll_cache as _cq
@@ -524,7 +627,9 @@ async def test_mcp_auto_and_prefer_inspect_all_eligible(tmp_path: Path) -> None:
         await repository.close()
 
 
-async def test_mcp_pinned_fanout_reads_only_subset(tmp_path: Path) -> None:
+async def test_mcp_pinned_fanout_reads_only_subset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """M4 MCP: fanout with providers=[A,B] queries only that subset."""
     from freesearch.persistence.storage import SQLiteRepository as _Repo
 
@@ -532,7 +637,9 @@ async def test_mcp_pinned_fanout_reads_only_subset(tmp_path: Path) -> None:
     repository = await _Repo.open(tmp_path / "mcp-pinned.db")
     try:
         adapters = [_MaskStub(f"p{i}") for i in (1, 2, 3, 4)]
-        server = await _authed_server(repository, adapters, "mcp-pinned")
+        server, pid = await _authed_server(
+            repository, adapters, "mcp-pinned", monkeypatch=monkeypatch
+        )
         health_names: list[list[str]] = []
         orig = _Repo.latest_health_batch
 
@@ -546,6 +653,7 @@ async def test_mcp_pinned_fanout_reads_only_subset(tmp_path: Path) -> None:
                 "search",
                 {
                     "request": {
+                        "project_id": pid,
                         "query": "pinned",
                         "fanout": True,
                         "routing": {"mode": "fanout", "providers": ["p1", "p2"]},
@@ -561,7 +669,7 @@ async def test_mcp_pinned_fanout_reads_only_subset(tmp_path: Path) -> None:
         for batch in health_names:
             assert set(batch) <= {"p1", "p2"}
     finally:
-        from freesearch.routers.control import clear_config_cache as _clear
+        from freesearch.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
         from freesearch.services.monitoring import clear_quota_poll_cache as _cq
@@ -570,7 +678,9 @@ async def test_mcp_pinned_fanout_reads_only_subset(tmp_path: Path) -> None:
         await repository.close()
 
 
-async def test_mcp_stale_first_then_new_snapshot(tmp_path: Path) -> None:
+async def test_mcp_stale_first_then_new_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """E1 MCP: first request uses the old snapshot; later request excludes."""
     import asyncio as _asyncio
     from contextlib import suppress as _suppress
@@ -580,7 +690,7 @@ async def test_mcp_stale_first_then_new_snapshot(tmp_path: Path) -> None:
 
     from freesearch.models.contracts import QuotaSnapshot as _QS
     from freesearch.models.contracts import QuotaSource as _QSrc
-    from freesearch.routers.api import _BACKGROUND_TASKS as _TASKS
+    from freesearch.services.provider_runtime import _BACKGROUND_TASKS as _TASKS
 
     await _reset_mcp_caches()
     repository = await SQLiteRepository.open(tmp_path / "mcp-stale.db")
@@ -608,12 +718,27 @@ async def test_mcp_stale_first_then_new_snapshot(tmp_path: Path) -> None:
             observed_at=_dt(2026, 3, 10, 12, 5, 0, tzinfo=_UTC),
         )
         adapter = _QuotaStub("exa", snapshot=zero, entered=entered, release=release)
-        server = await _authed_server(repository, [adapter], "mcp-stale")
+        server, pid = await _authed_server(
+            repository, [adapter], "mcp-stale", monkeypatch=monkeypatch
+        )
+        from uuid import UUID
+
+        from freesearch.persistence.bindings import ProjectBindingRepository
+
+        async with repository.session() as session:
+            bindings = await ProjectBindingRepository(session).list_for_project(
+                project_id=UUID(pid)
+            )
+        credential_id = bindings[0].credential_id
+        old = await repository.latest_quota("exa")
+        assert old is not None and old.remaining == _Dec("10")
+        await repository.record_quota(old, credential_id=credential_id)
         first_task = _asyncio.create_task(
             server.call_tool(
                 "search",
                 {
                     "request": {
+                        "project_id": pid,
                         "query": "stale first",
                         "routing": {"mode": "require", "providers": ["exa"]},
                     }
@@ -629,9 +754,11 @@ async def test_mcp_stale_first_then_new_snapshot(tmp_path: Path) -> None:
         for task in list(_TASKS):
             with _suppress(Exception):
                 await _asyncio.wait_for(_asyncio.shield(task), timeout=5)
-        stored = await repository.latest_quota("exa")
+        stored = await repository.latest_quota("exa", credential_id=credential_id)
         assert stored is not None
         assert stored.remaining == _Dec("0")
+        unscoped = await repository.latest_quota("exa")
+        assert unscoped is not None and unscoped.remaining == _Dec("10")
         from freesearch.services.monitoring import clear_quota_poll_cache as _cq1
 
         _cq1()
@@ -640,6 +767,7 @@ async def test_mcp_stale_first_then_new_snapshot(tmp_path: Path) -> None:
                 "search",
                 {
                     "request": {
+                        "project_id": pid,
                         "query": "after exhaustion",
                         "routing": {"mode": "require", "providers": ["exa"]},
                     }
@@ -648,12 +776,12 @@ async def test_mcp_stale_first_then_new_snapshot(tmp_path: Path) -> None:
         assert adapter.search_calls == 1
     finally:
         release.set()
-        from freesearch.routers.api import _BACKGROUND_TASKS as _T2
+        from freesearch.services.provider_runtime import _BACKGROUND_TASKS as _T2
 
         for task in list(_T2):
             with _suppress(Exception):
                 await _asyncio.wait_for(_asyncio.shield(task), timeout=5)
-        from freesearch.routers.control import clear_config_cache as _clear
+        from freesearch.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
         from freesearch.services.monitoring import clear_quota_poll_cache as _cq
@@ -662,13 +790,32 @@ async def test_mcp_stale_first_then_new_snapshot(tmp_path: Path) -> None:
         await repository.close()
 
 
-async def test_mcp_single_attempt_preserves_tool_error(tmp_path: Path) -> None:
-    """E6 MCP: CHAINED/FIRST_ONLY/allow_fallback=false invoke only the first candidate."""
+async def test_mcp_single_attempt_preserves_tool_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """MCP propagates an unexpected first-provider error without fallback."""
     await _reset_mcp_caches()
     repository = await SQLiteRepository.open(tmp_path / "mcp-single.db")
     try:
         from freesearch.models.contracts import RoutingConfigResponse
         from freesearch.routers.control import persist_routing_config
+
+        async def order_exa_first(pid: str) -> None:
+            async with repository.session() as session:
+                settings = ProjectSettingsRepository(session)
+                project_id = UUID(pid)
+                revision = await settings.revision(
+                    project_id=project_id, namespace="provider_order"
+                )
+                order = {"strategy": "custom", "custom_order": ["exa", "brave"]}
+                assert await settings.compare_and_set(
+                    project_id=project_id,
+                    namespace="provider_order",
+                    schema_version=1,
+                    overrides={"search": order, "fetch": order},
+                    expected_revision=revision,
+                )
+                await session.commit()
 
         for fallback in ("chained", "first_only"):
             await persist_routing_config(
@@ -684,48 +831,54 @@ async def test_mcp_single_attempt_preserves_tool_error(tmp_path: Path) -> None:
             for allow in (True, False):
                 primary = _FailStub("exa")
                 fallback_adapter = _MaskStub("brave")
-                server = await _authed_server(
-                    repository, [primary, fallback_adapter], f"mcp-single-{fallback}"
+                server, pid = await _authed_server(
+                    repository,
+                    [primary, fallback_adapter],
+                    f"mcp-single-{fallback}",
+                    monkeypatch=monkeypatch,
                 )
-                with pytest.raises(ToolError, match="simulated failure"):
-                    await server.call_tool(
-                        "search",
-                        {
-                            "request": {
-                                "query": "single",
-                                "routing": {
-                                    "mode": "require",
-                                    "providers": ["exa", "brave"],
-                                    "allow_fallback": allow,
-                                },
-                            }
+                await order_exa_first(pid)
+                arguments = {
+                    "request": {
+                        "project_id": pid,
+                        "query": "single",
+                        "routing": {
+                            "mode": "require",
+                            "providers": ["exa", "brave"],
+                            "allow_fallback": allow,
                         },
-                    )
+                    }
+                }
+                with pytest.raises(ToolError, match="simulated failure"):
+                    await server.call_tool("search", arguments)
                 assert primary.search_calls == 1
                 assert fallback_adapter.search_calls == 0
                 primary_f = _FailStub("exa")
                 fallback_f = _MaskStub("brave")
-                server_f = await _authed_server(
-                    repository, [primary_f, fallback_f], f"mcp-single-f-{fallback}"
+                server_f, pid = await _authed_server(
+                    repository,
+                    [primary_f, fallback_f],
+                    f"mcp-single-f-{fallback}",
+                    monkeypatch=monkeypatch,
                 )
-                with pytest.raises(ToolError, match="simulated failure"):
-                    await server_f.call_tool(
-                        "fetch",
-                        {
-                            "request": {
-                                "url": "https://example.com",
-                                "routing": {
-                                    "mode": "require",
-                                    "providers": ["exa", "brave"],
-                                    "allow_fallback": allow,
-                                },
-                            }
+                await order_exa_first(pid)
+                fetch_arguments = {
+                    "request": {
+                        "project_id": pid,
+                        "url": "https://example.com",
+                        "routing": {
+                            "mode": "require",
+                            "providers": ["exa", "brave"],
+                            "allow_fallback": allow,
                         },
-                    )
+                    }
+                }
+                with pytest.raises(ToolError, match="simulated failure"):
+                    await server_f.call_tool("fetch", fetch_arguments)
                 assert primary_f.fetch_calls == 1
                 assert fallback_f.fetch_calls == 0
     finally:
-        from freesearch.routers.control import clear_config_cache as _clear
+        from freesearch.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
         from freesearch.services.monitoring import clear_quota_poll_cache as _cq
@@ -734,18 +887,20 @@ async def test_mcp_single_attempt_preserves_tool_error(tmp_path: Path) -> None:
         await repository.close()
 
 
-async def test_mcp_fanout_partial_and_all_fail(tmp_path: Path) -> None:
+async def test_mcp_fanout_partial_and_all_fail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """E7 MCP: partial preserves results; all-fail raises ToolError with first error."""
     await _reset_mcp_caches()
     repository = await SQLiteRepository.open(tmp_path / "mcp-fanout-fail.db")
     try:
         failing = _FailStub("flaky_provider")
         working = _MaskStub("reliable_provider")
-        server = await _authed_server(
-            repository, [failing, working], "mcp-fanout-partial"
+        server, pid = await _authed_server(
+            repository, [failing, working], "mcp-fanout-partial", monkeypatch=monkeypatch
         )
         response = await server.call_tool(
-            "search", {"request": {"query": "partial", "fanout": True}}
+            "search", {"request": {"project_id": pid, "query": "partial", "fanout": True}}
         )
         data = response[1]
         assert data["participating_providers"] == ["reliable_provider"]
@@ -757,13 +912,17 @@ async def test_mcp_fanout_partial_and_all_fail(tmp_path: Path) -> None:
 
         first = _FailStub("flaky-a")
         second = _FailStub("flaky-b")
-        doomed = await _authed_server(repository, [first, second], "mcp-fanout-doomed")
+        doomed, pid = await _authed_server(
+            repository, [first, second], "mcp-fanout-doomed", monkeypatch=monkeypatch
+        )
         with pytest.raises(ToolError, match="all search providers failed"):
-            await doomed.call_tool("search", {"request": {"query": "doomed", "fanout": True}})
+            await doomed.call_tool(
+                "search", {"request": {"project_id": pid, "query": "doomed", "fanout": True}}
+            )
         assert first.search_calls == 1
         assert second.search_calls == 1
     finally:
-        from freesearch.routers.control import clear_config_cache as _clear
+        from freesearch.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
         from freesearch.services.monitoring import clear_quota_poll_cache as _cq
@@ -774,7 +933,7 @@ async def test_mcp_fanout_partial_and_all_fail(tmp_path: Path) -> None:
 
 async def test_mcp_lifespan_clears_config_cache(tmp_path: Path) -> None:
     """M3 MCP: lifespan exit clears cached config and policy entries."""
-    from freesearch.routers.control import (
+    from freesearch.services.provider_runtime import (
         _CONFIG_CACHE,
         _POLICY_CACHE,
         clear_config_cache,
@@ -815,37 +974,48 @@ async def test_mcp_lifespan_clears_config_cache(tmp_path: Path) -> None:
         await repository.close()
 
 
-async def test_mcp_generation_replacement_builds_fresh_state(tmp_path: Path) -> None:
+async def test_mcp_generation_replacement_builds_fresh_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """MCP generations detach cleanly so a later session never reuses closed state."""
     from freesearch.infrastructure.observability import NO_OP_OBSERVABILITY
     from freesearch.mcp.server import _detach_generation
+    from freesearch.services.execution import ExecutionService
 
     await _reset_mcp_caches()
     repository = await SQLiteRepository.open(tmp_path / "mcp-gen.db")
     try:
         first = _MaskStub("exa")
+        store = _encrypted_store(repository)
+        execution = ExecutionService(repository=repository, secret_store=store)
         state: dict = {
             "repository": repository,
             "client": None,
             "routes": [first],
-            "secret_store": None,
+            "secret_store": store,
             "limits": None,
             "limits_sync": None,
             "limits_task": None,
             "limits_stop": None,
             "observability": NO_OP_OBSERVABILITY,
+            "execution": execution,
         }
         await _detach_generation(state, owns_repository=False)
+        assert state["execution"] is None
         assert state["routes"] is None
         assert state["client"] is None
         second = _MaskStub("brave")
-        server = await _authed_server(repository, [second], "mcp-gen-fresh")
-        response = await server.call_tool("search", {"request": {"query": "fresh"}})
+        server, pid = await _authed_server(
+            repository, [second], "mcp-gen-fresh", monkeypatch=monkeypatch
+        )
+        response = await server.call_tool(
+            "search", {"request": {"project_id": pid, "query": "fresh"}}
+        )
         assert response[1]["provider"] == "brave"
         assert second.search_calls == 1
         assert first.search_calls == 0
     finally:
-        from freesearch.routers.control import clear_config_cache as _clear
+        from freesearch.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
         from freesearch.services.monitoring import clear_quota_poll_cache as _cq
@@ -860,7 +1030,7 @@ async def test_mcp_object_identity_after_lifespan(
     """E3 MCP: a new repository never inherits a closed repository cache entry."""
     import builtins
 
-    from freesearch.routers.control import (
+    from freesearch.services.provider_runtime import (
         clear_config_cache,
         effective_config_for_name,
     )

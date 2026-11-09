@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { toTraceResultView } from "./traceResultPresentation"
+import { plainTraceSnippet, toTraceResultView } from "./traceResultPresentation"
 import type { TraceSearchResult } from "@/domains/activity"
 
 function traceResult(overrides: Partial<TraceSearchResult> = {}): TraceSearchResult {
@@ -12,6 +12,11 @@ function traceResult(overrides: Partial<TraceSearchResult> = {}): TraceSearchRes
     ...overrides,
   }
 }
+
+it("removes common markdown from excerpts without changing ordinary text", () => {
+  expect(plainTraceSnippet("- [*Navigating*](https://example.com)\n- **More** `details`")).toBe("Navigating\nMore details")
+  expect(plainTraceSnippet("plain_text and 2 * 3")).toBe("plain_text and 2 * 3")
+})
 
 /**
  * toTraceResultView (PLAN §3): one recorded trace result in the shared

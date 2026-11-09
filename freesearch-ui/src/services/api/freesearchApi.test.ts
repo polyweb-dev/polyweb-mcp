@@ -9,10 +9,7 @@ import {
   searchResponseFixture,
   fetchResponseFixture,
   providerTestFixture,
-  secretStatusFixture,
   breakerResetFixture,
-  traceDetailFixture,
-  traceListFixture,
 } from "@/test/backendFixtures"
 
 /**
@@ -25,7 +22,7 @@ import {
  * Expected service surface (Developer implements in freesearchApi.ts, keeping
  * the class name FreeSearchApiService + singleton apiService):
  * listProviders, getRoutingConfig, updateRoutingConfig, patchProvider,
- * testProvider, resetCircuitBreaker, putSecret, deleteSecret, search,
+ * testProvider, resetCircuitBreaker, search,
  * fetchDoc, getDashboard. Old executeSearch/executeFetch/testConnection/
  * getEligibleProviders/generateMock* are REMOVED.
  */
@@ -44,8 +41,6 @@ describe("FreeSearchApiService (live HTTP)", () => {
       "patchProvider",
       "testProvider",
       "resetCircuitBreaker",
-      "putSecret",
-      "deleteSecret",
       "search",
       "fetchDoc",
       "getDashboard",
@@ -61,6 +56,16 @@ describe("FreeSearchApiService (live HTTP)", () => {
       "testConnection",
       "generateMockSearchResults",
       "generateMockFetchedDocument",
+      // The account-wide trace reads are gone; Activity reads project routes.
+      "listTraces",
+      "getTrace",
+      // The global secret and provider OAuth routes are gone (U3): secrets
+      // and OAuth live on credential instances.
+      "putSecret",
+      "deleteSecret",
+      "beginOAuthDeviceFlow",
+      "getOAuthStatus",
+      "revokeOAuth",
     ]) {
       expect(
         (service as unknown as Record<string, unknown>)[removed]
@@ -140,7 +145,6 @@ describe("FreeSearchApiService (live HTTP)", () => {
 
     const full = {
       fallback_policy: "first_only",
-      cost_optimization_preset: "balanced",
       max_attempts: 1,
     }
     const result = await service.updateRoutingConfig(full as never)
@@ -161,17 +165,6 @@ describe("FreeSearchApiService (live HTTP)", () => {
     expect(stub.requests[0].method).toBe("PATCH")
     expect(stub.requests[0].body).toEqual({ enabled: false })
     expect(JSON.parse(stub.requests[0].bodyText!)).toEqual({ enabled: false })
-  })
-
-  it("patchProvider() sends a real-int priority without coercion", async () => {
-    const stub = installFetchStub(() => ok(allProvidersFixture()[3]))
-
-    await service.patchProvider("exa", { priority: 2 } as never)
-
-    expect(stub.requests[0].body).toEqual({ priority: 2 })
-    expect(typeof (stub.requests[0].body as { priority: unknown }).priority).toBe(
-      "number"
-    )
   })
 
   it("patchProvider() sends one-bit search and fetch bodies", async () => {
@@ -197,13 +190,14 @@ describe("FreeSearchApiService (live HTTP)", () => {
     )
   })
 
-  it("patchProvider() never sends support_mask or unknown keys", async () => {
+  it("patchProvider() never sends priority, support_mask or unknown keys", async () => {
     const stub = installFetchStub(() => ok(allProvidersFixture()[0]))
     await service.patchProvider(
       "brave",
-      { enabled: false, support_mask: 7, extra: true } as never,
+      { enabled: false, priority: 1, support_mask: 7, extra: true } as never,
     )
     expect(stub.requests[0].body).toEqual({ enabled: false })
+    expect("priority" in (stub.requests[0].body as object)).toBe(false)
     expect("support_mask" in (stub.requests[0].body as object)).toBe(false)
     expect("extra" in (stub.requests[0].body as object)).toBe(false)
   })
@@ -245,16 +239,10 @@ describe("FreeSearchApiService (live HTTP)", () => {
     }
   })
 
-  it("patchProvider() keeps access and priority patches free of the tier field", async () => {
+  it("patchProvider() keeps access patches free of the tier field", async () => {
     const accessStub = installFetchStub(() => ok(allProvidersFixture()[0]))
     await service.patchProvider("brave", { enabled: false } as never)
     expect(accessStub.requests[0].body).toEqual({ enabled: false })
-    vi.unstubAllGlobals()
-
-    const priorityStub = installFetchStub(() => ok(allProvidersFixture()[3]))
-    await service.patchProvider("exa", { priority: 2 } as never)
-    expect(priorityStub.requests[0].body).toEqual({ priority: 2 })
-    vi.unstubAllGlobals()
   })
 
   it("testProvider() POSTs relative /api/v1/providers/{id}/test", async () => {
@@ -281,30 +269,6 @@ describe("FreeSearchApiService (live HTTP)", () => {
     expect(result).toEqual(wire)
   })
 
-  it("putSecret() PUTs exactly {key} to relative .../secret", async () => {
-    const wire = secretStatusFixture()
-    const stub = installFetchStub(() => ok(wire))
-
-    const result = await service.putSecret("tavily", "tvly-live-key-123")
-
-    expect(stub.requests[0].url).toBe("/api/v1/providers/tavily/secret")
-    expect(stub.requests[0].method).toBe("PUT")
-    expect(stub.requests[0].body).toEqual({ key: "tvly-live-key-123" })
-    expect(Object.keys(stub.requests[0].body as object)).toEqual(["key"])
-    expect(result).toEqual(wire)
-  })
-
-  it("deleteSecret() DELETEs relative .../secret (idempotent)", async () => {
-    const wire = secretStatusFixture({ presence: "missing", fingerprint: null })
-    const stub = installFetchStub(() => ok(wire))
-
-    const result = await service.deleteSecret("tavily")
-
-    expect(stub.requests[0].url).toBe("/api/v1/providers/tavily/secret")
-    expect(stub.requests[0].method).toBe("DELETE")
-    expect(result).toEqual(wire)
-  })
-
   it("getDashboard() defaults to limit=50 and honors explicit limits", async () => {
     const wire = dashboardFixture()
     const stub = installFetchStub(() => ok(wire))
@@ -326,10 +290,6 @@ describe("FreeSearchApiService (live HTTP)", () => {
       if (req.url === "/api/v1/providers") return ok(allProvidersFixture())
       if (req.url.endsWith("/test")) return ok(providerTestFixture())
       if (req.url.endsWith("/reset")) return ok(breakerResetFixture())
-      if (req.url.endsWith("/secret"))
-        return ok(req.method === "DELETE"
-          ? secretStatusFixture({ presence: "missing" })
-          : secretStatusFixture())
       return ok(allProvidersFixture()[0])
     })
 
@@ -350,14 +310,11 @@ describe("FreeSearchApiService (live HTTP)", () => {
     await service.getRoutingConfig()
     await service.updateRoutingConfig({
       fallback_policy: "chained",
-      cost_optimization_preset: "balanced",
       max_attempts: 3,
     } as never)
     await service.patchProvider("brave", { enabled: true } as never)
     await service.testProvider("brave")
     await service.resetCircuitBreaker("brave")
-    await service.putSecret("brave", "k")
-    await service.deleteSecret("brave")
     await service.getDashboard()
 
     const fetchMock = vi.mocked(globalThis.fetch)
@@ -425,126 +382,5 @@ describe("FreeSearchApiService (live HTTP)", () => {
     expect(failure).toBeInstanceOf(ApiError)
     expect(failure!.status).toBe(0)
     expect(failure!.detail).toContain("API unreachable")
-  })
-})
-
-/**
- * Trace read API: the Activity list stays summary-only while detail carries
- * the disclosed query, results, and stage timeline. Exact relative URLs,
- * query encoding, AbortSignal forwarding, and 404/error mapping.
- */
-describe("FreeSearchApiService traces", () => {
-  const service = new FreeSearchApiService()
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
-  it("listTraces() GETs relative /api/v1/traces with no query by default", async () => {
-    const wire = traceListFixture()
-    const stub = installFetchStub(() => ok(wire))
-
-    const result = await service.listTraces()
-
-    expect(stub.requests).toHaveLength(1)
-    expect(stub.requests[0].url).toBe("/api/v1/traces")
-    expect(stub.requests[0].method).toBe("GET")
-    expect(stub.requests[0].bodyText).toBeUndefined()
-    expect(result).toEqual(wire)
-  })
-
-  it("listTraces() encodes limit/operation/outcome filters as query params", async () => {
-    const stub = installFetchStub(() => ok(traceListFixture()))
-
-    await service.listTraces({ limit: 50, operation: "fetch", outcome: "error" })
-
-    expect(stub.requests[0].url).toBe(
-      "/api/v1/traces?limit=50&operation=fetch&outcome=error"
-    )
-    expect(stub.requests[0].method).toBe("GET")
-  })
-
-  it("listTraces() forwards the AbortSignal", async () => {
-    const stub = installFetchStub(() => ok(traceListFixture()))
-    const controller = new AbortController()
-
-    await service.listTraces({ limit: 10 }, controller.signal)
-
-    expect(stub.requests[0].url).toBe("/api/v1/traces?limit=10")
-    expect(stub.requests[0].signal).toBe(controller.signal)
-  })
-
-  it("getTrace() GETs the URL-encoded detail path", async () => {
-    const wire = traceDetailFixture()
-    const stub = installFetchStub((req) => {
-      expect(req.url).toBe(
-        `/api/v1/traces/${encodeURIComponent("e1c2d3a4b5c6d7e8f9012345678abcde")}`
-      )
-      expect(req.method).toBe("GET")
-      return ok(wire)
-    })
-
-    const result = await service.getTrace("e1c2d3a4b5c6d7e8f9012345678abcde")
-
-    expect(stub.requests).toHaveLength(1)
-    expect(result).toEqual(wire)
-  })
-
-  it("getTrace() encodes hostile trace ids instead of building path segments", async () => {
-    const stub = installFetchStub(() => ok(traceDetailFixture()))
-
-    await service.getTrace("a/b?c=d&e=f")
-
-    expect(stub.requests[0].url).toBe(`/api/v1/traces/${encodeURIComponent("a/b?c=d&e=f")}`)
-    expect(stub.requests[0].url).not.toContain("?")
-  })
-
-  it("getTrace() forwards the AbortSignal", async () => {
-    const stub = installFetchStub(() => ok(traceDetailFixture()))
-    const controller = new AbortController()
-
-    await service.getTrace("e1c2d3a4b5c6d7e8f9012345678abcde", controller.signal)
-
-    expect(stub.requests[0].signal).toBe(controller.signal)
-  })
-
-  it("maps a 404 detail miss to ApiError with status and detail", async () => {
-    installFetchStub(() => err(404, { detail: "unknown trace 'deadbeef'" }))
-
-    const failure = await service.getTrace("deadbeef").then(
-      () => null,
-      (error: unknown) => error as ApiError
-    )
-
-    expect(failure).toBeInstanceOf(ApiError)
-    expect(failure!.status).toBe(404)
-    expect(failure!.detail).toContain("unknown trace")
-  })
-
-  it("maps a 500 trace failure to ApiError", async () => {
-    installFetchStub(() => err(500, { detail: "trace store unavailable" }))
-
-    const failure = await service.listTraces().then(
-      () => null,
-      (error: unknown) => error as ApiError
-    )
-
-    expect(failure).toBeInstanceOf(ApiError)
-    expect(failure!.status).toBe(500)
-    expect(failure!.detail).toBe("trace store unavailable")
-  })
-
-  it("never calls an absolute backend host literal for trace routes", async () => {
-    installFetchStub(() => ok(traceListFixture()))
-
-    await service.listTraces({ limit: 50 })
-    await service.getTrace("e1c2d3a4b5c6d7e8f9012345678abcde")
-
-    const fetchMock = vi.mocked(globalThis.fetch)
-    for (const call of fetchMock.mock.calls) {
-      const url = String(call[0])
-      expect(url).not.toContain("127.0.0.1")
-      expect(url.startsWith("/")).toBe(true)
-    }
   })
 })

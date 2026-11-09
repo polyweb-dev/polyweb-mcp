@@ -8,8 +8,8 @@ import { delayStubbedProviderPatch, failStubbedProviderPatch } from "./backendSt
  *
  * Semantic switch labels only: operation switches expose
  * "{Provider} {search|fetch} routing", the global switch exposes
- * "{Provider} global routing", and unsupported tools expose
- * "{Provider} {operation} routing (not supported)".
+ * "{Provider} global routing", and unsupported tools show a dash with
+ * "{Provider} does not support {operation}" for assistive technology.
  *
  * Step-text uniqueness: every pattern contains "access flag",
  * "operation picker should exclude", or "ranks table should exclude",
@@ -26,13 +26,6 @@ function operationSwitch(page: Page, provider: string, operation: string) {
 function globalSwitch(page: Page, provider: string) {
   return page.getByRole("switch", {
     name: `${provider} global routing`,
-    exact: true,
-  })
-}
-
-function unsupportedSwitch(page: Page, provider: string, operation: string) {
-  return page.getByRole("switch", {
-    name: `${provider} ${operation.toLowerCase()} routing (not supported)`,
     exact: true,
   })
 }
@@ -168,10 +161,12 @@ Then(
 Then(
   "the {string} {string} access flag should be off and locked as unsupported",
   async ({ page }, provider: string, operation: string) => {
-    const sw = unsupportedSwitch(page, provider, operation)
-    await expect(sw).toBeVisible()
-    await expect(sw).toHaveAttribute("aria-checked", "false")
-    await expect(sw).toBeDisabled()
+    const unsupported = page.getByText(`${provider} does not support ${operation.toLowerCase()}`, { exact: true })
+    const cell = unsupported.locator("xpath=ancestor::td[1]")
+    await expect(cell).toContainText("—")
+    await expect(cell.getByRole("switch")).toHaveCount(0)
+    await unsupported.locator("..").hover()
+    await expect(page.getByRole("tooltip", { name: "Not supported", exact: true })).toBeVisible()
   }
 )
 
@@ -189,13 +184,15 @@ Then(
 
 Then(
   "the {string} operation picker should exclude {string}",
-  async ({ page }, _operation: string, provider: string) => {
-    const select = page.locator("main select").first()
+  async ({ page }, operation: string, provider: string) => {
+    const select = page.getByTestId(`playground-${operation.toLowerCase()}-provider`)
     await expect(select).toBeVisible()
-    const options = select.locator("option")
+    await select.click()
+    const options = page.getByRole("listbox").getByRole("option")
     await expect(options.first()).toBeAttached()
     const labels = await options.allTextContents()
     expect(labels).not.toContain(provider)
+    await page.keyboard.press("Escape")
   }
 )
 

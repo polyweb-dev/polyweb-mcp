@@ -12,7 +12,8 @@ from fastapi_users import exceptions
 from fastapi_users.password import PasswordHelper
 from pydantic import SecretStr
 
-from freesearch.models.users import AuthFamily, UserPrincipal, UserRole
+import freesearch.services.users as users_service
+from freesearch.models.users import AuthFamily
 from freesearch.persistence.users import UserRow
 from freesearch.services.users import (
     AUTH_TOKEN_ALGORITHM,
@@ -21,9 +22,7 @@ from freesearch.services.users import (
     AuthConfigurationError,
     SessionJWTStrategy,
     UserManager,
-    _stored_role,
     get_jwt_strategy,
-    has_role,
     refresh_token_digest,
 )
 from tests.fixtures import auth as auth_fixtures
@@ -42,11 +41,9 @@ def _row(**overrides: Any) -> UserRow:
         "email": "unit@example.com",
         "hashed_password": _HELPER.hash(_STRONG),
         "is_active": True,
-        "is_superuser": False,
         "is_verified": False,
         "auth_provider": "local",
         "auth_provider_id": None,
-        "role": "agent",
     }
     base.update(overrides)
     return UserRow(**base)
@@ -139,22 +136,20 @@ def test_refresh_token_digest_rejects_malformed_values(token: str) -> None:
 
 
 def test_has_role_uses_database_row_only() -> None:
-    def _principal(role: UserRole, active: bool, superuser: bool) -> UserPrincipal:
-        return UserPrincipal(
-            id=uuid4(),
-            email="unit@example.com",
-            role=role,
-            session_id=uuid4(),
-            is_active=active,
-            is_superuser=superuser,
-            is_verified=False,
-        )
+    """A1 replacement: no role helper exists; the library flag is a constant False.
 
-    assert has_role(_principal(UserRole.ADMIN, True, True), frozenset({UserRole.ADMIN})) is True
-    assert has_role(_principal(UserRole.AGENT, True, False), frozenset({UserRole.ADMIN})) is False
-    assert has_role(_principal(UserRole.ADMIN, False, True), frozenset({UserRole.ADMIN})) is False
-    # A superuser flag never widens the decision without the database role.
-    assert has_role(_principal(UserRole.AGENT, True, True), frozenset({UserRole.ADMIN})) is False
+    The old helper decided authority from a role column and proved a superuser
+    flag could not widen it. Now no role or flag exists at all: authority is
+    resolved from live scoped assignments (see the integration suites).
+    """
+
+    for removed in ("has_role", "_stored_role", "AuthUnsupportedRole", "change_role"):
+        assert not hasattr(users_service, removed)
+    assert not hasattr(users_service.AuthService, "change_role")
+    row = _row()
+    assert row.is_superuser is False
+    with pytest.raises(AttributeError):
+        row.is_superuser = True  # type: ignore[misc]
 
 
 def test_access_lifetime_caps_at_family_expiry() -> None:
@@ -187,29 +182,19 @@ def test_auth_token_constants() -> None:
     assert SecretStr("x").get_secret_value() == "x"
 
 
-def test_stored_role_falls_back_to_agent_for_broken_values() -> None:
-    assert _stored_role("admin") is UserRole.ADMIN
-    assert _stored_role("developer") is UserRole.DEVELOPER
-    assert _stored_role("agent") is UserRole.AGENT
-    assert _stored_role("owner") is UserRole.AGENT
-    assert _stored_role("") is UserRole.AGENT
-    assert _stored_role("ADMIN") is UserRole.AGENT
+@pytest.mark.parametrize("legacy_role", ["admin", "developer", "agent", "owner", "", "ADMIN"])
+def test_stored_role_falls_back_to_agent_for_broken_values(legacy_role: str) -> None:
+    """Stash origin: A1 refuses legacy role fields instead of deriving authority from them."""
+    with pytest.raises((TypeError, AttributeError)):
+        _row(role=legacy_role)
 
 
-def test_stored_role_never_raises_for_a_database_row_value() -> None:
-    row = UserRow(
-        id=uuid4(),
-        email="broken-role@example.com",
-        hashed_password=_HELPER.hash(_STRONG),
-        is_active=True,
-        is_superuser=False,
-        is_verified=False,
-        auth_provider="local",
-        auth_provider_id=None,
-        role="superadmin",
-    )
+@pytest.mark.parametrize("field,value", [("role", "admin"), ("is_superuser", True)])
+def test_stored_role_never_raises_for_a_database_row_value(field: str, value: object) -> None:
+    """A1 replacement: the account row refuses a role or privilege flag outright."""
 
-    assert _stored_role(str(row.role)) is UserRole.AGENT
+    with pytest.raises((TypeError, AttributeError)):
+        _row(**{field: value})
 
 
 async def test_provision_account_uses_safe_manager_and_returns_projection() -> None:
@@ -226,9 +211,7 @@ async def test_provision_account_uses_safe_manager_and_returns_projection() -> N
     expected = UserAccount(
         id=created_id,
         email="unit@example.com",
-        role=UserRole.DEVELOPER,
         is_active=True,
-        is_superuser=False,
         is_verified=False,
     )
     seen: dict[str, object] = {}
@@ -249,14 +232,15 @@ async def test_provision_account_uses_safe_manager_and_returns_projection() -> N
     service.user_manager = _manager_ctx  # type: ignore[method-assign]
     service.get_account = AsyncMock(return_value=expected)  # type: ignore[method-assign]
 
-    from freesearch.routers.auth import UserCreate
-
-    result = await service.provision_account(
-        UserCreate(email="unit@example.com", password=_STRONG, role=UserRole.DEVELOPER)
-    )
+    result = await service.provision_account("unit@example.com", SecretStr(_STRONG))
 
     assert result == expected
     assert seen["safe"] is True
+    payload = seen["payload"]
+    # The created account asks for no privilege; the library's own flags stay off.
+    assert getattr(payload, "is_superuser", False) is False
+    assert not hasattr(payload, "role")
+    assert "role" not in result.model_dump()
     service.get_account.assert_awaited_once_with(created_id)  # type: ignore[attr-defined]
 
 
@@ -277,12 +261,8 @@ async def test_provision_account_maps_storage_failure() -> None:
     service.user_manager = _manager_ctx  # type: ignore[method-assign]
     service.get_account = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
-    from freesearch.routers.auth import UserCreate
-
     with pytest.raises(AuthStorageUnavailable):
-        await service.provision_account(
-            UserCreate(email="unit@example.com", password=_STRONG, role=UserRole.AGENT)
-        )
+        await service.provision_account("unit@example.com", SecretStr(_STRONG))
 
 
 async def test_provision_account_propagates_library_errors() -> None:
@@ -309,9 +289,5 @@ async def test_provision_account_propagates_library_errors() -> None:
         service = AuthService(auth_fixtures.test_settings(), repository=AsyncMock())
         service.user_manager = _make_ctx(failure)  # type: ignore[method-assign]
 
-        from freesearch.routers.auth import UserCreate
-
         with pytest.raises(type(failure)):
-            await service.provision_account(
-                UserCreate(email="unit@example.com", password=_STRONG, role=UserRole.AGENT)
-            )
+            await service.provision_account("unit@example.com", SecretStr(_STRONG))

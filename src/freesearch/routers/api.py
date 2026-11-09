@@ -1,23 +1,27 @@
 """REST API for the FreeSearch providers: FastAPI app with OpenAPI docs.
 
-Thin HTTP layer over the same composition root as the MCP server: adapters are
-built in configured priority order and every request is routed through
-:func:`freesearch.routing.select_route`. Responses are the provider-neutral
-contract models, so the OpenAPI schema at ``/docs`` documents them directly.
+Thin HTTP layer over the shared project execution service: every search and
+fetch resolves the verified project scope first, then runs the one
+transport-independent execution path (bindings, strict caps, telemetry)
+through :class:`freesearch.services.execution.ExecutionService`. Responses are
+the provider-neutral contract models, so the OpenAPI schema at ``/docs``
+documents them directly.
 
-Every search/fetch call also records read-only local telemetry (usage and
-health observations) through :mod:`freesearch.monitoring`, the loopback
-monitoring reads (``/stats``, ``/dashboard``) expose that telemetry, and the
-Stage 5 control plane (:mod:`freesearch.control`) serves the ``/api/v1``
-provider, secret, and routing-policy endpoints.
+Every search/fetch call records usage, health, and quota telemetry through
+:mod:`freesearch.services.monitoring`, the loopback monitoring reads
+(``/stats``, ``/dashboard``) expose that telemetry, and the control plane
+(:mod:`freesearch.routers.control`) serves the ``/api/v1`` provider
+configuration and routing-policy endpoints. Credential mutations use the
+credential-instance endpoints. Execution runs strictly through the project's
+enabled credentials.
 """
 
 import asyncio
+import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -26,80 +30,92 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.registry import adapter_factory, build_adapters, close_adapters
+from freesearch.adapters.registry import close_adapters
 from freesearch.configuration.config import get_settings, require_transport_port
-from freesearch.configuration.provider_config import ProviderConfigError
-from freesearch.infrastructure.auth_asgi import BearerAuthMiddleware
-from freesearch.infrastructure.cryptography import SecretCodec, load_or_create_master_key
+from freesearch.infrastructure.auth_asgi import (
+    OPERATION_ROUTES,
+    BearerAuthMiddleware,
+    current_verified_principal,
+)
 from freesearch.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
-    migrate_legacy_secrets_to_encrypted_db,
+    load_secret_codec,
 )
 from freesearch.infrastructure.http import create_async_client
 from freesearch.infrastructure.observability import (
     NO_OP_OBSERVABILITY,
     ObservabilityRuntime,
-    SpanHandle,
-    SpanKindName,
+    bind_execution_attribution,
+    bind_trace_capture,
     build_observability,
-    current_observability,
 )
-from freesearch.infrastructure.observability_asgi import ProviderTraceMiddleware
+from freesearch.infrastructure.observability_asgi import (
+    INGRESS_MONOTONIC_STATE_KEY,
+    IngressDeadlineMiddleware,
+    ProviderTraceMiddleware,
+)
 from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
-from freesearch.infrastructure.trace_payloads import (
-    _annotate_root,
-    _annotate_root_error,
-    _operation_name,
-    _request_attributes,
-    _search_results_payload,
-)
-from freesearch.mcp.server import _apply_parallel_seed
+from freesearch.infrastructure.secrets import AsyncSecretStore
 from freesearch.models.contracts import (
-    CostPreset,
-    FallbackPolicy,
     FetchRequest,
     FetchResponse,
-    ProviderHealth,
-    ProviderTraceItem,
-    QuotaSnapshot,
-    RoutingMode,
     SearchRequest,
     SearchResponse,
-    UsageEvent,
-    UsageOperation,
-    UsageStatus,
 )
-from freesearch.models.observability import (
-    TRACE_EVENT_PROVIDER_REQUEST,
-    TRACE_EVENT_PROVIDER_RESPONSE,
-    TraceAttribute,
-    TraceOperation,
-    TraceRootSpan,
-    TraceSpanName,
+from freesearch.models.execution_failures import (
+    ExecutionAuthorityUnavailable,
+    ExecutionQueueExpired,
+    ExecutionQueueSaturated,
 )
+from freesearch.models.observability import ExecutionAttribution, TraceRootSpan
+from freesearch.models.projects import PermissionAction, ProjectApiKeyPrincipal, ProjectContext
 from freesearch.models.provider_limits import (
     LimitDeniedError,
     LimitStoreUnavailable,
+    SyncResult,
 )
+from freesearch.models.quota_api import USDProviderLimits
 from freesearch.models.users import UserPrincipal
-from freesearch.persistence.database_migrations import upgrade_database
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.auth import register_auth_routes, require_control_reader
-from freesearch.routers.control import (
-    _build_with_resolved_secret,
-    _resolve_secret,
-    clear_config_cache,
-    effective_config_for_name,
-    initialize_provider_configs,
-    register_control_routes,
-    routing_policy,
+from freesearch.persistence.database_migrations import (
+    DatabaseResetRequired,
+    exit_if_database_reset_required,
+    upgrade_database,
 )
+from freesearch.persistence.storage import SQLiteRepository
+from freesearch.routers.api_keys import register_api_key_routes
+from freesearch.routers.auth import register_auth_routes, require_control_reader
+from freesearch.routers.bindings import register_binding_routes
+from freesearch.routers.control import register_control_routes
+from freesearch.routers.credentials import register_project_credential_read_routes
 from freesearch.routers.limits import limit_denial_response, register_limit_routes
 from freesearch.routers.observability import register_observability_routes
+from freesearch.routers.project_pools import router as project_pools_router
+from freesearch.routers.project_routing import register_project_routing_routes
 from freesearch.routers.projects import register_project_routes
+from freesearch.routers.retention import register_retention_routes
 from freesearch.routers.settings import register_settings_routes
-from freesearch.services.aggregation import reciprocal_rank_fusion
+from freesearch.routers.vault_keys import router as vault_keys_router
+from freesearch.routers.vault_pools import router as vault_pools_router
+from freesearch.services.api_keys import DEFAULT_USE_RECORDER, ApiKeyVerifier
+from freesearch.services.authorization import human_principal
+from freesearch.services.execution import (
+    ExecutionAllFailed,
+    ExecutionError,
+    ExecutionNotPermitted,
+    ExecutionRequestInvalid,
+    ExecutionService,
+    _terminal_out_of_credits,
+)
+from freesearch.services.execution_scope import (
+    ExecutionForbidden,
+    ExecutionProjectArchived,
+    ExecutionProjectRequired,
+    ExecutionScopeError,
+    ExecutionStorageUnavailable,
+    ExecutionUnauthenticated,
+    execution_attribution,
+    resolve_execution_boundary,
+)
 from freesearch.services.limits_sync import LimitSyncService
 from freesearch.services.monitoring import (
     MAX_RECENT_LIMIT,
@@ -107,15 +123,15 @@ from freesearch.services.monitoring import (
     StatsResponse,
     clear_quota_poll_cache,
     collect_stats,
-    effective_quota,
-    effective_quotas_batch,
-    refresh_quotas,
     resolve_database_path,
-    tracked_call,
 )
-from freesearch.services.provider_limits import ProviderLimitsService
-from freesearch.services.routing import RoutingError, select_route
+from freesearch.services.provider_runtime import (
+    clear_config_cache,
+    initialize_provider_configs,
+)
 from freesearch.services.users import AuthService
+
+logger = logging.getLogger(__name__)
 
 # Route templates that receive a root server span. Extending provider-querying
 # coverage means adding one entry here (plus its operation shape) — the
@@ -135,50 +151,10 @@ def _install_default_secret_store(app: FastAPI, repo: SQLiteRepository | None) -
 
     if not isinstance(repo, SQLiteRepository) or not app.state._uses_default_secret_store:
         return
-    settings = get_settings()
-    passphrase = (
-        settings.encryption_key.get_secret_value() if settings.encryption_key is not None else None
-    )
     app.state.secret_store = EncryptedDbSecretStore(
         repo,
-        SecretCodec(
-            load_or_create_master_key(
-                key_file=settings.encryption_key_file, passphrase_env=passphrase
-            )
-        ),
+        load_secret_codec(get_settings()),
     )
-
-
-async def _build_app_adapters(
-    repository: SQLiteRepository,
-    routes: list[ProviderAdapter],
-    client: httpx.AsyncClient | None,
-    store: AsyncSecretStore,
-) -> None:
-    """Build credential-ready adapters from app-scoped encrypted vault secrets.
-
-    An administrator OFF choice does not skip construction: each request
-    filters the candidate list, so a later ON choice needs no restart. A
-    missing Tavily key keeps the keyless public tier with its configured rail
-    and PAYGO values instead of dropping the provider.
-    """
-
-    await initialize_provider_configs(repository)
-    for provider in ProviderName:
-        key, _source = await _resolve_secret(provider, store)
-        if key is None and provider not in (ProviderName.KEENABLE, ProviderName.TAVILY):
-            continue
-        factory = adapter_factory(provider.value)
-        if factory is None:
-            continue
-        try:
-            if provider is ProviderName.TAVILY:
-                config = await effective_config_for_name(repository, provider.value)
-                routes.append(_build_with_resolved_secret(factory, client, key, config=config))
-            else:
-                routes.append(_build_with_resolved_secret(factory, client, key))
-        except Exception:
-            continue
 
 
 async def _verify_access_token(app: FastAPI, token: str) -> UserPrincipal | None:
@@ -197,6 +173,22 @@ async def _verify_refresh_token(app: FastAPI, token: str) -> UserPrincipal | Non
     if service is None:
         return None
     return await service.verify_refresh_token(token)
+
+
+def _execution_repository(app: FastAPI) -> SQLiteRepository | None:
+    """Return the repository that owns projects, keys and execution scope."""
+
+    repository: SQLiteRepository | None = app.state.repository
+    return repository
+
+
+async def _verify_api_key(app: FastAPI, token: str) -> ProjectApiKeyPrincipal | None:
+    """Verify one project API key on an execution route; nothing is cached."""
+
+    repository = _execution_repository(app)
+    if repository is None:
+        return None
+    return await ApiKeyVerifier(repository).verify(token)
 
 
 async def _reserve_registration(app: FastAPI, peer_address: str) -> int | None:
@@ -247,6 +239,15 @@ async def _teardown_app_lifespan(
     runtime: ObservabilityRuntime = app.state.observability
     app.state.observability = NO_OP_OBSERVABILITY
     await asyncio.to_thread(runtime.shutdown)
+    # The per-credential adapters close with their cache first, so no poll can
+    # race a closing database.
+    execution = app.state.execution
+    app.state.execution = None
+    if execution is not None:
+        await execution.aclose()
+    # Queued API key bookkeeping (use stamps, denial events) finishes before
+    # any repository closes, injected or owned.
+    await DEFAULT_USE_RECORDER.drain()
     # The schedule task stops and is awaited before the repository and
     # adapters close, so no poll can race a closing database.
     await _stop_limits(app, stop_limits)
@@ -306,46 +307,15 @@ def create_app(
             await _open_accounts(
                 auth, repo=repo, database=database, owns_auth_service=owns_auth_service
             )
-            if (
-                owns_repository
-                and repo is not None
-                and isinstance(app.state.secret_store, EncryptedDbSecretStore)
-            ):
-                await migrate_legacy_secrets_to_encrypted_db(
-                    repository=repo,
-                    encrypted_store=app.state.secret_store,
-                )
-            if adapters is None:
-                if isinstance(repo, SQLiteRepository):
-                    await _build_app_adapters(
-                        repo,
-                        routes,
-                        app.state._client,
-                        app.state.secret_store,
-                    )
-                else:
-                    routes.extend(build_adapters(app.state._client))
-            elif isinstance(repo, SQLiteRepository):
-                # Injected adapters with an owned database still need the
-                # canonical provider records before the first request.
-                await initialize_provider_configs(repo)
-            # Restore locally derived quota state before the first dashboard
-            # read.  This hydrates Keenable's rolling-hour keyless counter and
-            # applies any persisted Parallel monthly budget without requiring
-            # a search/fetch request to happen first.
-            await _apply_parallel_seed(routes, repo)
-            await _start_limits(app, repo, routes, stop_limits)
-            trace_database = _trace_database(repo, database)
-            if trace_database is not None and not isinstance(repo, SQLiteRepository):
-                # An injected-adapters composition can still point at a trace
-                # database; adopt it (upgrade + validate) before the exporter
-                # starts writing. A failure here is not fatal: the exporter
-                # reports a failed batch instead of failing user requests.
-                with suppress(Exception):
-                    await asyncio.to_thread(upgrade_database, trace_database)
-            app.state.observability = build_observability(
-                get_settings(),
-                database=trace_database,
+            await _compose_runtime_generation(
+                app,
+                repo,
+                routes=routes,
+                owns_adapters=adapters is None,
+                adapter_source=adapters,
+                owns_client=owns_client,
+                database=database,
+                stop_limits=stop_limits,
             )
             yield
         finally:
@@ -375,6 +345,7 @@ def create_app(
     app.state.limits = None
     app.state.limits_sync = None
     app.state._limits_task = None
+    app.state.execution = None
     app.state.auth_service = accounts
     app.state._owns_auth_service = owns_auth_service
     app.state.auth_browser_origins = browser_origins
@@ -393,11 +364,24 @@ def create_app(
         browser_origins=browser_origins,
         verify_token=lambda token: _verify_access_token(app, token),
         verify_refresh_token=lambda token: _verify_refresh_token(app, token),
+        verify_api_key=lambda token: _verify_api_key(app, token),
+        api_key_routes=OPERATION_ROUTES,
         registration_limit=lambda peer: _reserve_registration(app, peer),
     )
+    # Added last, so arrival time is stamped before authentication and body
+    # processing as well as before the handler's own deadline logic.
+    app.add_middleware(IngressDeadlineMiddleware)
     register_auth_routes(app)
     register_project_routes(app)
+    register_project_routing_routes(app)
+    register_api_key_routes(app)
     register_settings_routes(app)
+    register_retention_routes(app)
+    register_project_credential_read_routes(app)
+    app.include_router(vault_keys_router)
+    app.include_router(vault_pools_router)
+    app.include_router(project_pools_router)
+    register_binding_routes(app)
     register_control_routes(app)
     register_limit_routes(app)
     register_observability_routes(app)
@@ -414,37 +398,76 @@ def create_app(
 
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
+    @app.exception_handler(ExecutionQueueSaturated)
+    async def _queue_saturated(_: Any, exc: ExecutionQueueSaturated) -> JSONResponse:
+        """Queue saturation is its own bounded-capacity refusal."""
+
+        return JSONResponse(
+            status_code=429,
+            content={"detail": exc.detail},
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
+    @app.exception_handler(ExecutionQueueExpired)
+    async def _queue_expired(_: Any, exc: ExecutionQueueExpired) -> JSONResponse:
+        """An expired queue wait is retriable and distinct from rate denial."""
+
+        return JSONResponse(
+            status_code=429,
+            content={"detail": exc.detail},
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
+    @app.exception_handler(ExecutionAuthorityUnavailable)
+    async def _authority_unavailable(_: Any, exc: ExecutionAuthorityUnavailable) -> JSONResponse:
+        """No authority may dispatch a borrowed pool: fail closed, no bypass."""
+
+        return JSONResponse(status_code=503, content={"detail": exc.detail})
+
     # Module-level handler: a terminal Tavily out-of-Credits error is a 402;
     # every other ProviderOperationError re-raises into the standard 500 flow.
     app.add_exception_handler(ProviderOperationError, _provider_operation_error)
 
-    @app.post("/search", response_model=SearchResponse)
-    async def search(request: SearchRequest) -> SearchResponse:
-        """Search the web through the best available provider or all providers concurrently."""
-        observability = current_observability()
-        with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
-            if request.fanout or request.routing.mode is RoutingMode.FANOUT:
-                return await _dispatch_fanout_search(
-                    request,
-                    routes=app.state._routes,
-                    repository=app.state.repository,
-                    secret_store=app.state.secret_store,
-                    limits=app.state.limits,
-                )
-            return await _dispatch(
-                request,
-                UsageOperation.SEARCH,
-                lambda target, req: target.search(req),
-                routes=app.state._routes,
-                repository=app.state.repository,
-                secret_store=app.state.secret_store,
-                limits=app.state.limits,
-            )
+    async def search(request: SearchRequest, http_request: Request) -> SearchResponse:
+        """Search through the project's best available provider or all concurrently."""
 
-    @app.post("/fetch", response_model=FetchResponse)
-    async def fetch(request: FetchRequest) -> FetchResponse | JSONResponse:
-        """Fetch a URL's content through the best available provider."""
-        return await _execute_fetch(app, request)
+        deadline = _request_deadline(http_request)
+        try:
+            async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
+                attribution, context = await _resolve_execution(
+                    app, request.project_id, PermissionAction.SEARCH_EXECUTE
+                )
+                return await _search_route(
+                    app,
+                    request,
+                    attribution=attribution,
+                    context=context,
+                    deadline=deadline,
+                )
+        except TimeoutError as error:
+            raise _deadline_expired() from error
+
+    async def fetch(request: FetchRequest, http_request: Request) -> FetchResponse | JSONResponse:
+        """Fetch a URL's content through the project's best available provider."""
+
+        deadline = _request_deadline(http_request)
+        try:
+            async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
+                attribution, context = await _resolve_execution(
+                    app, request.project_id, PermissionAction.FETCH_EXECUTE
+                )
+                return await _fetch_route(
+                    app,
+                    request,
+                    attribution=attribution,
+                    context=context,
+                    deadline=deadline,
+                )
+        except TimeoutError as error:
+            raise _deadline_expired() from error
+
+    app.post("/search", response_model=SearchResponse)(search)
+    app.post("/fetch", response_model=FetchResponse)(fetch)
 
     @app.get("/stats", response_model=StatsResponse)
     async def stats(
@@ -477,12 +500,130 @@ def create_app(
             recent_usage=snapshot.recent_usage,
             latest_quota=snapshot.latest_quota,
             latest_health=snapshot.latest_health,
-            crd_usage_totals=snapshot.crd_usage_totals,
-            provider_limits=await _provider_limits(app.state.limits),
+            spend_totals=snapshot.spend_totals,
+            provider_limits=[
+                USDProviderLimits.model_validate(row)
+                for row in await _provider_limits(app.state.limits)
+            ],
             generated_at=datetime.now(UTC),
         )
 
     return app
+
+
+async def _search_route(
+    app: FastAPI,
+    request: SearchRequest,
+    *,
+    attribution: ExecutionAttribution,
+    context: ProjectContext,
+    deadline: float | None = None,
+) -> SearchResponse:
+    """REST search body: the shared execution service with one mapping layer."""
+
+    execution: ExecutionService | None = app.state.execution
+    if execution is None:
+        # A composition without the execution service cannot execute safely:
+        # fail closed before any binding or provider read happens.
+        raise HTTPException(status_code=503, detail="execution is temporarily unavailable")
+    try:
+        return await execution.search(
+            request, attribution=attribution, context=context, deadline=deadline
+        )
+    except ExecutionAllFailed as error:
+        raise HTTPException(status_code=500, detail=error.detail) from error
+    except ExecutionRequestInvalid as error:
+        raise HTTPException(status_code=422, detail=error.detail) from error
+    except ExecutionNotPermitted as error:
+        # Live authority was revoked after the boundary admitted the request.
+        raise HTTPException(status_code=403, detail="execution is not permitted") from error
+    except (ExecutionQueueSaturated, ExecutionQueueExpired) as error:
+        raise HTTPException(
+            status_code=429,
+            detail=error.detail,
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
+    except ExecutionError as error:
+        raise HTTPException(status_code=503, detail=error.detail) from error
+
+
+async def _fetch_route(
+    app: FastAPI,
+    request: FetchRequest,
+    *,
+    attribution: ExecutionAttribution,
+    context: ProjectContext,
+    deadline: float | None = None,
+) -> FetchResponse | JSONResponse:
+    """REST fetch body: the shared execution service with one mapping layer."""
+
+    execution: ExecutionService | None = app.state.execution
+    if execution is None:
+        raise HTTPException(status_code=503, detail="execution is temporarily unavailable")
+    try:
+        return await execution.fetch(
+            request, attribution=attribution, context=context, deadline=deadline
+        )
+    except ExecutionRequestInvalid as error:
+        raise HTTPException(status_code=422, detail=error.detail) from error
+    except ExecutionNotPermitted as error:
+        # Live authority was revoked after the boundary admitted the request.
+        raise HTTPException(status_code=403, detail="execution is not permitted") from error
+    except (ExecutionQueueSaturated, ExecutionQueueExpired) as error:
+        raise HTTPException(
+            status_code=429,
+            detail=error.detail,
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
+    except ExecutionError as error:
+        raise HTTPException(status_code=503, detail=error.detail) from error
+    except ProviderOperationError as exc:
+        return _fetch_provider_error_response(exc)
+
+
+async def _compose_runtime_generation(
+    app: FastAPI,
+    repo: SQLiteRepository | None,
+    *,
+    routes: list[ProviderAdapter],
+    owns_adapters: bool,
+    adapter_source: Sequence[ProviderAdapter] | None,
+    owns_client: bool,
+    database: str | Path | None,
+    stop_limits: asyncio.Event,
+) -> None:
+    """Build one runtime generation: adapters, limit rails, execution, tracing.
+
+    The compose step belongs to the lifespan: the quota state hydrates, the
+    limit schedule starts, and the shared execution service (repository,
+    encrypted credential slots, and limit rails) comes up before requests.
+    """
+
+    del adapter_source
+    if isinstance(repo, SQLiteRepository):
+        await initialize_provider_configs(repo)
+    await _start_limits(app, repo, routes, stop_limits)
+    # The execution service is the one path shared with MCP; it needs the
+    # repository, the encrypted store (credential slots), and the limit rails,
+    # so it starts after them and closes in teardown.
+    if isinstance(repo, SQLiteRepository) and isinstance(
+        app.state.secret_store, EncryptedDbSecretStore
+    ):
+        app.state.execution = ExecutionService(
+            repository=repo,
+            secret_store=app.state.secret_store,
+            client=app.state._client if owns_client else None,
+            limits=app.state.limits,
+        )
+    trace_database = _trace_database(repo, database)
+    if trace_database is not None and not isinstance(repo, SQLiteRepository):
+        # An injected-adapters composition can still point at a trace database;
+        # adopt it (upgrade + validate) before the exporter starts writing. A
+        # failure here is not fatal: the exporter reports a failed batch
+        # instead of failing user requests.
+        with suppress(Exception):
+            await _prepare_trace_database(trace_database)
+    app.state.observability = build_observability(get_settings(), database=trace_database)
 
 
 async def _start_limits(
@@ -499,19 +640,38 @@ async def _start_limits(
 
     if not isinstance(repo, SQLiteRepository):
         return
+    from freesearch.services.provider_limits import ProviderLimitsService
+
     limits = ProviderLimitsService(repo.limits)
     await limits.initialize()
-    adapter = next((route for route in routes if route.name == ProviderName.TAVILY.value), None)
-    if adapter is not None:
-        with suppress(Exception):
-            config = await effective_config_for_name(repo, ProviderName.TAVILY.value)
-            await limits.apply_tavily_config(config, auth_mode=adapter.limit_auth_mode)
-    keenable = next((route for route in routes if route.name == ProviderName.KEENABLE.value), None)
-    if keenable is not None:
-        limits.apply_keenable_auth_mode(keenable.limit_auth_mode)
+    apply_keenable_auth_mode(routes, limits)
     app.state.limits = limits
-    app.state.limits_sync = LimitSyncService(repo.limits, limits, lambda: routes)
-    app.state._limits_task = asyncio.create_task(app.state.limits_sync.run(stop))
+
+    async def sync_system_credentials(provider: str, now: datetime) -> SyncResult | None:
+        # The execution service starts after the limit rails, so the manual
+        # refresh resolves it per call; without one there is nothing to poll.
+        execution = getattr(app.state, "execution", None)
+        if execution is None:
+            return None
+        result: SyncResult = await execution.sync_system_limits(provider, now)
+        return result
+
+    app.state.limits_sync = LimitSyncService(
+        repo.limits, limits, lambda: routes, credential_sync=sync_system_credentials
+    )
+    # Credential-scoped observations are scheduled only by admitted execution
+    # and by the admin's manual refresh, which polls the provider's active
+    # vault credentials. There is no global vendor polling schedule.
+
+
+def apply_keenable_auth_mode(routes: Sequence[ProviderAdapter], limits: Any) -> None:
+    """Project Keenable's keyless-or-keyed rail choice into the limit service."""
+
+    from freesearch.infrastructure.secrets import ProviderName as _ProviderName
+
+    adapter = next((route for route in routes if route.name == _ProviderName.KEENABLE.value), None)
+    if adapter is not None:
+        limits.apply_keenable_auth_mode(adapter.limit_auth_mode)
 
 
 async def _stop_limits(app: FastAPI, stop: asyncio.Event) -> None:
@@ -528,62 +688,32 @@ async def _stop_limits(app: FastAPI, stop: asyncio.Event) -> None:
     app.state.limits_sync = None
 
 
-async def _provider_limits(
-    limits: ProviderLimitsService | None,
-) -> list[Any]:
+async def _provider_limits(limits: Any) -> list[Any]:
     """Read every provider card payload best effort; a failure yields none."""
 
     if limits is None:
         return []
-    with suppress(Exception):
-        return await limits.dashboard_views()
-    return []
+    try:
+        cards = await limits.dashboard_views()
+    except Exception:
+        return []
+    return list(cards)
 
 
-def _require_single_url(request: FetchRequest) -> None:
-    """Reject an executable batch fetch before admission and vendor I/O."""
+def _clamped_limit(limit: int) -> int:
+    """Clamp a requested recent-usage limit into ``[1, MAX_RECENT_LIMIT]``."""
 
-    if request.url_count != 1:
-        raise HTTPException(
-            status_code=422,
-            detail="this release executes exactly one URL per fetch request",
-        )
+    return min(max(limit, 1), MAX_RECENT_LIMIT)
 
 
-async def _order_routes(
-    routes: Sequence[ProviderAdapter],
-    repository: SQLiteRepository | None,
-    preset: CostPreset,
-    operation: UsageOperation,
-) -> list[ProviderAdapter]:
-    """Filter inaccessible adapters and sort by persisted priority.
+async def _prepare_trace_database(trace_database: Path) -> None:
+    """Upgrade the trace database, logging the reset instructions when it is refused."""
 
-    A candidate stays only when ``config.allows(operation)`` holds, so the
-    admin mask, the system support mask, and the global gate all apply before
-    any provider call. The sort is stable: adapters with equal persisted
-    priority keep their startup order (``build_adapters`` already emits the
-    configured ``(priority, name)`` order, and injected routes keep the
-    caller's order), so the pinned single-candidate routing contracts are
-    preserved.
-    """
-
-    eligible: list[tuple[int, ProviderAdapter]] = []
-    for adapter in routes:
-        config = await effective_config_for_name(repository, adapter.name, strict=True)
-        if config.allows(operation):
-            eligible.append((config.priority, adapter))
-    ordered = [adapter for _, adapter in sorted(eligible, key=lambda item: item[0])]
-    return _pin_free_first(ordered, preset)
-
-
-def _pin_free_first(ordered: list[ProviderAdapter], preset: CostPreset) -> list[ProviderAdapter]:
-    """Pin Keenable to the candidate front when the preset is ``free_first``."""
-
-    if preset is not CostPreset.FREE_FIRST:
-        return ordered
-    pinned = [adapter for adapter in ordered if adapter.name == "keenable"]
-    rest = [adapter for adapter in ordered if adapter.name != "keenable"]
-    return pinned + rest
+    try:
+        await asyncio.to_thread(upgrade_database, trace_database)
+    except DatabaseResetRequired as error:
+        logger.warning("trace database refused: %s", error)
+        raise
 
 
 def _trace_database(repo: SQLiteRepository | None, database: str | Path | None) -> Path | None:
@@ -602,342 +732,116 @@ def _trace_database(repo: SQLiteRepository | None, database: str | Path | None) 
     return resolve_database_path(database)
 
 
-def _provider_request_event(request: SearchRequest | FetchRequest) -> dict[str, Any]:
-    """Outbound provider input event: content yes, credentials/headers never."""
-
-    if isinstance(request, SearchRequest):
-        return {
-            "query": request.query,
-            "limit": request.limit,
-            "mode": request.mode,
-            "language": request.language,
-            "country_code": request.country_code,
-            "domains": list(request.domains),
-        }
-    return {
-        "url": str(request.url),
-        "max_chars": request.max_chars,
-        "pdf_pages": request.pdf_pages,
-        "json_extract": request.json_extract,
-        "enhanced": request.enhanced,
-    }
+_DEADLINE_HEADER = "x-freesearch-deadline-ms"
 
 
-def _provider_response_event(response: SearchResponse | FetchResponse) -> dict[str, Any]:
-    """Normalized provider response event (bounded; the root holds full output)."""
+def _deadline_expired() -> HTTPException:
+    """Return the retriable REST refusal for an elapsed logical deadline."""
 
-    if isinstance(response, SearchResponse):
-        return {
-            "result_count": len(response.results),
-            "results": [item.model_dump() for item in _search_results_payload(response)],
-        }
-    document = response.document
-    return {
-        "result_count": 1,
-        "url": str(document.url),
-        "title": document.title,
-        "content_length": len(document.content),
-    }
+    return HTTPException(
+        status_code=429,
+        detail="the execution request deadline expired before dispatch",
+        headers={"Retry-After": "1"},
+    )
 
 
-def _result_count(response: SearchResponse | FetchResponse) -> int:
-    """Return how many results the caller received."""
+def _request_deadline(request: Request) -> float:
+    """Translate the ingress instant and forwarded deadline to monotonic time.
 
-    return len(response.results) if isinstance(response, SearchResponse) else 1
-
-
-def _annotate_root_request_identity(
-    observability: ObservabilityRuntime,
-    request: SearchRequest | FetchRequest,
-    provider: ProviderAdapter,
-) -> None:
-    """Keep the request identity on a failed root span.
-
-    The success path projects the same fields from the response. A failure
-    never reaches that projection, so the Activity row would lose its title
-    and the Provider column would show a dash.
+    The server's configured logical request timeout is the outer bound and it
+    starts at arrival, before authentication and body processing. A client
+    deadline can only shorten it. An absent, malformed, non-positive, or
+    oversized header therefore falls back to the server bound instead of
+    extending the request or raising ``OverflowError``. A deadline already in
+    the past maps to "now", so queued work expires before any provider attempt.
     """
 
-    attributes: dict[str, object] = {
-        TraceAttribute.OPERATION: _operation_name(request).value,
-        TraceAttribute.PROVIDER: provider.name,
-    }
-    if isinstance(request, SearchRequest):
-        attributes[TraceAttribute.REQUEST_QUERY] = request.query
-    observability.annotate_root(attributes)
-
-
-_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
-
-
-def _schedule_quota_refresh(
-    repository: SQLiteRepository | None,
-    routes: Sequence[ProviderAdapter],
-    secret_store: AsyncSecretStore | None,
-) -> None:
-    """Schedule asynchronous quota polling out-of-band without blocking the request hot path."""
-
-    if repository is None or not routes:
-        return
-    try:
-        loop = asyncio.get_running_loop()
-        task = loop.create_task(refresh_quotas(repository, routes, secret_store=secret_store))
-        _BACKGROUND_TASKS.add(task)
-        task.add_done_callback(_BACKGROUND_TASKS.discard)
-    except RuntimeError:
-        pass
-
-
-async def _routing_state(
-    repository: SQLiteRepository | None,
-    routes: Sequence[ProviderAdapter],
-    secret_store: AsyncSecretStore,
-) -> tuple[dict[str, ProviderHealth], dict[str, QuotaSnapshot]]:
-    """Refresh bounded quota state in background and collect health/quota maps for routing."""
-
-    if repository is None or not routes:
-        return {}, {}
-    _schedule_quota_refresh(repository, routes, secret_store)
-    provider_names = [adapter.name for adapter in routes]
-    health: dict[str, ProviderHealth] = {}
-    try:
-        if hasattr(repository, "latest_health_batch"):
-            health = await repository.latest_health_batch(provider_names)
-        else:
-            for adapter in routes:
-                observation = await repository.latest_health(adapter.name)
-                if observation is not None:
-                    health[adapter.name] = observation
-    except Exception:
-        pass
-
-    quotas: dict[str, QuotaSnapshot] = {}
-    try:
-        if hasattr(repository, "latest_quota_batch"):
-            quotas = await effective_quotas_batch(repository, provider_names)
-        else:
-            for adapter in routes:
-                snapshot = await effective_quota(repository, adapter.name)
-                if snapshot is not None:
-                    quotas[adapter.name] = snapshot
-    except Exception:
-        pass
-
-    return health, quotas
-
-
-def _usage_operation(request: SearchRequest | FetchRequest) -> UsageOperation:
-    """Return the usage operation of a provider-querying request."""
-
-    return UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
-
-
-async def _plan_route(
-    request: SearchRequest | FetchRequest,
-    routes: Sequence[ProviderAdapter],
-    repository: SQLiteRepository | None,
-    secret_store: AsyncSecretStore,
-) -> tuple[ProviderAdapter, ...]:
-    """Return the ordered adapters to attempt for ``request``.
-
-    The in-memory routes are filtered by effective access, sorted by persisted
-    priority, pinned for the cost preset, truncated by the fallback policy,
-    and finally ranked by ``select_route``. A single candidate path stays
-    identical to the pre-control routing contract.
-    """
-
-    if not routes:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "no provider is configured: store a key in the encrypted vault "
-                "(PUT /api/v1/providers/{id}/secret)"
-            ),
-        )
-
-    # Fast-path for explicit provider requirement
-    preference = request.routing
-    if preference.mode is RoutingMode.REQUIRE and preference.providers:
-        required_names = set(preference.providers)
-        matching = [adapter for adapter in routes if adapter.name in required_names]
-        if not matching:
-            raise HTTPException(
-                status_code=503,
-                detail=f"no required provider is eligible: {', '.join(preference.providers)}",
-            )
-        routes = tuple(matching)
-
-    operation = _usage_operation(request)
-    policy = await routing_policy(repository)
-    try:
-        ordered = await _order_routes(
-            routes, repository, policy.cost_optimization_preset, operation
-        )
-    except ProviderConfigError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    if policy.fallback_policy is FallbackPolicy.FIRST_ONLY:
-        ordered = ordered[:1]
-    health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
-    try:
-        candidates = select_route(request, ordered, health_snapshots, quota_snapshots)
-    except RoutingError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if not candidates:
-        raise HTTPException(
-            status_code=503,
-            detail=f"no eligible provider is available for {operation.value}",
-        )
-    # A per-request allow_fallback=false already truncates inside select_route;
-    # the global first_only policy truncates above.
-    chained = request.routing.allow_fallback and policy.fallback_policy is FallbackPolicy.CHAINED
-    if chained:
-        return tuple(candidate.adapter for candidate in candidates)
-    return (candidates[0].adapter,)
-
-
-async def _execute_fetch(app: FastAPI, request: FetchRequest) -> FetchResponse | JSONResponse:
-    """Execute a fetch request through route planning, dispatch, and graceful error handling."""
-
-    observability = current_observability()
-    with observability.span(TraceSpanName.BACKEND, attributes=_request_attributes(request)):
-        _require_single_url(request)
+    settings = get_settings()
+    server_ms = max(1, int(settings.execution_request_timeout_seconds * 1000))
+    ingress = getattr(request.state, INGRESS_MONOTONIC_STATE_KEY, None)
+    elapsed_ms = (
+        0 if not isinstance(ingress, (int, float)) else int((time.monotonic() - ingress) * 1000)
+    )
+    remaining_ms = max(0, server_ms - elapsed_ms)
+    raw = request.headers.get(_DEADLINE_HEADER)
+    if raw is not None and len(raw) <= 32:
         try:
-            return await _dispatch(
-                request,
-                UsageOperation.FETCH,
-                lambda target, req: target.fetch(req),
-                routes=app.state._routes,
-                repository=app.state.repository,
-                secret_store=app.state.secret_store,
-                limits=app.state.limits,
-            )
-        except ProviderOperationError as exc:
-            return _fetch_provider_error_response(exc)
+            deadline_ms = int(raw)
+        except (TypeError, ValueError):
+            deadline_ms = 0
+        if deadline_ms > 0:
+            remaining_ms = min(remaining_ms, deadline_ms - int(time.time() * 1000))
+    return time.monotonic() + max(0.0, remaining_ms / 1000.0)
 
 
-async def _dispatch[
-    RequestT: (SearchRequest, FetchRequest),
-    ResponseT: (
-        SearchResponse,
-        FetchResponse,
-    ),
-](
-    request: RequestT,
-    operation: UsageOperation,
-    invoke: Callable[[ProviderAdapter, RequestT], Awaitable[ResponseT]],
-    *,
-    routes: Sequence[ProviderAdapter],
-    repository: SQLiteRepository | None,
-    secret_store: AsyncSecretStore,
-    limits: ProviderLimitsService | None = None,
-) -> ResponseT:
-    """Run the routed adapter call for the best policy-ordered candidate.
+def _execution_scope_http_error(error: ExecutionScopeError) -> HTTPException:
+    """Map one scope failure onto its generic REST status without the reason."""
 
-    The candidate ordering applies the persisted enablement, priority, cost
-    preset, and fallback policy; adapter failures propagate unchanged so the
-    REST 500 / MCP ToolError contracts are preserved (no cross-adapter retry
-    on failure, pinned by the offline BDD failure scenario).
+    if isinstance(error, ExecutionUnauthenticated):
+        return HTTPException(
+            status_code=401,
+            detail="not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if isinstance(error, ExecutionStorageUnavailable):
+        return HTTPException(status_code=503, detail="execution is temporarily unavailable")
+    if isinstance(error, ExecutionProjectRequired):
+        return HTTPException(status_code=422, detail="project_id is required")
+    if isinstance(error, ExecutionProjectArchived):
+        return HTTPException(status_code=409, detail="project is archived")
+    if isinstance(error, ExecutionForbidden):
+        return HTTPException(status_code=403, detail="execution is not permitted")
+    return HTTPException(status_code=404, detail="project is unavailable")
 
-    The request shape reaches the common execution seam as an additive keyword,
-    so the local funds and rate gate can price the request after the unchanged
-    route selection.
 
-    Trace shape: ``freesearch.route`` (planning), ``freesearch.provider``
-    (one client span per attempted provider, with request/response events), and
-    ``freesearch.results`` (response projection). With a single candidate there
-    is nothing to fuse, so the results stage is the projection and root summary
-    annotation itself.
+async def _resolve_execution(
+    app: FastAPI, project_id: Any, action: PermissionAction
+) -> tuple[ExecutionAttribution, ProjectContext]:
+    """Resolve the request's execution scope and bind its trusted telemetry.
+
+    This is the first step of every provider-executing route — before route
+    planning, admission, or provider I/O — so a rejected request leaves no
+    usage rows and no attributed trace spans. A human session executes through
+    its live project membership; a project API key executes only in its own
+    project with its own scopes. The project trace policy is resolved here too,
+    once, so every span of the request carries the same immutable capture and
+    sampling decision. The resolved context (with the guard-verified
+    principal) flows to the execution service, which re-authorizes it against
+    live state before any credential is resolved.
     """
 
-    observability = current_observability()
-    with observability.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
-        attempts = await _plan_route(request, routes, repository, secret_store)
-
-    last_error: ProviderOperationError | None = None
-    for attempt_idx, provider in enumerate(attempts):
-        is_last = attempt_idx == len(attempts) - 1
-        with observability.span(
-            TraceSpanName.PROVIDER,
-            kind=SpanKindName.CLIENT,
-            attributes={
-                TraceAttribute.OPERATION: _operation_name(request).value,
-                TraceAttribute.PROVIDER: provider.name,
-                TraceAttribute.ROUTING_CANDIDATE_COUNT: len(attempts),
-            },
-        ) as provider_span:
-            provider_span.add_event(
-                TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
-            )
-            try:
-                response = await tracked_call(
-                    repository,
-                    provider,
-                    lambda target: invoke(target, request),
-                    operation=operation,
-                    request=request,
-                    limits=limits,
-                )
-            except ProviderOperationError as error:
-                provider_span.record_exception(error)
-                last_error = error
-                if is_last:
-                    _annotate_root_error(observability, error)
-                    _annotate_root_request_identity(observability, request, provider)
-                    raise
-                continue
-            except Exception as error:
-                _annotate_root_error(observability, error)
-                _annotate_root_request_identity(observability, request, provider)
-                raise
-            provider_span.add_event(
-                TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(response)
-            )
-        with observability.span(
-            TraceSpanName.RESULTS,
-            attributes={TraceAttribute.OPERATION: _operation_name(request).value},
-        ) as results_span:
-            results_span.set_attributes(
-                {TraceAttribute.RESPONSE_RESULT_COUNT: _result_count(response)}
-            )
-            _annotate_root(observability, request, response)
-        return response
-
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError("route planning produced zero attempts")
+    verified = current_verified_principal()
+    principal = human_principal(verified) if isinstance(verified, UserPrincipal) else verified
+    repository = _execution_repository(app)
+    try:
+        boundary = await resolve_execution_boundary(
+            repository,
+            principal,
+            project_id=project_id,
+            action=action,
+        )
+    except ExecutionScopeError as error:
+        raise _execution_scope_http_error(error) from error
+    attribution = execution_attribution(boundary.context)
+    bind_execution_attribution(attribution)
+    bind_trace_capture(boundary.trace_policy)
+    return attribution, boundary.context
 
 
-def _terminal_quota_402(exc: BaseException) -> ProviderOperationError | None:
-    """Return the terminal provider out-of-credits error, else ``None``.
-
-    The vendor 402 normalizes to ``quota_exhausted`` with ``status_code=402``
-    and ``retryable=False``; only that exact shape is a terminal transport,
-    never classified as rate limiting or a generic failure.
-    """
-
-    if not isinstance(exc, ProviderOperationError):
-        return None
-    if (
-        exc.error.provider in ("tavily", "firecrawl", "exa")
-        and exc.error.code == "quota_exhausted"
-        and exc.error.status_code == 402
-    ):
-        return exc
-    return None
-
-
-# Retain alias for backwards compatibility
-_terminal_tavily_402 = _terminal_quota_402
-
-
-async def _provider_operation_error(request: Request, exc: Exception) -> Response:
+def _provider_operation_error(request: Request, exc: Exception) -> Response:
     """Transport one :class:`ProviderOperationError` through its REST contract.
 
-    A terminal provider out-of-credits error (e.g. Tavily, Firecrawl) is an HTTP 402
-    with the safe message and named provider. Every other error re-raises, so
-    FastAPI's standard 500 flow stays untouched for all providers.
+    A terminal provider out-of-credits error (e.g. Tavily, Firecrawl) is an HTTP
+    402, and a normalized upstream rate error is a 429 carrying its parsed
+    Retry-After delay. Every other provider error re-raises into the standard
+    500 flow.
     """
 
+    del request
+    if isinstance(exc, ProviderOperationError):
+        rate = _provider_rate_response(exc)
+        if rate is not None:
+            return rate
     return _provider_operation_error_response(exc)
 
 
@@ -949,13 +853,13 @@ def _provider_operation_error_response(exc: Exception) -> JSONResponse:
     FastAPI's standard 500 flow stays untouched for all providers.
     """
 
-    terminal = _terminal_quota_402(exc)
-    if terminal is None:
-        raise exc
-    return JSONResponse(
-        status_code=402,
-        content={"detail": terminal.error.message, "provider": terminal.error.provider},
-    )
+    terminal = _terminal_out_of_credits(exc)
+    if terminal is not None:
+        return JSONResponse(
+            status_code=402,
+            content={"detail": terminal.error.message, "provider": terminal.error.provider},
+        )
+    raise exc
 
 
 def _fetch_provider_error_response(exc: ProviderOperationError) -> JSONResponse:
@@ -967,22 +871,15 @@ def _fetch_provider_error_response(exc: ProviderOperationError) -> JSONResponse:
     HTTP 502 Bad Gateway with structured diagnostics.
     """
 
-    terminal = _terminal_quota_402(exc)
+    terminal = _terminal_out_of_credits(exc)
     if terminal is not None:
         return JSONResponse(
             status_code=402,
             content={"detail": terminal.error.message, "provider": terminal.error.provider},
         )
-    if exc.error.status_code == 429 or exc.error.code == "rate_limited":
-        return JSONResponse(
-            status_code=429,
-            content={
-                "detail": exc.error.message,
-                "provider": exc.error.provider,
-                "code": exc.error.code,
-                "status_code": 429,
-            },
-        )
+    rate = _provider_rate_response(exc)
+    if rate is not None:
+        return rate
     return JSONResponse(
         status_code=502,
         content={
@@ -994,290 +891,40 @@ def _fetch_provider_error_response(exc: ProviderOperationError) -> JSONResponse:
     )
 
 
-def _fanout_failure_outcome(
-    adapter_name: str,
-    exc: Exception,
-    elapsed_ms: int,
-    *,
-    provider_span: SpanHandle | None = None,
-) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
-    """Return the handled-failure outcome tuple for one fanout candidate.
+def _provider_rate_response(exc: ProviderOperationError) -> JSONResponse | None:
+    """Project one normalized upstream rate error into a safe HTTP 429.
 
-    A vendor 429 keeps its distinctive outcome status; every other handled
-    failure stays ``failed``. The tuple shape matches the pre-terminal
-    ``asyncio.gather`` contract. A provider span in scope records the failure
-    observably first, without ever failing the outcome path.
+    The delay comes only from the adapter's parsed numeric Retry-After detail;
+    an absent or malformed value keeps the response retriable without inventing
+    a delay. Provider message content is not reflected beyond the normalized
+    error object already used for local denials.
     """
 
-    with suppress(Exception):
-        if provider_span is not None:
-            provider_span.record_exception(exc)
-    status = "failed"
-    if getattr(getattr(exc, "error", None), "status_code", None) == 429:
-        status = "rate_limited"
-    return (adapter_name, None, elapsed_ms, status, 0, str(exc))
-
-
-def _fanout_waterfall(
-    outcomes: Sequence[tuple[str, SearchResponse | None, int, str, int, str | None]],
-) -> tuple[list[ProviderTraceItem], list[tuple[str, SearchResponse]], list[str]]:
-    """Split handled fanout outcome tuples into the fusion waterfall inputs.
-
-    The splitter is a pure helper of :func:`_dispatch_fanout_search`; the
-    guarded ``_call`` closure keeps the fanout invariant branches, and the
-    project cyclomatic budget needs this loop body out of the dispatch
-    function.
-    """
-
-    waterfall: list[ProviderTraceItem] = []
-    successful_results: list[tuple[str, SearchResponse]] = []
-    errors: list[str] = []
-    for name, res, elapsed, status, count, err in outcomes:
-        waterfall.append(
-            ProviderTraceItem(
-                provider=name,
-                latency_ms=elapsed,
-                status=status,
-                results_count=count,
-                cost_credits=0.0,
-                error=err,
-            )
-        )
-        if res is not None:
-            successful_results.append((name, res))
-        elif err is not None:
-            errors.append(err)
-    return waterfall, successful_results, errors
-
-
-async def _fanout_outcomes[T](tasks: list[asyncio.Task[T]]) -> list[T]:
-    """Await fanout tasks in candidate order, honoring a terminal 402.
-
-    Tasks either complete with an outcome tuple or raise the terminal Tavily
-    402 (the surrounding ``_call`` returns the tuple form for every other
-    failure, so local admission denials keep the former gather semantics).
-    The first exception therefore is the terminal error: its re-raise cancels
-    the pending tasks and awaits their settlement before propagation, so no
-    provider call races the closing request. Without a terminal, outcomes
-    come back in the original candidate order — the same order
-    ``asyncio.gather`` produced before.
-    """
-
-    if not tasks:
-        return []
-    task_index = {task: index for index, task in enumerate(tasks)}
-    outcomes_by_index: dict[int, T] = {}
-    pending: set[asyncio.Task[T]] = set(tasks)
-    terminal: BaseException | None = None
-    while pending and terminal is None:
-        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_EXCEPTION)
-        for task in done:
-            if task.cancelled():
-                continue
-            error = task.exception()
-            if error is None:
-                outcomes_by_index[task_index[task]] = task.result()
-            elif terminal is None:
-                # ``_call`` only ever re-raises the terminal Tavily 402; every
-                # other failure already took the outcome-tuple form.
-                terminal = error
-    if terminal is not None:
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        raise terminal
-    return [outcomes_by_index[index] for index in range(len(tasks))]
-
-
-async def _dispatch_fanout_search(
-    request: SearchRequest,
-    *,
-    routes: Sequence[ProviderAdapter],
-    repository: SQLiteRepository | None,
-    secret_store: AsyncSecretStore,
-    limits: ProviderLimitsService | None = None,
-) -> SearchResponse:
-    """Execute search across all eligible configured providers concurrently and fuse results.
-
-    Trace shape: one root with a ``freesearch.route`` planning span, one
-    concurrent ``freesearch.provider`` client span per candidate, and a single
-    ``freesearch.results`` span around the RRF assembly — never one trace per
-    provider. A handled provider failure marks that child ERROR and the root
-    ``partial`` (the caller still received a response).
-
-    A terminal Tavily out-of-Credits 402 is preserved even when another
-    provider succeeds: the remaining fanout tasks are cancelled and awaited,
-    then the error propagates to the request-level 402 transport instead of a
-    fused response.
-    """
-    if not routes:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "no provider is configured: store a key in the encrypted vault "
-                "(PUT /api/v1/providers/{id}/secret)"
-            ),
-        )
-
-    fanout_routes = routes
-    if request.routing.providers:
-        required_names = set(request.routing.providers)
-        matching = [adapter for adapter in routes if adapter.name in required_names]
-        if not matching:
-            raise HTTPException(
-                status_code=503,
-                detail="no eligible provider is available for fanout",
-            )
-        fanout_routes = matching
-
-    observability = current_observability()
-    with observability.span(TraceSpanName.ROUTE, attributes=_request_attributes(request)):
-        policy = await routing_policy(repository)
-        try:
-            ordered = await _order_routes(
-                fanout_routes, repository, policy.cost_optimization_preset, UsageOperation.SEARCH
-            )
-        except ProviderConfigError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
-        health_snapshots, quota_snapshots = await _routing_state(repository, ordered, secret_store)
-        fanout_request = request.model_copy(
-            update={"routing": request.routing.model_copy(update={"mode": RoutingMode.FANOUT})}
-        )
-        try:
-            candidates = select_route(fanout_request, ordered, health_snapshots, quota_snapshots)
-        except RoutingError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-        if not candidates:
-            raise HTTPException(
-                status_code=503, detail="no eligible provider is available for search"
-            )
-
-    overall_start = time.perf_counter()
-
-    async def _call(
-        candidate_adapter: ProviderAdapter,
-    ) -> tuple[str, SearchResponse | None, int, str, int, str | None]:
-        call_start = time.perf_counter()
-        provider_span: SpanHandle | None = None
-        try:
-            with observability.span(
-                TraceSpanName.PROVIDER,
-                kind=SpanKindName.CLIENT,
-                attributes={
-                    TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
-                    TraceAttribute.PROVIDER: candidate_adapter.name,
-                    TraceAttribute.ROUTING_MODE: RoutingMode.FANOUT.value,
-                    TraceAttribute.ROUTING_CANDIDATE_COUNT: len(candidates),
-                },
-            ) as provider_span:
-                provider_span.add_event(
-                    TRACE_EVENT_PROVIDER_REQUEST, attributes=_provider_request_event(request)
-                )
-                try:
-                    res = await tracked_call(
-                        repository,
-                        candidate_adapter,
-                        lambda target: target.search(request),
-                        operation=UsageOperation.SEARCH,
-                        request=request,
-                        limits=limits,
-                    )
-                except Exception as exc:
-                    elapsed = int((time.perf_counter() - call_start) * 1000)
-                    if _terminal_quota_402(exc) is not None:
-                        # The terminal out-of-Credits error is the transport: the
-                        # span context records it once as it re-raises (the same
-                        # shape as the single-path provider failure), and the
-                        # request-level 402 handler turns it into the body.
-                        raise
-                    provider_span.record_exception(exc)
-                    return _fanout_failure_outcome(candidate_adapter.name, exc, elapsed)
-                provider_span.add_event(
-                    TRACE_EVENT_PROVIDER_RESPONSE, attributes=_provider_response_event(res)
-                )
-                elapsed = int((time.perf_counter() - call_start) * 1000)
-                return (candidate_adapter.name, res, elapsed, "success", len(res.results), None)
-        except Exception as exc:
-            # The guarded fanout invariant (see _fanout_outcomes): only the
-            # terminal Tavily 402 escapes _call. Machinery failures outside the
-            # tracked_call try (span bookkeeping, event serialization) convert
-            # to the handled outcome tuple, never to a raised task error; the
-            # outcome path records the exception on its provider span.
-            # CancelledError is a BaseException, so a cancelled task still
-            # surfaces as cancelled and _fanout_outcomes skips it.
-            if _terminal_quota_402(exc) is not None:
-                raise
-            return _fanout_failure_outcome(
-                candidate_adapter.name,
-                exc,
-                int((time.perf_counter() - call_start) * 1000),
-                provider_span=provider_span,
-            )
-
-    tasks = [asyncio.ensure_future(_call(c.adapter)) for c in candidates]
-    outcomes = await _fanout_outcomes(tasks)
-
-    waterfall, successful_results, errors = _fanout_waterfall(outcomes)
-
-    if not successful_results:
-        first_err = errors[0] if errors else "all providers failed"
-        failure = HTTPException(
-            status_code=500,
-            detail=f"all search providers failed: {first_err}",
-        )
-        _annotate_root_error(observability, failure)
-        raise failure
-
-    with observability.span(
-        TraceSpanName.RESULTS,
-        attributes={
-            TraceAttribute.OPERATION: TraceOperation.SEARCH.value,
-            TraceAttribute.ROUTING_CANDIDATE_COUNT: len(candidates),
+    if exc.error.status_code != 429 and exc.error.code != "rate_limited":
+        return None
+    retry_after = _provider_retry_after_seconds(exc)
+    headers = None if retry_after is None else {"Retry-After": str(retry_after)}
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": exc.error.message,
+            "provider": exc.error.provider,
+            "code": exc.error.code,
+            "status_code": 429,
         },
-    ) as results_span:
-        fused_results = reciprocal_rank_fusion(
-            successful_results,
-            limit=request.limit,
-        )
-        participating = [name for name, _ in successful_results]
-        total_elapsed_ms = int((time.perf_counter() - overall_start) * 1000)
-
-        if repository is not None:
-            with suppress(Exception):
-                await repository.record_usage(
-                    UsageEvent(
-                        provider="aggregated",
-                        operation=UsageOperation.SEARCH,
-                        units=Decimal("0"),
-                        observed_at=datetime.now(UTC),
-                        latency_ms=total_elapsed_ms,
-                        status=UsageStatus.SUCCESS,
-                        metadata={
-                            "participating_providers": participating,
-                            "fused_count": len(fused_results),
-                        },
-                    )
-                )
-
-        response = SearchResponse(
-            query=request.query,
-            results=fused_results,
-            provider="aggregated" if len(successful_results) > 1 else successful_results[0][0],
-            total_results=len(fused_results),
-            participating_providers=participating,
-            waterfall=waterfall,
-        )
-        results_span.set_attributes({TraceAttribute.RESPONSE_RESULT_COUNT: len(fused_results)})
-        _annotate_root(observability, request, response)
-    return response
+        headers=headers,
+    )
 
 
-def _clamped_limit(limit: int) -> int:
-    """Clamp a requested recent-usage limit into ``[1, MAX_RECENT_LIMIT]``."""
+def _provider_retry_after_seconds(exc: ProviderOperationError) -> int | None:
+    """Return a positive whole-second upstream Retry-After delay, else ``None``."""
 
-    return min(max(limit, 1), MAX_RECENT_LIMIT)
+    details = exc.error.details if isinstance(exc.error.details, dict) else {}
+    raw = details.get("retry_after_seconds")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = int(raw)
+    return value if value >= 1 else None
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -1316,6 +963,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.port is not None:
         overrides["api_port"] = args.port
     effective = settings.model_copy(update=overrides) if overrides else settings
+    exit_if_database_reset_required(resolve_database_path(None))
 
     uvicorn.run(
         create_app(),

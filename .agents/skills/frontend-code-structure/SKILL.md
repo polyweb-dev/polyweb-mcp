@@ -1,6 +1,6 @@
 ---
 name: frontend-code-structure
-description: "Guidelines and conventions for frontend module boundaries, feature/domain separation, component extraction, state management, layer conventions, and test organization. Use when you create UI components, refactor React code, structure features, or audit frontend boundaries."
+description: Use when you create UI components, refactor React code, structure features, or audit frontend boundaries. Guidelines and conventions for frontend module boundaries, feature/domain separation, component extraction, state management, layer conventions, and test organization.
 ---
 
 # Frontend Code Structure & Architecture Guidelines

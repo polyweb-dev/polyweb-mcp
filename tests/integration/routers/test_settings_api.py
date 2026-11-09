@@ -9,14 +9,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from freesearch.configuration.config import Settings
+from freesearch.models.project_permissions import ProjectPermission
 from freesearch.models.projects import (
-    BuiltinRole,
     ProjectCreate,
     ProjectMemberAdd,
     ProjectRead,
     ProjectRolloutState,
 )
-from freesearch.models.users import UserPrincipal, UserRole
+from freesearch.models.users import UserPrincipal
 from freesearch.routers.api import create_app
 from freesearch.services.projects import ProjectService
 from tests.fixtures.alpha_fixtures import (
@@ -30,6 +30,11 @@ from tests.fixtures.auth import (
     temp_email,
     temp_principal,
 )
+
+
+@pytest.fixture(autouse=True)
+def _configured_auth(auth_secret):
+    return auth_secret
 
 
 class _MemorySecretStore:
@@ -73,7 +78,7 @@ async def _build_fixture(tmp_path: Path) -> _HttpSettingsFixture:
     project_service = ProjectService(boot.repository)
 
     system_row = await create_temp_user(
-        boot.repository, temp_email("p03-http-system"), role=UserRole.ADMIN
+        boot.repository, temp_email("p03-http-system"), system_admin=True
     )
     system_admin = temp_principal(system_row)
 
@@ -105,7 +110,7 @@ async def _build_fixture(tmp_path: Path) -> _HttpSettingsFixture:
         boot.default_project.id,
         ProjectMemberAdd(
             user_id=token_manager.id,
-            initial_role=BuiltinRole.TOKEN_MANAGER.value,
+            permissions=int(ProjectPermission.TOKENS),
         ),
     )
 
@@ -201,7 +206,7 @@ async def test_http_authorization_and_project_isolation_matrix(tmp_path: Path) -
                     f"/api/v1/projects/{boot.default_project.id}/settings",
                     headers=token_manager_headers,
                 ).status_code
-                == 403
+                == 200
             )
 
             assert (
@@ -215,6 +220,13 @@ async def test_http_authorization_and_project_isolation_matrix(tmp_path: Path) -
                 client.get(
                     f"/api/v1/projects/{fixture.project_b.id}/settings",
                     headers=admin_headers,
+                ).status_code
+                == 200
+            )
+            assert (
+                client.get(
+                    f"/api/v1/projects/{fixture.project_b.id}/settings",
+                    headers=member_headers,
                 ).status_code
                 == 404
             )
@@ -305,7 +317,6 @@ async def test_http_bounded_writes_stale_conflicts_and_archive(tmp_path: Path) -
                     "routing": {
                         "fallback_policy": "first_only",
                         "max_attempts": 5,
-                        "preferred_providers": ["exa"],
                     },
                     "execution": {
                         "cache_enabled": False,
@@ -354,11 +365,11 @@ async def test_http_bounded_writes_stale_conflicts_and_archive(tmp_path: Path) -
                     "routing": {"preferred_providers": ["ghost"]},
                 },
             )
-            assert unknown_provider.status_code == 400
+            assert unknown_provider.status_code == 422
 
             unchanged = client.get(project_url, headers=admin_headers)
             assert unchanged.json()["project_revision"] == 1
-            assert unchanged.json()["effective_settings"]["routing.preferred_providers"] == ["exa"]
+            assert unchanged.json()["effective_settings"]["routing.max_attempts"] == 5
             assert unchanged.json()["effective_settings"]["execution.cache_enabled"] is False
 
             system_unknown = client.put(
@@ -369,7 +380,7 @@ async def test_http_bounded_writes_stale_conflicts_and_archive(tmp_path: Path) -
                     "routing": {"preferred_providers": ["ghost"]},
                 },
             )
-            assert system_unknown.status_code == 400
+            assert system_unknown.status_code == 422
             assert (
                 client.get("/api/v1/system/settings", headers=admin_headers).json()["revision"] == 0
             )

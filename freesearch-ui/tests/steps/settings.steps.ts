@@ -3,12 +3,12 @@ import type { Page } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
 
 Given("I am on the Settings view", async ({ page }) => {
-  await page.getByRole("link", { name: "Settings", exact: true }).click()
-  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible()
+  await page.getByRole("link", { name: "Providers", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Providers", exact: true })).toBeVisible()
 })
 
-When("I open the {string} settings tab", async ({ page }, tabLabel: string) => {
-  await page.getByRole("tab", { name: tabLabel, exact: true }).click()
+When("I view the provider catalog", async ({ page }) => {
+  await expect(page.getByRole("heading", { name: "Providers", exact: true })).toBeVisible()
 })
 
 Then("the settings page should expose exactly {int} sub-tabs", async ({ page }, count: number) => {
@@ -23,30 +23,12 @@ Then("the settings page should not expose an {string} button", async ({ page }, 
   await expect(page.getByRole("button", { name: buttonLabel, exact: true })).toHaveCount(0)
 })
 
-Then(
-  "the {string} upward priority arrow should be disabled",
-  async ({ page }, provider: string) => {
-    await expect(getProviderRow(page, provider).getByRole("button", { name: /up/i })).toBeDisabled()
-  }
-)
-
-Then(
-  "the {string} downward priority arrow should be disabled",
-  async ({ page }, provider: string) => {
-    await expect(getProviderRow(page, provider).getByRole("button", { name: /down/i })).toBeDisabled()
-  }
-)
-
-Then("the first provider row upward priority arrow should be disabled", async ({ page }) => {
-  // Boundary-agnostic: live registries may reorder (equal priorities sort by
-  // provider_id), so the boundary is the first RENDERED row, not a fixed name.
-  const upButtons = page.getByRole("button", { name: /priority up/i })
-  await expect(upButtons.first()).toBeDisabled()
-})
-
-Then("the last provider row downward priority arrow should be disabled", async ({ page }) => {
-  const downButtons = page.getByRole("button", { name: /priority down/i })
-  await expect(downButtons.last()).toBeDisabled()
+Then("the provider catalog has no order controls", async ({ page }) => {
+  const table = page.getByRole("table").first()
+  await expect(table.getByRole("columnheader", { name: "Cost per call" })).toBeVisible()
+  await expect(table.getByRole("columnheader", { name: /priority|rank/i })).toHaveCount(0)
+  await expect(table.getByRole("button", { name: /priority (up|down)/i })).toHaveCount(0)
+  await expect(table.locator("[draggable=true]")).toHaveCount(0)
 })
 
 When(
@@ -99,139 +81,38 @@ Then(
   }
 )
 
-Then("the keys tab should show a masked fingerprint containing bullets", async ({ page }) => {
-  await expect(page.locator("body")).toContainText("••••••••")
+Then("the settings page should expose no secret input", async ({ page }) => {
+  // Provider secrets moved to credential instances (U3): the global page
+  // never renders a write-only secret input.
+  await expect(page.getByRole("tab").first()).toBeVisible()
+  await expect(page.locator('input[type="password"]')).toHaveCount(0)
 })
-
-Then(
-  "the keys tab should not contain {string}, {string}, {string}, or {string}",
-  async ({ page }, first: string, second: string, third: string, fourth: string) => {
-    const body = await page.locator("body").innerText()
-    for (const forbidden of [first, second, third, fourth]) {
-      expect(body).not.toContain(forbidden)
-    }
-  }
-)
-
-When(
-  "I save the key {string} for {string}",
-  async ({ page }, rawKey: string, provider: string) => {
-    const card = getKeyCard(page, provider)
-    await card.locator('input[type="password"]').fill(rawKey)
-    await card.getByRole("button", { name: "Save", exact: true }).click()
-  }
-)
-
-When(
-  "I delete the key for {string}",
-  async ({ page }, provider: string) => {
-    await getKeyCard(page, provider)
-      .getByRole("button", { name: "Delete key", exact: true })
-      .click()
-  }
-)
-
-Then("the {string} key input should be empty", async ({ page }, provider: string) => {
-  // The vault clears the write-only input only after a successful save, so an
-  // empty input proves the PUT response flowed through (not just typed text).
-  await expect(getKeyCard(page, provider).locator('input[type="password"]')).toHaveValue("")
-})
-
-Then("the {string} key status should be {string}", async ({ page }, provider: string, status: string) => {
-  await expect(getKeyCard(page, provider).getByText(status, { exact: true })).toBeVisible()
-})
-
-Then(
-  "the {string} key fingerprint should be {string}",
-  async ({ page }, provider: string, fingerprint: string) => {
-    await expect(getKeyCard(page, provider).getByText(fingerprint, { exact: true })).toBeVisible()
-  }
-)
-
-Then(
-  "the {string} key fingerprint should contain bullets",
-  async ({ page }, provider: string) => {
-    // Backend-tolerant: the masked fingerprint is server-computed, so the
-    // suite asserts bullets-present-only, never an exact mask.
-    await expect(getKeyCard(page, provider).getByText(/••••••••/)).toBeVisible()
-  }
-)
-
-Then(
-  "the {string} key card should show a stored key indicator",
-  async ({ page }, provider: string) => {
-    // Backend-tolerant: after save the card shows either the "Stored" pill
-    // or a fingerprint-shaped value (bullets plus at least one alnum char).
-    const card = getKeyCard(page, provider)
-    await expect(async () => {
-      const storedCount = await card.getByText("Stored", { exact: true }).count()
-      const bulletCount = await card.getByText(/••••••••/).count()
-      expect(storedCount + bulletCount).toBeGreaterThan(0)
-    }).toPass({ timeout: 10_000 })
-    const bullets = card.getByText(/••••••••/)
-    if ((await bullets.count()) > 0) {
-      await expect(bullets.first()).toContainText(/[A-Za-z0-9]/)
-    }
-  }
-)
-
-Then(
-  "the key cards should expose at least one {string} button",
-  async ({ page }, buttonLabel: string) => {
-    // The vault renders "Delete key" per card; match the real accessible
-    // name tolerantly (bare "Delete" or the full "Delete key").
-    const buttons = page.getByRole("button", {
-      name: new RegExp(`^${escapeRegExp(buttonLabel)}( key)?$`, "i"),
-    })
-    expect(await buttons.count()).toBeGreaterThanOrEqual(1)
-    await expect(buttons.first()).toBeVisible()
-  }
-)
 
 Then("the failover switch {string} should be visible", async ({ page }, label: string) => {
   await expect(page.getByText(label, { exact: true })).toBeVisible()
-})
-
-Then("each failover switch should expose a description", async ({ page }) => {
-  const labels = [
-    "Fallback chaining",
-    "Failover on rate limit (429)",
-    "Failover on timeout",
-    "Failover on server error (5xx)",
-  ]
-
-  for (const label of labels) {
-    const labelNode = page.getByText(label, { exact: true })
-    await expect(labelNode).toBeVisible()
-    const labelParent = labelNode.locator("xpath=..")
-    const textElements = labelParent.locator("span, p").filter({ hasText: /\S/ })
-    expect(await textElements.count()).toBeGreaterThan(1)
-  }
-})
-
-Then("the failover operation switches should be vertically stacked", async ({ page }) => {
-  const labels = [
-    "Failover on rate limit (429)",
-    "Failover on timeout",
-    "Failover on server error (5xx)",
-  ]
-  const boxes = await Promise.all(
-    labels.map(async (label) => page.getByText(label, { exact: true }).boundingBox())
-  )
-
-  expect(boxes.every((box): box is NonNullable<typeof box> => box !== null)).toBe(true)
-  for (let index = 1; index < boxes.length; index += 1) {
-    expect(boxes[index]!.y).toBeGreaterThan(boxes[index - 1]!.y)
-  }
 })
 
 Then("the failover row {string} should be visible", async ({ page }, label: string) => {
   await expect(page.getByText(label, { exact: true })).toBeVisible()
 })
 
+Then("the failover tab should not show the removed per-condition switches", async ({ page }) => {
+  for (const removed of [
+    "Fallback chaining",
+    "Failover on rate limit (429)",
+    "Failover on timeout",
+    "Failover on server error (5xx)",
+    "Cascade depth",
+    "Timeout budget",
+  ]) {
+    await expect(page.getByText(removed, { exact: true })).toHaveCount(0)
+  }
+  await expect(page.locator("main")).not.toContainText(/session-only|not enforced|not exposed/i)
+})
+
 function getProviderRow(page: Page, provider: string) {
   const cell = page.getByText(provider, { exact: true }).first()
-  return cell.locator("xpath=ancestor-or-self::tr | ancestor::*[.//*[normalize-space()='Global']][1]").first()
+  return cell.locator("xpath=ancestor-or-self::tr | ancestor::*[.//*[normalize-space()='Enabled']][1]").first()
 }
 
 function getSegmentButton(
@@ -243,16 +124,6 @@ function getSegmentButton(
   const row = getProviderRow(page, provider)
   const operationLabel = row.getByText(operation, { exact: true })
   return operationLabel.locator("xpath=..").getByRole("button", { name: value, exact: true })
-}
-
-function getKeyCard(page: Page, provider: string) {
-  // Precise per-card scope: the password input's aria-label
-  // ("{Provider} API key") is unique per card, so the card is its nearest
-  // ancestor holding the Save action. (Name-text ancestors are ambiguous:
-  // provider names also render in the Providers registry tab.)
-  return page
-    .getByRole("textbox", { name: `${provider} API key`, exact: true })
-    .locator("xpath=ancestor::*[.//button[normalize-space()='Save']][1]")
 }
 
 function escapeRegExp(value: string): string {

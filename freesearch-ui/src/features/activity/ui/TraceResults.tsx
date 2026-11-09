@@ -5,12 +5,15 @@ import { TraceSearchResults } from "./TraceSearchResults"
 
 export interface TraceResultsProps {
   output: TraceOutput | null
+  input: string | null
   mode: RankingMode
   /** Provider the scoped output belongs to, or null for a fused whole trace. */
   providerId: string | null
   /** Decoded results of the scoped search output (empty for other shapes). */
   results: readonly TraceSearchResult[]
   selectedIndex: number | null
+  /** The one sentence shown when no output was recorded. */
+  emptyMessage: string
   onSelect: (index: number) => void
 }
 
@@ -22,18 +25,16 @@ export interface TraceResultsProps {
  */
 export function TraceResults({
   output,
+  input,
   mode,
   providerId,
   results,
   selectedIndex,
+  emptyMessage,
   onSelect,
 }: TraceResultsProps) {
   if (output === null) {
-    return (
-      <p className="text-[13px] text-[var(--muted)]">
-        No results were recorded for this trace.
-      </p>
-    )
+    return <p className="text-[13px] text-[var(--muted)]">{emptyMessage}</p>
   }
   if (output.kind === "search_results") {
     return (
@@ -46,5 +47,5 @@ export function TraceResults({
       />
     )
   }
-  return <TraceFetchDocument output={output} />
+  return <TraceFetchDocument output={output} input={input} />
 }

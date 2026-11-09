@@ -16,12 +16,13 @@ Three responsibilities:
 
 Access expiry is fixed at issue and capped by the family's absolute expiry. No
 API or MCP request renews a token; only ``POST /auth/jwt/refresh`` may issue a
-successor, and the role always comes from the current database row rather than
-from a token claim.
+successor. No token claim and no account field carries authority: system
+authority comes only from ``system_role_assignments``, which only the trusted
+bootstrap and explicit system-admin grant and revoke operations change.
 """
 
 import secrets
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -37,10 +38,14 @@ from fastapi_users.jwt import SecretType, decode_jwt, generate_jwt
 from fastapi_users.manager import UUIDIDMixin
 from fastapi_users.password import PasswordHelperProtocol
 from pydantic import SecretStr
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.configuration.config import Settings
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
+from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, BuiltinRole
+from freesearch.models.schema_enums import AuditActorType, AuditCategory, AuditOutcome
 from freesearch.models.users import (
     REFRESH_TOKEN_BYTES,
     REFRESH_TOKEN_LENGTH,
@@ -48,8 +53,8 @@ from freesearch.models.users import (
     AuthTokens,
     UserAccount,
     UserPrincipal,
-    UserRole,
 )
+from freesearch.persistence.audit import AuditRepository
 from freesearch.persistence.auth_sessions import AuthSessionRepository
 from freesearch.persistence.login_throttle import (
     clear_pair,
@@ -57,9 +62,12 @@ from freesearch.persistence.login_throttle import (
     reserve_attempt,
     reserve_registration_attempt,
 )
+from freesearch.persistence.projects import AccountRow, ProjectRepository
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow, local_password_hash
+from freesearch.services.authorization import ScopedAuthorizationService
 from freesearch.services.monitoring import resolve_database_path
+from freesearch.services.oauth_flow_guard import end_unauthorized_oauth_flows
 
 #: Accepted password rule (Q2b): length plus three character classes.
 PASSWORD_MIN_LENGTH: int = 12
@@ -104,26 +112,27 @@ class AuthUserNotFound(AuthServiceError):
     """Raised when a trusted operation names an account that does not exist."""
 
 
-class AuthUnsupportedRole(AuthServiceError):
-    """Raised when an operation requests an obsolete or unsupported role."""
-
-    def __init__(self, role: UserRole | str) -> None:
-        val = role.value if isinstance(role, UserRole) else str(role)
-        super().__init__(f"the role '{val}' is obsolete and unsupported")
-        self.role = val
-
-
 class AuthRoleAssignmentFailed(AuthServiceError):
-    """Raised when a new bootstrap account keeps the Agent role.
+    """Raised when a new bootstrap account did not receive its system admin role.
 
-    The account row is committed before its promotion, so the caller can report
-    the real least-privileged state instead of claiming a successful Admin
-    creation.
+    The account row is committed before the assignment, so the caller can report
+    the real ordinary-account state instead of claiming a system administrator.
     """
 
     def __init__(self, user_id: UUID) -> None:
-        super().__init__("the account was created without the admin role")
+        super().__init__("the account was created without the system admin role")
         self.user_id = user_id
+
+
+class AuthLastSystemAdmin(AuthServiceError):
+    """Raised when a revocation or deactivation would leave no active system administrator."""
+
+    code: str = "LAST_SYSTEM_ADMIN"
+
+
+#: Audit action names of system role changes.
+SYSTEM_ROLE_GRANTED: str = "system_role.granted"
+SYSTEM_ROLE_REVOKED: str = "system_role.revoked"
 
 
 def refresh_token_digest(token: str) -> str | None:
@@ -146,30 +155,14 @@ def _new_refresh_token() -> str:
     return secrets.token_urlsafe(REFRESH_TOKEN_BYTES)
 
 
-def _stored_role(value: str) -> UserRole:
-    """Return the stored role, or the least-privileged role for a broken value.
-
-    A value outside the enum must never widen access. One policy therefore
-    governs the request principal and the Admin account projection, and no
-    caller can turn a broken row into a server error.
-    """
-
-    try:
-        return UserRole(value)
-    except ValueError:
-        return UserRole.AGENT
-
-
 def _principal(user: UserRow, family_id: UUID) -> UserPrincipal:
     """Project one account row plus its family id into the request principal."""
 
     return UserPrincipal(
         id=user.id,
         email=user.email,
-        role=_stored_role(user.role),
         session_id=family_id,
         is_active=bool(user.is_active),
-        is_superuser=bool(user.is_superuser),
         is_verified=bool(user.is_verified),
     )
 
@@ -402,16 +395,6 @@ def get_jwt_strategy(
     )
 
 
-def has_role(principal: UserPrincipal, allowed: frozenset[UserRole]) -> bool:
-    """Return whether an active account holds one of ``allowed`` database roles.
-
-    The database row is the only authority: a token claim, a caller label, or a
-    ``is_superuser`` flag can never widen this decision.
-    """
-
-    return principal.is_active and principal.role in allowed
-
-
 class AuthService:
     """Compose accounts, session families, and attempt limits for both transports.
 
@@ -502,8 +485,9 @@ class AuthService:
         """Return the principal of a live access token, else ``None``.
 
         The check covers the signature, the audience, the fixed expiry, the
-        ``sid`` family state, the current active flag, and the current role. A
-        missing or invalid signing configuration fails closed with ``None``.
+        ``sid`` family state, and the current active flag. A missing or invalid
+        signing configuration fails closed with ``None``. Authority is not part
+        of the principal; every operation resolves it from live assignments.
         """
 
         if not token:
@@ -626,11 +610,12 @@ class AuthService:
             await session.commit()
 
     async def create_admin(self, email: str, password: SecretStr) -> UUID:
-        """Create one active local Admin account for the trusted operator.
+        """Create one active local account and grant it ``system_admin`` (trusted bootstrap).
 
-        The account is created as an Agent first, through the library's default
-        password helper and the accepted password rule. A failed promotion then
-        leaves a least-privileged account instead of a half-written Admin row.
+        The account is created as an ordinary account first, through the
+        library's default password helper and the accepted password rule. A
+        failed grant then leaves an ordinary account instead of a half-written
+        administrator.
         """
 
         async with self._session() as session:
@@ -639,79 +624,178 @@ class AuthService:
                 schemas.BaseUserCreate(email=email, password=password.get_secret_value())
             )
         try:
-            await self.change_role(user.id, UserRole.ADMIN)
+            await self.grant_system_admin(user.id)
         except AuthServiceError as error:
             raise AuthRoleAssignmentFailed(user.id) from error
         return user.id
 
-    async def provision_account(self, user_create: schemas.BaseUserCreate) -> UserAccount:
-        """Create one standalone account in the role of the request.
+    async def provision_account(self, email: str, password: SecretStr) -> UserAccount:
+        """Create one ordinary standalone account for an authorized provisioner.
 
         The library manager owns the password rule, the duplicate-email check, and
-        the safe creation path, so a privilege flag of the request never reaches
-        the row. The response is the safe projection of the stored account, with
-        no credential material. The caller owns the attempt reservation, the role
-        gate, and the HTTP mapping.
+        the safe creation path. No role or privilege is created: the account has
+        no system role assignment and no project membership. The response is the
+        safe projection of the stored account, with no credential material. The
+        caller owns the attempt reservation, the permission gate, and the HTTP
+        mapping.
         """
 
-        role_val = getattr(user_create, "role", UserRole.AGENT)
-        if isinstance(role_val, str):
-            role_val = UserRole(role_val)
-        if role_val is UserRole.DEVELOPER:
-            raise AuthUnsupportedRole(role_val)
-
         async with self.user_manager() as manager:
-            created = await manager.create(user_create, safe=True)
-        if role_val is UserRole.ADMIN:
-            await self.change_role(created.id, UserRole.ADMIN)
-
+            created = await manager.create(
+                schemas.BaseUserCreate(email=email, password=password.get_secret_value()),
+                safe=True,
+            )
         account = await self.get_account(created.id)
         if account is None:
             raise AuthStorageUnavailable("the created account is not readable")
         return account
 
-    async def change_role(self, user_id: UUID, role: UserRole) -> None:
-        """Set one account's role and revoke its families in one transaction.
+    async def grant_system_admin(self, user_id: UUID, *, granted_by: UUID | None = None) -> bool:
+        """Assign ``system_admin`` to one active account; ``False`` when already held.
 
-        The role and the privilege flag change together, and every session
-        family of that account is revoked even when the requested role matches
-        the stored one, so no old credential keeps the previous authority.
+        ``granted_by`` names the authorized human actor; ``None`` is the trusted
+        local operator path, which records the account itself as the grantor
+        and a ``system`` audit actor. The assignment and its system audit event
+        commit together.
         """
 
-        if role is UserRole.DEVELOPER:
-            raise AuthUnsupportedRole(role)
-
-        now = datetime.now(UTC)
-        async with self._session() as session:
-            try:
-                updated = await UserDatabase(session, UserRow).set_role(user_id, role)
-            except ValueError as error:
-                raise AuthUnsupportedRole(role) from error
-            if not updated:
+        async def operation(session: AsyncSession) -> bool:
+            user = await session.get(UserRow, user_id)
+            if user is None:
                 raise AuthUserNotFound("no account has this id")
-            await AuthSessionRepository(session).revoke_user_families(user_id, now=now)
-            await session.commit()
+            if not user.is_active:
+                raise AuthServiceError("an inactive account cannot hold a system role")
+            if await session.get(AccountRow, str(DEFAULT_INSTALLATION_ACCOUNT_ID)) is None:
+                session.add(AccountRow(id=str(DEFAULT_INSTALLATION_ACCOUNT_ID), status="active"))
+                await session.flush()
+            repository = ProjectRepository(session)
+            held = await repository.get_system_role_assignments(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID, user_id=user_id
+            )
+            if any(item.role_key == BuiltinRole.SYSTEM_ADMIN.value for item in held):
+                return False
+            try:
+                await repository.assign_system_role(
+                    account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                    user_id=user_id,
+                    role_key=BuiltinRole.SYSTEM_ADMIN.value,
+                    granted_by=granted_by or user_id,
+                )
+            except ValueError as error:
+                raise AuthServiceError("the system role could not be assigned") from error
+            await self._system_role_event(session, SYSTEM_ROLE_GRANTED, user_id, granted_by)
+            return True
+
+        return await self._serialized(operation)
+
+    async def revoke_system_admin(
+        self,
+        user_id: UUID,
+        *,
+        revoked_by: UUID | None = None,
+        secret_store: EncryptedDbSecretStore | None = None,
+    ) -> bool:
+        """Remove ``system_admin`` from one account; ``False`` when it was not held.
+
+        The revocation refuses to leave the installation without an active
+        system administrator, ends the account's session families, ends every
+        pending OAuth device flow on a system credential whose initiator no
+        longer holds ``system.credentials.manage`` and writes its system audit
+        event in the same serialized transaction. ``secret_store`` lets the
+        flow check read each flow's initiator; without it those flows end
+        fail-closed.
+        """
+
+        async def operation(session: AsyncSession) -> bool:
+            user = await session.get(UserRow, user_id)
+            if user is None:
+                raise AuthUserNotFound("no account has this id")
+            repository = ProjectRepository(session)
+            removed = await repository.delete_system_role(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                user_id=user_id,
+                role_key=BuiltinRole.SYSTEM_ADMIN.value,
+            )
+            if not removed:
+                return False
+            remaining = await repository.count_active_system_admins(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID
+            )
+            if remaining == 0:
+                raise AuthLastSystemAdmin("the change would leave no active system administrator")
+            await AuthSessionRepository(session).revoke_user_families(
+                user_id, now=datetime.now(UTC)
+            )
+            await self._end_system_oauth_flows(session, secret_store, revoked_by)
+            await self._system_role_event(session, SYSTEM_ROLE_REVOKED, user_id, revoked_by)
+            return True
+
+        return await self._serialized(operation)
+
+    async def _end_system_oauth_flows(
+        self,
+        session: AsyncSession,
+        secret_store: EncryptedDbSecretStore | None,
+        actor_id: UUID | None,
+    ) -> None:
+        """End pending system-credential OAuth flows whose initiator lost authority."""
+
+        repository = self.repository
+        if repository is None:
+            raise AuthStorageUnavailable("the account store is unavailable")
+        await end_unauthorized_oauth_flows(
+            session,
+            authorization=ScopedAuthorizationService(
+                repository, account_id=DEFAULT_INSTALLATION_ACCOUNT_ID
+            ),
+            secret_store=secret_store,
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            system_only=True,
+            actor_id=actor_id,
+        )
 
     async def get_account(self, user_id: UUID) -> UserAccount | None:
         """Return one account's safe projection, or ``None`` for an unknown id.
 
-        The projection holds the identity and the authorization flags of one
-        account. It holds no password hash and no session family identifier, so
-        an Admin route can confirm a target without credential material.
+        The projection holds identity, provider, profile and status fields. It
+        holds no password hash, no session family identifier and no role, so a
+        provisioning route can confirm a target without credential material.
         """
 
         async with self._session() as session:
             user = await session.get(UserRow, user_id)
             if user is None:
                 return None
-            return UserAccount(
-                id=user.id,
-                email=user.email,
-                role=_stored_role(user.role),
-                is_active=user.is_active,
-                is_superuser=user.is_superuser,
-                is_verified=user.is_verified,
-            )
+            return UserAccount.model_validate(user)
+
+    async def _serialized[T](self, operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
+        """Run one account write under ``BEGIN IMMEDIATE`` and commit it."""
+
+        async with self._session() as session:
+            await session.execute(text("BEGIN IMMEDIATE"))
+            try:
+                result = await operation(session)
+            except BaseException:
+                await session.rollback()
+                raise
+            await session.commit()
+            return result
+
+    @staticmethod
+    async def _system_role_event(
+        session: AsyncSession, action: str, user_id: UUID, actor_id: UUID | None
+    ) -> None:
+        await AuditRepository(session).append_system_event(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            category=AuditCategory.AUDIT,
+            action=action,
+            actor_type=AuditActorType.SYSTEM if actor_id is None else AuditActorType.HUMAN,
+            actor_id=actor_id,
+            outcome=AuditOutcome.SUCCESS,
+            target_type="user",
+            target_id=str(user_id),
+            detail={"role_key": BuiltinRole.SYSTEM_ADMIN.value},
+        )
 
     async def _start_family(
         self, session: AsyncSession, user: UserRow, *, now: datetime
@@ -743,18 +827,19 @@ __all__ = [
     "PASSWORD_MAX_LENGTH",
     "PASSWORD_MIN_LENGTH",
     "PASSWORD_RULE_MESSAGE",
+    "SYSTEM_ROLE_GRANTED",
+    "SYSTEM_ROLE_REVOKED",
     "AuthConfigurationError",
+    "AuthLastSystemAdmin",
     "AuthRoleAssignmentFailed",
     "AuthService",
     "AuthServiceError",
     "AuthSessionInvalid",
     "AuthStorageUnavailable",
-    "AuthUnsupportedRole",
     "AuthUserNotFound",
     "LoginRateLimited",
     "SessionJWTStrategy",
     "UserManager",
     "get_jwt_strategy",
-    "has_role",
     "refresh_token_digest",
 ]

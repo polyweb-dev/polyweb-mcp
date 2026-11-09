@@ -407,8 +407,14 @@ async def test_real_sdk_routes_borrowed_transport_end_to_end(monkeypatch) -> Non
     adapter: TavilyAdapter | None = None
     try:
         adapter = TavilyAdapter(caller, api_key=SecretStr("sk-e2e-secret-77"))
-        search_response = await adapter.search(SearchRequest(query="e2e"))
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        search_response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="e2e")
+        )
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
         # Adapter close closes only the SDK-owned client, never the shared one.
         await adapter.aclose()
         assert adapter._owned_http is not None
@@ -462,6 +468,7 @@ async def test_search_maps_query_cap_domains_country_and_usage() -> None:
 
     response = await adapter.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="python async",
             limit=7,
             country_code="US",
@@ -491,7 +498,9 @@ async def test_search_caps_max_results_at_twenty(limit: int, expected: int) -> N
     sdk.search_response = _search_payload()
     adapter = make_adapter(sdk=sdk)
 
-    await adapter.search(SearchRequest(query="cap", limit=limit))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cap", limit=limit)
+    )
 
     assert sdk.search_calls[0]["max_results"] == expected
 
@@ -501,7 +510,9 @@ async def test_search_omits_domains_and_country_when_unset() -> None:
     sdk.search_response = _search_payload()
     adapter = make_adapter(sdk=sdk)
 
-    await adapter.search(SearchRequest(query="bare"))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bare")
+    )
 
     call = sdk.search_calls[0]
     assert call == {
@@ -520,7 +531,13 @@ async def test_search_omits_country_kwarg_for_unsupported_iso_codes(country_code
     sdk.search_response = _search_payload()
     adapter = make_adapter(sdk=sdk)
 
-    await adapter.search(SearchRequest(query="bare", country_code=country_code))
+    await adapter.search(
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="bare",
+            country_code=country_code,
+        )
+    )
 
     call = sdk.search_calls[0]
     assert call == {
@@ -550,7 +567,9 @@ async def test_search_normalizes_results_and_metadata() -> None:
     }
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="norm"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="norm")
+    )
 
     first = response.results[0]
     assert first.title == "Example"
@@ -576,7 +595,9 @@ async def test_search_maps_observed_credits_and_request_id_only() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="usage"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+    )
 
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.SEARCH
@@ -596,12 +617,16 @@ async def test_search_drops_absent_or_unknown_usage_and_rejects_negative_credits
 
     if usage == {"credits": -1}:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="usage"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+            )
         assert excinfo.value.error.code == "invalid_response"
         assert excinfo.value.error.retryable is False
         return
 
-    response = await adapter.search(SearchRequest(query="usage"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+    )
 
     assert response.usage is None
 
@@ -610,7 +635,9 @@ async def test_boolean_usage_credits_is_normalized_error_not_decimal_error() -> 
     sdk = _FakeSDK()
     sdk.search_response = _search_payload(usage={"credits": True})
     with pytest.raises(ProviderOperationError) as excinfo:
-        await make_adapter(sdk=sdk).search(SearchRequest(query="usage"))
+        await make_adapter(sdk=sdk).search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+        )
 
     assert excinfo.value.error.provider == "tavily"
     assert excinfo.value.error.code == "invalid_response"
@@ -621,7 +648,11 @@ async def test_boolean_usage_credits_is_normalized_error_not_decimal_error() -> 
     fetch_sdk = _FakeSDK()
     fetch_sdk.extract_response = _extract_payload(usage={"credits": True})
     with pytest.raises(ProviderOperationError) as excinfo:
-        await make_adapter(sdk=fetch_sdk).fetch(FetchRequest(url="https://example.com/doc"))
+        await make_adapter(sdk=fetch_sdk).fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -634,7 +665,9 @@ async def test_search_malformed_response_raises_nonretryable_error() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.provider == "tavily"
     assert excinfo.value.error.code == "invalid_response"
@@ -647,7 +680,9 @@ async def test_search_malformed_result_item_raises_nonretryable_error() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.provider == "tavily"
     assert excinfo.value.error.code == "invalid_response"
@@ -660,7 +695,9 @@ async def test_search_routes_through_shared_runner() -> None:
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
 
-    await adapter.search(SearchRequest(query="routed"))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="routed")
+    )
 
     assert runner.entries == ["tavily"]
     assert len(sdk.search_calls) == 1
@@ -674,7 +711,11 @@ async def test_fetch_extracts_single_url_as_markdown() -> None:
     sdk.extract_response = _extract_payload()
     adapter = make_adapter(sdk=sdk)
 
-    await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert sdk.extract_calls == [
         {
@@ -692,7 +733,13 @@ async def test_fetch_truncates_content_at_max_chars() -> None:
     sdk.extract_response = _extract_payload(raw_content="x" * 500)
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=100))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/doc",
+            max_chars=100,
+        )
+    )
 
     assert response.document.content == "x" * 100
     assert response.document.metadata == {"truncated": True}
@@ -703,7 +750,13 @@ async def test_fetch_within_max_chars_is_not_truncated() -> None:
     sdk.extract_response = _extract_payload(raw_content="short")
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=1000))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/doc",
+            max_chars=1000,
+        )
+    )
 
     assert response.document.content == "short"
     assert response.document.metadata == {}
@@ -716,7 +769,10 @@ async def test_fetch_matches_scheme_and_host_case_insensitively_and_retains_path
     }
     adapter = make_adapter(sdk=sdk)
 
-    request = FetchRequest(url="https://example.com/Docs?Query=Alpha")
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
+        url="https://example.com/Docs?Query=Alpha",
+    )
     response = await adapter.fetch(request)
 
     assert response.document.content == "kept"
@@ -732,7 +788,12 @@ async def test_fetch_path_and_query_case_differences_do_not_match() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/docs?query=alpha"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://example.com/docs?query=alpha",
+            )
+        )
 
     assert excinfo.value.error.code == "fetch_failed"
 
@@ -743,7 +804,11 @@ async def test_fetch_missing_extraction_result_raises_nonretryable_error() -> No
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.provider == "tavily"
     assert excinfo.value.error.code == "fetch_failed"
@@ -756,7 +821,11 @@ async def test_fetch_malformed_response_raises_nonretryable_error() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.provider == "tavily"
     assert excinfo.value.error.code == "invalid_response"
@@ -779,7 +848,11 @@ async def test_fetch_matching_result_without_string_raw_content_is_invalid_respo
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.provider == "tavily"
     assert excinfo.value.error.code == "invalid_response"
@@ -791,7 +864,11 @@ async def test_fetch_empty_string_raw_content_is_accepted() -> None:
     sdk.extract_response = _extract_payload(raw_content="")
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.document.content == ""
     assert response.document.metadata == {}
@@ -802,7 +879,11 @@ async def test_fetch_maps_observed_usage() -> None:
     sdk.extract_response = _extract_payload(usage={"credits": 0.4}, request_id="ext-9")
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.FETCH
@@ -816,7 +897,11 @@ async def test_fetch_routes_through_shared_runner() -> None:
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
 
-    await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert runner.entries == ["tavily"]
     assert len(sdk.extract_calls) == 1
@@ -836,8 +921,14 @@ async def test_sdk_search_and_extract_forward_caller_shared_timeout() -> None:
     sdk.extract_response = _extract_payload()
     adapter = TavilyAdapter(caller, sdk_client=sdk)
     try:
-        await adapter.search(SearchRequest(query="timeout policy"))
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="timeout policy")
+        )
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -867,8 +958,14 @@ async def test_sdk_timeout_forwarded_with_operation_caps(
     sdk.extract_response = _extract_payload()
     adapter = TavilyAdapter(caller, sdk_client=sdk)
     try:
-        await adapter.search(SearchRequest(query="cap"))
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cap")
+        )
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -887,8 +984,14 @@ async def test_sdk_timeout_sub_second_read_is_floored_at_one_second() -> None:
     sdk.extract_response = _extract_payload()
     adapter = TavilyAdapter(caller, sdk_client=sdk)
     try:
-        await adapter.search(SearchRequest(query="sub second"))
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="sub second")
+        )
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -907,8 +1010,14 @@ async def test_sdk_timeout_read_none_forwards_operation_cap() -> None:
     sdk.extract_response = _extract_payload()
     adapter = TavilyAdapter(caller, sdk_client=sdk)
     try:
-        await adapter.search(SearchRequest(query="no deadline"))
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="no deadline")
+        )
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -927,8 +1036,14 @@ async def test_sdk_timeout_forwards_read_phase_of_shared_policy() -> None:
     sdk.extract_response = _extract_payload()
     adapter = TavilyAdapter(caller, sdk_client=sdk)
     try:
-        await adapter.search(SearchRequest(query="phases"))
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="phases")
+        )
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
     finally:
         await caller.aclose()
 
@@ -942,7 +1057,9 @@ async def test_sdk_timeout_forwards_read_phase_of_shared_policy() -> None:
 async def test_estimate_cost_search_is_one_credit() -> None:
     adapter = make_adapter()
 
-    estimate = await adapter.estimate_cost(SearchRequest(query="cost"))
+    estimate = await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cost")
+    )
 
     assert estimate.operation is UsageOperation.SEARCH
     assert estimate.units == Decimal("1")
@@ -952,7 +1069,11 @@ async def test_estimate_cost_search_is_one_credit() -> None:
 async def test_estimate_cost_fetch_is_zero_point_two_credits() -> None:
     adapter = make_adapter()
 
-    estimate = await adapter.estimate_cost(FetchRequest(url="https://example.com/doc"))
+    estimate = await adapter.estimate_cost(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert estimate.operation is UsageOperation.FETCH
     assert estimate.units == Decimal("0.2")
@@ -962,6 +1083,7 @@ async def test_estimate_cost_fetch_is_zero_point_two_credits() -> None:
 async def test_estimate_cost_uses_nested_tavily_depth_over_common_mode() -> None:
     adapter = make_adapter()
     request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         query="cost",
         mode="basic",
         provider_options=SearchProviderOptions(tavily={"search_depth": "advanced"}),
@@ -977,8 +1099,14 @@ async def test_estimate_cost_is_network_free() -> None:
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
 
-    await adapter.estimate_cost(SearchRequest(query="cost"))
-    await adapter.estimate_cost(FetchRequest(url="https://example.com/doc"))
+    await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cost")
+    )
+    await adapter.estimate_cost(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert runner.entries == []
     assert sdk.search_calls == []
@@ -1079,7 +1207,9 @@ async def test_sdk_error_surfaces_as_normalized_redacted_nonretryable() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.code == "bad_request"
     assert excinfo.value.error.retryable is False
@@ -1110,7 +1240,9 @@ async def test_malformed_response_error_suppresses_chained_cause_and_secret() ->
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     error = excinfo.value
     assert error.error.code == "invalid_response"
@@ -1133,7 +1265,11 @@ async def test_malformed_fetch_response_error_suppresses_chained_cause_and_secre
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     error = excinfo.value
     assert error.error.code == "invalid_response"
@@ -1154,7 +1290,9 @@ async def test_sdk_error_suppresses_chained_cause_and_secret() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     error = excinfo.value
     assert error.error.code == "invalid_api_key"
@@ -1172,7 +1310,7 @@ async def test_two_concurrent_rate_limited_calls_enter_shared_runner() -> None:
     sdk.search_error = UsageLimitExceededError("usage limit exceeded")
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
-    request = SearchRequest(query="concurrent")
+    request = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="concurrent")
 
     outcomes = await asyncio.gather(
         adapter.search(request), adapter.search(request), return_exceptions=True
@@ -1203,7 +1341,9 @@ async def test_rate_limited_retries_happen_inside_shared_runner() -> None:
     adapter = make_adapter(sdk=sdk, runner=runner)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="retry"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+        )
 
     assert excinfo.value.error.code == "rate_limited"
     assert excinfo.value.error.retryable is True
@@ -1752,8 +1892,14 @@ async def test_keyless_rail_sends_access_mode_without_key(monkeypatch) -> None:
     try:
         adapter = TavilyAdapter(caller, api_key=None)
         assert adapter.limit_auth_mode is AuthMode.KEYLESS
-        await adapter.search(SearchRequest(query="keyless"))
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keyless")
+        )
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -1782,7 +1928,9 @@ async def test_keyless_rail_isolates_ambient_key_and_caller_headers(monkeypatch)
     try:
         adapter = TavilyAdapter(caller, api_key=None)
         assert adapter.limit_auth_mode is AuthMode.KEYLESS
-        await adapter.search(SearchRequest(query="isolated"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="isolated")
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -1803,7 +1951,9 @@ async def test_keyed_rail_takes_precedence_with_both_headers(monkeypatch) -> Non
     adapter: TavilyAdapter | None = None
     try:
         adapter = TavilyAdapter(caller, api_key=SecretStr("tvly-key-wins-1"))
-        await adapter.search(SearchRequest(query="precedence"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="precedence")
+        )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -1831,6 +1981,7 @@ async def test_identical_param_transfer_on_both_rails() -> None:
 
     await keyed.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="p",
             limit=5,
             provider_options=SearchProviderOptions(tavily=params),
@@ -1838,6 +1989,7 @@ async def test_identical_param_transfer_on_both_rails() -> None:
     )
     await keyless.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="p",
             limit=5,
             provider_options=SearchProviderOptions(tavily=params),
@@ -1845,12 +1997,14 @@ async def test_identical_param_transfer_on_both_rails() -> None:
     )
     await keyed.fetch(
         FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             url="https://example.com/doc",
             provider_options=FetchProviderOptions(tavily=extract),
         )
     )
     await keyless.fetch(
         FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             url="https://example.com/doc",
             provider_options=FetchProviderOptions(tavily=extract),
         )
@@ -1910,6 +2064,7 @@ async def test_search_forwards_modeled_options_and_preserves_response_extras() -
 
     response = await adapter.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="query",
             limit=25,
             mode="basic",
@@ -1958,6 +2113,7 @@ async def test_extract_forwards_modeled_options_but_keeps_shared_timeout() -> No
     adapter = make_adapter(sdk=sdk)
 
     request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url="https://example.com/doc",
         provider_options=FetchProviderOptions(tavily=params),
     )
@@ -1990,6 +2146,7 @@ async def test_nested_depth_overrides_common_mode_before_vendor_io() -> None:
 
     await adapter.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="conflict",
             mode="basic",
             provider_options=SearchProviderOptions(
@@ -2001,6 +2158,7 @@ async def test_nested_depth_overrides_common_mode_before_vendor_io() -> None:
     assert sdk.search_calls[0]["search_depth"] == "advanced"
     estimate = await adapter.estimate_cost(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="conflict",
             mode="basic",
             provider_options=SearchProviderOptions(
@@ -2043,9 +2201,15 @@ async def _real_sdk_429_then_success(
     try:
         adapter = TavilyAdapter(caller, runner=runner, api_key=SecretStr("tvly-429-exact"))
         if operation == "search":
-            await adapter.search(SearchRequest(query="retry"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+            )
         else:
-            await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+                )
+            )
     finally:
         if adapter is not None:
             await adapter.aclose()
@@ -2109,7 +2273,9 @@ async def test_402_normalizes_quota_exhausted_safe_text() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="exhausted"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="exhausted")
+        )
 
     error = excinfo.value.error
     assert error.code == "quota_exhausted"
@@ -2140,7 +2306,9 @@ async def test_402_preserved_despite_positive_cached_balance() -> None:
     sdk.search_error = _http_status_error(402)  # type: ignore[union-attr]
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="exhausted"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="exhausted")
+        )
 
     assert excinfo.value.error.code == "quota_exhausted"
     zero = await adapter.quota_after_error(402)
@@ -2254,7 +2422,7 @@ async def test_quota_after_success_projects_local_debit() -> None:
 
     response = await TavilyAdapter(
         _FakeClient(), sdk_client=sdk, api_key=SecretStr("tvly-project")
-    ).search(SearchRequest(query="debit"))
+    ).search(SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="debit"))
     projected = adapter.quota_after_success(response)
 
     assert projected is not None and projected.remaining == Decimal("8")
@@ -2292,11 +2460,15 @@ async def test_quota_after_success_consecutive_calls_project_from_fresh_cache() 
     sdk = adapter._sdk
     sdk.search_response = _search_payload(usage={"credits": 2})  # type: ignore[union-attr]
 
-    first = await adapter.search(SearchRequest(query="one"))
+    first = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="one")
+    )
     projected_first = adapter.quota_after_success(first)
     assert projected_first is not None and projected_first.remaining == Decimal("8")
 
-    second = await adapter.search(SearchRequest(query="two"))
+    second = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="two")
+    )
     projected_second = adapter.quota_after_success(second)
     assert projected_second is not None and projected_second.remaining == Decimal("6")
 
@@ -2318,7 +2490,9 @@ async def test_usage_snapshot_after_terminal_clamps_positive_to_zero() -> None:
     sdk.search_error = _http_status_error(402)  # type: ignore[union-attr]
 
     with pytest.raises(ProviderOperationError):
-        await adapter.search(SearchRequest(query="exhausted"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="exhausted")
+        )
     zero = await adapter.quota_after_error(402)
     assert zero is not None and zero.remaining == Decimal("0")
     assert adapter._terminal_402 is True

@@ -11,6 +11,7 @@ import pytest_asyncio
 
 from freesearch.models.contracts import UsageEvent, UsageOperation
 from freesearch.persistence.storage import SQLiteRepository
+from tests.fixtures.execution import seed_execution_project
 
 
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
@@ -67,9 +68,9 @@ async def test_usage_totals_are_decimal_exact_grouped_since_filtered_and_ordered
         _event("beta", UsageOperation.SEARCH, "2.500000", t0 + timedelta(seconds=3)),
     ]
     for event in events:
-        await repository.record_usage(event)
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
 
-    totals = await repository.usage_totals()
+    totals = await repository.installation_usage_totals()
     assert [
         (total.provider, total.operation, total.total_units, total.event_count) for total in totals
     ] == [
@@ -79,7 +80,7 @@ async def test_usage_totals_are_decimal_exact_grouped_since_filtered_and_ordered
     ]
 
     plus_two = timezone(timedelta(hours=2))
-    since_totals = await repository.usage_totals(
+    since_totals = await repository.installation_usage_totals(
         since=datetime(2026, 1, 1, 2, 0, 1, tzinfo=plus_two)
     )
     assert [
@@ -102,9 +103,9 @@ async def test_recent_usage_is_newest_first_and_respects_limit(
     same_time_second = _event("same-second", UsageOperation.SEARCH, "4", t0 + timedelta(seconds=2))
     newest = _event("newest", UsageOperation.SEARCH, "5", t0 + timedelta(seconds=3))
     for event in (older, middle, same_time_first, same_time_second, newest):
-        await repository.record_usage(event)
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
 
-    recent = await repository.recent_usage(limit=3)
+    recent = await repository.recent_installation_usage(limit=3)
     assert recent == [newest, same_time_second, same_time_first]
     assert len(recent) == 3
     assert [event.observed_at for event in recent] == [

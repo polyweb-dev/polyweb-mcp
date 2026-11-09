@@ -88,7 +88,9 @@ async def test_real_runner_retries_429_then_succeeds_with_zero_delay() -> None:
     sleeps: list[float] = []
     adapter = _adapter(client, runner=_zero_delay_runner(client, sleeps))
     try:
-        response = await adapter.search(SearchRequest(query="retry me"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry me")
+        )
     finally:
         await client.aclose()
 
@@ -114,7 +116,9 @@ async def test_real_runner_retries_transport_error_and_redacts_key() -> None:
     adapter = _adapter(client, runner=_zero_delay_runner(client, sleeps), key=secret)
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="query"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+            )
     finally:
         await client.aclose()
 
@@ -144,7 +148,9 @@ async def test_injected_runner_transport_error_normalized_without_key_leak() -> 
     )
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="query"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+            )
     finally:
         await client.aclose()
 
@@ -162,7 +168,9 @@ async def test_injected_runner_circuit_open_passes_through_unchanged() -> None:
     adapter = _adapter(client, runner=_RaisingRunner(CircuitOpenError("brave")))
     try:
         with pytest.raises(CircuitOpenError) as excinfo:
-            await adapter.search(SearchRequest(query="query"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+            )
     finally:
         await client.aclose()
 

@@ -20,6 +20,19 @@ function playgroundTab(page: Page, label: string): Locator {
   return main(page).getByRole("tab", { name: label, exact: true })
 }
 
+/**
+ * The playground tab once the view switch has settled. Each composer footer
+ * renders its own "Playground view" tablist, and Base UI unmounts the
+ * inactive panel only after the switch, so for a moment two tablists (with
+ * the same tab ids) exist and a strict locator throws. The feature's own
+ * contract is a single mounted tabpanel, so wait for that first.
+ */
+async function settledPlaygroundTab(page: Page, label: string): Promise<Locator> {
+  await expect(main(page).getByRole("tabpanel")).toHaveCount(1)
+  await expect(playgroundTab(page, label)).toHaveCount(1)
+  return playgroundTab(page, label)
+}
+
 /** Find the one group that contains every expected option button. */
 function groupWithOptions(page: Page, scope: Locator, labels: string[]): Locator {
   let group = scope.getByRole("group")
@@ -78,13 +91,13 @@ Then(
 )
 
 Then("the playground tab {string} should be selected", async ({ page }, label: string) => {
-  await expect(playgroundTab(page, label)).toHaveAttribute("aria-selected", "true")
+  await expect(await settledPlaygroundTab(page, label)).toHaveAttribute("aria-selected", "true")
 })
 
 Then(
   "the playground tab {string} should not be selected",
   async ({ page }, label: string) => {
-    await expect(playgroundTab(page, label)).toHaveAttribute(
+    await expect(await settledPlaygroundTab(page, label)).toHaveAttribute(
       "aria-selected",
       "false"
     )
@@ -92,7 +105,7 @@ Then(
 )
 
 Then("the playground tab {string} should have focus", async ({ page }, label: string) => {
-  await expect(playgroundTab(page, label)).toBeFocused()
+  await expect(await settledPlaygroundTab(page, label)).toBeFocused()
 })
 
 When("I activate the focused playground tab", async ({ page }) => {
@@ -123,7 +136,7 @@ Then("the playground tabs should be linked to their panels", async ({ page }) =>
 })
 
 Then("the playground should show the {string} panel", async ({ page }, label: string) => {
-  const tab = playgroundTab(page, label)
+  const tab = await settledPlaygroundTab(page, label)
   const panelId = (await tab.getAttribute("aria-controls")) ?? ""
   const tabId = (await tab.getAttribute("id")) ?? ""
   expect(panelId.length).toBeGreaterThan(0)
@@ -137,7 +150,7 @@ Then("the playground should show the {string} panel", async ({ page }, label: st
 
 Then("the fetch URL input should be visible", async ({ page }) => {
   await expect(
-    main(page).getByPlaceholder(/Enter a URL to fetch/i)
+    main(page).getByPlaceholder(/URL to fetch/i)
   ).toBeVisible()
   await expect(
     main(page).getByRole("button", { name: "Fetch", exact: true })
@@ -266,38 +279,18 @@ Then(
 )
 
 Then(
-  "the routing tabs should remain canonical pill tabs {string}, {string}, {string} and {string}",
-  async (
-    { page },
-    a: string,
-    b: string,
-    c: string,
-    d: string
-  ) => {
+  "the settings tabs should remain canonical pill tabs {string} and {string}",
+  async ({ page }, a: string, b: string) => {
     const pillList = main(page).locator(
       '[data-slot="tabs-list"][data-variant="pill"]'
     )
     await expect(pillList).toBeVisible()
-    for (const label of [a, b, c, d]) {
+    for (const label of [a, b]) {
       await expect(
         pillList.getByRole("tab", { name: label, exact: true })
       ).toHaveCount(1)
     }
-  }
-)
-
-Then(
-  "the settings tabs should remain canonical pill tabs {string}, {string} and {string}",
-  async ({ page }, a: string, b: string, c: string) => {
-    const pillList = main(page).locator(
-      '[data-slot="tabs-list"][data-variant="pill"]'
-    )
-    await expect(pillList).toBeVisible()
-    for (const label of [a, b, c]) {
-      await expect(
-        pillList.getByRole("tab", { name: label, exact: true })
-      ).toHaveCount(1)
-    }
+    await expect(pillList.getByRole("tab")).toHaveCount(2)
   }
 )
 
@@ -330,11 +323,13 @@ Then("the header navigation should expose zero tab roles", async ({ page }) => {
   const navigation = page.getByRole("navigation", { name: "Primary" })
   await expect(navigation.getByRole("tab")).toHaveCount(0)
   await expect(navigation.getByRole("tablist")).toHaveCount(0)
-  // P1-FINAL: standalone Providers page retired — five workspace links.
   await expect(navigation.getByRole("link")).toHaveCount(5)
+  const projectNavigation = page.getByRole("navigation", { name: "Project" })
+  await expect(projectNavigation.getByRole("tab")).toHaveCount(0)
+  await expect(projectNavigation.getByRole("tablist")).toHaveCount(0)
 })
 
 Then("the page URL should be unchanged", async ({ page }) => {
   expect(page.url()).not.toMatch(/[?#]/)
-  expect(new URL(page.url()).pathname).toBe("/playground")
+  expect(new URL(page.url()).pathname).toMatch(/^\/p\/[0-9a-f-]{36}\/playground$/)
 })

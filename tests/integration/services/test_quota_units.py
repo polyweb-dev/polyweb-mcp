@@ -43,6 +43,7 @@ from freesearch.persistence.storage import LegacyUsageTotal, SQLiteRepository
 from freesearch.services import monitoring as monitoring_module
 from freesearch.services.monitoring import effective_quota, refresh_quotas, tracked_call
 from freesearch.services.routing import select_route
+from tests.fixtures.execution import seed_execution_project
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -228,9 +229,10 @@ class TestDecimalRules:
                 observed_at=FIXED_AT,
                 unit_kind=_opt(kind, "USD"),
                 display_unit="USD",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         assert totals[0].total_units == Decimal("0.001"), (
             f"totals must stay Decimal-exact, saw {totals[0].total_units!r}"
         )
@@ -260,9 +262,10 @@ class TestSafeAggregation:
                     observed_at=FIXED_AT + timedelta(seconds=index),
                     unit_kind=_opt(kind, name),
                     display_unit=name.lower(),
-                )
+                ),
+                attribution=await seed_execution_project(repo),
             )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         assert all(hasattr(total, "unit_kind") for total in totals), (
             "AC-3: UsageTotal must carry unit_kind (group by provider, operation, kind)"
         )
@@ -285,7 +288,8 @@ class TestSafeAggregation:
                 observed_at=FIXED_AT,
                 unit_kind=_opt(kind, "REQUEST"),
                 display_unit="requests",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
         await repo.record_usage(
             UsageEvent(
@@ -293,9 +297,10 @@ class TestSafeAggregation:
                 operation=UsageOperation.SEARCH,
                 units=Decimal("0.001"),
                 observed_at=FIXED_AT + timedelta(seconds=1),
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         known = [total for total in totals if _opt(total, "unit_kind", None) is not None]
         assert len(known) == 1 and known[0].total_units == Decimal("1"), (
             f"AC-3: known totals stay exact beside legacy rows, saw {totals!r}"
@@ -305,7 +310,7 @@ class TestSafeAggregation:
                 assert isinstance(total, LegacyUsageTotal), (
                     f"AC-8: kind-less totals must be LegacyUsageTotal, saw {type(total).__name__}"
                 )
-        rows = await repo.list_usage(provider="exa")
+        rows = await repo.list_provider_usage(provider="exa")
         assert len(rows) == 1 and rows[0].units == Decimal("0.001"), (
             "AC-8: legacy rows stay listed in history with exact raw units"
         )
@@ -320,9 +325,10 @@ class TestSafeAggregation:
                 operation=UsageOperation.SEARCH,
                 units=Decimal("0.001"),
                 observed_at=FIXED_AT,
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         assert len(totals) == 1 and isinstance(totals[0], LegacyUsageTotal), (
             f"AC-8: legacy-only data must aggregate as LegacyUsageTotal, saw {totals!r}"
         )
@@ -338,7 +344,8 @@ class TestSafeAggregation:
                 observed_at=FIXED_AT,
                 unit_kind=_opt(kind, "REQUEST"),
                 display_unit="requests",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
         await repo.record_usage(
             UsageEvent(
@@ -349,9 +356,10 @@ class TestSafeAggregation:
                 status=UsageStatus.FAILURE,
                 unit_kind=_opt(kind, "REQUEST"),
                 display_unit="requests",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
-        totals = await repo.usage_totals()
+        totals = await repo.installation_usage_totals()
         assert len(totals) == 1, f"AC-3: FAILURE row must not form its own total: {totals!r}"
         assert totals[0].event_count == 1, (
             f"AC-3: FAILURE zeros excluded from counts (saw {totals[0].event_count})"
@@ -488,7 +496,11 @@ class TestFirecrawlEstimates:
         client = httpx.AsyncClient(timeout=30.0)
         try:
             adapter = FirecrawlAdapter(client, sdk_client=object())
-            estimate = await adapter.estimate_cost(SearchRequest(query="q", limit=limit))
+            estimate = await adapter.estimate_cost(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=limit
+                )
+            )
         finally:
             await client.aclose()
         assert estimate.units == Decimal(credits), (
@@ -505,7 +517,12 @@ class TestFirecrawlEstimates:
         client = httpx.AsyncClient(timeout=30.0)
         try:
             adapter = FirecrawlAdapter(client, sdk_client=object())
-            estimate = await adapter.estimate_cost(FetchReq(url="https://example.com/doc"))
+            estimate = await adapter.estimate_cost(
+                FetchReq(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://example.com/doc",
+                )
+            )
         finally:
             await client.aclose()
         assert estimate.units == Decimal("1"), (
@@ -532,6 +549,7 @@ class TestFirecrawlEstimates:
         try:
             adapter = FirecrawlAdapter(client, sdk_client=object())
             request = FetchReq(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 url="https://example.com/doc",
                 pdf_pages=pdf,
                 json_extract=json_extract,
@@ -567,7 +585,9 @@ class TestCostEstimates:
         client = httpx.AsyncClient(timeout=30.0)
         try:
             adapter = KeenableAdapter(client, api_key=TEST_API_KEY)
-            estimate = await adapter.estimate_cost(SearchRequest(query="q", limit=3))
+            estimate = await adapter.estimate_cost(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=3)
+            )
         finally:
             await client.aclose()
         assert estimate.units == Decimal("0.004"), (
@@ -583,7 +603,9 @@ class TestCostEstimates:
         adapter: ParallelAdapter | None = None
         try:
             adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
-            estimate = await adapter.estimate_cost(SearchRequest(query="q", limit=3))
+            estimate = await adapter.estimate_cost(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=3)
+            )
         finally:
             if adapter is not None:
                 await adapter.aclose()
@@ -639,7 +661,13 @@ class TestCostEstimates:
         try:
             adapter = ParallelAdapter(client, api_key=TEST_API_KEY)
             try:
-                request = SearchRequest(query="q", limit=3, mode="turbo", extra_bundles=0)
+                request = SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    query="q",
+                    limit=3,
+                    mode="turbo",
+                    extra_bundles=0,
+                )
             except ValidationError as exc:
                 raise AssertionError(
                     "AC-PA-2: SearchRequest lacks the mode-aware estimate "
@@ -679,8 +707,13 @@ class TestKeenableErrors:
                 await tracked_call(
                     repo,
                     adapter,
-                    lambda running: running.search(SearchRequest(query="q", limit=2)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repo),
                 )
         finally:
             await client.aclose()
@@ -700,8 +733,13 @@ class TestKeenableErrors:
                 await tracked_call(
                     repo,
                     adapter,
-                    lambda running: running.search(SearchRequest(query="q", limit=2)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repo),
                 )
         finally:
             await client.aclose()
@@ -728,8 +766,13 @@ class TestKeenableErrors:
             response = await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="paid", limit=2)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="paid", limit=2
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
         finally:
             await client.aclose()
@@ -861,14 +904,27 @@ class TestRoutingSemantics:
             )
         }
         health = {"tavily": _health("tavily", HealthStatus.HEALTHY)}
-        route = select_route(SearchRequest(query="q"), adapters, health, quota)
+        route = select_route(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q"),
+            adapters,
+            health,
+            quota,
+        )
         names = [c.adapter.name for c in route]
         assert "tavily" not in names, f"AC-6: hard exhaustion must steer away: {names!r}"
         assert names[0] == "brave", f"AC-6: fallback must lead: {names!r}"
 
     def test_unknown_quota_eligible(self) -> None:
         adapters = self._adapters()
-        names = [c.adapter.name for c in select_route(SearchRequest(query="q"), adapters, {}, {})]
+        names = [
+            c.adapter.name
+            for c in select_route(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q"),
+                adapters,
+                {},
+                {},
+            )
+        ]
         assert names == ["tavily", "brave"], (
             f"AC-6: unknown quota must stay eligible, never 0: {names!r}"
         )
@@ -891,7 +947,13 @@ class TestRoutingSemantics:
         }
         health = {"tavily": _health("tavily", HealthStatus.HEALTHY)}
         names = [
-            c.adapter.name for c in select_route(SearchRequest(query="q"), adapters, health, quota)
+            c.adapter.name
+            for c in select_route(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q"),
+                adapters,
+                health,
+                quota,
+            )
         ]
         assert "tavily" not in names, f"AC-6: genuine depletion must steer away: {names!r}"
         assert names[0] == "brave", f"AC-6: fallback must lead: {names!r}"
@@ -908,7 +970,12 @@ class TestRoutingSemantics:
         }
         names = [
             c.adapter.name
-            for c in select_route(SearchRequest(query="q"), [_parallel_route_adapter()], {}, quota)
+            for c in select_route(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q"),
+                [_parallel_route_adapter()],
+                {},
+                quota,
+            )
         ]
         assert names == ["parallel"], (
             f"AC-6/AC-PA-5: Parallel soft zero must stay routable, saw {names!r}"
@@ -939,7 +1006,12 @@ class TestRoutingSemantics:
         health = {"keenable": _health("keenable", HealthStatus.HEALTHY)}
         names = [
             candidate.adapter.name
-            for candidate in select_route(SearchRequest(query="q"), adapters, health, quota)
+            for candidate in select_route(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q"),
+                adapters,
+                health,
+                quota,
+            )
         ]
         assert names[0] == "keenable", (
             "AC-6: keyless local 0/1000 must stay eligible despite shared-pool uncertainty"
@@ -968,7 +1040,8 @@ class TestRoutingSemantics:
                 status=UsageStatus.SUCCESS,
                 unit_kind=_opt(kind, "USD"),
                 display_unit="USD",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
         view = await effective_quota(repo, "parallel")
         assert view is not None and view.remaining is None, (
@@ -977,7 +1050,10 @@ class TestRoutingSemantics:
         names = [
             c.adapter.name
             for c in select_route(
-                SearchRequest(query="q"), [_parallel_route_adapter()], {}, {"parallel": view}
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q"),
+                [_parallel_route_adapter()],
+                {},
+                {"parallel": view},
             )
         ]
         assert names == ["parallel"], (
@@ -1000,9 +1076,10 @@ class TestCompatibilityPrivacy:
                     units=Decimal("1"),
                     observed_at=FIXED_AT,
                     metadata={"api_key": "sk-never-persist"},
-                )
+                ),
+                attribution=await seed_execution_project(repo),
             )
-        assert await repo.list_usage(provider="tavily") == [], (
+        assert await repo.list_provider_usage(provider="tavily") == [], (
             "AC-8: rejected credential write must persist nothing"
         )
 
@@ -1027,9 +1104,10 @@ class TestCompatibilityPrivacy:
                     units=Decimal("1"),
                     observed_at=FIXED_AT,
                     metadata=metadata,
-                )
+                ),
+                attribution=await seed_execution_project(repo),
             )
-        assert await repo.list_usage(provider="tavily") == [], (
+        assert await repo.list_provider_usage(provider="tavily") == [], (
             "AC-8: rejected credential write must persist nothing"
         )
 
@@ -1042,7 +1120,8 @@ class TestCompatibilityPrivacy:
                     units=Decimal("1"),
                     observed_at=FIXED_AT,
                     metadata={(1, 2): "x"},  # type: ignore[dict-item]
-                )
+                ),
+                attribution=await seed_execution_project(repo),
             )
 
     async def test_quota_metadata_public_round_trip(self, repo: SQLiteRepository) -> None:
@@ -1198,7 +1277,10 @@ class TestPollFailureSafety:
         names = [
             candidate.adapter.name
             for candidate in select_route(
-                SearchRequest(query="q"), [a._stub for a in adapters], health, quota
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q"),
+                [a._stub for a in adapters],
+                health,
+                quota,
             )
         ]
         assert "brave" in names, (
@@ -1271,8 +1353,15 @@ class TestParallelFetchUsagePersistence:
             response = await tracked(
                 repo,
                 adapter,
-                lambda running: running.fetch(FetchReq(url="https://example.com/doc", url_count=4)),
+                lambda running: running.fetch(
+                    FetchReq(
+                        project_id="00000000-0000-4000-8000-0000000000aa",
+                        url="https://example.com/doc",
+                        url_count=4,
+                    )
+                ),
                 operation=UsageOperation.FETCH,
+                attribution=await seed_execution_project(repo),
             )
         finally:
             if adapter is not None:
@@ -1282,7 +1371,7 @@ class TestParallelFetchUsagePersistence:
         assert response.usage.metadata.get("url_count") == 4, (
             f"AC-PA-1 setup: executed fetch must tag url_count=4, saw {response.usage.metadata!r}"
         )
-        events = await repo.list_usage(provider="parallel", operation=UsageOperation.FETCH)
+        events = await repo.list_provider_usage(provider="parallel", operation=UsageOperation.FETCH)
         assert len(events) == 1, f"AC-PA-1/R2: fetch usage must persist, saw {events!r}"
         assert events[0].metadata.get("url_count") == 4, (
             "AC-PA-1/R2: url_count must survive the metadata filter and the "
@@ -1337,8 +1426,13 @@ class TestKeenableRebuildPersistence:
                 await tracked(
                     repo,
                     first,
-                    lambda running: running.search(SearchRequest(query="q", limit=2)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repo),
                 )
             assert (await first.quota()).remaining == Decimal("99997")
             rebuilt = KeenableAdapter(client, api_key=TEST_API_KEY)
@@ -1366,8 +1460,13 @@ class TestKeenableRebuildPersistence:
                 await tracked(
                     repo,
                     first,
-                    lambda running: running.search(SearchRequest(query="q", limit=2)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repo),
                 )
             assert (await first.quota()).remaining == Decimal("0")
             rebuilt = KeenableAdapter(client, api_key=TEST_API_KEY)
@@ -1394,7 +1493,8 @@ class TestKeenableRebuildPersistence:
                     status=UsageStatus.SUCCESS,
                     unit_kind=_opt(kind, "CREDIT"),
                     display_unit="credits",
-                )
+                ),
+                attribution=await seed_execution_project(repo),
             )
         await repo.record_quota(
             QuotaSnapshot(
@@ -1434,9 +1534,10 @@ class TestMetadataTypePreservation:
                 units=Decimal("1"),
                 observed_at=FIXED_AT,
                 metadata={"count": 4, "paid": False, "missing": None},
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
-        (event,) = await repo.list_usage(provider="alpha")
+        (event,) = await repo.list_provider_usage(provider="alpha")
         assert event.metadata["count"] == 4 and isinstance(event.metadata["count"], int)
         assert event.metadata["paid"] is False
         assert event.metadata["missing"] is None
@@ -1451,9 +1552,10 @@ class TestMetadataTypePreservation:
                 units=Decimal("1"),
                 observed_at=FIXED_AT,
                 metadata={"label": "4", "price_text": "0.005"},
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
-        (event,) = await repo.list_usage(provider="alpha")
+        (event,) = await repo.list_provider_usage(provider="alpha")
         assert event.metadata["label"] == "4" and isinstance(event.metadata["label"], str), (
             f"numeric strings must not coerce to numbers, saw {event.metadata!r}"
         )
@@ -1469,9 +1571,10 @@ class TestMetadataTypePreservation:
                 units=Decimal("1"),
                 observed_at=FIXED_AT,
                 metadata={"mode": "keyed", "price": Decimal("1.25")},
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
-        (event,) = await repo.list_usage(provider="alpha")
+        (event,) = await repo.list_provider_usage(provider="alpha")
         back = event.metadata["price"]
         assert not isinstance(back, float), (
             f"Decimal telemetry must never round-trip through float, saw {back!r}"
@@ -1613,8 +1716,13 @@ class TestParallelHydrationUnknownMode:
                 },
             )
 
-        await repo.record_usage(row(mode="turbo", observed_at=now))
-        await repo.record_usage(row(mode="ultra-mega", observed_at=now))
+        await repo.record_usage(
+            row(mode="turbo", observed_at=now), attribution=await seed_execution_project(repo)
+        )
+        await repo.record_usage(
+            row(mode="ultra-mega", observed_at=now),
+            attribution=await seed_execution_project(repo),
+        )
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={})
@@ -1705,7 +1813,9 @@ class TestBraveDerivedSpend:
         )
         try:
             adapter = BraveAdapter(client, api_key=TEST_API_KEY)
-            response = await adapter.search(SearchRequest(query="q", limit=2))
+            response = await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
         finally:
             await client.aclose()
         snapshot = response.quota_snapshot
@@ -1739,7 +1849,8 @@ class TestBraveDerivedSpend:
                     status=UsageStatus.SUCCESS,
                     unit_kind=_opt(kind, "REQUEST"),
                     display_unit="requests",
-                )
+                ),
+                attribution=await seed_execution_project(repo),
             )
         headers = {
             "X-RateLimit-Remaining": "49, 0",
@@ -1754,8 +1865,13 @@ class TestBraveDerivedSpend:
             await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="spend", limit=3)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="spend", limit=3
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
         finally:
             await client.aclose()
@@ -1779,7 +1895,7 @@ class TestBraveDerivedSpend:
         )
         totals = {
             (total.provider, str(total.operation), str(_opt(total, "unit_kind"))): total
-            for total in await repo.usage_totals()
+            for total in await repo.installation_usage_totals()
         }
         assert totals[("brave", "search", "REQUEST")].total_units == Decimal("176"), (
             "AC-3: Brave REQUEST ledger stays exact (175 plus the tracked search)"
@@ -1794,7 +1910,9 @@ class TestBraveDerivedSpend:
         )
         try:
             adapter = BraveAdapter(client, api_key=TEST_API_KEY)
-            response = await adapter.search(SearchRequest(query="q", limit=2))
+            response = await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            )
         finally:
             await client.aclose()
         assert response.usage is not None, "Brave usage missing"
@@ -1812,7 +1930,8 @@ class TestBraveDerivedSpend:
                 observed_at=FIXED_AT,
                 unit_kind=_opt(kind, "USD"),
                 display_unit="USD",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
         await repo.record_usage(
             UsageEvent(
@@ -1823,7 +1942,8 @@ class TestBraveDerivedSpend:
                 status=UsageStatus.SUCCESS,
                 unit_kind=_opt(kind, "REQUEST"),
                 display_unit="requests",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
         headers = {"X-RateLimit-Remaining": "49, 0", "X-RateLimit-Limit": "50, 0"}
         client = httpx.AsyncClient(
@@ -1836,8 +1956,13 @@ class TestBraveDerivedSpend:
             await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
         finally:
             await client.aclose()
@@ -1862,7 +1987,11 @@ class TestBraveExhaustionMapping:
         try:
             adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             with pytest.raises(ProviderOperationError) as exc_info:
-                await adapter.search(SearchRequest(query="q", limit=2))
+                await adapter.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                    )
+                )
         finally:
             await client.aclose()
         assert exc_info.value.error.code == "quota_exhausted", (
@@ -1884,7 +2013,11 @@ class TestBraveExhaustionMapping:
         try:
             adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             with pytest.raises(ProviderOperationError) as exc_info:
-                await adapter.search(SearchRequest(query="q", limit=2))
+                await adapter.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                    )
+                )
         finally:
             await client.aclose()
         assert exc_info.value.error.code == "quota_exhausted", (
@@ -1908,7 +2041,11 @@ class TestBraveExhaustionMapping:
         try:
             adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             with pytest.raises(ProviderOperationError) as exc_info:
-                await adapter.search(SearchRequest(query="q", limit=2))
+                await adapter.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                    )
+                )
         finally:
             await client.aclose()
         assert exc_info.value.error.code == "http_error"
@@ -1930,8 +2067,13 @@ class TestBraveExhaustionMapping:
                 await tracked_call(
                     repo,
                     adapter,
-                    lambda running: running.search(SearchRequest(query="q", limit=2)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repo),
                 )
         finally:
             await client.aclose()
@@ -1967,8 +2109,13 @@ class TestBraveExhaustionMapping:
             await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="depleted", limit=2)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="depleted", limit=2
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
         finally:
             await client.aclose()
@@ -2011,7 +2158,12 @@ class TestBraveExhaustionMapping:
         health = {"brave": _health("brave", HealthStatus.HEALTHY)}
         names = [
             c.adapter.name
-            for c in select_route(SearchRequest(query="q"), adapters, health, {"brave": latest})
+            for c in select_route(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q"),
+                adapters,
+                health,
+                {"brave": latest},
+            )
         ]
         assert "brave" not in names, f"AC-6: genuine 0/1000 must steer away: {names!r}"
         assert names[0] == "tavily", f"AC-6: fallback must lead: {names!r}"
@@ -2030,8 +2182,13 @@ class TestBraveMonthlyCounterLedger:
             await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
         finally:
             await client.aclose()
@@ -2053,8 +2210,13 @@ class TestBraveMonthlyCounterLedger:
             await tracked_call(
                 repo,
                 first,
-                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
             rebuilt = BraveAdapter(client, api_key=TEST_API_KEY)
             snapshot = await rebuilt.hydrate_quota(repo)
@@ -2082,8 +2244,13 @@ class TestBraveMonthlyCounterLedger:
             await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="q", limit=2)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
         finally:
             await client.aclose()
@@ -2144,8 +2311,13 @@ class TestExaMonthlyLedger:
             response = await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="test", limit=1)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=1
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
             assert response.usage is not None
             assert response.usage.units == Decimal("0.007")
@@ -2187,8 +2359,13 @@ class TestExaMonthlyLedger:
             await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="test1", limit=1)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="test1", limit=1
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
             # Second call
             sdk.search_response = ExaSDKResponse(
@@ -2200,8 +2377,13 @@ class TestExaMonthlyLedger:
             await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="test2", limit=1)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="test2", limit=1
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
         finally:
             if adapter is not None:
@@ -2243,8 +2425,13 @@ class TestExaMonthlyLedger:
                 await tracked_call(
                     repo,
                     adapter,
-                    lambda running: running.search(SearchRequest(query="fail", limit=1)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa", query="fail", limit=1
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repo),
                 )
             assert exc_info.value.error.status_code == 402
             assert exc_info.value.error.code == "quota_exhausted"
@@ -2272,8 +2459,13 @@ class TestExaMonthlyLedger:
             await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="success", limit=1)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="success", limit=1
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
 
             latest_after = await repo.latest_quota("exa")
@@ -2302,8 +2494,15 @@ class TestExaMonthlyLedger:
                 await tracked_call(
                     repo,
                     adapter,
-                    lambda running: running.search(SearchRequest(query="rate_limited", limit=1)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa",
+                            query="rate_limited",
+                            limit=1,
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repo),
                 )
             assert exc_info.value.error.status_code == 429
             assert exc_info.value.error.code == "rate_limited"
@@ -2331,7 +2530,8 @@ class TestExaMonthlyLedger:
                 status=UsageStatus.SUCCESS,
                 unit_kind=_opt(kind, "USD"),
                 display_unit="USD",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
         await repo.record_usage(
             UsageEvent(
@@ -2342,7 +2542,8 @@ class TestExaMonthlyLedger:
                 status=UsageStatus.SUCCESS,
                 unit_kind=_opt(kind, "USD"),
                 display_unit="USD",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
         # Previous month event: should not be counted
         last_month = (now.replace(day=1) - timedelta(days=1)).replace(day=15)
@@ -2355,7 +2556,8 @@ class TestExaMonthlyLedger:
                 status=UsageStatus.SUCCESS,
                 unit_kind=_opt(kind, "USD"),
                 display_unit="USD",
-            )
+            ),
+            attribution=await seed_execution_project(repo),
         )
 
         client = httpx.AsyncClient(timeout=30.0)
@@ -2402,8 +2604,13 @@ class TestExaMonthlyLedger:
             response = await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="fallback", limit=5)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="fallback", limit=5
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
             assert response.usage is not None
             assert response.usage.units == Decimal("0.007")
@@ -2439,8 +2646,15 @@ class TestExaMonthlyLedger:
                 await tracked_call(
                     repo,
                     adapter,
-                    lambda running: running.search(SearchRequest(query="limited", limit=1)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa",
+                            query="limited",
+                            limit=1,
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repo),
                 )
             latest = await repo.latest_quota("exa")
             assert latest is not None
@@ -2457,8 +2671,15 @@ class TestExaMonthlyLedger:
             await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="recovered", limit=1)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa",
+                        query="recovered",
+                        limit=1,
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
             latest_after = await repo.latest_quota("exa")
             assert latest_after is not None
@@ -2506,8 +2727,13 @@ class TestTavilyQuotaCoexistence:
                 await tracked_call(
                     repo,
                     adapter,
-                    lambda running: running.search(SearchRequest(query="fail", limit=1)),
+                    lambda running: running.search(
+                        SearchRequest(
+                            project_id="00000000-0000-4000-8000-0000000000aa", query="fail", limit=1
+                        )
+                    ),
                     operation=UsageOperation.SEARCH,
+                    attribution=await seed_execution_project(repo),
                 )
         finally:
             if adapter is not None:
@@ -2529,8 +2755,13 @@ class TestTavilyQuotaCoexistence:
             response = await tracked_call(
                 repo,
                 adapter,
-                lambda running: running.search(SearchRequest(query="empty", limit=1)),
+                lambda running: running.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="empty", limit=1
+                    )
+                ),
                 operation=UsageOperation.SEARCH,
+                attribution=await seed_execution_project(repo),
             )
         finally:
             if adapter is not None:

@@ -17,17 +17,23 @@ and rows are upserted by ``span_id`` so a re-export cannot duplicate a span.
 import json
 import logging
 import sqlite3
+import threading
+import weakref
 from collections.abc import Sequence
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import SpanKind, StatusCode
 
 from freesearch.models.observability import (
+    INTERNAL_ATTRIBUTES,
+    TRACE_CONTENT_ATTRIBUTES,
+    ActorType,
     TraceAttribute,
     TraceEventDetail,
     TraceOperation,
@@ -38,10 +44,16 @@ from freesearch.models.observability import (
     trace_outcome_for,
 )
 from freesearch.persistence.database_migrations import absolute_database_path
+from freesearch.persistence.trace_policy import METADATA_ONLY_POLICY, apply_trace_policy
 
 logger = logging.getLogger(__name__)
 
 _SQLITE_TIMEOUT_SECONDS = 30.0
+
+#: Exporters with an open batch connection, by weak reference. Closing the
+#: owning repository releases these file handles even when an embedder never
+#: shut the trace runtime down (Windows otherwise cannot remove the database).
+_EXPORTERS: weakref.WeakSet[Any] = weakref.WeakSet()
 
 _KINDS: dict[SpanKind, TraceSpanKind] = {
     SpanKind.INTERNAL: TraceSpanKind.INTERNAL,
@@ -59,22 +71,18 @@ _STATUS_CODES: dict[StatusCode, TraceStatusCode] = {
 
 # Content-bearing attributes are projected into their own summary columns; they
 # are dropped from ``attributes_json`` so one fetch payload is stored once.
-_CONTENT_ATTRIBUTES = frozenset(
-    {
-        TraceAttribute.REQUEST_QUERY,
-        TraceAttribute.REQUEST_URL,
-        TraceAttribute.RESPONSE_OUTPUT_JSON,
-    }
-)
+_CONTENT_ATTRIBUTES = TRACE_CONTENT_ATTRIBUTES
 
 _INSERT = """
 INSERT OR REPLACE INTO trace_spans (
-    span_id, trace_id, parent_span_id, user_id, name, kind, started_at, ended_at,
+    span_id, trace_id, parent_span_id, user_id, project_id, actor_type,
+    actor_id, name, kind, started_at, ended_at,
     duration_ms, status_code, status_message, outcome, error_type, operation,
     provider, input_text, output_json, result_count, attributes_json,
     events_json, resource_json
 ) VALUES (
-    :span_id, :trace_id, :parent_span_id, :user_id, :name, :kind, :started_at,
+    :span_id, :trace_id, :parent_span_id, :user_id, :project_id, :actor_type,
+    :actor_id, :name, :kind, :started_at,
     :ended_at, :duration_ms, :status_code, :status_message, :outcome,
     :error_type, :operation, :provider, :input_text, :output_json,
     :result_count, :attributes_json, :events_json, :resource_json
@@ -178,15 +186,6 @@ def _http_status(attributes: dict[str, Any]) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _status_message(span: ReadableSpan, attributes: dict[str, Any]) -> str | None:
-    """Prefer the OTel status description, else the annotated failure message."""
-
-    message = attributes.get(TraceAttribute.ERROR_MESSAGE)
-    if isinstance(message, str) and message:
-        return message
-    return span.status.description
-
-
 def _summary_attributes(attributes: dict[str, Any], *, is_root: bool) -> dict[str, Any]:
     """Return the root-summary column values (empty for child spans)."""
 
@@ -206,6 +205,28 @@ def _summary_attributes(attributes: dict[str, Any], *, is_root: bool) -> dict[st
         "output_json": output if isinstance(output, str) else None,
         "result_count": int(result_count) if isinstance(result_count, (int, float)) else None,
     }
+
+
+def _uuid_attribute(attributes: dict[str, Any], key: str) -> UUID | None:
+    """Parse one UUID ownership attribute defensively; invalid data is ``None``."""
+
+    raw = attributes.get(key)
+    if raw is None:
+        return None
+    try:
+        return UUID(str(raw))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _actor_type(attributes: dict[str, Any]) -> ActorType | None:
+    """Parse the actor-type ownership attribute, tolerating unknown values."""
+
+    raw = attributes.get(TraceAttribute.ACTOR_TYPE)
+    try:
+        return ActorType(str(raw)) if raw else None
+    except ValueError:
+        return None
 
 
 def _provider(attributes: dict[str, Any]) -> str | None:
@@ -241,10 +262,15 @@ def span_record(span: ReadableSpan) -> TraceSpanRecord:
         ended_at=_timestamp(ended),
         duration_ms=_duration_ms(started, ended),
         status_code=status,
-        status_message=_status_message(span, attributes),
+        # No exception text is ever persisted: the safe projection is the
+        # low-cardinality ``error_type`` that the facade records.
+        status_message=None,
         outcome=_outcome(status, attributes, is_root=is_root, http_status=_http_status(attributes)),
         error_type=_error_type(span),
         user_id=summary.get("user_id"),
+        project_id=_uuid_attribute(attributes, TraceAttribute.PROJECT_ID),
+        actor_type=_actor_type(attributes),
+        actor_id=_uuid_attribute(attributes, TraceAttribute.ACTOR_ID),
         operation=_operation(summary.get("operation")),
         provider=_provider(attributes),
         input_text=summary.get("input_text"),
@@ -253,7 +279,7 @@ def span_record(span: ReadableSpan) -> TraceSpanRecord:
         attributes={
             key: value
             for key, value in attributes.items()
-            if not (is_root and key in _CONTENT_ATTRIBUTES)
+            if key not in INTERNAL_ATTRIBUTES and not (is_root and key in _CONTENT_ATTRIBUTES)
         },
         events=_events(span),
         resource=_resource(span),
@@ -304,37 +330,172 @@ def _row(record: TraceSpanRecord) -> dict[str, Any]:
     return payload
 
 
+def _record_rows(records: Sequence[TraceSpanRecord]) -> list[dict[str, Any]]:
+    """Validate ownership, then render every record as SQL parameters."""
+
+    if not records:
+        return []
+    for record in records:
+        if record.project_id is None or record.actor_type is None or record.actor_id is None:
+            raise ValueError(
+                "trace span records must carry project ownership and actor attribution"
+            )
+    return [_row(record) for record in records]
+
+
+def _write_rows(connection: sqlite3.Connection, rows: Sequence[dict[str, Any]]) -> None:
+    """Upsert one batch in one transaction on an already-open connection."""
+
+    if not rows:
+        return
+    connection.executemany(_INSERT, rows)
+    connection.commit()
+
+
+def _close_connection(connection: sqlite3.Connection) -> None:
+    """Best-effort close for interpreter/finalizer teardown."""
+
+    with suppress(Exception):
+        connection.close()
+
+
 def write_trace_spans(database: Path, records: Sequence[TraceSpanRecord]) -> None:
     """Upsert span rows in one short transaction (also the fixture seed path).
 
-    The connection is closed explicitly: exports run on the SDK's batch thread,
-    so a leaked handle would keep the database file locked (and on Windows block
-    its owner from removing it).
+    This is the raw storage path: the caller supplies the rows to persist.
+    Project trace detail policy is applied by
+    :class:`SQLiteSpanExporter` before it reaches this function, so fixture
+    seeds can intentionally write rows of a project whose current policy is
+    narrower.
+
+    Every record must carry project ownership and actor attribution; an
+    unattributed record raises ``ValueError`` before any write. The connection
+    is closed explicitly: seed callers are one-shot, so a leaked handle would
+    keep the database file locked (and on Windows block its owner from removing
+    it).
     """
 
-    if not records:
+    rows = _record_rows(records)
+    if not rows:
         return
-    rows = [_row(record) for record in records]
     with closing(sqlite3.connect(database, timeout=_SQLITE_TIMEOUT_SECONDS)) as connection:
         connection.execute("PRAGMA busy_timeout = 30000")
         connection.execute("PRAGMA synchronous = NORMAL")
-        connection.executemany(_INSERT, rows)
-        connection.commit()
+        _write_rows(connection, rows)
+
+
+def _capture_decision(span: ReadableSpan) -> bool:
+    """Return the stamped trusted payload capture decision.
+
+    A missing decision fails closed to metadata-only capture.
+    """
+
+    attributes = span.attributes or {}
+    return attributes.get(TraceAttribute.CAPTURE_PAYLOAD) is True
 
 
 class SQLiteSpanExporter(SpanExporter):
-    """Persist finished spans into the local ``trace_spans`` table."""
+    """Persist finished spans into the local ``trace_spans`` table.
+
+    One sqlite connection is reused across batches. Opening a fresh connection
+    for every flushed request re-parses the schema and re-applies the pragmas
+    on the batch thread; measured on the latency harness that cost dominated
+    the MCP flush. Each batch still runs its own short transaction and commit,
+    so the durability and one-batch-one-transaction contract is unchanged.
+    """
 
     def __init__(self, database: Path) -> None:
         """Resolve the trace database once so exports cannot retarget it."""
 
         self._database = absolute_database_path(database)
+        self._lock = threading.Lock()
+        self._connection: sqlite3.Connection | None = None
+        self._finalizer: weakref.finalize[Any, Any] | None = None
+        _EXPORTERS.add(self)
+
+    @property
+    def database_path(self) -> Path:
+        """Return the database this exporter writes to."""
+
+        return self._database
+
+    def _connection_locked(self) -> sqlite3.Connection:
+        """Return the exporter's batch-thread connection, opening it once."""
+
+        if self._connection is None:
+            connection = sqlite3.connect(
+                self._database,
+                timeout=_SQLITE_TIMEOUT_SECONDS,
+                check_same_thread=False,
+            )
+            connection.execute("PRAGMA busy_timeout = 30000")
+            connection.execute("PRAGMA synchronous = NORMAL")
+            # Match the repository's WAL checkpoint policy: the exporter is a
+            # separate long-lived connection, and its commits must not trigger
+            # frequent whole-WAL checkpoints either.
+            connection.execute("PRAGMA cache_size = -64000")
+            connection.execute("PRAGMA mmap_size = 268435456")
+            connection.execute("PRAGMA temp_store = MEMORY")
+            connection.execute("PRAGMA wal_autocheckpoint = 8000")
+            connection.execute("PRAGMA journal_size_limit = 67108864")
+            self._connection = connection
+            # A provider that is never shut down must still release the file
+            # handle when the exporter becomes garbage, or Windows cannot
+            # remove the temporary database.
+            self._finalizer = weakref.finalize(self, _close_connection, connection)
+        return self._connection
+
+    def _discard_connection_locked(self) -> None:
+        """Close and forget the connection after a failed batch or shutdown."""
+
+        connection = self._connection
+        self._connection = None
+        finalizer = self._finalizer
+        self._finalizer = None
+        if finalizer is not None:
+            finalizer.detach()
+        if connection is not None:
+            _close_connection(connection)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        """Write one batch; failures are reported, never raised."""
+        """Write one batch using each span's stamped capture decision.
+
+        Spans without trusted ownership (for example a root opened before the
+        handler bound its execution scope) are dropped from the batch and
+        logged by count only — never with payload. A span whose payload capture is disabled is
+        projected to metadata before persistence. Failures are reported, never
+        raised.
+        """
 
         try:
-            write_trace_spans(self._database, [span_record(span) for span in spans])
+            retained: list[TraceSpanRecord] = []
+            skipped = 0
+            for span in spans:
+                captures_payload = _capture_decision(span)
+                record = span_record(span)
+                if (
+                    record.project_id is None
+                    or record.actor_type is None
+                    or record.actor_id is None
+                ):
+                    skipped += 1
+                    continue
+                retained.append(
+                    record if captures_payload else apply_trace_policy(record, METADATA_ONLY_POLICY)
+                )
+            if skipped:
+                logger.warning("trace export skipped %d unattributed span(s)", skipped)
+            rows = _record_rows(retained)
+            if not rows:
+                return SpanExportResult.SUCCESS
+            with self._lock:
+                try:
+                    _write_rows(self._connection_locked(), rows)
+                except BaseException:
+                    # Discard the failed transaction before another batch can
+                    # use this connection and commit any of its partial rows.
+                    self._discard_connection_locked()
+                    raise
         except Exception as error:
             logger.warning(
                 "trace export failed for %d span(s): %s",
@@ -346,9 +507,30 @@ class SQLiteSpanExporter(SpanExporter):
         return SpanExportResult.SUCCESS
 
     def shutdown(self) -> None:
-        """Nothing to release: every batch uses its own short-lived connection."""
+        """Close the batch connection; every batch already committed."""
 
-        return None
+        with self._lock:
+            self._discard_connection_locked()
 
 
-__all__ = ["SQLiteSpanExporter", "span_record", "write_trace_spans"]
+def close_trace_exporters(database: Path) -> None:
+    """Close every exporter connection bound to one database path.
+
+    The repository calls this as it closes. An embedder can forget to shut an
+    injected trace runtime down, and a persistent SQLite connection would then
+    keep the file handle open (Windows refuses to remove or replace the file).
+    Closing here is safe: the next export reopens the connection.
+    """
+
+    resolved = absolute_database_path(database)
+    for exporter in list(_EXPORTERS):
+        if exporter.database_path == resolved:
+            exporter.shutdown()
+
+
+__all__ = [
+    "SQLiteSpanExporter",
+    "close_trace_exporters",
+    "span_record",
+    "write_trace_spans",
+]

@@ -28,15 +28,17 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from freesearch.models.project_permissions import STANDARD, effective_project_permissions
 from freesearch.models.projects import (
+    API_KEY_ACTIONS,
     BUILTIN_ROLE_DEFINITIONS,
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     AuthorizationDecision,
     AuthorizationQuery,
     HumanPrincipal,
     PermissionAction,
+    ProjectApiKeyPrincipal,
     ProjectContext,
-    ProjectTokenPrincipal,
     RoleDefinition,
     ScopeType,
     action_scope,
@@ -57,8 +59,12 @@ from freesearch.persistence.users import UserRow
 def project_role_permissions(role_key: str) -> frozenset[PermissionAction]:
     """Return a project role's permissions, rejecting non-project role keys."""
 
-    definition = _project_role_definition(role_key)
-    return definition.permissions
+    _project_role_definition(role_key)
+    if role_key not in {"project_admin", "project_member"}:
+        raise ValueError(f"Role {role_key!r} is not assignable")
+    return frozenset(
+        PermissionAction(action) for action in effective_project_permissions([role_key], STANDARD)
+    )
 
 
 def _project_role_definition(role_key: str) -> RoleDefinition:
@@ -138,9 +144,38 @@ class ScopedAuthorizationService:
             raise AuthorizationDenied(decision)
         return decision
 
+    def decide_in_context(
+        self, context: ProjectContext, *, action: PermissionAction
+    ) -> AuthorizationDecision:
+        """Evaluate one project action from a live-resolved context.
+
+        The execution boundary builds ``context`` in the same transaction from
+        the current account, user, membership, and role rows, so its
+        ``effective_permissions`` are that request's live decision snapshot.
+        Evaluating the action from it avoids re-reading the same rows without
+        caching anything across requests: a revocation changed before this
+        transaction is already reflected in the context.
+        """
+
+        query = AuthorizationQuery(
+            principal=context.principal,
+            action=action,
+            scope_type=ScopeType.PROJECT,
+            scope_id=context.project_id,
+        )
+        if action_scope(action) is not ScopeType.PROJECT:
+            return AuthorizationDecision(
+                allowed=False,
+                reason=(f"Action {action.value!r} requires {action_scope(action).value!r} scope"),
+                required_permission=action,
+                scope_type=ScopeType.PROJECT,
+                scope_id=context.project_id,
+            )
+        return evaluate_authorization(query, effective_permissions=context.effective_permissions)
+
     async def effective_permissions(
         self,
-        principal: HumanPrincipal | ProjectTokenPrincipal,
+        principal: HumanPrincipal | ProjectApiKeyPrincipal,
         *,
         scope_type: ScopeType,
         scope_id: UUID | None,
@@ -155,22 +190,22 @@ class ScopedAuthorizationService:
     async def effective_permissions_in_session(
         self,
         session: AsyncSession,
-        principal: HumanPrincipal | ProjectTokenPrincipal,
+        principal: HumanPrincipal | ProjectApiKeyPrincipal,
         *,
         scope_type: ScopeType,
         scope_id: UUID | None,
     ) -> frozenset[PermissionAction]:
         """Resolve the current assignments of one principal in the given session."""
 
-        if isinstance(principal, ProjectTokenPrincipal):
-            return self._token_permissions(principal, scope_type=scope_type, scope_id=scope_id)
+        if isinstance(principal, ProjectApiKeyPrincipal):
+            return self._api_key_permissions(principal, scope_type=scope_type, scope_id=scope_id)
         return await self._human_permissions(
             session, principal.user_id, scope_type=scope_type, scope_id=scope_id
         )
 
     async def resolve_project_context(
         self,
-        principal: HumanPrincipal | ProjectTokenPrincipal,
+        principal: HumanPrincipal | ProjectApiKeyPrincipal,
         project_id: UUID,
     ) -> ProjectContext | None:
         """Return an immutable context for one live accessible project.
@@ -189,7 +224,7 @@ class ScopedAuthorizationService:
     async def resolve_project_context_in_session(
         self,
         session: AsyncSession,
-        principal: HumanPrincipal | ProjectTokenPrincipal,
+        principal: HumanPrincipal | ProjectApiKeyPrincipal,
         project_id: UUID,
     ) -> ProjectContext | None:
         """Resolve one immutable context inside a caller-owned session."""
@@ -208,14 +243,14 @@ class ScopedAuthorizationService:
         if project is None:
             return None
 
-        if isinstance(principal, ProjectTokenPrincipal):
+        if isinstance(principal, ProjectApiKeyPrincipal):
             if principal.project_id != project_id:
                 return None
             return ProjectContext(
                 account_id=self._account_id,
                 project_id=project_id,
                 principal=principal,
-                effective_permissions=self._token_permissions(
+                effective_permissions=self._api_key_permissions(
                     principal, scope_type=ScopeType.PROJECT, scope_id=project_id
                 ),
                 policy_revision=1,
@@ -226,10 +261,12 @@ class ScopedAuthorizationService:
             return None
         membership = (
             await session.execute(
-                select(ProjectMembershipRow).where(
+                select(ProjectMembershipRow)
+                .where(
                     ProjectMembershipRow.project_id == str(project_id),
                     ProjectMembershipRow.user_id == str(principal.user_id),
                 )
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if membership is None or membership.status != "active":
@@ -244,7 +281,7 @@ class ScopedAuthorizationService:
                 )
             ).scalars()
         )
-        permissions = self._permissions_from_project_roles(role_rows)
+        permissions = self._permissions_from_project_roles(role_rows, membership.permissions or 0)
         policy_revision = max([membership.version, *(row.version for row in role_rows), 1])
         return ProjectContext(
             account_id=self._account_id,
@@ -269,12 +306,33 @@ class ScopedAuthorizationService:
         caller can grant a system role or a capability they do not hold.
         """
 
-        definition = _project_role_definition(role_key)
-        granted = definition.permissions
+        await self.require_delegable_permissions_in_session(
+            session,
+            actor,
+            project_id=project_id,
+            permissions=project_role_permissions(role_key),
+            required_permission=PermissionAction.ROLES_ASSIGN,
+        )
+
+    async def require_delegable_permissions_in_session(
+        self,
+        session: AsyncSession,
+        actor: HumanPrincipal,
+        *,
+        project_id: UUID,
+        permissions: frozenset[PermissionAction],
+        required_permission: PermissionAction,
+    ) -> None:
+        """Require the actor to hold every permission it delegates in this project.
+
+        The same delegation limit bounds project roles and project API key
+        scopes: nobody can hand out authority they do not currently hold.
+        """
+
         held = await self._human_permissions(
             session, actor.user_id, scope_type=ScopeType.PROJECT, scope_id=project_id
         )
-        missing = granted - held
+        missing = permissions - held
         if missing:
             raise AuthorizationDenied(
                 AuthorizationDecision(
@@ -283,20 +341,20 @@ class ScopedAuthorizationService:
                         "Delegation limit: the actor does not hold "
                         f"{', '.join(sorted(action.value for action in missing))}"
                     ),
-                    required_permission=PermissionAction.ROLES_ASSIGN,
+                    required_permission=required_permission,
                     scope_type=ScopeType.PROJECT,
                     scope_id=project_id,
                 )
             )
 
-    def _token_permissions(
+    def _api_key_permissions(
         self,
-        principal: ProjectTokenPrincipal,
+        principal: ProjectApiKeyPrincipal,
         *,
         scope_type: ScopeType,
         scope_id: UUID | None,
     ) -> frozenset[PermissionAction]:
-        """Return execution-only token scopes for the token's own project."""
+        """Return a key's execution scopes for its own project, never more."""
 
         if scope_type is not ScopeType.PROJECT or scope_id != principal.project_id:
             return frozenset()
@@ -306,7 +364,7 @@ class ScopedAuthorizationService:
                 action = PermissionAction(scope)
             except ValueError:
                 continue
-            if action_scope(action) is ScopeType.PROJECT:
+            if action in API_KEY_ACTIONS:
                 actions.add(action)
         return frozenset(actions)
 
@@ -360,10 +418,12 @@ class ScopedAuthorizationService:
             return frozenset()
         membership = (
             await session.execute(
-                select(ProjectMembershipRow).where(
+                select(ProjectMembershipRow)
+                .where(
                     ProjectMembershipRow.project_id == str(scope_id),
                     ProjectMembershipRow.user_id == str(user_id),
                 )
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if membership is None or membership.status != "active":
@@ -377,25 +437,19 @@ class ScopedAuthorizationService:
                 )
             )
         ).scalars()
-        return self._permissions_from_project_roles(list(role_rows))
+        return self._permissions_from_project_roles(list(role_rows), membership.permissions or 0)
 
     @staticmethod
     def _permissions_from_project_roles(
         role_rows: list[ProjectRoleAssignmentRow],
+        bits: int,
     ) -> frozenset[PermissionAction]:
-        """Map project role rows to live project-scope catalog permissions."""
+        """Resolve membership actions from stored bits and the admin role."""
 
-        project_permissions: set[PermissionAction] = set()
-        for role_row in role_rows:
-            definition = BUILTIN_ROLE_DEFINITIONS.get(role_row.role_key)
-            if definition is None or definition.scope_type is not ScopeType.PROJECT:
-                continue
-            project_permissions.update(
-                action
-                for action in definition.permissions
-                if action_scope(action) is ScopeType.PROJECT
-            )
-        return frozenset(project_permissions)
+        return frozenset(
+            PermissionAction(action)
+            for action in effective_project_permissions((row.role_key for row in role_rows), bits)
+        )
 
 
 def human_principal(user: UserPrincipal) -> HumanPrincipal:

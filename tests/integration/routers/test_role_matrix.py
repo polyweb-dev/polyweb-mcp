@@ -1,9 +1,17 @@
-"""Admin/Developer/Agent route matrix on real HTTP (P1a, T14 parts).
+"""Scoped-authority route matrix on real HTTP (P1a T14, rewritten for A1).
 
 Every test uses an isolated database, stub adapters, and a generated signing
-secret with a cleared settings cache. Role assignment goes through the trusted
-repository path before login. The guard answers 401 before the role check, so
-anonymous calls never reach the 403 branch.
+secret with a cleared settings cache. The old Admin/Developer/Agent matrix is
+replaced by the scoped model (TASK-000041):
+
+* ``admin``: an explicit trusted ``system_admin`` assignment, no membership.
+* ``developer`` (kept as the fixture attribute name for traceability): an
+  ordinary human who administers one project. Project authority never grants
+  system/control-plane authority.
+* ``agent``: an ordinary human who is a plain member of its project.
+
+The guard answers 401 before the authority check, so anonymous calls never
+reach the 403 branch.
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
@@ -28,16 +37,23 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.users import UserRole
+from freesearch.models.project_permissions import (
+    ADMIN_ACTIONS,
+    BASE_ACTIONS,
+    PERMISSION_CATALOG,
+    ProjectPermission,
+)
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
+    account_id_from_pair,
     raw_auth_headers,
     register_and_login,
-    register_promote_login,
+    register_system_admin_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_execution_project
 
 
 class _StubAdapter(ProviderAdapter):
@@ -96,20 +112,39 @@ class _StubAdapter(ProviderAdapter):
 
 
 @pytest_asyncio.fixture
-async def matrix_client(tmp_path: Path, auth_secret: str) -> TestClient:
+async def matrix_client(
+    tmp_path: Path, auth_secret: str, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     repository = await SQLiteRepository.open(tmp_path / "matrix.db")
     app = create_app([_StubAdapter("tavily")], repository=repository)
     with TestClient(app) as client:
-        admin = await register_promote_login(
-            client, repository, temp_email("matrix-admin"), UserRole.ADMIN
-        )
-        developer = await register_promote_login(
-            client, repository, temp_email("matrix-dev"), UserRole.DEVELOPER
-        )
+        admin = await register_system_admin_login(client, repository, temp_email("matrix-admin"))
+        # A project administrator holds project authority only.
+        developer = register_and_login(client, temp_email("matrix-project-admin"))
         agent = register_and_login(client, temp_email("matrix-agent"))
         client.headers_admin = raw_auth_headers(admin["access_token"])  # type: ignore[attr-defined]
         client.headers_developer = raw_auth_headers(developer["access_token"])  # type: ignore[attr-defined]
         client.headers_agent = raw_auth_headers(agent["access_token"])  # type: ignore[attr-defined]
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(developer))
+        agent_id = account_id_from_pair(agent)
+        added = client.post(
+            f"/api/v1/projects/{project.project_id}/members",
+            json={"user_id": str(agent_id), "permissions": 3},
+            headers=client.headers_developer,  # type: ignore[attr-defined]
+        )
+        assert added.status_code == 201
+        from tests.fixtures.execution import bind_existing_project
+
+        await bind_existing_project(
+            repository,
+            project.project_id,
+            project.actor_id,
+            app.state._routes,
+            monkeypatch,
+            app.state.secret_store,
+        )
+        client.agent_pid = str(project.project_id)  # type: ignore[attr-defined]
+        client.agent_id = str(agent_id)  # type: ignore[attr-defined]
         yield client
     await repository.close()
 
@@ -122,23 +157,25 @@ def test_anonymous_reports_401_before_role_checks(matrix_client: TestClient) -> 
 
 
 def test_control_reads_permit_admin_and_developer_only(matrix_client: TestClient) -> None:
-    for headers in (matrix_client.headers_admin, matrix_client.headers_developer):  # type: ignore[attr-defined]
-        assert matrix_client.get("/api/v1/providers", headers=headers).status_code == 200
-        assert matrix_client.get("/api/v1/providers/tavily", headers=headers).status_code == 200
-        assert matrix_client.get("/api/v1/routing/config", headers=headers).status_code == 200
-        assert matrix_client.get("/stats", headers=headers).status_code == 200
-        assert matrix_client.get("/dashboard", headers=headers).status_code == 200
+    """A1: control reads need a system assignment; project authority is not enough."""
 
-    agent = matrix_client.headers_agent  # type: ignore[attr-defined]
-    assert matrix_client.get("/api/v1/providers", headers=agent).status_code == 403
-    assert matrix_client.get("/api/v1/providers/tavily", headers=agent).status_code == 403
-    assert matrix_client.get("/api/v1/routing/config", headers=agent).status_code == 403
-    assert matrix_client.get("/stats", headers=agent).status_code == 403
-    assert matrix_client.get("/dashboard", headers=agent).status_code == 403
+    admin = matrix_client.headers_admin  # type: ignore[attr-defined]
+    assert matrix_client.get("/api/v1/providers", headers=admin).status_code == 200
+    assert matrix_client.get("/api/v1/providers/tavily", headers=admin).status_code == 200
+    assert matrix_client.get("/api/v1/routing/config", headers=admin).status_code == 200
+    assert matrix_client.get("/stats", headers=admin).status_code == 200
+    assert matrix_client.get("/dashboard", headers=admin).status_code == 200
+
+    for headers in (matrix_client.headers_developer, matrix_client.headers_agent):  # type: ignore[attr-defined]
+        assert matrix_client.get("/api/v1/providers", headers=headers).status_code == 403
+        assert matrix_client.get("/api/v1/providers/tavily", headers=headers).status_code == 403
+        assert matrix_client.get("/api/v1/routing/config", headers=headers).status_code == 403
+        assert matrix_client.get("/stats", headers=headers).status_code == 403
+        assert matrix_client.get("/dashboard", headers=headers).status_code == 403
 
 
 def test_control_mutations_require_admin(matrix_client: TestClient) -> None:
-    payload = {"enabled": False, "priority": 7}
+    payload = {"enabled": False}
     allowed = matrix_client.patch(
         "/api/v1/providers/tavily",
         json=payload,
@@ -162,13 +199,10 @@ def test_admin_only_surfaces_reject_developer_and_agent(matrix_client: TestClien
     probe = matrix_client.post("/api/v1/providers/tavily/test", headers=admin)
     assert probe.status_code == 200
 
-    assert (
-        matrix_client.get("/api/v1/providers/tavily/oauth/status", headers=developer).status_code
-        == 403
-    )
-    assert (
-        matrix_client.get("/api/v1/providers/tavily/oauth/status", headers=agent).status_code == 403
-    )
+    # Project administrators can access their own vault, but developers cannot.
+    assert matrix_client.get("/api/v1/account/vault/keys", headers=developer).status_code == 200
+    assert matrix_client.get("/api/v1/account/vault/keys", headers=agent).status_code == 403
+    assert matrix_client.get("/api/v1/account/vault/keys", headers=admin).status_code == 200
 
     assert (
         matrix_client.put("/api/v1/routing/config", json={}, headers=developer).status_code == 403
@@ -176,38 +210,98 @@ def test_admin_only_surfaces_reject_developer_and_agent(matrix_client: TestClien
     assert matrix_client.put("/api/v1/routing/config", json={}, headers=agent).status_code == 403
 
     assert (
-        matrix_client.put(
-            "/api/v1/providers/tavily/secret", json={"secret": "x" * 16}, headers=agent
+        matrix_client.post(
+            "/api/v1/account/vault/keys",
+            json={"provider_type": "tavily", "label": "denied", "secret": "x" * 16},
+            headers=agent,
         ).status_code
         == 403
     )
-    assert (
-        matrix_client.delete("/api/v1/providers/tavily/secret", headers=developer).status_code
-        == 403
+
+
+@pytest.mark.parametrize(
+    ("bit", "action"),
+    [(item.bit, item.action) for item in PERMISSION_CATALOG if item.developer_toggle],
+)
+def test_project_admin_has_all_actions_and_developer_has_only_granted_bit(
+    matrix_client: TestClient, bit: int, action: str
+) -> None:
+    project = matrix_client.agent_pid  # type: ignore[attr-defined]
+    user = matrix_client.agent_id  # type: ignore[attr-defined]
+    owner = matrix_client.headers_developer  # type: ignore[attr-defined]
+    developer = matrix_client.headers_agent  # type: ignore[attr-defined]
+    updated = matrix_client.patch(
+        f"/api/v1/projects/{project}/members/{user}", json={"permissions": bit}, headers=owner
+    )
+    assert updated.status_code == 200
+    access = matrix_client.get(f"/api/v1/projects/{project}/access", headers=developer)
+    assert access.status_code == 200
+    assert set(access.json()["permissions"]) == set(BASE_ACTIONS) | {action}
+    admin_access = matrix_client.get(f"/api/v1/projects/{project}/access", headers=owner)
+    assert admin_access.status_code == 200
+    assert set(admin_access.json()["permissions"]) == (
+        set(BASE_ACTIONS) | set(ADMIN_ACTIONS) | {item.action for item in PERMISSION_CATALOG}
     )
 
 
 def test_agent_keeps_execution_access(matrix_client: TestClient) -> None:
     agent = matrix_client.headers_agent  # type: ignore[attr-defined]
-    search = matrix_client.post("/search", json={"query": "matrix probe"}, headers=agent)
+    owner = matrix_client.headers_developer  # type: ignore[attr-defined]
+    project = matrix_client.agent_pid  # type: ignore[attr-defined]
+    user = matrix_client.agent_id  # type: ignore[attr-defined]
+    search = matrix_client.post(
+        "/search",
+        json={"project_id": matrix_client.agent_pid, "query": "matrix probe"},
+        headers=agent,
+    )
     assert search.status_code == 200
-    fetch = matrix_client.post("/fetch", json={"url": "https://example.com/x"}, headers=agent)
+    fetch = matrix_client.post(
+        "/fetch",
+        json={"project_id": matrix_client.agent_pid, "url": "https://example.com/x"},
+        headers=agent,
+    )
     assert fetch.status_code == 200
     assert matrix_client.get("/users/me", headers=agent).status_code == 200
+    for bit, search_status, fetch_status in (
+        (ProjectPermission.SEARCH, 200, 403),
+        (ProjectPermission.FETCH, 403, 200),
+        (ProjectPermission.TOKENS, 403, 403),
+    ):
+        updated = matrix_client.patch(
+            f"/api/v1/projects/{project}/members/{user}",
+            json={"permissions": int(bit)},
+            headers=owner,
+        )
+        assert updated.status_code == 200
+        assert (
+            matrix_client.post(
+                "/search", json={"project_id": project, "query": "probe"}, headers=agent
+            ).status_code
+            == search_status
+        )
+        assert (
+            matrix_client.post(
+                "/fetch",
+                json={"project_id": project, "url": "https://example.com/x"},
+                headers=agent,
+            ).status_code
+            == fetch_status
+        )
+        assert matrix_client.get(
+            f"/api/v1/projects/{project}/api-keys", headers=agent
+        ).status_code == (200 if bit == ProjectPermission.TOKENS else 403)
 
 
 def test_public_registration_accepts_each_role_without_privilege_widening(
     matrix_client: TestClient,
 ) -> None:
-    """T2-SIGNUP: open signup creates the selected role; flags cannot widen authority."""
+    """T2-SIGNUP (A1): signup cannot request a role or flag; the result is ordinary."""
 
-    created = matrix_client.post(
+    requested = matrix_client.post(
         "/auth/register",
         json={"email": temp_email("matrix-extra"), "password": TEMP_PASSWORD, "role": "admin"},
     )
-    assert created.status_code == 201
-    assert created.json()["role"] == "admin"
-    assert created.json()["is_superuser"] is True
+    assert requested.status_code == 422
 
     flagged = matrix_client.post(
         "/auth/register",
@@ -217,6 +311,50 @@ def test_public_registration_accepts_each_role_without_privilege_widening(
             "is_superuser": True,
         },
     )
-    assert flagged.status_code == 201
-    assert flagged.json()["is_superuser"] is False
-    assert flagged.json()["role"] == "agent"
+    assert flagged.status_code == 422
+    # The ordinary-signup result is covered by
+    # test_auth_api.py::test_public_registration_creates_each_role_with_safe_projection.
+
+
+def test_system_admin_without_membership_has_no_project_bypass(
+    matrix_client: TestClient,
+) -> None:
+    """A1/AC2: a system administrator who is not a member cannot execute or read a project."""
+
+    admin = matrix_client.headers_admin  # type: ignore[attr-defined]
+    pid = matrix_client.agent_pid  # type: ignore[attr-defined]
+    for path, body in (
+        ("/search", {"project_id": pid, "query": "bypass"}),
+        ("/fetch", {"project_id": pid, "url": "https://example.com/bypass"}),
+    ):
+        denied = matrix_client.post(path, json=body, headers=admin)
+        assert denied.status_code == 404
+        assert denied.json() == {"detail": "project is unavailable"}
+    denied = {403, 404}
+    assert matrix_client.get(f"/api/v1/projects/{pid}/members", headers=admin).status_code in denied
+    assert (
+        matrix_client.get(f"/api/v1/projects/{pid}/api-keys", headers=admin).status_code in denied
+    )
+    issued = matrix_client.post(
+        f"/api/v1/projects/{pid}/api-keys", json={"label": "bypass"}, headers=admin
+    )
+    assert issued.status_code in denied
+    assert "fs_live_" not in issued.text
+
+
+def test_project_member_cannot_manage_keys_or_members(matrix_client: TestClient) -> None:
+    """A1/AC2: a plain member holds execution, not project administration."""
+
+    agent = matrix_client.headers_agent  # type: ignore[attr-defined]
+    pid = matrix_client.agent_pid  # type: ignore[attr-defined]
+    assert matrix_client.get(f"/api/v1/projects/{pid}/api-keys", headers=agent).status_code == 403
+    assert (
+        matrix_client.post(
+            f"/api/v1/projects/{pid}/api-keys", json={"label": "x"}, headers=agent
+        ).status_code
+        == 403
+    )
+    developer = matrix_client.headers_developer  # type: ignore[attr-defined]
+    assert (
+        matrix_client.get(f"/api/v1/projects/{pid}/api-keys", headers=developer).status_code == 200
+    )

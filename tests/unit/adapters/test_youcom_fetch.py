@@ -26,7 +26,11 @@ async def test_fetch_matches_target_page_and_normalizes_document() -> None:
         )
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert response.provider == "you"
     assert str(response.document.url) == "https://example.com/doc"
@@ -44,7 +48,12 @@ async def test_fetch_matches_scheme_and_host_case_insensitively_and_retains_path
         )
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/Docs?Query=Alpha"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://example.com/Docs?Query=Alpha",
+            )
+        )
 
     assert response.document.content == "kept"
     assert str(response.document.url) == "https://example.com/Docs?Query=Alpha"
@@ -59,7 +68,11 @@ async def test_fetch_bare_origin_trailing_slash_normalization_matches() -> None:
         )
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com"
+            )
+        )
 
     assert response.document.content == "landing"
     assert str(response.document.url) == "https://example.com/"
@@ -82,7 +95,11 @@ async def test_fetch_normalizes_contents_metadata_site_name_and_favicon() -> Non
         )
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert response.document.metadata == {
         "site_name": "Example",
@@ -106,7 +123,13 @@ async def test_fetch_truncation_merges_with_contents_metadata() -> None:
         )
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=100))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://example.com/doc",
+                max_chars=100,
+            )
+        )
 
     assert response.document.content == "x" * 100
     assert response.document.metadata == {
@@ -130,7 +153,11 @@ async def test_fetch_non_dict_contents_metadata_is_ignored() -> None:
         )
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert response.document.metadata == {}
 
@@ -140,7 +167,11 @@ async def test_fetch_empty_markdown_is_accepted() -> None:
         fetch=_fetch_payload({"url": "https://example.com/doc", "markdown": "", "title": "T"})
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert response.document.content == ""
     assert response.document.metadata == {}
@@ -153,7 +184,13 @@ async def test_fetch_truncates_content_at_max_chars() -> None:
         )
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=100))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://example.com/doc",
+                max_chars=100,
+            )
+        )
 
     assert response.document.content == "x" * 100
     assert response.document.metadata == {"truncated": True}
@@ -164,7 +201,13 @@ async def test_fetch_exact_boundary_length_is_not_truncated() -> None:
         fetch=_fetch_payload({"url": "https://example.com/doc", "markdown": "abcde", "title": "T"})
     )
     async with _wired(recorder) as adapter:
-        response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=5))
+        response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://example.com/doc",
+                max_chars=5,
+            )
+        )
 
     assert response.document.content == "abcde"
     assert response.document.metadata == {}
@@ -184,6 +227,7 @@ async def test_fetch_forwards_you_contents_options_and_normalizes_html() -> None
     async with _wired(recorder) as adapter:
         response = await adapter.fetch(
             FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 url="https://example.com/page",
                 provider_options={
                     "you": {

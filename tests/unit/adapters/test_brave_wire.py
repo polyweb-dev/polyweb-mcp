@@ -18,34 +18,15 @@ from pydantic import SecretStr
 from freesearch.adapters.brave import BraveAdapter
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.models.contracts import SearchRequest, SearchResponse
+from tests.unit.adapters._brave_test_support import brave_adapter, brave_payload
 
-
-def _payload(**overrides: object) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "web": {
-            "results": [
-                {
-                    "title": "Example",
-                    "url": "https://example.com/article",
-                    "description": "A result snippet.",
-                    "page_age": "2024-01-02T03:04:05Z",
-                    "language": "en",
-                }
-            ]
-        }
-    }
-    payload.update(overrides)
-    return payload
+_payload = brave_payload
 
 
 def _adapter(
     handler: Callable[[httpx.Request], httpx.Response], *, key: str = "edge-secret"
 ) -> tuple[BraveAdapter, httpx.AsyncClient]:
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-        headers={"Authorization": "Bearer caller", "X-API-Key": "caller-key"},
-    )
-    return BraveAdapter(client, api_key=SecretStr(key)), client
+    return brave_adapter(handler, key=key)
 
 
 def _no_leak_client(
@@ -83,6 +64,7 @@ async def test_wire_request_preserves_query_and_drops_domain_and_caller_auth() -
     try:
         response = await adapter.search(
             SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 query="café & python?",
                 domains=("example.com", "example.org"),
                 country_code="us",
@@ -116,7 +98,11 @@ async def test_wire_count_is_capped_to_twenty(limit: int, expected: str) -> None
 
     adapter, client = _adapter(handler)
     try:
-        await adapter.search(SearchRequest(query="query", limit=limit))
+        await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="query", limit=limit
+            )
+        )
     finally:
         await client.aclose()
 
@@ -157,7 +143,9 @@ async def test_wire_request_never_sends_caller_client_auth_and_never_follows_red
 
     adapter, client = _no_leak_client(handler, requests, sent_kwargs, monkeypatch)
     try:
-        response = await adapter.search(SearchRequest(query="query"))
+        response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+        )
     finally:
         await client.aclose()
 
@@ -182,7 +170,9 @@ async def test_cross_origin_302_is_single_request_without_forwarding_token(monke
     adapter, client = _no_leak_client(handler, requests, sent_kwargs, monkeypatch)
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
-            await adapter.search(SearchRequest(query="query"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="query")
+            )
     finally:
         await client.aclose()
 

@@ -2,14 +2,13 @@
 
 Every scenario uses synthetic provider ids (never real vendor builders),
 a fresh isolated SQLite database, and deterministic clocks. No vendor I/O.
-Plan: P01-P02, P03 base hooks, P04-P07, P08 generic detail; B01/0, B02,
+Plan: P01-P02, P03 base hooks, P04-P07, P08 generic detail; B01/0,
 B04-B06, B11-B13, B19-B27, B33, B37-B41. Rev5 K=0.001 exact Decimal math.
 """
 
 import asyncio
-import sqlite3
 import tempfile
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -45,6 +44,8 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services import credit_units as cu
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.database_lifecycle import unlink_with_retries
+from tests.fixtures.execution import FIXTURE_ACTOR, bdd_project_id, scenario_attribution
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 SYNTH = "synth"
@@ -56,11 +57,37 @@ def _run(context: Any, coro: Any) -> Any:
 
 
 def _open_repo(context: Any) -> None:
-    with tempfile.NamedTemporaryFile(
-        prefix="s0-core-", suffix=".db", dir=Path.cwd(), delete=False
-    ) as tmp:
-        context.database_path = tmp.name
-    context.repository = _run(context, SQLiteRepository.open(Path(context.database_path)))
+    """Open a fresh repository inside a per-scenario temporary directory.
+
+    Databases never land in the working directory. A scenario may open more
+    than one repository, so every one opened here is closed, and the directory
+    removed, by a scenario cleanup registered on first use.
+    """
+
+    directory = getattr(context, "s0_core_directory", None)
+    if directory is None:
+        directory = Path(tempfile.mkdtemp(prefix="s0-core-"))
+        context.s0_core_directory = directory
+        context.s0_core_repositories = []
+        context.enc_cleanups = [
+            *getattr(context, "enc_cleanups", []),
+            lambda: _close_and_remove_s0_core(context),
+        ]
+    path = directory / f"s0-core-{len(context.s0_core_repositories)}.db"
+    context.database_path = str(path)
+    context.repository = _run(context, SQLiteRepository.open(path))
+    context.s0_core_repositories.append(context.repository)
+
+
+def _close_and_remove_s0_core(context: Any) -> None:
+    """Close every scenario repository, then delete its temporary directory."""
+
+    for repository in context.s0_core_repositories:
+        _run(context, repository.close())
+    directory = context.s0_core_directory
+    for child in directory.iterdir():
+        unlink_with_retries(child)
+    directory.rmdir()
 
 
 def _limits_repo(context: Any) -> Any:
@@ -138,6 +165,7 @@ def _ctx(
     at: datetime = FIXED_AT,
 ) -> LimitCallContext:
     return LimitCallContext(
+        **FIXTURE_ACTOR,
         provider=provider,
         operation=operation,
         auth_mode=AuthMode.KEYED,
@@ -173,83 +201,13 @@ def step_empty_views(context: Any) -> None:
     assert context.dashboard_views == []
 
 
-# --- B02: migration ---------------------------------------------------------
-
-
-@given("a legacy synthetic database with native history")
-def step_legacy_db(context: Any) -> None:
-    with tempfile.NamedTemporaryFile(
-        prefix="s0-legacy-", suffix=".db", dir=Path.cwd(), delete=False
-    ) as tmp:
-        context.database_path = tmp.name
-    with sqlite3.connect(context.database_path) as conn:
-        conn.executescript(
-            """
-            CREATE TABLE usage_events (
-                id INTEGER PRIMARY KEY, provider TEXT NOT NULL,
-                operation TEXT NOT NULL, units TEXT NOT NULL,
-                observed_at TEXT NOT NULL, request_id TEXT, metadata TEXT NOT NULL);
-            CREATE TABLE quota_snapshots (
-                id INTEGER PRIMARY KEY, provider TEXT NOT NULL,
-                source TEXT NOT NULL, remaining TEXT, limit_units TEXT,
-                reset_at TEXT, observed_at TEXT NOT NULL);
-            """
-        )
-        conn.execute(
-            "INSERT INTO usage_events VALUES (7,'synth','search','12.50',"
-            "'2026-01-01T00:00:00+00:00','r-7','{}')"
-        )
-        conn.execute(
-            "INSERT INTO quota_snapshots VALUES (9,'synth','OBSERVED','75',"
-            "'100',NULL,'2026-01-01T00:00:00+00:00')"
-        )
-
-
-@when("I upgrade the synthetic database twice")
-def step_upgrade_twice(context: Any) -> None:
-    from freesearch.persistence.database_migrations import (
-        migration_head,
-        upgrade_database,
-    )
-
-    first = upgrade_database(Path(context.database_path))
-    second = upgrade_database(Path(context.database_path))
-    context.first_changed = first.changed
-    context.second_changed = second.changed
-    context.head = migration_head()
-
-
-@then("the synthetic native rows are preserved")
-def step_rows_preserved(context: Any) -> None:
-    assert context.first_changed is True
-    assert context.second_changed is False
-    with sqlite3.connect(context.database_path) as conn:
-        usage = conn.execute("SELECT units FROM usage_events WHERE id=7").fetchone()
-        quota = conn.execute("SELECT remaining FROM quota_snapshots WHERE id=9").fetchone()
-    assert usage == ("12.50",)
-    assert quota == ("75",)
-
-
-@then("the synthetic database is at one migration head with limit tables")
-def step_one_head(context: Any) -> None:
-    from freesearch.persistence.database_migrations import migration_head
-
-    assert context.head == migration_head()
-    with sqlite3.connect(context.database_path) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        }
-    for table in (
-        "provider_limits",
-        "provider_native_pools",
-        "provider_crd_grants",
-        "provider_limit_events",
-        "provider_limit_admissions",
-        "provider_rate_observations",
-        "provider_rate_attempts",
-    ):
-        assert table in tables
+# --- B02: retired ----------------------------------------------------------
+# "B02 legacy native rows survive upgrade with one migration head" and its four
+# exclusively consumed steps were removed (RT-13): D1 rejects older databases
+# without modification. Survivors: database_migrations.feature "A database from
+# an older revision is rejected and left unchanged" plus the baseline,
+# idempotency, byte-identical and worktree-isolation tests in
+# tests/integration/persistence/test_database_migrations.py.
 
 
 # --- B04: lease -------------------------------------------------------------
@@ -584,8 +542,7 @@ def step_grant(context: Any) -> None:
             SYNTH,
             GrantPayload(
                 version=0,
-                period_start=date(2026, 3, 1),
-                period_end=date(2026, 4, 1),
+                period="month",
                 search_crd=Decimal("10"),
                 fetch_crd=Decimal("4"),
             ),
@@ -657,7 +614,9 @@ def step_route_fixtures(context: Any) -> None:
 def step_routes_twice(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
-    req = SearchRequest(query="synthetic routing probe")
+    req = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query="synthetic routing probe"
+    )
     context.first_order = [
         c.adapter.name for c in context.select_route(req, context.route_adapters, {}, {})
     ]
@@ -805,12 +764,11 @@ def step_task_clean(context: Any) -> None:
 def step_batch(context: Any) -> None:
     from fastapi.testclient import TestClient
 
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_and_login,
         temp_email,
     )
     from tests.integration.services.test_monitoring import _StubAdapter
@@ -818,15 +776,17 @@ def step_batch(context: Any) -> None:
     configure_bdd_secret(context)
     app = create_app([_StubAdapter("synth-gate")], repository=context.repository)
     with TestClient(app) as client:
-        pair = _run(
-            context,
-            register_promote_login(
-                client, context.repository, temp_email("s0-batch"), UserRole.DEVELOPER
-            ),
-        )
+        # Batch fetch is execution: project membership only, no system role.
+        pair = register_and_login(client, temp_email("s0-batch"))
         headers = raw_auth_headers(pair["access_token"])
         context.batch_response = client.post(
-            "/fetch", json={"url": "https://example.com/a", "url_count": 2}, headers=headers
+            "/fetch",
+            json={
+                "project_id": bdd_project_id(context, headers),
+                "url": "https://example.com/a",
+                "url_count": 2,
+            },
+            headers=headers,
         )
 
 
@@ -1285,7 +1245,9 @@ def _brave_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any, A
         return handler(request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(counting), timeout=30.0)
-    return BraveAdapter(client, api_key=SecretStr("brave-test-secret")), client
+    return BraveAdapter(
+        client, api_key=SecretStr("brave-test-secret"), clock=lambda: FIXED_AT
+    ), client
 
 
 def _brave_records() -> list[ProviderLimitRecord]:
@@ -1365,7 +1327,12 @@ def step_brave_headers(context: Any) -> None:
     context.brave_client = client
     from freesearch.models.contracts import SearchRequest
 
-    context.brave_response = _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+    context.brave_response = _run(
+        context,
+        adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        ),
+    )
 
 
 @when("I read the Brave usage snapshot")
@@ -1442,12 +1409,11 @@ def step_brave_app(context: Any) -> None:
 
     from freesearch.models.contracts import SearchRequest
     from freesearch.models.provider_limits import UsageSyncRequest
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_system_admin_login,
         temp_email,
     )
 
@@ -1471,12 +1437,15 @@ def step_brave_app(context: Any) -> None:
     with TestClient(context.brave_app) as http_client:
         pair = _run(
             context,
-            register_promote_login(
-                http_client, context.repository, temp_email("s1-brave"), UserRole.ADMIN
-            ),
+            register_system_admin_login(http_client, context.repository, temp_email("s1-brave")),
         )
         context.brave_admin_headers = raw_auth_headers(pair["access_token"])
-    _run(context, context.brave_adapter.search(SearchRequest(query="q", limit=2)))
+    _run(
+        context,
+        context.brave_adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+        ),
+    )
     snapshot = _run(
         context,
         context.brave_adapter.usage_snapshot(
@@ -1512,13 +1481,12 @@ def step_brave_fetch_grant_422(context: Any) -> None:
 
     with TestClient(context.brave_app) as client:
         response = client.put(
-            "/api/v1/providers/brave/crd-grants/keyed",
+            "/api/v1/providers/brave/budgets/keyed",
             json={
                 "version": 0,
-                "period_start": "2026-03-01",
-                "period_end": "2026-04-01",
-                "search_crd": "10",
-                "fetch_crd": "4",
+                "period": "month",
+                "search_usd": "0.010",
+                "fetch_usd": "0.004",
             },
             headers=context.brave_admin_headers,
         )
@@ -1591,7 +1559,7 @@ def step_brave_402(context: Any) -> None:
     assert context.brave_admission is None
     assert context.brave_denial is not None
     assert context.brave_denial.status_code == 402
-    assert context.brave_denial.error.code == "crd_exhausted"
+    assert context.brave_denial.error.code == "budget_exhausted"
     assert context.brave_denial.error.retryable is False
     assert context.vendor_calls == []
 
@@ -1624,7 +1592,12 @@ def step_brave_quota_limited(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     try:
-        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        _run(
+            context,
+            adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
+        )
         context.brave_error = None
     except Exception as exc:
         context.brave_error = exc
@@ -1654,7 +1627,12 @@ def step_brave_rate_limited(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     try:
-        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        _run(
+            context,
+            adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
+        )
         context.brave_error = None
     except Exception as exc:
         context.brave_error = exc
@@ -1702,8 +1680,7 @@ def step_brave_grant(context: Any) -> None:
             "brave",
             GrantPayload(
                 version=0,
-                period_start=date(2026, 3, 1),
-                period_end=date(2026, 4, 1),
+                period="month",
                 search_crd=Decimal("10"),
                 fetch_crd=Decimal("0"),
             ),
@@ -1742,7 +1719,9 @@ def step_brave_route_fixtures(context: Any) -> None:
 def step_brave_routes_twice(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
-    req = SearchRequest(query="brave routing probe")
+    req = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query="brave routing probe"
+    )
     context.first_order = [
         c.adapter.name for c in context.select_route(req, context.route_adapters, {}, {})
     ]
@@ -1864,6 +1843,7 @@ def _tavily_ctx(
     at: datetime = FIXED_AT,
 ) -> LimitCallContext:
     return LimitCallContext(
+        **FIXTURE_ACTOR,
         provider="tavily",
         operation=operation,
         auth_mode=AuthMode.KEYED,
@@ -2257,13 +2237,29 @@ def step_tavily_both_rails_sdk(context: Any) -> None:
 
     keyless = context.tavily_keyless_adapter
     keyed = context.tavily_keyed_adapter
-    context.tavily_keyless_search = _run(context, keyless.search(SearchRequest(query="q")))
-    context.tavily_keyless_fetch = _run(
-        context, keyless.fetch(FetchRequest(url="https://example.com/doc"))
+    context.tavily_keyless_search = _run(
+        context,
+        keyless.search(SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q")),
     )
-    context.tavily_keyed_search = _run(context, keyed.search(SearchRequest(query="q")))
+    context.tavily_keyless_fetch = _run(
+        context,
+        keyless.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
+    )
+    context.tavily_keyed_search = _run(
+        context,
+        keyed.search(SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q")),
+    )
     context.tavily_keyed_fetch = _run(
-        context, keyed.fetch(FetchRequest(url="https://example.com/doc"))
+        context,
+        keyed.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
     )
     assert context.tavily_keyless_search.provider == "tavily"
     assert context.tavily_keyed_search.provider == "tavily"
@@ -2369,6 +2365,7 @@ def step_tavily_full_params(context: Any) -> None:
             context,
             adapter.search(
                 SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
                     query="params probe",
                     limit=5,
                     mode="advanced",
@@ -2382,6 +2379,7 @@ def step_tavily_full_params(context: Any) -> None:
             context,
             adapter.fetch(
                 FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
                     url="https://example.com/doc",
                     provider_options={"tavily": extract_params},
                 )
@@ -2427,32 +2425,29 @@ def step_tavily_params_identical(context: Any) -> None:
     assert keyed_extract["urls"] == ["https://example.com/doc"]
 
 
-@then("a Tavily explicit depth conflict denies before vendor I/O")
-def step_tavily_depth_conflict(context: Any) -> None:
+@then("a Tavily nested depth overrides common mode on both rails with two-Credit cost")
+def step_tavily_depth_precedence(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
     from freesearch.models.tavily import TavilySearchParams
 
-    before_keyed = len(context.tavily_keyed_sdk.search_calls)
-    before_keyless = len(context.tavily_keyless_sdk.search_calls)
-    for adapter in (context.tavily_keyed_adapter, context.tavily_keyless_adapter):
-        try:
-            _run(
-                context,
-                adapter.search(
-                    SearchRequest(
-                        query="conflict",
-                        mode="basic",
-                        provider_options={"tavily": TavilySearchParams(search_depth="advanced")},
-                    )
-                ),
-            )
-            raise AssertionError("depth conflict must deny before vendor I/O")
-        except Exception as exc:
-            error = getattr(exc, "error", exc)
-            assert getattr(error, "code", "") == "bad_request"
-            assert getattr(error, "retryable", True) is False
-    assert len(context.tavily_keyed_sdk.search_calls) == before_keyed
-    assert len(context.tavily_keyless_sdk.search_calls) == before_keyless
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
+        query="explicit depth precedence",
+        mode="basic",
+        provider_options={"tavily": TavilySearchParams(search_depth="advanced")},
+    )
+    for adapter, sdk in (
+        (context.tavily_keyed_adapter, context.tavily_keyed_sdk),
+        (context.tavily_keyless_adapter, context.tavily_keyless_sdk),
+    ):
+        before = len(sdk.search_calls)
+        _run(context, adapter.search(request))
+        assert len(sdk.search_calls) == before + 1
+        assert sdk.search_calls[-1]["search_depth"] == "advanced"
+        estimate = _run(context, adapter.estimate_cost(request))
+        assert estimate.units == Decimal("2")
+        assert estimate.currency == "Credits"
+        assert len(sdk.search_calls) == before + 1, "cost estimation must not call the vendor"
 
 
 @when("I estimate Tavily basic and advanced search cost")
@@ -2468,20 +2463,32 @@ def step_tavily_estimate_search(context: Any) -> None:
     context.tavily_caller_clients = getattr(context, "tavily_caller_clients", [])
     context.tavily_caller_clients.append(cost_caller)
     context.tavily_basic_estimate = _run(
-        context, context.tavily_cost_adapter.estimate_cost(SearchRequest(query="q"))
+        context,
+        context.tavily_cost_adapter.estimate_cost(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q")
+        ),
     )
     context.tavily_advanced_estimate = _run(
         context,
-        context.tavily_cost_adapter.estimate_cost(SearchRequest(query="q", mode="advanced")),
+        context.tavily_cost_adapter.estimate_cost(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="q", mode="advanced"
+            )
+        ),
     )
     context.tavily_basic_extract_estimate = _run(
         context,
-        context.tavily_cost_adapter.estimate_cost(FetchRequest(url="https://example.com/doc")),
+        context.tavily_cost_adapter.estimate_cost(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
     )
     context.tavily_advanced_extract_estimate = _run(
         context,
         context.tavily_cost_adapter.estimate_cost(
             FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
                 url="https://example.com/doc",
                 provider_options={"tavily": TavilyExtractParams(extract_depth="advanced")},
             )
@@ -2961,8 +2968,7 @@ def step_tavily_funds_state(context: Any, state: str) -> None:
                 "tavily",
                 GrantPayload(
                     version=0,
-                    period_start=date(2026, 3, 1),
-                    period_end=date(2027, 12, 31),
+                    period="month",
                     search_crd=Decimal("8"),
                     fetch_crd=Decimal("0"),
                 ),
@@ -3019,12 +3025,11 @@ def step_tavily_gate_decision(context: Any, decision: str, status: int) -> None:
 def step_tavily_app(context: Any) -> None:
     from fastapi.testclient import TestClient
 
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_system_admin_login,
         temp_email,
     )
     from tests.integration.services.test_monitoring import _StubAdapter
@@ -3040,9 +3045,7 @@ def step_tavily_app(context: Any) -> None:
     with TestClient(context.tavily_app) as http_client:
         pair = _run(
             context,
-            register_promote_login(
-                http_client, context.repository, temp_email("tav-app"), UserRole.ADMIN
-            ),
+            register_system_admin_login(http_client, context.repository, temp_email("tav-app")),
         )
         context.tavily_admin_headers = raw_auth_headers(pair["access_token"])
 
@@ -3093,9 +3096,8 @@ def step_tavily_grant(context: Any) -> None:
             "tavily",
             GrantPayload(
                 version=0,
-                period_start=date(2026, 3, 1),
-                period_end=date(2026, 4, 1),
-                search_crd=Decimal("10"),
+                period="month",
+                search_crd=Decimal("20"),
                 fetch_crd=Decimal("4"),
             ),
             AuthMode.KEYED,
@@ -3113,7 +3115,7 @@ def step_tavily_grant(context: Any) -> None:
 def step_tavily_grant_audit(context: Any) -> None:
     auth = context.tavily_saved.auth(AuthMode.KEYED)
     assert auth is not None
-    assert auth.grants.search_granted_crd == Decimal("10")
+    assert auth.grants.search_granted_crd == Decimal("20")
     assert auth.grants.fetch_granted_crd == Decimal("4")
     reasons = [e.reason for e in context.tavily_history.events]
     assert "grant" in reasons
@@ -3129,7 +3131,9 @@ def step_tavily_routes_twice(context: Any) -> None:
 
     context.tavily_select_route = select_route
     context.tavily_route_adapters = [_StubAdapter("tavily-b"), _StubAdapter("tavily-a")]
-    req = SearchRequest(query="tavily routing probe")
+    req = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query="tavily routing probe"
+    )
     context.tavily_first_order = [
         c.adapter.name for c in select_route(req, context.tavily_route_adapters, {}, {})
     ]
@@ -3198,6 +3202,9 @@ def step_tavily_held_usage(context: Any) -> None:
         def __init__(self, outer: Any) -> None:
             self._outer = outer
 
+        async def aclose(self) -> None:
+            """No sockets are owned by this held in-memory transport."""
+
         async def get(self, url: str) -> Any:
             self._outer.tavily_usage_gets.append(url)
             await self._outer.tavily_release.wait()
@@ -3228,10 +3235,16 @@ def step_tavily_run_while_held(context: Any) -> None:
         )
 
     async def _search() -> Any:
-        return await context.tavily_held_adapter.search(SearchRequest(query="held-q"))
+        return await context.tavily_held_adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="held-q")
+        )
 
     async def _extract() -> Any:
-        return await context.tavily_held_adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        return await context.tavily_held_adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     async def _scenario() -> tuple[Any, Any, Any]:
         poll_task = asyncio.ensure_future(_held_poll())
@@ -3267,17 +3280,26 @@ def step_tavily_zero_gets(context: Any) -> None:
 
     assert context.tavily_usage_gets == ["https://api.tavily.com/usage"]
     before = list(context.tavily_usage_gets)
-    _run(context, context.tavily_held_adapter.estimate_cost(SearchRequest(query="q")))
     _run(
         context,
-        context.tavily_held_adapter.estimate_cost(FetchRequest(url="https://example.com/doc")),
+        context.tavily_held_adapter.estimate_cost(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q")
+        ),
+    )
+    _run(
+        context,
+        context.tavily_held_adapter.estimate_cost(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
     )
     _run(context, context.tavily_held_adapter.quota())
     _run(context, context.service.provider_view("tavily"))
     from freesearch.services.routing import select_route
     from tests.integration.services.test_monitoring import _StubAdapter
 
-    req = SearchRequest(query="zero-get probe")
+    req = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="zero-get probe")
     select_route(req, [_StubAdapter("tavily-a")], {}, {})
     assert context.tavily_usage_gets == before
 
@@ -3535,24 +3557,17 @@ def _tavily_402_sdk() -> _TavilyFakeSDK:
     return sdk
 
 
-def _tavily_assert_zero_debit(context: Any, *, terminal_pool: bool = True) -> None:
-    pool = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
-    assert pool is not None
-    if terminal_pool:
-        assert pool.remaining == Decimal("0")
-        assert pool.source == "vendor_402"
-    else:
-        # The injected MCP composition builds no limits generation
-        # (create_server keeps state["limits"] None without a lifespan
-        # enter), so tracked_call runs limit-free and the pool row stays
-        # at its seeded value. Pool immediacy itself is pinned through
-        # the shared helper by the REST, fanout, and service cases.
-        assert pool.remaining == Decimal("999")
-        assert pool.source == "vendor_api"
-    history = _run(
-        context,
-        context.service.history(LimitHistoryQuery(provider="tavily", limit=20)),
-    )
+def _tavily_assert_zero_debit(context: Any) -> None:
+    pools = _run(context, _limits_repo(context).list_pools("tavily"))
+    scoped = [pool for pool in pools if "#cred:" in pool.pool_id]
+    assert len(scoped) == 1, [(pool.pool_id, pool.remaining) for pool in pools]
+    assert scoped[0].remaining == Decimal("0")
+    assert scoped[0].source == "vendor_402"
+    # A scoped terminal response must not contaminate the unrelated catalog balance.
+    catalog = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
+    assert catalog is not None and catalog.remaining == Decimal("999")
+    assert catalog.source == "vendor_api"
+    history = _run(context, context.service.history(LimitHistoryQuery(provider="tavily", limit=20)))
     assert all(e.reason != "local_success" for e in history.events)
 
 
@@ -3563,12 +3578,11 @@ def step_tavily_rest_402(context: Any) -> None:
     from pydantic import SecretStr
 
     from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_and_login,
         temp_email,
     )
 
@@ -3590,12 +3604,7 @@ def step_tavily_rest_402(context: Any) -> None:
         [context.tavily_rest_adapter], repository=context.repository
     )
     with TestClient(context.tavily_rest_app) as http_client:
-        pair = _run(
-            context,
-            register_promote_login(
-                http_client, context.repository, temp_email("tav-rest"), UserRole.AGENT
-            ),
-        )
+        pair = register_and_login(http_client, temp_email("tav-rest"))
         context.tavily_rest_headers = raw_auth_headers(pair["access_token"])
 
 
@@ -3603,10 +3612,15 @@ def step_tavily_rest_402(context: Any) -> None:
 def step_tavily_rest_search(context: Any) -> None:
     from fastapi.testclient import TestClient
 
+    context.app = context.tavily_rest_app
     with TestClient(context.tavily_rest_app) as client:
         context.tavily_rest_response = client.post(
             "/search",
-            json={"query": "rest 402 probe", "limit": 3},
+            json={
+                "project_id": bdd_project_id(context, context.tavily_rest_headers),
+                "query": "rest 402 probe",
+                "limit": 3,
+            },
             headers=context.tavily_rest_headers,
         )
 
@@ -3628,8 +3642,6 @@ def step_tavily_mcp_402(context: Any) -> None:
     from pydantic import SecretStr
 
     from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.mcp.server import create_server
-    from tests.fixtures.auth import mcp_account_token
 
     _open_repo(context)
     context.service = _service(context, _tavily_records())
@@ -3645,16 +3657,11 @@ def step_tavily_mcp_402(context: Any) -> None:
         api_key=SecretStr("tvly-mcp-402"),
     )
 
-    async def _server() -> Any:
-        service, token, _email = await mcp_account_token(context.repository, "tav-mcp")
-        return create_server(
-            [context.tavily_mcp_adapter],
-            repository=context.repository,
-            auth_service=service,
-            stdio_token=SecretStr(token.get_secret_value()),
-        )
+    from tests.fixtures.execution import bdd_mcp_server
 
-    context.tavily_mcp_server = _run(context, _server())
+    context.tavily_mcp_server, context.tavily_mcp_pid = _run(
+        context, bdd_mcp_server(context, [context.tavily_mcp_adapter], "tav-mcp")
+    )
 
 
 @when("I request one Tavily search through MCP")
@@ -3664,7 +3671,10 @@ def step_tavily_mcp_search(context: Any) -> None:
     try:
         _run(
             context,
-            context.tavily_mcp_server.call_tool("search", {"request": {"query": "mcp 402 probe"}}),
+            context.tavily_mcp_server.call_tool(
+                "search",
+                {"request": {"project_id": context.tavily_mcp_pid, "query": "mcp 402 probe"}},
+            ),
         )
         context.tavily_mcp_error = None
     except ToolError as exc:
@@ -3673,7 +3683,7 @@ def step_tavily_mcp_search(context: Any) -> None:
         context.tavily_mcp_error = exc
 
     async def _drain_refresh() -> None:
-        from freesearch.routers.api import _BACKGROUND_TASKS
+        from freesearch.services.provider_runtime import _BACKGROUND_TASKS
 
         pending = [task for task in list(_BACKGROUND_TASKS) if not task.done()]
         if pending:
@@ -3688,7 +3698,7 @@ def step_tavily_mcp_402_assert(context: Any) -> None:
     text = str(context.tavily_mcp_error)
     assert "Tavily is out of Credits. Wait until reset or upgrade." in text
     assert len(context.tavily_mcp_sdk.search_calls) == 1
-    _tavily_assert_zero_debit(context, terminal_pool=False)
+    _tavily_assert_zero_debit(context)
 
 
 @given("a Tavily fanout app with a held other task and vendor 402")
@@ -3698,12 +3708,11 @@ def step_tavily_fanout_app(context: Any) -> None:
     from pydantic import SecretStr
 
     from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.models.users import UserRole
     from freesearch.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
-        register_promote_login,
+        register_and_login,
         temp_email,
     )
 
@@ -3773,12 +3782,7 @@ def step_tavily_fanout_app(context: Any) -> None:
         [context.tavily_fanout_adapter], repository=context.repository
     )
     with TestClient(context.tavily_fanout_app) as http_client:
-        pair = _run(
-            context,
-            register_promote_login(
-                http_client, context.repository, temp_email("tav-fanout"), UserRole.AGENT
-            ),
-        )
+        pair = register_and_login(http_client, temp_email("tav-fanout"))
         context.tavily_fanout_headers = raw_auth_headers(pair["access_token"])
 
 
@@ -3786,28 +3790,44 @@ def step_tavily_fanout_app(context: Any) -> None:
 def step_tavily_fanout_run(context: Any) -> None:
     from fastapi.testclient import TestClient
 
+    context.app = context.tavily_fanout_app
     with TestClient(context.tavily_fanout_app) as client:
         context.tavily_fanout_held = client.post(
             "/search",
-            json={"query": "fanout 402 probe", "limit": 3, "fanout": True},
+            json={
+                "project_id": bdd_project_id(context, context.tavily_fanout_headers),
+                "query": "fanout 402 probe",
+                "limit": 3,
+                "fanout": True,
+            },
             headers=context.tavily_fanout_headers,
         )
     context.tavily_other_released.set()
     with TestClient(context.tavily_fanout_app) as client:
         context.tavily_fanout_released = client.post(
             "/search",
-            json={"query": "fanout 402 probe", "limit": 3, "fanout": True},
+            json={
+                "project_id": bdd_project_id(context, context.tavily_fanout_headers),
+                "query": "fanout 402 probe",
+                "limit": 3,
+                "fanout": True,
+            },
             headers=context.tavily_fanout_headers,
         )
+    context.app = context.tavily_single_app
     with TestClient(context.tavily_single_app) as client:
         context.tavily_single_fallback = client.post(
             "/search",
-            json={"query": "fanout 402 probe", "limit": 3},
+            json={
+                "project_id": bdd_project_id(context, context.tavily_fanout_headers),
+                "query": "fanout 402 probe",
+                "limit": 3,
+            },
             headers=context.tavily_fanout_headers,
         )
 
     async def _drain_refresh() -> None:
-        from freesearch.routers.api import _BACKGROUND_TASKS
+        from freesearch.services.provider_runtime import _BACKGROUND_TASKS
 
         pending = [task for task in list(_BACKGROUND_TASKS) if not task.done()]
         if pending:
@@ -3841,7 +3861,7 @@ def step_tavily_fanout_released_assert(context: Any) -> None:
     waterfall = body.get("waterfall", [])
     tavily_legs = [entry for entry in waterfall if entry.get("provider") == "tavily"]
     assert len(tavily_legs) == 1
-    assert "crd_exhausted" in (tavily_legs[0].get("error") or "")
+    assert "budget_exhausted" in (tavily_legs[0].get("error") or "")
 
 
 @then("the Tavily single fallback answer is a local 402 with no new vendor attempt")
@@ -3852,7 +3872,7 @@ def step_tavily_single_fallback_assert(context: Any) -> None:
     detail = body.get("detail")
     assert isinstance(detail, dict)
     assert detail.get("provider") == "tavily"
-    assert detail.get("code") == "crd_exhausted"
+    assert detail.get("code") == "budget_exhausted"
     assert detail.get("status_code") == 402
     assert len(context.tavily_fanout_sdk.search_calls) == 1
     _tavily_assert_zero_debit(context)
@@ -3929,7 +3949,10 @@ def step_tavily_search_retry_7(context: Any) -> None:
     context.tavily_retry_sdk.search = _flaky  # type: ignore[assignment]
     context.tavily_sleeps.clear()
     context.tavily_search_retry = _run(
-        context, context.tavily_retry_adapter.search(SearchRequest(query="retry-7"))
+        context,
+        context.tavily_retry_adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry-7")
+        ),
     )
     context.tavily_search_calls = calls["count"]
 
@@ -3973,7 +3996,11 @@ def step_tavily_extract_retry_3(context: Any) -> None:
     context.tavily_sleeps.clear()
     context.tavily_extract_retry = _run(
         context,
-        context.tavily_retry_adapter.fetch(FetchRequest(url="https://example.com/doc")),
+        context.tavily_retry_adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        ),
     )
     context.tavily_extract_calls = calls["count"]
 
@@ -4113,12 +4140,22 @@ def step_tavily_retry_variant(context: Any, header: str) -> None:
         context.tavily_variant_adapter._normalize_error = _patched  # type: ignore[assignment]
     if header in ("zero", "http-date"):
         context.tavily_variant_result = _run(
-            context, context.tavily_variant_adapter.search(SearchRequest(query="variant"))
+            context,
+            context.tavily_variant_adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="variant")
+            ),
         )
         context.tavily_variant_error = None
     else:
         try:
-            _run(context, context.tavily_variant_adapter.search(SearchRequest(query="variant")))
+            _run(
+                context,
+                context.tavily_variant_adapter.search(
+                    SearchRequest(
+                        project_id="00000000-0000-4000-8000-0000000000aa", query="variant"
+                    )
+                ),
+            )
             context.tavily_variant_error = None
         except Exception as exc:
             context.tavily_variant_error = exc
@@ -4363,6 +4400,7 @@ def step_keenable_shared_usage(context: Any) -> None:
         context,
         context.service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -4395,6 +4433,7 @@ def step_keenable_shared_usage(context: Any) -> None:
         context,
         context.service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYED,
@@ -4480,7 +4519,10 @@ def step_keenable_paid_adapter(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     context.keenable_paid_response = _run(
-        context, adapter.search(SearchRequest(query="paid", limit=2))
+        context,
+        adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="paid", limit=2)
+        ),
     )
     assert context.keenable_paid_response.usage is not None
     assert context.keenable_paid_response.usage.units == Decimal("2")
@@ -4497,7 +4539,8 @@ def step_keenable_paid_adapter(context: Any) -> None:
                 observed_at=now,
                 status=UsageStatus.SUCCESS,
                 metadata={"paid": True, "sku": "search.pro"},
-            )
+            ),
+            attribution=scenario_attribution(context),
         ),
     )
 
@@ -4627,7 +4670,12 @@ def step_keenable_429(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     try:
-        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        _run(
+            context,
+            adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
+        )
         context.keenable_error = None
     except Exception as exc:
         context.keenable_error = exc
@@ -4663,7 +4711,12 @@ def step_keenable_402(context: Any) -> None:
     from freesearch.models.contracts import SearchRequest
 
     try:
-        _run(context, adapter.search(SearchRequest(query="q", limit=2)))
+        _run(
+            context,
+            adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=2)
+            ),
+        )
         context.keenable_error = None
     except Exception as exc:
         context.keenable_error = exc
@@ -4696,6 +4749,7 @@ def step_keenable_two_standard(context: Any) -> None:
         context,
         context.service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
@@ -4714,6 +4768,7 @@ def step_keenable_two_standard(context: Any) -> None:
         context,
         context.service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="keenable",
                 operation=LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYED,
@@ -4779,6 +4834,7 @@ def step_keenable_keyless_exhausted(context: Any) -> None:
             context,
             context.service.admit(
                 LimitCallContext(
+                    **FIXTURE_ACTOR,
                     provider="keenable",
                     operation=LimitOperation.SEARCH,
                     auth_mode=AuthMode.KEYLESS,
@@ -4797,6 +4853,7 @@ def step_keenable_keyless_request(context: Any) -> None:
             context,
             context.service.admit(
                 LimitCallContext(
+                    **FIXTURE_ACTOR,
                     provider="keenable",
                     operation=LimitOperation.SEARCH,
                     auth_mode=AuthMode.KEYLESS,

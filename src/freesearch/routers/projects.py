@@ -19,17 +19,23 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
+from freesearch.models.project_permissions import PERMISSION_CATALOG
 from freesearch.models.projects import (
+    ProjectAccessRead,
     ProjectCreate,
     ProjectMemberAdd,
     ProjectMemberRead,
     ProjectMembersBulkUpdate,
     ProjectMemberUpdate,
     ProjectRead,
-    RoleAssignmentRead,
+    ProviderOwnerChange,
+    ProviderOwnerRead,
+    ProviderOwnerTransferRead,
+    SystemAccessRead,
 )
 from freesearch.models.users import UserPrincipal
-from freesearch.routers.auth import UserRead, current_principal
+from freesearch.routers.auth import current_principal
 from freesearch.services.authorization import AuthorizationDenied
 from freesearch.services.projects import (
     ProjectConflict,
@@ -59,9 +65,11 @@ def _project_service(request: Request) -> ProjectService:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="project management is not configured",
         )
+    secret_store = getattr(request.app.state, "secret_store", None)
     return ProjectService(
         repository,
         rollout_state=account_service.settings.projects_rollout_state,
+        secret_store=secret_store if isinstance(secret_store, EncryptedDbSecretStore) else None,
     )
 
 
@@ -140,6 +148,19 @@ def register_project_routes(app: FastAPI) -> None:
         return await _project_service(request).archive_project(principal, project_id)
 
     @app.get(
+        "/api/v1/projects/{project_id}/access",
+        response_model=ProjectAccessRead,
+    )
+    async def read_project_access(
+        request: Request,
+        principal: _Principal,
+        project_id: UUID,
+    ) -> ProjectAccessRead:
+        """Return the caller's live permissions and role keys for one project."""
+
+        return await _project_service(request).project_access(principal, project_id)
+
+    @app.get(
         "/api/v1/projects/{project_id}/members",
         response_model=list[ProjectMemberRead],
     )
@@ -211,51 +232,75 @@ def register_project_routes(app: FastAPI) -> None:
         await _project_service(request).remove_member(principal, project_id, user_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.put(
-        "/api/v1/projects/{project_id}/members/{user_id}/roles/{role_key}",
-        response_model=RoleAssignmentRead,
+    @app.get("/api/v1/permissions/project-catalog")
+    async def project_permission_catalog(principal: _Principal) -> dict[str, object]:
+        """Return the project permission definitions and developer presets."""
+
+        labels = (
+            ("Run searches", "Send search requests in the playground."),
+            ("Fetch pages", "Fetch web pages in the playground."),
+            ("View activity", "Open request traces."),
+            ("View usage", "See request counts."),
+            ("Edit project settings", "Change the trace and routing settings."),
+            ("Copy settings", "Copy settings from another project."),
+            (
+                "Change provider order",
+                "Change the Search order and the Fetch order. Turn operations on or off.",
+            ),
+            ("Manage API keys", "Create, rotate, and revoke project API keys."),
+            ("Provider owner", "Supply provider capacity for the project."),
+        )
+        return {
+            "permissions": [
+                {**item.model_dump(), "label": label, "description": description}
+                for item, (label, description) in zip(PERMISSION_CATALOG, labels, strict=True)
+            ],
+            "presets": [
+                {"key": "read_only", "label": "Read only", "permissions": 12},
+                {"key": "standard", "label": "Standard", "permissions": 15},
+                {"key": "full_developer", "label": "Full developer", "permissions": 255},
+            ],
+        }
+
+    @app.get(
+        "/api/v1/projects/{project_id}/provider-owner", response_model=ProviderOwnerRead | None
     )
-    async def assign_project_role(
-        request: Request,
-        principal: _Principal,
-        project_id: UUID,
-        user_id: UUID,
-        role_key: str,
-    ) -> RoleAssignmentRead:
-        """Assign one extra built-in project role within delegation limits."""
-
-        return await _project_service(request).assign_role(principal, project_id, user_id, role_key)
-
-    @app.delete(
-        "/api/v1/projects/{project_id}/members/{user_id}/roles/{role_key}",
-        status_code=status.HTTP_204_NO_CONTENT,
-    )
-    async def remove_project_role(
-        request: Request,
-        principal: _Principal,
-        project_id: UUID,
-        user_id: UUID,
-        role_key: str,
-    ) -> Response:
-        """Remove one project role under delegation and last-admin guards."""
-
-        await _project_service(request).remove_role(principal, project_id, user_id, role_key)
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    async def read_provider_owner(
+        request: Request, principal: _Principal, project_id: UUID
+    ) -> ProviderOwnerRead | None:
+        return await _project_service(request).provider_owner(principal, project_id)
 
     @app.post(
-        "/api/v1/users/{user_id}/deactivate",
-        response_model=UserRead,
-        status_code=status.HTTP_200_OK,
+        "/api/v1/projects/{project_id}/provider-owner",
+        response_model=ProviderOwnerTransferRead,
     )
-    async def deactivate_user_account(
+    async def transfer_provider_owner(
+        request: Request, principal: _Principal, project_id: UUID, body: ProviderOwnerChange
+    ) -> ProviderOwnerTransferRead:
+        return await _project_service(request).transfer_provider_owner(
+            principal, project_id, body.user_id
+        )
+
+    @app.get("/api/v1/system/access", response_model=SystemAccessRead)
+    async def read_system_access(
         request: Request,
         principal: _Principal,
-        user_id: UUID,
-    ) -> UserRead:
-        """Deactivate one human account as a live system-scope operation."""
+    ) -> SystemAccessRead:
+        """Return the caller's live system-scope effective permissions."""
 
-        accounts = await _project_service(request).deactivate_accounts([user_id], actor=principal)
-        return UserRead.model_validate(accounts[0])
+        return await _project_service(request).system_access(principal)
+
+    @app.get("/api/v1/system/projects", response_model=list[ProjectRead])
+    async def list_system_projects(
+        request: Request,
+        principal: _Principal,
+        include_archived: bool = True,
+    ) -> list[ProjectRead]:
+        """List every project for credential grants and pool allocations."""
+
+        return await _project_service(request).list_system_projects(
+            principal, include_archived=include_archived
+        )
 
 
 __all__ = ["register_project_routes"]

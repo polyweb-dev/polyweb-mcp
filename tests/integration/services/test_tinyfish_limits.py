@@ -83,7 +83,11 @@ async def test_tinyfish_free_operations_preserve_rate_budget_split() -> None:
     try:
         adapter = TinyfishAdapter(client, api_key=SecretStr("tinyfish-test-secret"))
 
-        search = await adapter.search(SearchRequest(query="free proof", limit=2))
+        search = await adapter.search(
+            SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="free proof", limit=2
+            )
+        )
         assert search.provider == "tinyfish"
         assert len(search.results) == 1
         assert str(search.results[0].url) == "https://example.com/item"
@@ -92,7 +96,10 @@ async def test_tinyfish_free_operations_preserve_rate_budget_split() -> None:
         assert search.usage.metadata["cost_usd"] == Decimal("0")
 
         fetch = await adapter.fetch(
-            FetchRequest(url=cast(Any, "https://example.com/page")),
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url=cast(Any, "https://example.com/page"),
+            ),
         )
         assert fetch.provider == "tinyfish"
         assert str(fetch.document.url) == "https://example.com/page"
@@ -164,9 +171,14 @@ async def test_tinyfish_free_operations_preserve_rate_budget_split() -> None:
         assert snapshot is None
         assert len(calls) == before
 
-        search_est = await adapter.estimate_cost(SearchRequest(query="free proof"))
+        search_est = await adapter.estimate_cost(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="free proof")
+        )
         fetch_est = await adapter.estimate_cost(
-            FetchRequest(url=cast(Any, "https://example.com/page")),
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url=cast(Any, "https://example.com/page"),
+            ),
         )
         assert search_est.units == Decimal("0")
         assert search_est.currency == "USD"

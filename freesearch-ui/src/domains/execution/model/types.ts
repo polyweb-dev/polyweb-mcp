@@ -1,3 +1,5 @@
+import type { UnitKind } from "@/shared/api/units";
+
 export interface SearchRequest {
   query: string;
   providerIds?: string[];
@@ -38,6 +40,10 @@ export interface SearchResponse {
   waterfall: ProviderWaterfallItem[];
   executionTimeMs: number;
   costEstimateCredits: number;
+  /** Unit kind of `costEstimateCredits`; absent when the response did not say. */
+  costUnitKind?: UnitKind | null;
+  /** Backend display unit of `costEstimateCredits`, e.g. `requests`. */
+  costDisplayUnit?: string | null;
   timestamp: string;
   participatingProviders?: string[];
 }

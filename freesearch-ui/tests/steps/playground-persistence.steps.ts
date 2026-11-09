@@ -1,13 +1,14 @@
 import { expect } from "@playwright/test"
-import type { Page, Route } from "@playwright/test"
+import type { Page } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
-import { searchResponseFixture } from "../../src/test/backendFixtures"
+import { holdStubbedSearches, releaseHeldSearches } from "./backendStub"
 
 /**
  * Playground persistence acceptance (PLAN §4.3): drafts/results/loading/error
  * survive page switches without refetching and survive reloads via the
- * namespaced localStorage key. All backend traffic stays stubbed (@stub);
- * request counts prove navigation/rehydration never re-issues /search|/fetch.
+ * project-scoped localStorage key (freesearch:playground:v2:<account>:<project>).
+ * All backend traffic stays stubbed (@stub); request counts prove
+ * navigation/rehydration never re-issues /search|/fetch.
  *
  * Step-text uniqueness: every pattern here is new — submission, tab, sidebar,
  * heading, direct-navigation, and reload phrasings are reused from
@@ -15,7 +16,8 @@ import { searchResponseFixture } from "../../src/test/backendFixtures"
  * url-routing.steps.ts and are not redefined.
  */
 
-const PERSIST_KEY = "freesearch:playground:v1"
+/** Every playground key: the project-scoped v2 keys and any legacy v1 key. */
+const PERSIST_PREFIX = "freesearch:playground:"
 
 interface RequestCounts {
   search: number
@@ -25,7 +27,6 @@ interface RequestCounts {
 
 const countsByPage = new WeakMap<Page, RequestCounts>()
 const attachedPages = new WeakSet<Page>()
-const heldSearchRoutes = new WeakMap<Page, Route[]>()
 
 function countsOf(page: Page): RequestCounts {
   let counts = countsByPage.get(page)
@@ -58,21 +59,20 @@ function attachRequestCounter(page: Page): void {
   })
 }
 
-function readJsonBody(route: Route): Record<string, unknown> {
-  try {
-    return JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>
-  } catch {
-    return {}
-  }
-}
-
 Given("the persisted playground state is cleared", async ({ page }) => {
   attachRequestCounter(page)
-  await page.evaluate((key) => window.localStorage.removeItem(key), PERSIST_KEY)
+  await page.evaluate((prefix) => {
+    const keys: string[] = []
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index)
+      if (key !== null && key.startsWith(prefix)) keys.push(key)
+    }
+    for (const key of keys) window.localStorage.removeItem(key)
+  }, PERSIST_PREFIX)
 })
 
 Then("the persisted search draft should be {string}", async ({ page }, draft: string) => {
-  await expect(page.getByPlaceholder(/Search across all providers/i)).toHaveValue(draft)
+  await expect(page.getByPlaceholder(/Search the web/i)).toHaveValue(draft)
 })
 
 Then("the persisted search results should show {string}", async ({ page }, text: string) => {
@@ -80,7 +80,7 @@ Then("the persisted search results should show {string}", async ({ page }, text:
 })
 
 Then("the persisted fetch URL should be {string}", async ({ page }, url: string) => {
-  await expect(page.getByPlaceholder(/Enter a URL to fetch/i)).toHaveValue(url)
+  await expect(page.getByPlaceholder(/URL to fetch/i)).toHaveValue(url)
 })
 
 Then("the persisted fetch document should show {string}", async ({ page }, text: string) => {
@@ -118,41 +118,11 @@ Then("the persisted search request count should not have increased", async ({ pa
 
 When("I hold the persisted search response", async ({ page }) => {
   attachRequestCounter(page)
-  await page.unroute("**/search")
-  await page.route("**/search", async (route) => {
-    const held = heldSearchRoutes.get(page) ?? []
-    held.push(route)
-    heldSearchRoutes.set(page, held)
-  })
+  // Hold every search open in the shared stub (project gate and request log
+  // stay in force) until the release step.
+  holdStubbedSearches(null)
 })
 
-When("I release the persisted search response", async ({ page }) => {
-  const held = heldSearchRoutes.get(page) ?? []
-  heldSearchRoutes.set(page, [])
-  for (const route of held) {
-    const body = readJsonBody(route)
-    const routing = (body.routing ?? {}) as { providers?: unknown }
-    const providers = Array.isArray(routing.providers) ? routing.providers : []
-    const pinned = typeof providers[0] === "string" ? (providers[0] as string) : "brave"
-    const query = typeof body.query === "string" ? (body.query as string) : "stubbed query"
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(searchResponseFixture({ query, provider: pinned })),
-    })
-  }
-  await page.unroute("**/search")
-  await page.route("**/search", async (route) => {
-    if (route.request().method() !== "POST") return route.fallback()
-    const body = readJsonBody(route)
-    const routing = (body.routing ?? {}) as { providers?: unknown }
-    const providers = Array.isArray(routing.providers) ? routing.providers : []
-    const pinned = typeof providers[0] === "string" ? (providers[0] as string) : "brave"
-    const query = typeof body.query === "string" ? (body.query as string) : "stubbed query"
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(searchResponseFixture({ query, provider: pinned })),
-    })
-  })
+When("I release the persisted search response", async ({ page: _page }) => {
+  releaseHeldSearches()
 })

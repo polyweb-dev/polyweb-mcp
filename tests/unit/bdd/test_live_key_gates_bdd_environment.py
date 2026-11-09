@@ -303,12 +303,14 @@ def test_is_tavily_scenario_false_for_every_other_provider_selection() -> None:
         has_keenable_key=False,
         has_brave_key=False,
         has_tavily_key=False,
+        has_tinyfish_key=False,
     )
     other_scenarios = (
         _firecrawl_scenario(),
         _FakeScenario(["live", "parallel", "search"]),
         _FakeScenario(["live", "brave", "search"]),
         _FakeScenario(["live", "keenable", "keenable-keyed", "search"]),
+        _FakeScenario(["live", "tinyfish-live", "search"]),
         _FakeScenario(["youcom", "live", "search"]),
     )
 
@@ -328,3 +330,40 @@ def test_is_tavily_scenario_false_for_every_other_provider_selection() -> None:
     ):
         assert environment._is_tavily_scenario(scenario) is False, scenario.tags
         assert environment._missing_live_key_reason(context, scenario) is None, scenario.tags
+
+
+def test_harness_env_key_prefers_canonical_and_accepts_legacy_tinyfish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tinyfish reads FREESEARCH_TINYFISH_API_KEY first, then the legacy spelling."""
+    monkeypatch.delenv("FREESEARCH_TINYFISH_API_KEY", raising=False)
+    monkeypatch.setenv("TINYFISH_API_KEY", "legacy-fixture")
+    assert environment._harness_env_key(ProviderName.TINYFISH) == "legacy-fixture"
+    monkeypatch.setenv("FREESEARCH_TINYFISH_API_KEY", "canonical-fixture")
+    assert environment._harness_env_key(ProviderName.TINYFISH) == "canonical-fixture"
+
+
+def test_harness_env_key_treats_blank_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dotenv line such as ``KEY=`` must not count as a configured key."""
+    monkeypatch.setenv(PROVIDER_ENV_VARS[ProviderName.KEENABLE], "  ")
+    assert environment._harness_env_key(ProviderName.KEENABLE) is None
+
+
+def test_keyless_keenable_ignores_a_configured_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keyless scenarios run on the public tier even when a Keenable key is set."""
+    from freesearch.models.provider_limits import AuthMode
+
+    monkeypatch.setenv(PROVIDER_ENV_VARS[ProviderName.KEENABLE], "keenable-fixture")
+    keyless = environment._adapter_for(_FakeClient(), _FakeScenario(["live", "keenable"]))
+    keyed = environment._adapter_for(
+        _FakeClient(), _FakeScenario(["live", "keenable", "keenable-keyed"])
+    )
+    assert keyless.limit_auth_mode is AuthMode.KEYLESS
+    assert keyed.limit_auth_mode is AuthMode.KEYED
+
+
+def test_live_tinyfish_scenario_builds_tinyfish_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live Tinyfish feature gets a Tinyfish adapter built from the harness key."""
+    monkeypatch.setenv("FREESEARCH_TINYFISH_API_KEY", "tinyfish-fixture")
+    adapter = environment._adapter_for(_FakeClient(), _FakeScenario(["live", "tinyfish-live"]))
+    assert adapter.name == "tinyfish"

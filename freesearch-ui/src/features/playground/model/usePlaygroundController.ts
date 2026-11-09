@@ -1,9 +1,9 @@
 import { useEffect } from "react"
 import type { Dispatch, FormEvent, SetStateAction } from "react"
-import { useFreeSearch } from "@/context/useFreeSearch"
-import { isProviderOperationEnabled } from "@/domains/providers"
-import type { ProviderConfig } from "@/domains/providers"
+import { providersForOperation } from "@/domains/providers"
+import type { ProjectProvider } from "@/domains/providers"
 import type { FetchResponse, SearchResponse, SearchResult } from "@/domains/execution"
+import { useProjectExecution } from "@/domains/execution/state/useProjectExecution"
 import { useAppDispatch, useAppSelector } from "@/store/hooks"
 import {
   selectActiveFetch,
@@ -32,13 +32,40 @@ import { createFetchResultHandler } from "./playgroundFetchAction"
 
 export type { PlaygroundMode }
 
+/**
+ * Project inputs of the playground: the project provider view and the
+ * execution permissions of the caller in the URL project.
+ */
+export interface PlaygroundScope {
+  /** URL project id, used to build the provider setup link. */
+  projectId: string
+  /** Project provider view; empty without `providers.read`. */
+  providers: readonly ProjectProvider[]
+  orderedProviders?: Record<PlaygroundMode, ProjectProvider[]>
+  providersLoading: boolean
+  /** The provider view read settled successfully at least once. */
+  providersReady: boolean
+  /** The provider view read failed; a retry is offered. */
+  providersError: boolean
+  retryProviders: () => void
+  canSearch: boolean
+  canFetch: boolean
+}
+
 export interface PlaygroundController {
   mode: PlaygroundMode
   query: string
   fetchUrl: string
   selectedProviderId: string
   resultCount: number
-  eligibleProviders: ProviderConfig[]
+  projectId: string
+  eligibleProviders: ProjectProvider[]
+  /** Ready view with no provider that can run the active mode. */
+  noProviderForMode: boolean
+  providersError: boolean
+  retryProviders: () => void
+  canSearch: boolean
+  canFetch: boolean
   hasSearchContent: boolean
   hasFetchContent: boolean
   activeSearch: SearchResponse | null
@@ -62,17 +89,11 @@ export interface PlaygroundController {
   handleFetchResult: (result: SearchResult) => Promise<void>
 }
 
-/**
- * Picker eligibility: the shared effective-access rule plus the credential rule.
- * The shared helper owns enable AND support with the global gate, so an admin
- * choice for an unsupported tool can never enter the picker.
- */
-function isEligibleForOperation(
-  provider: ProviderConfig,
-  operation: "search" | "fetch"
-): boolean {
-  const hasCredential = provider.hasKey || provider.capabilities.includes("keyless_tier")
-  return hasCredential && isProviderOperationEnabled(provider, operation)
+/** A mode the caller lacks permission for falls back to the permitted one. */
+function resolveMode(mode: PlaygroundMode, scope: PlaygroundScope): PlaygroundMode {
+  if (mode === "search" && !scope.canSearch && scope.canFetch) return "fetch"
+  if (mode === "fetch" && !scope.canFetch && scope.canSearch) return "search"
+  return mode
 }
 
 /**
@@ -81,7 +102,7 @@ function isEligibleForOperation(
  */
 function resolveEffectiveProviderId(
   selectedProviderId: string,
-  eligibleProviders: ProviderConfig[]
+  eligibleProviders: readonly ProjectProvider[]
 ): string {
   if (selectedProviderId === "auto" || selectedProviderId === "all") return selectedProviderId
   return eligibleProviders.some((provider) => provider.id === selectedProviderId)
@@ -109,21 +130,22 @@ function usePlaygroundSliceFields() {
 }
 
 /**
- * Interaction coordination for the search/fetch playground. Composer drafts,
- * view mode, request options, latest results, and execution status are Redux
- * state (persisted); only inspector/clipboard presentation state stays local.
- * Rendering lives in ui/.
+ * Interaction coordination for the project search/fetch playground. Composer
+ * drafts, view mode, request options, latest results, and execution status are
+ * Redux state of the project store (persisted); only inspector/clipboard
+ * presentation state stays local. The picker offers the providers whose
+ * project `effective_operations` hold the mode. Rendering lives in ui/.
  */
-export function usePlaygroundController(): PlaygroundController {
-  const { providers, providersLoading, runSearch, runFetch } = useFreeSearch()
+export function usePlaygroundController(scope: PlaygroundScope): PlaygroundController {
+  const { providers, providersLoading } = scope
+  const { runSearch, runFetch } = useProjectExecution()
   const dispatch = useAppDispatch()
-  const fields = usePlaygroundSliceFields()
+  const sliceFields = usePlaygroundSliceFields()
+  const fields = { ...sliceFields, mode: resolveMode(sliceFields.mode, scope) }
   const preview = useResultPreview()
   const { setSelectedResultForPreview } = preview
 
-  const eligibleProviders = providers.filter((provider) =>
-    isEligibleForOperation(provider, fields.mode)
-  )
+  const eligibleProviders = scope.orderedProviders?.[fields.mode] ?? providersForOperation(providers, fields.mode)
 
   const effectiveSelectedProviderId = resolveEffectiveProviderId(
     fields.selectedProviderId,
@@ -131,11 +153,12 @@ export function usePlaygroundController(): PlaygroundController {
   )
   const isSelectionStale = effectiveSelectedProviderId !== fields.selectedProviderId
 
-  // The catalog arrives asynchronously and a persisted provider can lose its key
-  // between sessions: rewrite the stored choice once the catalog has settled so
-  // a reload cannot resurrect an ineligible id. Display already falls back.
+  // The project view arrives asynchronously and a persisted provider can lose
+  // its binding between sessions: rewrite the stored choice once the view has
+  // settled so a reload cannot resurrect an ineligible id. Display already
+  // falls back.
   useEffect(() => {
-    if (providersLoading !== true && isSelectionStale) {
+    if (!providersLoading && isSelectionStale) {
       dispatch(setSelectedProviderIdAction("auto"))
     }
   }, [dispatch, isSelectionStale, providersLoading])
@@ -159,12 +182,12 @@ export function usePlaygroundController(): PlaygroundController {
   })
 
   const switchMode = (next: PlaygroundMode) => {
+    if (next === "search" ? !scope.canSearch : !scope.canFetch) return
     const selectionLostForNextMode =
       effectiveSelectedProviderId !== "auto" &&
       effectiveSelectedProviderId !== "all" &&
-      !providers.some(
-        (provider) =>
-          provider.id === effectiveSelectedProviderId && isEligibleForOperation(provider, next)
+      !providersForOperation(providers, next).some(
+        (provider) => provider.id === effectiveSelectedProviderId
       )
     if (next === "fetch" && effectiveSelectedProviderId === "all") {
       setSelectedProviderId("auto")
@@ -175,7 +198,7 @@ export function usePlaygroundController(): PlaygroundController {
     setSelectedResultForPreview(null)
   }
 
-  const handleFetchResult = createFetchResultHandler({
+  const fetchResult = createFetchResultHandler({
     selectedProviderId: effectiveSelectedProviderId,
     providers,
     isSearching: fields.isSearching,
@@ -184,12 +207,21 @@ export function usePlaygroundController(): PlaygroundController {
     setSelectedProviderId,
     setFetchUrl,
     switchMode,
-    isEligibleForFetch: (provider) => isEligibleForOperation(provider, "fetch"),
+    isEligibleForFetch: (provider) => provider.effectiveOperations.includes("fetch"),
   })
+  const handleFetchResult = async (result: SearchResult) => {
+    if (scope.canFetch) await fetchResult(result)
+  }
 
   return {
     ...fields,
+    projectId: scope.projectId,
     eligibleProviders,
+    noProviderForMode: scope.providersReady && eligibleProviders.length === 0,
+    providersError: scope.providersError,
+    retryProviders: scope.retryProviders,
+    canSearch: scope.canSearch,
+    canFetch: scope.canFetch,
     selectedProviderId: effectiveSelectedProviderId,
     selectedResultForPreview: preview.selectedResultForPreview,
     showJsonInspector: preview.showJsonInspector,

@@ -10,10 +10,8 @@ from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import create_server
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -30,16 +28,16 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
-    mcp_account_token,
-    promote_account,
+    promote_to_system_admin,
     temp_email,
 )
+from tests.fixtures.execution import bdd_project_id
+from tests.fixtures.usage_ledger import all_usage_events
 
 
 class _MonitoringStubAdapter(ProviderAdapter):
@@ -173,14 +171,16 @@ def _parse_utc_timestamp(value: Any) -> datetime:
     return timestamp
 
 
-def _login_headers(context: Any, role: UserRole, prefix: str) -> dict[str, str]:
-    # Register one account, assign one role, and return one access header.
+def _login_headers(context: Any, prefix: str, *, system_admin: bool = False) -> dict[str, str]:
+    # Register one ordinary account; grant system_admin (trusted) only when the
+    # scenario reads system-scoped stats/dashboard (A1). Execution uses the
+    # account's own project membership.
     email = temp_email(prefix)
     with _rest_client(context) as client:
         registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
         assert registered.status_code == 201
-        if role is not UserRole.AGENT:
-            context.loop.run_until_complete(promote_account(context.repository, email, role))
+        if system_admin:
+            context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
         logged_in = client.post(
             "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
         )
@@ -211,17 +211,25 @@ def step_given_rest_monitoring(context: Any) -> None:
     _seed_quota(context, "rest-fetch", QuotaSource.OBSERVED)
     context.app = create_app(context.adapters, repository=context.repository)
     # Stats and dashboard need the Reader role, search and fetch need any role.
-    context.auth_headers = _login_headers(context, UserRole.DEVELOPER, "monitor-dev")
+    context.auth_headers = _login_headers(context, "monitor-reader", system_admin=True)
 
 
 @when('I submit REST search query "{query}" and fetch URL "{url}"')
 def step_when_rest_search_and_fetch(context: Any, query: str, url: str) -> None:
     with _rest_client(context) as client:
         context.search_response = client.post(
-            "/search", json={"query": query, "limit": 1}, headers=context.auth_headers
+            "/search",
+            json={
+                "project_id": bdd_project_id(context, context.auth_headers),
+                "query": query,
+                "limit": 1,
+            },
+            headers=context.auth_headers,
         )
         context.fetch_response = client.post(
-            "/fetch", json={"url": url}, headers=context.auth_headers
+            "/fetch",
+            json={"project_id": bdd_project_id(context, context.auth_headers), "url": url},
+            headers=context.auth_headers,
         )
         context.stats_response = client.get("/stats", headers=context.auth_headers)
         context.dashboard_response = client.get("/dashboard", headers=context.auth_headers)
@@ -301,26 +309,24 @@ def step_given_mcp_monitoring(context: Any) -> None:
         ),
     ]
 
-    async def _authed_service() -> tuple[Any, str]:
-        service, token, _email = await mcp_account_token(context.repository, "monitor-mcp")
-        return service, token.get_secret_value()
+    from tests.fixtures.execution import bdd_mcp_server
 
-    service, raw_token = context.loop.run_until_complete(_authed_service())
-    context.server = create_server(
-        context.adapters,
-        repository=context.repository,
-        auth_service=service,
-        stdio_token=SecretStr(raw_token),
+    context.server, context.mcp_pid = context.loop.run_until_complete(
+        bdd_mcp_server(context, context.adapters, "monitor-mcp")
     )
 
 
 @when("I call the MCP search and fetch tools")
 def step_when_mcp_search_and_fetch(context: Any) -> None:
     context.mcp_search_result = context.loop.run_until_complete(
-        context.server.call_tool("search", {"request": {"query": "mcp stage four"}})
+        context.server.call_tool(
+            "search", {"request": {"project_id": context.mcp_pid, "query": "mcp stage four"}}
+        )
     )
     context.mcp_fetch_result = context.loop.run_until_complete(
-        context.server.call_tool("fetch", {"request": {"url": "https://example.com/mcp"}})
+        context.server.call_tool(
+            "fetch", {"request": {"project_id": context.mcp_pid, "url": "https://example.com/mcp"}}
+        )
     )
 
 
@@ -333,13 +339,28 @@ def step_then_mcp_telemetry(context: Any) -> None:
     assert context.mcp_search_result[1]["provider"] == "mcp-search"
     assert context.mcp_fetch_result[1]["provider"] == "mcp-fetch"
 
-    usage = context.loop.run_until_complete(context.repository.list_usage())
+    usage = context.loop.run_until_complete(all_usage_events(context.repository))
     assert [(event.provider, event.operation.value, event.units) for event in usage] == [
         ("mcp-search", "search", Decimal("1.25")),
         ("mcp-fetch", "fetch", Decimal("2.50")),
     ]
     for provider in ("mcp-search", "mcp-fetch"):
-        health = context.loop.run_until_complete(context.repository.latest_health(provider))
+
+        async def scoped_health(provider: str = provider):
+            from uuid import UUID
+
+            from freesearch.persistence.bindings import ProjectBindingRepository
+
+            async with context.repository.session() as session:
+                bindings = await ProjectBindingRepository(session).list_for_project(
+                    project_id=UUID(context.mcp_pid)
+                )
+                binding = next(b for b in bindings if b.route_label == provider)
+            return await context.repository.latest_health(
+                provider, credential_id=binding.credential_id
+            )
+
+        health = context.loop.run_until_complete(scoped_health())
         assert health is not None
         assert health.provider == provider
         assert health.status is HealthStatus.HEALTHY
@@ -353,7 +374,7 @@ def step_given_privacy_safe_monitoring(context: Any) -> None:
     context.adapters = [_MonitoringStubAdapter("privacy-provider")]
     context.app = create_app(context.adapters, repository=context.repository)
     # Stats and dashboard need the Reader role, search and fetch need any role.
-    context.auth_headers = _login_headers(context, UserRole.DEVELOPER, "monitor-dev")
+    context.auth_headers = _login_headers(context, "monitor-reader", system_admin=True)
 
 
 @when("I submit a private REST search and fetch request")
@@ -362,10 +383,20 @@ def step_when_private_rest_requests(context: Any) -> None:
     context.private_url = "https://secret.example/private-document"
     with _rest_client(context) as client:
         context.private_search_response = client.post(
-            "/search", json={"query": context.private_query}, headers=context.auth_headers
+            "/search",
+            json={
+                "project_id": bdd_project_id(context, context.auth_headers),
+                "query": context.private_query,
+            },
+            headers=context.auth_headers,
         )
         context.private_fetch_response = client.post(
-            "/fetch", json={"url": context.private_url}, headers=context.auth_headers
+            "/fetch",
+            json={
+                "project_id": bdd_project_id(context, context.auth_headers),
+                "url": context.private_url,
+            },
+            headers=context.auth_headers,
         )
         context.private_stats_response = client.get("/stats", headers=context.auth_headers)
         context.private_dashboard_response = client.get("/dashboard", headers=context.auth_headers)
@@ -375,7 +406,7 @@ def step_when_private_rest_requests(context: Any) -> None:
 def step_then_numeric_metadata(context: Any) -> None:
     assert context.private_search_response.status_code == 200
     assert context.private_fetch_response.status_code == 200
-    events = context.loop.run_until_complete(context.repository.list_usage())
+    events = context.loop.run_until_complete(all_usage_events(context.repository))
     assert len(events) == 2
     for event in events:
         assert event.metadata == {"credits": 3, "tokens": 12, "latency_ms": 8.5}
@@ -437,14 +468,19 @@ def step_given_failing_telemetry_app(context: Any) -> None:
     context.repository.record_usage = _fail_usage  # type: ignore[method-assign]
     context.repository.record_health = _fail_health  # type: ignore[method-assign]
     # Search needs any authenticated role.
-    context.auth_headers = _login_headers(context, UserRole.AGENT, "monitor-agent")
+    context.auth_headers = _login_headers(context, "monitor-agent")
 
 
 @when("I submit a resilient REST search request")
 def step_when_resilient_rest_search(context: Any) -> None:
     with _rest_client(context) as client:
         context.resilient_response = client.post(
-            "/search", json={"query": "resilient"}, headers=context.auth_headers
+            "/search",
+            json={
+                "project_id": bdd_project_id(context, context.auth_headers),
+                "query": "resilient",
+            },
+            headers=context.auth_headers,
         )
 
 

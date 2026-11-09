@@ -1,0 +1,50 @@
+labels:
+  size: standard
+  provider: gcp
+
+when:
+  - event: manual
+
+steps:
+  routing-latency-tests:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    environment:
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+    commands:
+      - |
+        echo "=========================================================="
+        echo "               GCP SPOT CI WORKER INFO                    "
+        echo "=========================================================="
+        echo "Worker Host:   ${CI_MACHINE}"
+        echo "Worker Labels: ${CI_AGENT_LABELS}"
+        echo "OS / Platform: ${CI_SYSTEM_PLATFORM}"
+        echo "CPU Cores:     $(nproc) physical/virtual cores detected"
+        echo "Total Memory:  $(free -h | awk "/Mem:/ {print \$2}")"
+        echo "Free Disk:     $(df -h / | awk "NR==2 {print \$4}")"
+        echo "=========================================================="
+      - |
+        bash scripts/ci/run-and-log.sh routing-latency-tests.log bash -euo pipefail -c '
+          test -f .env || cp .env.example .env
+          uv sync --frozen
+          uv run freesearch-db upgrade
+          uv run behave tests/bdd/features/routing_latency.feature
+          uv run pytest tests/integration/latency/ -q
+          echo "=========================================================="
+          echo "               ROUTING LATENCY REPORT                     "
+          echo "=========================================================="
+          if [ -f test_reports/routing_latency_offline.md ]; then
+            cat test_reports/routing_latency_offline.md
+          fi
+          find test_reports -name "*.md" -not -name "routing_latency_offline.md" -exec echo "--- {} ---" \; -exec cat {} \;
+        '
+
+  upload-artifacts:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
+    environment:
+      GITEA_UPLOAD_TOKEN:
+        from_secret: gitea_artifact_upload_token
+    commands:
+      - python scripts/ci/upload_gitea.py api-latency
+    when:
+      - event: manual
+        status: [success, failure]

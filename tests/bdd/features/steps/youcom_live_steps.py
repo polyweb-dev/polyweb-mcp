@@ -1,8 +1,11 @@
+# mypy: disable-error-code="untyped-decorator"
 """Live vault-backed You.com search+fetch (manual-only, @live).
 
 Skips gracefully without a harness key; never hardcodes a real key. The real
 You.com key comes only from the harness env (FREESEARCH_YOU_API_KEY) and is
-stored through the vault (PUT /secret) under passphrase encryption
+stored as an encrypted project credential through the credentials API, then
+bound to the project; search and fetch run through REST pinned to ``you``,
+so execution resolves the key from the vault. Encryption uses a passphrase
 (FREESEARCH_ENCRYPTION_KEY when present, else an auto-generated tmp key
 file). Search+fetch run against the live vendor; logs/responses/rows are
 swept for key material.
@@ -21,19 +24,17 @@ from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
 from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.contracts import FetchRequest, SearchRequest
-from freesearch.models.users import UserRole
+from freesearch.models.contracts import FetchResponse, SearchResponse
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from freesearch.routers.control import _build_with_resolved_secret, _resolve_secret
 from tests.encrypted_secrets_helpers import assert_no_sentinels
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
-    promote_account,
+    promote_to_system_admin,
     temp_email,
 )
+from tests.fixtures.execution import create_bound_provider, seed_member_project
 from tests.integration.services.oauth.oauth_stubs import collect_sqlite_texts
 
 YOU_ENV = "FREESEARCH_YOU_API_KEY"
@@ -85,7 +86,7 @@ def step_given_live_vault_youcom(context: Any) -> None:
         get_settings.cache_clear()
 
     _push_cleanup(context, _restore)
-    # Vault-only: drop provider env keys so only the PUT vault value resolves.
+    # Vault-only: drop provider env keys so only the stored credential resolves.
     # The live key itself was already captured above and is never re-exported.
     for var in (
         "FREESEARCH_EXA_API_KEY",
@@ -116,57 +117,60 @@ def step_given_live_vault_youcom(context: Any) -> None:
     root.addHandler(handler)
     _push_cleanup(context, lambda: root.removeHandler(handler))
 
-    # Vault writes need the Admin role.
+    # Credential writes need the Admin role.
     email = temp_email("live-you-admin")
-    with TestClient(context.app) as client:
-        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
-        assert registered.status_code == 201, registered.text
-        context.loop.run_until_complete(promote_account(context.repository, email, UserRole.ADMIN))
-        logged_in = client.post(
-            "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
-        )
-        assert logged_in.status_code == 200, logged_in.text
-        context.live_auth_headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
-        put = client.put(
-            "/api/v1/providers/you/secret",
-            json={"key": live_key},
-            headers=context.live_auth_headers,
-        )
-        assert put.status_code == 200, put.text
-        assert put.json()["source"] == "encrypted_db"
-        context.live_put_body = put.text
+    client = TestClient(context.app)
+    client.__enter__()
+    _push_cleanup(context, lambda: client.__exit__(None, None, None))
+    context.live_client = client
+    registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+    assert registered.status_code == 201, registered.text
+    context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
+    logged_in = client.post("/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD})
+    assert logged_in.status_code == 200, logged_in.text
+    context.live_auth_headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+    project = context.loop.run_until_complete(
+        seed_member_project(context.repository, context.live_auth_headers)
+    )
+    context.live_project_id = str(project.project_id)
+    created = create_bound_provider(
+        client, context.live_project_id, "you", live_key, context.live_auth_headers
+    )
+    context.live_put_body = created.text
 
-    async def _build_live_adapter() -> Any:
-        from freesearch.adapters.registry import adapter_factory
 
-        key, source = await _resolve_secret(ProviderName.YOU, context.app.state.secret_store)
-        assert key is not None and source == "encrypted_db", (
-            "RED: vault PUT must resolve via encrypted_db before live search"
-        )
-        factory = adapter_factory("you")
-        assert factory is not None
-        return _build_with_resolved_secret(factory, context.http_client, key)
-
-    context.youcom_live_adapter = context.loop.run_until_complete(_build_live_adapter())
+def _pinned_you(context: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "project_id": context.live_project_id,
+        "routing": {"mode": "require", "providers": ["you"]},
+        **payload,
+    }
 
 
 @when('I run a live vault search for "{query}" with limit {limit:d}')
 def step_when_live_vault_search(context: Any, query: str, limit: int) -> None:
-    request = SearchRequest(query=query, limit=limit)
-    context.live_query = query
-    context.live_search = context.loop.run_until_complete(
-        context.youcom_live_adapter.search(request)
+    response = context.live_client.post(
+        "/search",
+        json=_pinned_you(context, {"query": query, "limit": limit}),
+        headers=context.live_auth_headers,
     )
+    assert response.status_code == 200, response.text
+    context.live_query = query
+    context.live_search = SearchResponse.model_validate(response.json())
 
 
 @when("I fetch the first live vault result URL")
 def step_when_live_vault_fetch(context: Any) -> None:
     results = context.live_search.results
     assert results, "live search returned no results to fetch"
-    first_url = results[0].url
-    context.live_fetch_url = str(first_url)
-    request = FetchRequest(url=first_url, max_chars=2000)
-    context.live_fetch = context.loop.run_until_complete(context.youcom_live_adapter.fetch(request))
+    context.live_fetch_url = str(results[0].url)
+    response = context.live_client.post(
+        "/fetch",
+        json=_pinned_you(context, {"url": context.live_fetch_url, "max_chars": 2000}),
+        headers=context.live_auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    context.live_fetch = FetchResponse.model_validate(response.json())
 
 
 @then("the live vault search and fetch should succeed")

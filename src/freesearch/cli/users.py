@@ -1,9 +1,10 @@
-"""Operator-only account CLI: Admin bootstrap and role assignment.
+"""Operator-only account CLI: system administrator bootstrap and assignment.
 
-These commands replace the absent HTTP role-management surface (PLAN P1a/Q5b).
-They run under operator filesystem privileges, so they are the only trusted path
-that can create an Admin account or change a role. No first-registration rule
-and no email match grants Admin.
+These commands are the trusted local path for system authority. They run under
+operator filesystem privileges, so they are the only path that can create the
+first system administrator or grant and revoke the ``system_admin`` role
+assignment. No first-registration rule and no email match grants it, and no
+account type or role field exists on an account.
 
 Safety rules:
 
@@ -13,9 +14,12 @@ Safety rules:
   prompt is an error, not an echo-prone fallback.
 * The target database must exist as an absolute file path, so a mistyped path
   cannot create an empty database with an Admin account.
-* A successful privileged operation prints only the account UUID and its role.
-  Passwords, token pairs, hashes, and argument namespaces never reach the
-  output, and every failure uses one fixed message.
+* A successful privileged operation prints only the account UUID and the
+  system role outcome. Passwords, token pairs, hashes, and argument namespaces
+  never reach the output, and every failure uses one fixed message.
+* ``revoke-system-admin`` refuses to remove the last active system
+  administrator, and ``deactivate`` refuses to leave any project, archived or
+  not, without an active project administrator.
 """
 
 import argparse
@@ -31,8 +35,14 @@ from fastapi_users import exceptions
 from pydantic import SecretStr
 
 from freesearch.configuration.config import get_settings
-from freesearch.models.users import UserRole
-from freesearch.persistence.database_migrations import absolute_database_path
+from freesearch.infrastructure.encrypted_store import (
+    EncryptedDbSecretStore,
+    load_existing_secret_codec,
+)
+from freesearch.persistence.database_migrations import (
+    DatabaseResetRequired,
+    absolute_database_path,
+)
 from freesearch.services.monitoring import resolve_database_path
 from freesearch.services.projects import (
     LAST_PROJECT_ADMIN,
@@ -44,10 +54,10 @@ from freesearch.services.projects import (
     ProjectValidationError,
 )
 from freesearch.services.users import (
+    AuthLastSystemAdmin,
     AuthRoleAssignmentFailed,
     AuthService,
     AuthServiceError,
-    AuthUnsupportedRole,
     AuthUserNotFound,
 )
 
@@ -61,6 +71,9 @@ _PASSWORD_ARGUMENT_ERROR: str = (
 
 #: One fixed message for every unexpected failure.
 _OPERATION_ERROR: str = "the account operation failed"
+
+#: The one system role the operator CLI manages.
+_SYSTEM_ADMIN: str = "system_admin"
 
 #: Flags that could carry a password value.
 _PASSWORD_FLAGS: frozenset[str] = frozenset({"-p", "--pass", "--passwd", "--password", "--secret"})
@@ -86,40 +99,39 @@ def _is_password_argument(argument: str) -> bool:
 
 
 def _parser() -> argparse.ArgumentParser:
-    """Return the parser for the two privileged account commands."""
+    """Return the parser for the privileged account commands."""
 
     parser = _SafeParser(
         prog="freesearch-users",
         description=(
-            "Create an Admin account, assign an account role, or deactivate "
-            "accounts with the project administrator guard (operator only)."
+            "Create a system administrator, grant or revoke the system_admin role, "
+            "or deactivate accounts with the project administrator guard (operator only)."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     create = subparsers.add_parser(
-        "create-admin", help="create one local Admin account through a masked prompt"
+        "create-admin",
+        help="create one local account with the system_admin role through a masked prompt",
     )
-    create.add_argument("--email", required=True, help="email address of the new Admin account")
+    create.add_argument("--email", required=True, help="email address of the new account")
     create.add_argument(
         "--database",
         type=Path,
         default=None,
         help="existing database file; the shared FREESEARCH_DB precedence applies",
     )
-    role = subparsers.add_parser("set-role", help="assign one role to an explicit account UUID")
-    role.add_argument("--user-id", required=True, help="account UUID to change")
-    role.add_argument(
-        "--role",
-        required=True,
-        choices=[member.value for member in UserRole],
-        help="role to assign: admin, developer, or agent",
-    )
-    role.add_argument(
-        "--database",
-        type=Path,
-        default=None,
-        help="existing database file; the shared FREESEARCH_DB precedence applies",
-    )
+    for command, summary in (
+        ("grant-system-admin", "grant the system_admin role to an explicit account UUID"),
+        ("revoke-system-admin", "revoke the system_admin role from an explicit account UUID"),
+    ):
+        role = subparsers.add_parser(command, help=summary)
+        role.add_argument("--user-id", required=True, help="account UUID to change")
+        role.add_argument(
+            "--database",
+            type=Path,
+            default=None,
+            help="existing database file; the shared FREESEARCH_DB precedence applies",
+        )
     deactivate = subparsers.add_parser(
         "deactivate",
         help="deactivate one or more accounts after the last-project-admin guard",
@@ -170,6 +182,9 @@ def _prompt_password() -> SecretStr:
 def _report(error: Exception) -> int:
     """Print one fixed, secret-free message for a failed operation."""
 
+    if isinstance(error, DatabaseResetRequired):
+        print(str(error), file=sys.stderr)
+        return 1
     if isinstance(error, CliError):
         print(str(error), file=sys.stderr)
         return 1
@@ -184,10 +199,13 @@ def _report(error: Exception) -> int:
         return 1
     if isinstance(error, AuthRoleAssignmentFailed):
         print(f"Account: {error.user_id}")
-        print("Role: agent (the admin role was not applied)")
+        print("System role: none (the system_admin role was not applied)")
         return 1
-    if isinstance(error, AuthUnsupportedRole):
-        print(str(error), file=sys.stderr)
+    if isinstance(error, AuthLastSystemAdmin):
+        print(
+            "cannot change: the installation would lose its last active system administrator",
+            file=sys.stderr,
+        )
         return 1
     if isinstance(error, ProjectConflict) and error.code == LAST_PROJECT_ADMIN:
         print(
@@ -207,11 +225,31 @@ def _report(error: Exception) -> int:
     if isinstance(error, ProjectServiceError):
         print(_OPERATION_ERROR, file=sys.stderr)
         return 1
+    if type(error) is AuthServiceError:
+        print(str(error), file=sys.stderr)
+        return 1
     if isinstance(error, AuthServiceError):
         print("the account database is unavailable", file=sys.stderr)
         return 1
     print(_OPERATION_ERROR, file=sys.stderr)
     return 1
+
+
+def _secret_store(service: AuthService) -> EncryptedDbSecretStore | None:
+    """Return the installation's encrypted store so OAuth flow checks can read initiators.
+
+    The existing master key is loaded without ever creating one. A missing or
+    unreadable key gives ``None``, and pending OAuth flows in the affected
+    scope then end fail-closed.
+    """
+
+    repository = service.repository
+    if repository is None:
+        return None
+    try:
+        return EncryptedDbSecretStore(repository, load_existing_secret_codec(service.settings))
+    except (OSError, ValueError):
+        return None
 
 
 async def _execute(options: argparse.Namespace) -> int:
@@ -227,7 +265,7 @@ async def _execute(options: argparse.Namespace) -> int:
         if options.command == "create-admin":
             account = await service.create_admin(options.email, _prompt_password())
             print(f"Account: {account}")
-            print(f"Role: {UserRole.ADMIN.value}")
+            print(f"System role: {_SYSTEM_ADMIN}")
             return 0
         if options.command == "deactivate":
             repository = service.repository
@@ -237,16 +275,21 @@ async def _execute(options: argparse.Namespace) -> int:
             accounts = await ProjectService(
                 repository,
                 rollout_state=service.settings.projects_rollout_state,
+                secret_store=_secret_store(service),
             ).deactivate_accounts(target_ids, trusted=True)
             for deactivated in accounts:
                 print(f"Account: {deactivated.id}")
                 print("Active: false")
             return 0
         user_id = UUID(str(options.user_id))
-        target_role = UserRole(str(options.role))
-        await service.change_role(user_id, target_role)
+        if options.command == "grant-system-admin":
+            changed = await service.grant_system_admin(user_id)
+            print(f"Account: {user_id}")
+            print(f"System role: {_SYSTEM_ADMIN} {'granted' if changed else 'already held'}")
+            return 0
+        changed = await service.revoke_system_admin(user_id, secret_store=_secret_store(service))
         print(f"Account: {user_id}")
-        print(f"Role: {options.role}")
+        print(f"System role: {_SYSTEM_ADMIN} {'revoked' if changed else 'not held'}")
         return 0
     finally:
         await service.close()

@@ -1,25 +1,14 @@
-/**
- * Native Tavily Credits display model.
- *
- * One native Credit projects to 8 CRD at the PAYGO reference price (USD 0.008
- * per Credit, CRD reference USD 0.001), so every conversion is an exact
- * string-decimal step through the shared `parseDecimal`. CRD wire values stay
- * untouched: conversion happens only at this display boundary, and the profile
- * drives both directions. The display selects the aggregate native pool first
- * and falls back to native tiers and vendor detail; it never sums two
- * operation views of one pool.
- */
-
+/** Native Tavily credits and exact conversions at the provider USD price. */
 import type {
-  CRDConversionProfile,
-  CRDGrantsSummary,
+  UsdConversionProfile,
+  UsdGrantsSummary,
   LimitRateWindow,
   NativePool,
   ProviderAuthLimits,
   TierBalance,
 } from "@/domains/dashboard"
-import { operationAvailable } from "./crdCardModel"
-import { callsText } from "./crdDisplay"
+import { operationAvailable } from "./usdCardModel"
+import { callsText } from "./usdDisplay"
 import { parseDecimal, subtractDecimal } from "./manualQuotaMath"
 
 /** One balance state of a Tavily native rail; the unit stays `Credits` in all of them. */
@@ -33,7 +22,7 @@ export interface TavilyCreditsDisplay {
   state: TavilyCreditsState
   source: string | null
   stale: boolean
-  /** The local grant ceiling in unconverted CRD text; the label shows CRD. */
+  /** The local grant ceiling in unconverted Usd text; the label shows Usd. */
   localCap: string | null
   paygo: boolean
   resetAt: string | null
@@ -45,13 +34,12 @@ export interface TavilyCreditsDisplay {
 /** The native display inputs of one Tavily rail, with its price profile. */
 export interface TavilyDisplayAdapter {
   credits: TavilyCreditsDisplay
-  /** The CRD conversion profile of the rail; null when the payload has none. */
-  profile: CRDConversionProfile | null
+  /** The Usd conversion profile of the rail; null when the payload has none. */
+  profile: UsdConversionProfile | null
 }
 
 /** The documented Tavily PAYGO price profile for views without a payload. */
-export const DEFAULT_TAVILY_PROFILE: CRDConversionProfile = {
-  reference_usd_per_crd: "0.001",
+export const DEFAULT_TAVILY_PROFILE: UsdConversionProfile = {
   native_usd_per_unit: "0.008",
   cost_basis: "paygo_reference",
   price_version: "paygo-reference",
@@ -111,42 +99,41 @@ function formatScaled(value: bigint, scale: number): string {
  */
 function convertScaled(amount: Scaled, numerator: Scaled, denominator: Scaled): string {
   const target = amount.scale + EXTRA_SCALE
-  const dividend = amount.int * numerator.int * 10n ** BigInt(numerator.scale + target)
-  const divisor = denominator.int * 10n ** BigInt(denominator.scale + amount.scale)
+  const dividend = amount.int * numerator.int * 10n ** BigInt(denominator.scale + target)
+  const divisor = denominator.int * 10n ** BigInt(numerator.scale + amount.scale)
   const quotient = dividend / divisor
   const rounded = (dividend % divisor) * 2n >= divisor ? quotient + 1n : quotient
   return formatScaled(rounded, target)
 }
 
 /** The parsed native price of one profile, or null when the profile is unknown. */
-function profilePrices(profile: CRDConversionProfile): { perCredit: Scaled; perCRD: Scaled } | null {
+function profilePrices(profile: UsdConversionProfile): { perCredit: Scaled; perUsd: Scaled } | null {
   const perCredit = profile.native_usd_per_unit === null ? null : parseDecimal(profile.native_usd_per_unit)
   if (perCredit === null) return null
-  const perCRD = profile.reference_usd_per_crd === null ? null : parseDecimal(profile.reference_usd_per_crd)
-  if (perCRD === null || perCRD.int === 0n) return null
-  return { perCredit, perCRD }
+  const perUsd: Scaled = { int: 1n, scale: 0 }
+  return { perCredit, perUsd }
 }
 
 /**
- * Convert Credits to CRD: `credits x native_usd_per_unit / reference_usd_per_crd`.
- * Null when the profile or the price is unknown; the stored CRD stays untouched.
+ * Convert Credits to Usd: `credits x native_usd_per_unit`.
+ * Null when the profile or the price is unknown; the stored Usd stays untouched.
  */
-export function tavilyCreditsToCRD(amount: string, profile: CRDConversionProfile): string | null {
+export function tavilyCreditsToUsd(amount: string, profile: UsdConversionProfile): string | null {
   const prices = profilePrices(profile)
   const credits = parseDecimal(amount)
   if (prices === null || credits === null) return null
-  return convertScaled(credits, prices.perCredit, prices.perCRD)
+  return convertScaled(credits, prices.perCredit, prices.perUsd)
 }
 
 /**
- * Convert CRD to Credits: `crd x reference_usd_per_crd / native_usd_per_unit`.
+ * Convert Usd to Credits: `usd / native_usd_per_unit`.
  * Null when the profile is unknown or the native price is zero.
  */
-export function tavilyCRDToCredits(amount: string, profile: CRDConversionProfile): string | null {
+export function tavilyUsdToCredits(amount: string, profile: UsdConversionProfile): string | null {
   const prices = profilePrices(profile)
-  const crd = parseDecimal(amount)
-  if (prices === null || crd === null || prices.perCredit.int === 0n) return null
-  return convertScaled(crd, prices.perCRD, prices.perCredit)
+  const usd = parseDecimal(amount)
+  if (prices === null || usd === null || prices.perCredit.int === 0n) return null
+  return convertScaled(usd, prices.perUsd, prices.perCredit)
 }
 
 /**
@@ -174,8 +161,9 @@ export function formatCreditValue(amount: string): string | null {
 /** Visible text of one exact Credits amount, always carrying its unit. */
 export function formatCreditAmount(amount: string): string {
   const text = formatCreditValue(amount)
-  if (text === null) return "Unknown Credits"
-  return text === "1" ? "1 Credit" : text + " Credits"
+  if (text === null) return "Unknown credits"
+  const grouped = text.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  return grouped === "1" ? "1 credit" : grouped + " credits"
 }
 
 interface NativeFunds {
@@ -195,10 +183,10 @@ function vendorTiers(auth: ProviderAuthLimits): TierBalance[] {
 }
 
 /** Sum an operator grant to its exact unspent ceiling, or null when nothing is stored. */
-function grantCeiling(grants: CRDGrantsSummary, operation: "search" | "fetch"): string | null {
-  const granted = operation === "search" ? grants.search_granted_crd : grants.fetch_granted_crd
-  const consumed = operation === "search" ? grants.search_consumed_crd : grants.fetch_consumed_crd
-  const reserved = operation === "search" ? grants.search_reserved_crd : grants.fetch_reserved_crd
+function grantCeiling(grants: UsdGrantsSummary, operation: "search" | "fetch"): string | null {
+  const granted = operation === "search" ? grants.search_granted_usd : grants.fetch_granted_usd
+  const consumed = operation === "search" ? grants.search_consumed_usd : grants.fetch_consumed_usd
+  const reserved = operation === "search" ? grants.search_reserved_usd : grants.fetch_reserved_usd
   if (granted === "0" && consumed === "0" && reserved === "0") return null
   const spent = subtractDecimal(granted, consumed)
   if (spent === null) return "0"
@@ -219,10 +207,10 @@ function compareDecimals(left: string, right: string): number {
 }
 
 /**
- * The local grant ceiling of one rail in unconverted CRD text: the lower of
+ * The local grant ceiling of one rail in unconverted Usd text: the lower of
  * the stored search and fetch grant rest values. A missing ceiling stays null.
  */
-function localCapOf(grants: CRDGrantsSummary | null): string | null {
+function localCapOf(grants: UsdGrantsSummary | null): string | null {
   if (grants === null) return null
   const ceilings = ["search", "fetch"] as const
   let lowest: string | null = null
@@ -347,11 +335,11 @@ export function minuteHeadroomOf(windows: LimitRateWindow[]): string | null {
  * The native kind floors a nonnegative amount to whole units through the
  * exact decimal parser and the shared callsText rule, without binary float.
  * A malformed, negative, absent, or unknown value yields null, never zero.
- * The crd and usd kinds keep significant fractions and trim redundant
+ * The usd and usd kinds keep significant fractions and trim redundant
  * trailing zeros ("1.600000000" reads "1.6", "0.008000000" reads "0.008"),
  * without integer conversion and without a monetary subunit.
  */
-export function formatTavilyPopoverAmount(amount: string, kind: "native" | "crd" | "usd"): string | null {
+export function formatTavilyPopoverAmount(amount: string, kind: "native" | "usd" | "usd"): string | null {
   const text = amount.trim()
   if (text === "" || text.toLowerCase() === "unknown" || text.toLowerCase() === "n/a") return null
   if (parseDecimal(text) === null) return null
@@ -361,8 +349,8 @@ export function formatTavilyPopoverAmount(amount: string, kind: "native" | "crd"
   return trimmed === "" ? "0" : trimmed
 }
 
-/** The applicable CRD price profile of one rail: the runnable operation first. */
-export function profileOf(auth: ProviderAuthLimits): CRDConversionProfile | null {
+/** The applicable Usd price profile of one rail: the runnable operation first. */
+export function profileOf(auth: ProviderAuthLimits): UsdConversionProfile | null {
   const operations = ["search", "fetch"] as const
   for (const wantsAvailable of [true, false]) {
     for (const operation of operations) {

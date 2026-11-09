@@ -10,10 +10,14 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
-from freesearch.models.users import UserRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, promote_account, temp_email
+from tests.fixtures.auth import (
+    TEMP_PASSWORD,
+    configure_bdd_secret,
+    promote_to_system_admin,
+    temp_email,
+)
 
 
 def _open_manual_repository(context: Any) -> None:
@@ -44,7 +48,7 @@ def _login_admin(context: Any) -> dict[str, str]:
     with _client(context) as client:
         registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
         assert registered.status_code == 201
-        context.loop.run_until_complete(promote_account(context.repository, email, UserRole.ADMIN))
+        context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
         logged_in = client.post(
             "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
         )
@@ -124,4 +128,5 @@ def step_when_clear_quota(context: Any) -> None:
 @then("the manual quota should be missing")
 def step_then_quota_missing(context: Any) -> None:
     assert context.clear_response.status_code == 204
-    assert context.get_after_clear.status_code == 404
+    assert context.get_after_clear.status_code == 200
+    assert context.get_after_clear.json() is None

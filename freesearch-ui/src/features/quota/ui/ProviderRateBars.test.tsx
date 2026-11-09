@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { render, screen } from "@testing-library/react"
 import type { RateProgressView } from "@/domains/dashboard"
-import { timeText } from "../model/timeText"
+import { formatDateTime } from "@/shared/lib/formatTime"
 import { ProviderRateBars } from "./ProviderRateBars"
 
 /**
@@ -84,8 +84,8 @@ describe("ProviderRateBars", () => {
         ]}
       />,
     )
-    expect(screen.getByText("5 of 10 requests")).not.toBeNull()
-    expect(screen.getByText("7 of 20 URLs")).not.toBeNull()
+    expect(screen.getByText("5 of 10 requests left this hour")).not.toBeNull()
+    expect(screen.getByText("7 of 20 URLs left today")).not.toBeNull()
   })
 
   it("shows_integer_request_and_url_counts", () => {
@@ -113,8 +113,8 @@ describe("ProviderRateBars", () => {
         ]}
       />,
     )
-    expect(screen.getByText("1000 of 1000 URLs")).not.toBeNull()
-    expect(screen.getByText("498 of 500 requests")).not.toBeNull()
+    expect(screen.getByText("1,000 of 1,000 URLs left today")).not.toBeNull()
+    expect(screen.getByText("498 of 500 requests left this hour")).not.toBeNull()
     expect(screen.queryByText("1000.000000000 of 1000.000000000 URLs")).toBeNull()
     expect(screen.queryByText("498.000000000 of 500 requests")).toBeNull()
     expect(
@@ -136,7 +136,7 @@ describe("ProviderRateBars", () => {
         progress={[makeProgress({ bucket_id: "synth-null", remaining: "7", limit: null })]}
       />,
     )
-    expect(screen.getByText("7 left requests")).not.toBeNull()
+    expect(screen.getByText("Limit not reported")).not.toBeNull()
     expect(screen.queryByRole("progressbar")).toBe(null)
     unmountNull()
 
@@ -147,7 +147,7 @@ describe("ProviderRateBars", () => {
         progress={[makeProgress({ bucket_id: "synth-zero", remaining: "5", limit: "0" })]}
       />,
     )
-    expect(screen.getByText("5 of 0 requests")).not.toBeNull()
+    expect(screen.getByText("Limit not reported")).not.toBeNull()
     expect(screen.queryByRole("progressbar")).toBe(null)
     unmountZero()
   })
@@ -171,7 +171,16 @@ describe("ProviderRateBars", () => {
     expect(screen.queryByText("Fetch daily rate")).toBe(null)
   })
 
-  it("shows source confidence text on each bar", () => {
+  it("states an estimated confidence in sentence case and no raw enum for a reported one", () => {
+    const { unmount } = render(
+      <ProviderRateBars
+        providerName="Synth A"
+        fetchAvailable
+        progress={[makeProgress({ confidence: "estimated" })]}
+      />,
+    )
+    expect(screen.getByText("Estimated")).not.toBeNull()
+    unmount()
     render(
       <ProviderRateBars
         providerName="Synth A"
@@ -179,10 +188,10 @@ describe("ProviderRateBars", () => {
         progress={[makeProgress({ confidence: "authoritative" })]}
       />,
     )
-    expect(screen.getByText("authoritative")).not.toBeNull()
+    expect(screen.queryByText("authoritative")).toBeNull()
   })
 
-  it("shows unknown confidence as plain text", () => {
+  it("shows no note for an unknown confidence", () => {
     render(
       <ProviderRateBars
         providerName="Synth A"
@@ -190,7 +199,20 @@ describe("ProviderRateBars", () => {
         progress={[makeProgress({ confidence: "unknown" })]}
       />,
     )
-    expect(screen.getByText("unknown")).not.toBeNull()
+    expect(screen.queryByText("unknown")).toBeNull()
+  })
+
+  it("colors a full hourly bar green through the shared bar", () => {
+    render(
+      <ProviderRateBars
+        providerName="Synth A"
+        fetchAvailable
+        progress={[makeProgress({ remaining: "10", limit: "10" })]}
+      />,
+    )
+    const bar = screen.getByRole("progressbar", { name: "Synth A search hourly requests remaining" })
+    expect(bar.querySelector("div")?.getAttribute("class")).toContain("bg-[var(--status-healthy)]")
+    expect(bar.querySelector("div")?.getAttribute("class")).not.toContain("bg-[var(--status-warning)]")
   })
 
   it("tags a free daily allowance bar", () => {
@@ -216,7 +238,7 @@ describe("ProviderRateBars", () => {
         ]}
       />,
     )
-    const expected = "Resets " + timeText("2026-03-01T00:00:00Z")
+    const expected = "Resets " + formatDateTime("2026-03-01T00:00:00Z")
     expect(screen.getByText(expected)).not.toBeNull()
     expect(screen.queryByText("Resets 2026-03-01T00:00:00Z")).toBeNull()
   })
@@ -245,7 +267,7 @@ describe("ProviderRateBars", () => {
         progress={[makeProgress({ remaining: "7", limit: null })]}
       />,
     )
-    expect(screen.getByText("7 left requests")).not.toBeNull()
+    expect(screen.getByText("Limit not reported")).not.toBeNull()
     expect(screen.queryByRole("progressbar")).toBe(null)
   })
 
@@ -278,7 +300,7 @@ describe("ProviderRateBars shared bar", () => {
       />,
     )
     // The shared bar holds the title only; the counts sit in the hover popover.
-    expect(screen.getByText("990 of 1000 requests per hour")).not.toBeNull()
+    expect(screen.getByText("990 of 1,000 requests left this hour")).not.toBeNull()
     expect(screen.queryByText("990.00000000")).toBeNull()
     const bar = screen.getByRole("progressbar", {
       name: "Keenable search hourly requests remaining",
@@ -307,7 +329,7 @@ describe("ProviderRateBars shared bar", () => {
         ]}
       />,
     )
-    expect(screen.getByText("7.5 of 20 URLs per day")).not.toBeNull()
+    expect(screen.getByText("7.5 of 20 URLs left today")).not.toBeNull()
   })
 
   it("shows limit-only text without a fabricated remaining amount", () => {
@@ -362,7 +384,7 @@ describe("ProviderRateBars shared bar", () => {
         progress={[makeProgress({ remaining: "lots", limit: "lots" })]}
       />,
     )
-    expect(container.textContent).toBe("")
+    expect(container.textContent).toContain("Limit not reported")
     expect(screen.queryByRole("progressbar")).toBeNull()
   })
 
@@ -402,6 +424,6 @@ describe("ProviderRateBars shared bar", () => {
         ]}
       />,
     )
-    expect(screen.getByText("observed")).not.toBeNull()
+    expect(screen.getByText("Observed")).not.toBeNull()
   })
 })

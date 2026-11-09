@@ -1,5 +1,6 @@
 """Brave Search API adapter using the shared HTTP and resilience contracts."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
@@ -180,10 +181,12 @@ class BraveAdapter(ProviderAdapter):
         *,
         runner: ResilientRunner | None = None,
         api_key: SecretStr | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         resolved = api_key
         if resolved is None:
             raise self._error("configuration_error", "no Brave API key configured")
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._client = client
         self._runner = runner or ResilientRunner(client)
         self._api_key: SecretStr = resolved
@@ -196,7 +199,7 @@ class BraveAdapter(ProviderAdapter):
         self._monthly_limit: Decimal | None = None
         self._monthly_limit_implied = True
         self._monthly_used = Decimal("0")
-        self._ledger_month = _month_start(datetime.now(UTC))
+        self._ledger_month = _month_start(self._clock())
         self._hydrated_month: datetime | None = None
         # The burst element of the rate-limit comma pair is a one-second rate
         # observation only. It never enters the monthly budget figures.
@@ -491,7 +494,7 @@ class BraveAdapter(ProviderAdapter):
     async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
         """Restore the monthly counter after an adapter or process restart."""
 
-        now = datetime.now(UTC)
+        now = self._clock()
         month_start = _month_start(now)
         self._rollover_if_needed(now)
         if self._hydrated_month == month_start:
@@ -507,7 +510,7 @@ class BraveAdapter(ProviderAdapter):
         ):
             self._monthly_limit = latest.limit
             self._monthly_limit_implied = False
-        events = await repository.list_usage(provider=self.name)
+        events = await repository.list_provider_usage(provider=self.name)
         used = Decimal("0")
         for event in events:
             if (
@@ -549,21 +552,21 @@ class BraveAdapter(ProviderAdapter):
         self._burst_observed_at = None
 
     def _usage_event(self, response: httpx.Response) -> UsageEvent:
-        self._rollover_if_needed(datetime.now(UTC))
+        self._rollover_if_needed(self._clock())
         self._monthly_used += Decimal("1")
         metadata: dict[str, int] = {}
         remaining = self._rate_limit_remaining(response.headers.get("X-RateLimit-Remaining"))
         if remaining is not None:
             metadata["rate_limit_remaining"] = remaining
             self._burst_remaining = remaining
-            self._burst_observed_at = datetime.now(UTC)
+            self._burst_observed_at = self._clock()
         return UsageEvent(
             provider=self.name,
             operation=UsageOperation.SEARCH,
             units=Decimal("1"),
             unit_kind=UnitKind.REQUEST,
             display_unit="requests",
-            observed_at=datetime.now(UTC),
+            observed_at=self._clock(),
             metadata=metadata,
         )
 
@@ -602,7 +605,7 @@ class BraveAdapter(ProviderAdapter):
         )
 
     def _quota_snapshot(self, response: httpx.Response) -> QuotaSnapshot:
-        observed_at = datetime.now(UTC)
+        observed_at = self._clock()
         self._rollover_if_needed(observed_at)
         remaining = monthly_header_value(response.headers.get("X-RateLimit-Remaining"))
         limit = monthly_header_value(response.headers.get("X-RateLimit-Limit"))
@@ -662,7 +665,7 @@ class BraveAdapter(ProviderAdapter):
             remaining=None,
             limit=None,
             reset_at=None,
-            observed_at=datetime.now(UTC),
+            observed_at=self._clock(),
             unit_kind=UnitKind.REQUEST,
             display_unit="requests",
             metadata=self._base_metadata(),
@@ -703,7 +706,7 @@ class BraveAdapter(ProviderAdapter):
             remaining=Decimal("0"),
             limit=limit,
             reset_at=None,
-            observed_at=datetime.now(UTC),
+            observed_at=self._clock(),
             unit_kind=UnitKind.REQUEST,
             display_unit="requests",
             metadata=metadata,
@@ -723,11 +726,11 @@ class BraveAdapter(ProviderAdapter):
 
         auth_mode = self.limit_auth_mode
         observed_at = request.observed_at
-        self._rollover_if_needed(datetime.now(UTC))
+        self._rollover_if_needed(self._clock())
         quota = (
             self._last_quota
             if self._monthly_observed
-            else self._snapshot_from_counter(datetime.now(UTC), None)
+            else self._snapshot_from_counter(self._clock(), None)
         )
         limit = quota.limit
         # A figure is vendor-header sourced only when the vendor supplied the

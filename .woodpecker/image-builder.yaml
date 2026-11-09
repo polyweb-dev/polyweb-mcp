@@ -1,0 +1,26 @@
+# Opt-in: create a deployment with target "worker-image" on feature/project.
+# Ordinary manual test runs do not bake images. See scripts/gcp-ci-worker/README.md.
+labels:
+  size: standard
+  provider: gcp
+
+when:
+  - event: deployment
+    branch: feature/project
+    evaluate: 'CI_PIPELINE_DEPLOY_TARGET == "worker-image"'
+
+steps:
+  bake-worker-image:
+    image: google/cloud-sdk:stable
+    environment:
+      GCP_PROJECT_ID: polyweb-513423
+      GCP_ZONE: us-central1-a
+      GCP_IMAGE_BUILDER_KEY:
+        from_secret: gcp_image_builder_key
+    commands:
+      - umask 077
+      - printf '%s' "$GCP_IMAGE_BUILDER_KEY" > /tmp/gcp-image-builder-key.json
+      - unset GCP_IMAGE_BUILDER_KEY
+      - trap 'rm -f /tmp/gcp-image-builder-key.json' EXIT
+      - gcloud auth activate-service-account --key-file=/tmp/gcp-image-builder-key.json
+      - bash scripts/gcp-ci-worker/build-image.sh

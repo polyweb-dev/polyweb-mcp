@@ -30,10 +30,11 @@ SENTINEL_PASSPHRASE = "correct horse passphrase for acceptance 9f31"
 #: Wrong-key passphrase sentinel (AC-4/AC-9). Must differ from the above.
 SENTINEL_WRONG_PASSPHRASE = "wrong horse passphrase for acceptance 51bd"
 
+# The legacy-secret census (``migrate_legacy_secrets_to_encrypted_db``) was a
+# no-op deleted by A4 (API-11); only the store itself is required now.
 _STORE_ATTRS = (
     "ENCRYPTED_SECRET_PREFIX",
     "EncryptedDbSecretStore",
-    "migrate_legacy_secrets_to_encrypted_db",
 )
 
 
@@ -53,7 +54,7 @@ def require_encrypted_store_module() -> Any:
     """Return the module hosting the encrypted store or fail Red.
 
     ``PLAN.md`` prefers a new ``encrypted_store.py`` but allows the symbols
-    to live in ``secrets.py``; accept whichever module exposes all three.
+    to live in ``secrets.py``; accept whichever module exposes both.
     """
 
     for name in (
@@ -69,7 +70,7 @@ def require_encrypted_store_module() -> Any:
     raise AssertionError(
         "RED (AC-3/AC-6): neither freesearch.infrastructure.encrypted_store "
         "nor freesearch.infrastructure.secrets exposes ENCRYPTED_SECRET_PREFIX/"
-        "EncryptedDbSecretStore/migrate_legacy_secrets_to_encrypted_db "
+        "EncryptedDbSecretStore "
         "(PLAN.md section 2b/4)"
     )
 

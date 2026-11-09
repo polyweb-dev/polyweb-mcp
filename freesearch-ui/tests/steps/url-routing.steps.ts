@@ -25,9 +25,7 @@ Then("the page URL path should be {string}", async ({ page }, expected: string) 
 })
 
 Then("the page URL path should still be {string}", async ({ page }, expected: string) => {
-  // Pill-tab switches must not push history entries.
-  await expect(page.getByRole("tab").first()).toBeVisible().catch(() => {})
-  expect(new URL(page.url()).pathname).toBe(expected)
+  await expect.poll(() => new URL(page.url()).pathname).toBe(expected)
 })
 
 When("I go back in history", async ({ page }) => {
@@ -67,13 +65,32 @@ Then("the shell should expose no header element", async ({ page }) => {
   await expect(page.locator("header")).toHaveCount(0)
 })
 
-Then("the sidebar navigation should expose five links", async ({ page }) => {
-  const nav = page.getByRole("navigation", { name: "Primary" })
-  await expect(nav).toBeVisible()
-  await expect(nav.getByRole("link")).toHaveCount(5)
-  // P1-FINAL: standalone Providers page retired into Settings — no link.
-  await expect(nav.getByRole("link", { name: "Providers", exact: true })).toHaveCount(0)
-  for (const label of ["Playground", "Routing", "Usage", "Activity", "Settings"]) {
-    await expect(nav.getByRole("link", { name: label, exact: true })).toHaveCount(1)
+/**
+ * Primary links of the default stubbed session, a system administrator (every
+ * system permission), in contract order: Playground and Activity moved to the
+ * Project navigation; the System group is Providers and Quotas.
+ */
+const SYSTEM_ADMINISTRATOR_LINKS = [
+  "Providers",
+  "Quotas",
+  "Projects",
+  "Keys and pools",
+  "Account",
+]
+
+Then(
+  "the sidebar navigation should expose the system administrator links",
+  async ({ page }) => {
+    const nav = page.getByRole("navigation", { name: "Primary" })
+    await expect(nav).toBeVisible()
+    const links = nav.getByRole("link")
+    await expect(links).toHaveCount(SYSTEM_ADMINISTRATOR_LINKS.length)
+    // P1-FINAL: the standalone /providers page is retired — no link to it;
+    // System credentials is a tab of System Providers, not a link.
+    await expect(nav.locator('a[href="/providers"]')).toHaveCount(0)
+    await expect(nav.getByRole("link", { name: "System credentials", exact: true })).toHaveCount(0)
+    for (const [index, label] of SYSTEM_ADMINISTRATOR_LINKS.entries()) {
+      await expect(links.nth(index)).toHaveAccessibleName(label)
+    }
   }
-})
+)

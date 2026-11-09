@@ -7,7 +7,8 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from freesearch.models.users import UserPrincipal, UserRole
+from freesearch.models.projects import ProjectApiKeyPrincipal
+from freesearch.models.users import UserPrincipal
 from freesearch.routers.auth import (
     BrowserTokenResponse,
     TokenPairResponse,
@@ -69,10 +70,8 @@ def test_static_principal_returns_verified_principal_only() -> None:
     principal = UserPrincipal(
         id=uuid4(),
         email="unit@example.com",
-        role=UserRole.AGENT,
         session_id=uuid4(),
         is_active=True,
-        is_superuser=False,
         is_verified=False,
     )
     request = _request("/users/me")
@@ -82,6 +81,13 @@ def test_static_principal_returns_verified_principal_only() -> None:
     impostor = _request("/users/me")
     impostor.state.user = "agent"
     assert static_principal(impostor) is None
+
+    # A1/AC5: a verified project API key is never a human principal.
+    machine = _request("/users/me")
+    machine.state.user = ProjectApiKeyPrincipal(
+        api_key_id=uuid4(), project_id=uuid4(), scopes=frozenset({"search.execute"})
+    )
+    assert static_principal(machine) is None
 
 
 async def test_auth_validation_errors_hide_credentials() -> None:
@@ -105,45 +111,43 @@ async def test_auth_validation_errors_hide_credentials() -> None:
 
 
 def test_registration_body_accepts_each_role_with_agent_default() -> None:
-    """T2-SIGNUP: public signup accepts each role and defaults to Agent."""
+    """T2-SIGNUP (A1 replacement): signup carries email and password only.
 
-    for role in (UserRole.ADMIN, UserRole.DEVELOPER, UserRole.AGENT):
-        created = UserCreate(
-            email="unit@example.com",
-            password="StrongPass123!x-Unit",
-            role=role,
-        )
-        assert created.role is role
-    assert (
-        UserCreate(email="unit@example.com", password="StrongPass123!x-Unit").role is UserRole.AGENT
-    )
+    The old contract accepted a requested role with an Agent default. Under A1
+    the body has no role field at all, so no request can ask for authority.
+    """
+
+    created = UserCreate(email="unit@example.com", password="StrongPass123!x-Unit")
+    assert set(created.model_dump()) == {"email", "password"}
+    assert "role" not in UserCreate.model_fields
+    assert "is_superuser" not in UserCreate.model_fields
 
 
-def test_registration_body_rejects_invalid_roles_and_provider_fields() -> None:
-    """T2-SIGNUP: null, unknown, and uppercase roles fail with safe validation."""
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("role", "admin"),
+        ("role", "agent"),
+        ("role", None),
+        ("is_superuser", True),
+        ("is_superuser", False),
+        ("is_active", False),
+        ("is_verified", True),
+        ("system_role", "system_admin"),
+        ("account_type", "human"),
+        ("auth_provider", "workos"),
+        ("auth_provider_id", "sso-1"),
+    ],
+)
+def test_registration_body_rejects_invalid_roles_and_provider_fields(
+    field: str, value: object
+) -> None:
+    """T2-SIGNUP (A1 replacement): every role, privilege or provider field is a 422."""
 
-    for bad in ("superadmin", "ADMIN", None):
-        with pytest.raises(ValidationError):
-            UserCreate(
-                email="unit@example.com",
-                password="StrongPass123!x-Unit",
-                role=bad,  # type: ignore[arg-type]
-            )
     with pytest.raises(ValidationError):
-        UserCreate(
-            email="unit@example.com",
-            password="StrongPass123!x-Unit",
-            role=UserRole.AGENT,
-            extra="agent",  # type: ignore[call-arg]
+        UserCreate.model_validate(
+            {"email": "unit@example.com", "password": "StrongPass123!x-Unit", field: value}
         )
-    # A library privilege flag stays accepted but never widens the stored row.
-    allowed = UserCreate(
-        email="unit@example.com",
-        password="StrongPass123!x-Unit",
-        role=UserRole.AGENT,
-        is_superuser=True,  # type: ignore[call-arg]
-    )
-    assert allowed.role is UserRole.AGENT
 
 
 def test_token_pair_response_defaults_to_bearer() -> None:
@@ -160,17 +164,23 @@ def test_token_pair_response_defaults_to_bearer() -> None:
 
 
 def test_user_read_carries_role_without_hash() -> None:
+    """A1 replacement: the account projection has no role, no superuser flag, no hash."""
+
     read = UserRead(
         id=uuid4(),
         email="unit@example.com",
         is_active=True,
-        is_superuser=False,
         is_verified=False,
-        role=UserRole.AGENT,
     )
 
-    assert read.role is UserRole.AGENT
-    assert "hashed_password" not in read.model_dump()
+    dumped = read.model_dump()
+    assert "hashed_password" not in dumped
+    assert "role" not in dumped
+    assert "is_superuser" not in dumped
+    with pytest.raises(ValidationError):
+        UserRead.model_validate({**dumped, "role": "agent"})
+    with pytest.raises(ValidationError):
+        UserRead.model_validate({**dumped, "is_superuser": False})
 
 
 def test_browser_token_response_omits_refresh_key() -> None:

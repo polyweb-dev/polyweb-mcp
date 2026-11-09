@@ -3,9 +3,14 @@ Feature: Private operational activity telemetry
   Against the live backend the ledger may be empty, so the suite accepts the
   columns view or the empty state.
 
+  Activity is a project section: the run selects the project named by
+  FREESEARCH_E2E_PROJECT (default "Local E2E").
+
   Background:
     Given I navigate to the web application
-    When I select the "Activity" header tab
+    When I open the projects list
+    And I choose the live e2e project in the project selector
+    And I follow the "Activity" link of the Project navigation
     Then I should see the "Activity" heading
 
   @smoke

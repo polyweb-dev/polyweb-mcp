@@ -160,7 +160,11 @@ async def test_search_invokes_sdk_search_with_query_and_limit_through_runner() -
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
 
-    response = await adapter.search(SearchRequest(query="python async", limit=7))
+    response = await adapter.search(
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="python async", limit=7
+        )
+    )
 
     assert sdk.search_calls == [{"query": "python async", "limit": 7}]
     assert runner.entries == ["firecrawl"]
@@ -174,7 +178,9 @@ async def test_search_defaults_limit_to_request_value() -> None:
     sdk.search_response = _search_payload()
     adapter = make_adapter(sdk=sdk)
 
-    await adapter.search(SearchRequest(query="bare"))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bare")
+    )
 
     assert sdk.search_calls == [{"query": "bare", "limit": 10}]
 
@@ -183,6 +189,7 @@ async def test_search_forwards_provider_options_and_overrides_common_values() ->
     sdk = _FakeSDK()
     sdk.search_response = _search_payload()
     request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         query="options",
         limit=4,
         country_code="US",
@@ -267,6 +274,7 @@ async def test_search_forwards_exclude_domains_option() -> None:
 
     await make_adapter(sdk=sdk).search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="exclude",
             provider_options={"firecrawl": {"exclude_domains": ["blocked.example"]}},
         )
@@ -288,6 +296,7 @@ async def test_search_uses_common_country_and_domains_when_provider_options_omit
 
     await adapter.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="common",
             country_code="GB",
             domains=("one.example", "two.example"),
@@ -331,7 +340,9 @@ async def test_search_normalizes_web_news_and_image_channels_and_response_metada
         },
         "warning": "Some sources were unavailable.",
     }
-    response = await make_adapter(sdk=sdk).search(SearchRequest(query="multi-source"))
+    response = await make_adapter(sdk=sdk).search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="multi-source")
+    )
 
     assert [item.source for item in response.results] == ["web", "news", "images"]
     assert response.results[1].snippet == "A news result."
@@ -346,7 +357,11 @@ async def test_search_normalizes_web_news_and_image_channels_and_response_metada
 
 async def test_search_provider_options_reject_unsupported_documented_values() -> None:
     with pytest.raises(ValidationError):
-        SearchRequest(query="bad", provider_options={"firecrawl": {"categories": ["other"]}})
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="bad",
+            provider_options={"firecrawl": {"categories": ["other"]}},
+        )
 
 
 @pytest.mark.parametrize(
@@ -369,7 +384,11 @@ async def test_search_preserves_native_data_without_normalized_urls(
     sdk.search_response = _search_payload(data=native_data)
 
     response = await make_adapter(sdk=sdk).search(
-        SearchRequest(query="native result", provider_options={"firecrawl": provider_options})
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="native result",
+            provider_options={"firecrawl": provider_options},
+        )
     )
 
     assert response.results == []
@@ -392,7 +411,9 @@ async def test_search_normalizes_title_url_description_and_published_date() -> N
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="norm"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="norm")
+    )
 
     first = response.results[0]
     assert first.title == "Example"
@@ -412,7 +433,9 @@ async def test_search_reports_observed_usage_only_when_supplied() -> None:
     with_usage.search_response = _search_payload(usage={"credits": 3}, request_id="req-9")
     adapter = make_adapter(sdk=with_usage)
 
-    response = await adapter.search(SearchRequest(query="usage"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+    )
 
     assert response.usage is not None
     assert response.usage.provider == "firecrawl"
@@ -424,7 +447,9 @@ async def test_search_reports_observed_usage_only_when_supplied() -> None:
     without_usage.search_response = _search_payload(usage=None)
     adapter = make_adapter(sdk=without_usage)
 
-    response = await adapter.search(SearchRequest(query="usage"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+    )
 
     assert response.usage is None
 
@@ -438,7 +463,11 @@ async def test_fetch_invokes_sdk_scrape_with_url_and_markdown_format_through_run
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert sdk.scrape_calls == [{"url": "https://example.com/doc", "formats": ["markdown"]}]
     assert runner.entries == ["firecrawl"]
@@ -454,7 +483,13 @@ async def test_fetch_truncates_markdown_exactly_at_max_chars() -> None:
     sdk.scrape_response = _scrape_payload(markdown="x" * 500)
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=100))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/doc",
+            max_chars=100,
+        )
+    )
 
     assert response.document.content == "x" * 100
     assert response.document.metadata == {"truncated": True}
@@ -464,6 +499,7 @@ async def test_fetch_forwards_modeled_scrape_options() -> None:
     sdk = _FakeSDK()
     sdk.scrape_response = _scrape_payload()
     request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url="https://example.com/doc",
         provider_options={
             "firecrawl": {
@@ -529,6 +565,7 @@ async def test_fetch_nested_options_override_common_fetch_defaults() -> None:
     sdk = _FakeSDK()
     sdk.scrape_response = _scrape_payload()
     request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url="https://example.com/doc",
         pdf_pages=6,
         json_extract=True,
@@ -576,6 +613,7 @@ async def test_fetch_maps_common_flags_and_normalizes_json_and_page_metadata() -
         "creditsUsed": 2,
     }
     request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url="https://example.com/doc",
         pdf_pages=3,
         json_extract=True,
@@ -607,6 +645,7 @@ async def test_fetch_maps_common_flags_and_normalizes_json_and_page_metadata() -
 async def test_fetch_provider_options_reject_invalid_scrape_limits() -> None:
     with pytest.raises(ValidationError):
         FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             url="https://example.com/doc",
             provider_options={"firecrawl": {"timeout": 999}},
         )
@@ -617,7 +656,13 @@ async def test_fetch_within_max_chars_is_not_truncated() -> None:
     sdk.scrape_response = _scrape_payload(markdown="short")
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=1000))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/doc",
+            max_chars=1000,
+        )
+    )
 
     assert response.document.content == "short"
     assert response.document.metadata == {}
@@ -671,7 +716,9 @@ async def test_sdk_http_status_error_maps_retryable(status: int) -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="retry"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+        )
 
     assert excinfo.value.error.provider == "firecrawl"
     assert excinfo.value.error.code == "http_error"
@@ -686,7 +733,9 @@ async def test_sdk_http_status_error_maps_non_retryable(status: int) -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="retry"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+        )
 
     assert excinfo.value.error.code == "http_error"
     assert excinfo.value.error.retryable is False
@@ -699,7 +748,9 @@ async def test_sdk_failure_normalized_redacted_and_cause_suppressed() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     error = excinfo.value
     assert error.error.provider == "firecrawl"
@@ -719,7 +770,9 @@ async def test_search_malformed_response_raises_invalid_response() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     error = excinfo.value
     assert error.error.code == "invalid_response"
@@ -735,7 +788,9 @@ async def test_search_none_response_raises_invalid_response() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -747,7 +802,11 @@ async def test_fetch_malformed_response_raises_invalid_response() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -761,8 +820,14 @@ async def test_estimate_cost_never_touches_runner_or_network_for_either_request(
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
 
-    search_estimate = await adapter.estimate_cost(SearchRequest(query="cost"))
-    fetch_estimate = await adapter.estimate_cost(FetchRequest(url="https://example.com/doc"))
+    search_estimate = await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cost")
+    )
+    fetch_estimate = await adapter.estimate_cost(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert search_estimate.provider == "firecrawl"
     assert search_estimate.operation is UsageOperation.SEARCH
@@ -904,7 +969,15 @@ async def test_search_published_date_with_explicit_offset_is_timezone_aware() ->
     )
     adapter = make_adapter(sdk=sdk)
 
-    published = (await adapter.search(SearchRequest(query="tz"))).results[0].published_at
+    published = (
+        (
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="tz")
+            )
+        )
+        .results[0]
+        .published_at
+    )
 
     assert published is not None
     assert published.utcoffset() is not None
@@ -918,7 +991,15 @@ async def test_search_published_date_without_timezone_remains_naive() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    published = (await adapter.search(SearchRequest(query="naive"))).results[0].published_at
+    published = (
+        (
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="naive")
+            )
+        )
+        .results[0]
+        .published_at
+    )
 
     assert published is not None
     assert published.utcoffset() is None  # adapter does not invent a timezone
@@ -937,7 +1018,15 @@ async def test_search_published_date_with_microseconds_parsed_exactly() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    published = (await adapter.search(SearchRequest(query="us"))).results[0].published_at
+    published = (
+        (
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="us")
+            )
+        )
+        .results[0]
+        .published_at
+    )
 
     assert published is not None
     assert published.microsecond == 123456
@@ -952,7 +1041,15 @@ async def test_search_unparseable_published_date_normalizes_to_none(bad_date: ob
     )
     adapter = make_adapter(sdk=sdk)
 
-    published = (await adapter.search(SearchRequest(query="bad-date"))).results[0].published_at
+    published = (
+        (
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad-date")
+            )
+        )
+        .results[0]
+        .published_at
+    )
 
     assert published is None
 
@@ -967,7 +1064,9 @@ async def test_search_data_not_a_list_raises_invalid_response(data: object) -> N
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -978,7 +1077,9 @@ async def test_search_empty_data_list_is_a_valid_empty_response() -> None:
     sdk.search_response = _search_payload(data=[])
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="empty"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="empty")
+    )
 
     assert response.total_results == 0
     assert response.results == []
@@ -992,7 +1093,9 @@ async def test_search_result_item_not_a_mapping_raises_invalid_response(item: ob
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -1004,7 +1107,9 @@ async def test_search_result_missing_url_raises_invalid_response() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -1016,7 +1121,9 @@ async def test_search_result_unparseable_url_raises_invalid_response() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -1031,7 +1138,11 @@ async def test_fetch_data_missing_or_not_a_mapping_raises_invalid_response(
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -1043,7 +1154,11 @@ async def test_fetch_markdown_key_missing_raises_invalid_response() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -1052,7 +1167,21 @@ async def test_fetch_markdown_key_missing_raises_invalid_response() -> None:
 # --- usage boundary values ----------------------------------------------------
 
 
-@pytest.mark.parametrize("credits", ["1", True, -1, -0.5])
+# ARCH-04: one seven-case invalid-credit matrix.  The first four cases are this
+# function's originals; the three non-finite cases moved here from the deleted
+# ``test_search_non_finite_credits_raise_invalid_response`` (identical body).
+_INVALID_FIRECRAWL_CREDITS = [
+    pytest.param("1", id="numeric-string"),
+    pytest.param(True, id="bool-true"),
+    pytest.param(-1, id="negative-int"),
+    pytest.param(-0.5, id="negative-fraction"),
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="positive-infinity"),
+    pytest.param(float("-inf"), id="negative-infinity"),
+]
+
+
+@pytest.mark.parametrize("credits", _INVALID_FIRECRAWL_CREDITS)
 async def test_search_non_numeric_or_negative_credits_raise_invalid_response(
     credits: object,
 ) -> None:
@@ -1061,20 +1190,9 @@ async def test_search_non_numeric_or_negative_credits_raise_invalid_response(
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="usage"))
-
-    assert excinfo.value.error.code == "invalid_response"
-    assert excinfo.value.error.retryable is False
-
-
-@pytest.mark.parametrize("credits", [float("nan"), float("inf"), float("-inf")])
-async def test_search_non_finite_credits_raise_invalid_response(credits: float) -> None:
-    sdk = _FakeSDK()
-    sdk.search_response = _search_payload(usage={"credits": credits})
-    adapter = make_adapter(sdk=sdk)
-
-    with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="usage"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+        )
 
     assert excinfo.value.error.code == "invalid_response"
     assert excinfo.value.error.retryable is False
@@ -1085,7 +1203,11 @@ async def test_search_fractional_credits_are_preserved_exactly() -> None:
     sdk.search_response = _search_payload(usage={"credits": 1.5})
     adapter = make_adapter(sdk=sdk)
 
-    usage = (await adapter.search(SearchRequest(query="usage"))).usage
+    usage = (
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+        )
+    ).usage
 
     assert usage is not None
     assert usage.units == Decimal("1.5")
@@ -1096,7 +1218,11 @@ async def test_search_zero_credits_are_a_valid_usage_event() -> None:
     sdk.search_response = _search_payload(usage={"credits": 0})
     adapter = make_adapter(sdk=sdk)
 
-    usage = (await adapter.search(SearchRequest(query="usage"))).usage
+    usage = (
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+        )
+    ).usage
 
     assert usage is not None
     assert usage.units == Decimal("0")
@@ -1108,7 +1234,9 @@ async def test_search_non_mapping_usage_is_ignored_not_fatal(usage: object) -> N
     sdk.search_response = _search_payload(usage=usage)
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="usage"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+    )
 
     assert response.usage is None
     assert response.total_results == 1
@@ -1119,7 +1247,11 @@ async def test_search_usage_without_credits_key_is_ignored() -> None:
     sdk.search_response = _search_payload(usage={"request_id": "req-0"})
     adapter = make_adapter(sdk=sdk)
 
-    usage = (await adapter.search(SearchRequest(query="usage"))).usage
+    usage = (
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+        )
+    ).usage
 
     assert usage is None
 
@@ -1129,7 +1261,11 @@ async def test_search_usage_without_request_id_reports_none() -> None:
     sdk.search_response = _search_payload(usage={"credits": 2}, request_id=None)
     adapter = make_adapter(sdk=sdk)
 
-    usage = (await adapter.search(SearchRequest(query="usage"))).usage
+    usage = (
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="usage")
+        )
+    ).usage
 
     assert usage is not None
     assert usage.request_id is None
@@ -1143,7 +1279,11 @@ async def test_fetch_reports_usage_with_fetch_operation() -> None:
     sdk.scrape_response = _scrape_payload(usage={"credits": 4}, request_id="ext-7")
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.FETCH
@@ -1156,7 +1296,11 @@ async def test_fetch_without_usage_reports_none() -> None:
     sdk.scrape_response = _scrape_payload(usage=None)
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.usage is None
 
@@ -1171,7 +1315,11 @@ async def test_fetch_sdk_http_status_error_maps_retryable(status: int) -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.code == "http_error"
     assert excinfo.value.error.retryable is True
@@ -1185,7 +1333,11 @@ async def test_fetch_sdk_http_status_error_maps_non_retryable(status: int) -> No
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.code == "http_error"
     assert excinfo.value.error.retryable is False
@@ -1198,7 +1350,11 @@ async def test_fetch_sdk_failure_normalized_redacted_and_cause_suppressed() -> N
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     error = excinfo.value
     assert error.error.code == "firecrawl_error"
@@ -1222,7 +1378,9 @@ async def test_sdk_transport_error_propagates_unwrapped_for_runner() -> None:
     adapter = make_adapter(sdk=sdk, runner=runner)
 
     with pytest.raises(httpx.ConnectError):
-        await adapter.search(SearchRequest(query="down"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="down")
+        )
 
 
 # --- constructor explicit-key happy-path builds the SDK with the injected key --
@@ -1284,7 +1442,9 @@ async def test_search_consumes_sdk_searchdata_model_surface() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="sdk"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="sdk")
+    )
 
     assert response.total_results == 1
     assert str(response.results[0].url) == "https://example.com/x"
@@ -1296,7 +1456,11 @@ async def test_fetch_consumes_sdk_document_model_surface() -> None:
     sdk.scrape_response = _DocumentLike(markdown="hello")
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.document.content == "hello"
 
@@ -1334,7 +1498,9 @@ async def test_search_sdk_status_error_maps_retryable_like_http(
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="retry"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+        )
 
     error = excinfo.value.error
     assert error.provider == "firecrawl"
@@ -1361,7 +1527,9 @@ async def test_search_sdk_status_error_maps_non_retryable(error_type: type, stat
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="retry"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="retry")
+        )
 
     error = excinfo.value.error
     assert error.code == "http_error"
@@ -1388,7 +1556,11 @@ async def test_fetch_sdk_status_error_maps_retryable_like_http(
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     error = excinfo.value.error
     assert error.code == "http_error"
@@ -1414,7 +1586,11 @@ async def test_fetch_sdk_status_error_maps_non_retryable(error_type: type, statu
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     error = excinfo.value.error
     assert error.code == "http_error"
@@ -1657,7 +1833,9 @@ async def test_search_sdk_maps_408_to_search_timeout() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter._search_sdk(SearchRequest(query="timeout"))
+        await adapter._search_sdk(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="timeout")
+        )
 
     assert excinfo.value.error.code == "timeout_error"
     assert excinfo.value.error.retryable is True
@@ -1670,7 +1848,11 @@ async def test_fetch_sdk_maps_408_to_scrape_timeout() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter._fetch_sdk(FetchRequest(url="https://example.com/doc"))
+        await adapter._fetch_sdk(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.code == "scrape_timeout"
     assert excinfo.value.error.retryable is True
@@ -1716,19 +1898,26 @@ async def test_cost_estimate_modifiers_including_enhanced_zero() -> None:
     try:
         adapter = FirecrawlAdapter(client, sdk_client=object(), api_key=SecretStr("test-key"))
         # Base fetch: 1 credit
-        req_base = FetchRequest(url="https://example.com")
+        req_base = FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com"
+        )
         est_base = await adapter.estimate_cost(req_base)
         assert est_base.units == Decimal("1")
         assert est_base.currency == "CREDIT"
 
         # Enhanced fetch: +0 modifier -> still 1 credit
         # (LIMITS.md section 5: enhanced proxy/auto escalation +0)
-        req_enhanced = FetchRequest(url="https://example.com", enhanced=True)
+        req_enhanced = FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com",
+            enhanced=True,
+        )
         est_enhanced = await adapter.estimate_cost(req_enhanced)
         assert est_enhanced.units == Decimal("1")
 
         # json_extract (+4) + pdf_pages 2 (+2) + enhanced (0) -> 1 + 4 + 2 = 7 credits
         req_combined = FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             url="https://example.com",
             enhanced=True,
             json_extract=True,

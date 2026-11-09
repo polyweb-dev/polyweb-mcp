@@ -27,14 +27,17 @@ freesearch-api = "freesearch.routers.api:main"
 freesearch-db = "freesearch.persistence.database_cli:main"
 freesearch-mcp = "freesearch.mcp.server:main"
 freesearch-users = "freesearch.cli.users:main"
+freesearch-secrets = "freesearch.cli.secrets:main"
 
 [dependency-groups]
 dev = [
     "behave>=1.3.3",
     "mypy>=1.10,<2.0",
+    "pyinstrument>=5.1.3,<6",
     "pytest>=8.2,<9.0",
     "pytest-asyncio>=0.23,<2.0",
     "pytest-gremlins>=1.9.0",
+    "pytest-xdist>=3.5.0",
     "ruff>=0.5,<1.0",
 ]
 
@@ -81,6 +84,9 @@ max-complexity = 15
 
 [tool.behave]
 paths = ["tests/bdd/features"]
+# @live scenarios call real providers: they run only when selected explicitly
+# with --tags (e.g. --tags="@live and @latency"), which replaces this default.
+default_tags = ["not @live"]
 
 [tool.mypy]
 python_version = "3.12"

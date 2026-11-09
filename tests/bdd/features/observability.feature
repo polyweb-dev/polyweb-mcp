@@ -9,6 +9,7 @@ Feature: OpenTelemetry trace observability for search and fetch
 
   Scenario: Successful search records a full trace with matching trace header
     Given an offline trace repository with a mock-transport Keenable search
+    And the system policy explicitly permits full trace capture
     When I submit a traced search for "distributed consensus algorithms" with limit 10
     Then the traced search should succeed with provider "keenable" and 2 results
     And the traced response should carry a trace header matching 32 lowercase hex chars
@@ -42,6 +43,7 @@ Feature: OpenTelemetry trace observability for search and fetch
 
   Scenario: Fetch mirrors search tracing for success and error
     Given an offline trace repository with a mock-transport Keenable fetch
+    And the system policy explicitly permits full trace capture
     When I submit a traced fetch for "https://example.com/article"
     Then the traced fetch should succeed with the stubbed document content
     And the fetch trace detail should show the required fetch span hierarchy with non-negative durations
@@ -54,7 +56,7 @@ Feature: OpenTelemetry trace observability for search and fetch
     Then the trace detail should carry my account UUID
     And the trace list rows should carry my account UUID
 
-  Scenario: Each account reads only its own traces
+  Scenario: Each project reads only its own traces
     Given an offline trace repository with a mock-transport Keenable search
     When I submit a traced search for "alice query" with limit 1
     And I register a second trace reader

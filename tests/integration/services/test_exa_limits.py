@@ -33,6 +33,7 @@ from freesearch.models.provider_limits import (
 )
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 EXA_POOL = "exa:keyed:usd"
@@ -145,12 +146,15 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
     for i in range(10):
         admission = await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
                 attempt_id=f"rate-search-{i}",
                 requested_at=FIXED_AT,
-                request=SearchRequest(query="test", limit=10),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+                ),
             )
         )
         assert admission.attempt_id == f"rate-search-{i}"
@@ -159,12 +163,15 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
                 attempt_id="rate-search-11",
                 requested_at=FIXED_AT,
-                request=SearchRequest(query="test", limit=10),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+                ),
             )
         )
     assert excinfo.value.status_code == 429
@@ -175,12 +182,16 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
     for i in range(100):
         admission = await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYED,
                 attempt_id=f"rate-fetch-{i}",
                 requested_at=FIXED_AT,
-                request=FetchRequest(url=AnyHttpUrl("https://example.com/doc")),
+                request=FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url=AnyHttpUrl("https://example.com/doc"),
+                ),
             )
         )
         assert admission.attempt_id == f"rate-fetch-{i}"
@@ -189,12 +200,16 @@ async def test_rate_admission_search_and_fetch(repository: SQLiteRepository) -> 
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.FETCH,
                 auth_mode=AuthMode.KEYED,
                 attempt_id="rate-fetch-101",
                 requested_at=FIXED_AT,
-                request=FetchRequest(url=AnyHttpUrl("https://example.com/doc")),
+                request=FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url=AnyHttpUrl("https://example.com/doc"),
+                ),
             )
         )
     assert excinfo.value.status_code == 429
@@ -210,12 +225,15 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
     # Limit 10 -> 7 CRD ($0.007)
     adm_s10 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
             attempt_id="cost-s10",
             requested_at=FIXED_AT,
-            request=SearchRequest(query="test", limit=10),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+            ),
         )
     )
     assert adm_s10.reserved_native == Decimal("0.007")
@@ -224,12 +242,15 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
     # Limit 20 -> 17 CRD ($0.017)
     adm_s20 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
             attempt_id="cost-s20",
             requested_at=FIXED_AT,
-            request=SearchRequest(query="test", limit=20),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=20
+            ),
         )
     )
     assert adm_s20.reserved_native == Decimal("0.017")
@@ -238,12 +259,17 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
     # Fetch 1 URL -> 1 CRD ($0.001)
     adm_f1 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.FETCH,
             auth_mode=AuthMode.KEYED,
             attempt_id="cost-f1",
             requested_at=FIXED_AT,
-            request=FetchRequest(url=AnyHttpUrl("https://example.com/1"), url_count=1),
+            request=FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url=AnyHttpUrl("https://example.com/1"),
+                url_count=1,
+            ),
         )
     )
     assert adm_f1.reserved_native == Decimal("0.001")
@@ -252,12 +278,17 @@ async def test_dynamic_crd_request_cost(repository: SQLiteRepository) -> None:
     # Fetch 5 URLs -> 5 CRD ($0.005)
     adm_f5 = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.FETCH,
             auth_mode=AuthMode.KEYED,
             attempt_id="cost-f5",
             requested_at=FIXED_AT,
-            request=FetchRequest(url=AnyHttpUrl("https://example.com/1"), url_count=5),
+            request=FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url=AnyHttpUrl("https://example.com/1"),
+                url_count=5,
+            ),
         )
     )
     assert adm_f5.reserved_native == Decimal("0.005")
@@ -272,16 +303,19 @@ async def test_funds_denial_on_zero_balance(repository: SQLiteRepository) -> Non
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
                 attempt_id="denied-zero-balance",
                 requested_at=FIXED_AT,
-                request=SearchRequest(query="test", limit=10),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+                ),
             )
         )
     assert excinfo.value.status_code == 402
-    assert excinfo.value.error.code == "crd_exhausted"
+    assert excinfo.value.error.code == "budget_exhausted"
     assert excinfo.value.error.retryable is False
     assert "funds_exhausted" in excinfo.value.reasons
 
@@ -308,16 +342,19 @@ async def test_terminal_402_records_zero_and_blocks_locally(
     with pytest.raises(LimitDeniedError) as excinfo:
         await service.admit(
             LimitCallContext(
+                **FIXTURE_ACTOR,
                 provider="exa",
                 operation=LimitOperation.SEARCH,
                 auth_mode=AuthMode.KEYED,
                 attempt_id="denied-after-terminal-402",
                 requested_at=FIXED_AT,
-                request=SearchRequest(query="test", limit=10),
+                request=SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+                ),
             )
         )
     assert excinfo.value.status_code == 402
-    assert excinfo.value.error.code == "crd_exhausted"
+    assert excinfo.value.error.code == "budget_exhausted"
     assert excinfo.value.error.retryable is False
 
 
@@ -330,12 +367,15 @@ async def test_debit_success_decrements_exact_usd_and_crd(
 
     admission = await service.admit(
         LimitCallContext(
+            **FIXTURE_ACTOR,
             provider="exa",
             operation=LimitOperation.SEARCH,
             auth_mode=AuthMode.KEYED,
             attempt_id="exa-debit-1",
             requested_at=FIXED_AT,
-            request=SearchRequest(query="test", limit=10),
+            request=SearchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+            ),
         )
     )
     assert admission.reserved_native == Decimal("0.007")
@@ -344,7 +384,9 @@ async def test_debit_success_decrements_exact_usd_and_crd(
     await service.record_success(
         admission,
         SearchResponse(query="test", results=[], provider="exa"),
-        request=SearchRequest(query="test", limit=10),
+        request=SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10
+        ),
     )
 
     pool = await repository.limits.get_pool(EXA_POOL)

@@ -15,10 +15,49 @@ the storage schema.
 from enum import StrEnum
 from re import Pattern, compile
 from typing import Annotated, Any, Final, Literal
+from uuid import UUID
 
-from pydantic import AwareDatetime, Field, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, ConfigDict, Field, TypeAdapter, ValidationError
 
 from freesearch.models.contracts import ContractModel
+
+
+class ActorType(StrEnum):
+    """Execution principal class recorded on usage and trace rows."""
+
+    HUMAN = "human"
+    PROJECT_API_KEY = "project_api_key"
+
+
+class ExecutionAttribution(ContractModel):
+    """Trusted project and actor identity stamped on execution telemetry.
+
+    Built only by the execution boundary from a verified principal and an
+    authorized project context; callers can never supply it through span
+    attributes or request payloads.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: UUID
+    actor_type: ActorType
+    actor_id: UUID
+
+
+class AttemptBinding(ContractModel):
+    """The project binding, credential instance, and pool one attempt used.
+
+    Built only by the execution service after the binding and credential
+    checks pass, so telemetry can attribute every usage row, health
+    observation, quota snapshot, admission, and rate attempt to the exact
+    credential that served it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    binding_id: UUID
+    credential_id: UUID
+    pool_id: UUID | None = None
 
 
 class TraceOperation(StrEnum):
@@ -63,6 +102,9 @@ class TraceAttribute:
     SCHEMA_VERSION: Final[str] = "freesearch.trace.schema_version"
     OPERATION: Final[str] = "freesearch.operation.name"
     USER_ID: Final[str] = "freesearch.user.id"
+    PROJECT_ID: Final[str] = "freesearch.project.id"
+    ACTOR_TYPE: Final[str] = "freesearch.actor.type"
+    ACTOR_ID: Final[str] = "freesearch.actor.id"
     PROVIDER: Final[str] = "freesearch.provider.name"
     ROUTING_MODE: Final[str] = "freesearch.routing.mode"
     ROUTING_CANDIDATE_COUNT: Final[str] = "freesearch.routing.candidate_count"
@@ -74,14 +116,64 @@ class TraceAttribute:
     RESPONSE_PARTIAL: Final[str] = "freesearch.response.partial"
     RESPONSE_OUTPUT_JSON: Final[str] = "freesearch.response.output_json"
     ERROR_TYPE: Final[str] = "error.type"
-    ERROR_MESSAGE: Final[str] = "freesearch.error.message"
     HTTP_REQUEST_METHOD: Final[str] = "http.request.method"
     HTTP_ROUTE: Final[str] = "http.route"
     HTTP_RESPONSE_STATUS_CODE: Final[str] = "http.response.status_code"
     URL_PATH: Final[str] = "url.path"
     SERVER_ADDRESS: Final[str] = "server.address"
     SERVER_PORT: Final[str] = "server.port"
+    #: Internal capture decision stamped by the trusted execution boundary.
+    CAPTURE_PAYLOAD: Final[str] = "freesearch.trace.capture_payload"
+    #: Reserved legacy key; untrusted callers cannot inject it.
+    SAMPLED: Final[str] = "freesearch.trace.sampled"
 
+
+OWNERSHIP_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {
+        TraceAttribute.PROJECT_ID,
+        TraceAttribute.ACTOR_TYPE,
+        TraceAttribute.ACTOR_ID,
+    }
+)
+"""Ownership keys only the trusted attribution binder may stamp on a span."""
+
+INTERNAL_ATTRIBUTES: Final[frozenset[str]] = OWNERSHIP_ATTRIBUTES | frozenset(
+    {
+        TraceAttribute.CAPTURE_PAYLOAD,
+        TraceAttribute.SAMPLED,
+    }
+)
+"""Keys owned by the trusted binders: callers cannot set them and they are never stored."""
+
+TRACE_CONTENT_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {
+        TraceAttribute.REQUEST_QUERY,
+        TraceAttribute.REQUEST_URL,
+        TraceAttribute.RESPONSE_OUTPUT_JSON,
+    }
+)
+"""Span attributes that carry request/response payload content."""
+
+TRACE_SAFE_EVENT_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {
+        "content_length",
+        "country_code",
+        "enhanced",
+        "exception.type",
+        "language",
+        "limit",
+        "max_chars",
+        "mode",
+        "pdf_pages",
+        "result_count",
+    }
+)
+"""Event attributes kept under metadata-only capture.
+
+These are provider request shape, counts, and the sanitized error type. Any
+other event attribute is treated as request/response content and dropped at
+capture time.
+"""
 
 TRACE_SCHEMA_VERSION: Final[int] = 1
 """Schema version stamped on every root span."""
@@ -258,10 +350,11 @@ class TraceDetail(TraceSummary):
 
 
 class TraceListResponse(ContractModel):
-    """Wire payload of ``GET /api/v1/traces``."""
+    """Wire payload of ``GET /api/v1/projects/{project_id}/traces``."""
 
     items: list[TraceSummary] = Field(default_factory=list)
     generated_at: AwareDatetime
+    next_cursor: str | None = None
 
 
 class TraceSpanRecord(ContractModel):
@@ -284,6 +377,9 @@ class TraceSpanRecord(ContractModel):
     error_type: str | None = None
     parent_span_id: str | None = None
     user_id: str | None = None
+    project_id: UUID | None = None
+    actor_type: ActorType | None = None
+    actor_id: UUID | None = None
     operation: TraceOperation | None = None
     provider: str | None = None
     input_text: str | None = None

@@ -3,6 +3,8 @@ Feature: Firecrawl Provider Adapter Integration
   I want to interact with the Firecrawl search provider
   So that I can run a small opt-in live verification of web search and scrape
 
+  # @live scenarios run only when selected explicitly: uv run behave --tags=@live (default_tags excludes @live).
+
   Background:
     Given a configured Firecrawl key resolved through the shared resolver
 

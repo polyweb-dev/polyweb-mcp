@@ -32,10 +32,12 @@ from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
+    account_id_from_pair,
     raw_auth_headers,
     register_and_login,
     temp_email,
 )
+from tests.fixtures.execution import seed_app_bound_project
 
 
 class _CountingAdapter(ProviderAdapter):
@@ -91,12 +93,16 @@ class _CountingAdapter(ProviderAdapter):
 
 
 @pytest_asyncio.fixture
-async def guard_client(tmp_path: Path, auth_secret: str) -> TestClient:
+async def guard_client(
+    tmp_path: Path, auth_secret: str, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     repository = await SQLiteRepository.open(tmp_path / "guard.db")
     adapter = _CountingAdapter("stubby")
     app = create_app([adapter], repository=repository)
     app.state.counting_adapter = adapter
     with TestClient(app) as client:
+        client.execution_repository = repository
+        client.execution_patcher = monkeypatch
         yield client
     await repository.close()
 
@@ -108,7 +114,7 @@ _ANONYMOUS_SURFACES: tuple[tuple[str, str, dict], ...] = (
     ("GET", "/api/v1/providers/tavily", {}),
     ("PATCH", "/api/v1/providers/tavily", {"enabled": False}),
     ("GET", "/api/v1/providers/tavily/oauth/status", {}),
-    ("GET", "/api/v1/traces", {}),
+    ("GET", "/api/v1/projects/00000000-0000-4000-8000-0000000000aa/traces", {}),
     ("GET", "/no-such-route", {}),
 )
 
@@ -125,16 +131,18 @@ def test_anonymous_calls_reach_no_protected_surface(guard_client: TestClient) ->
         assert response.headers["www-authenticate"] == "Bearer", path
 
 
-def test_search_and_fetch_allow_anonymous_calls_but_reject_bad_bearer(
+def test_search_and_fetch_reject_anonymous_and_bad_bearer(
     guard_client: TestClient,
 ) -> None:
     adapter = guard_client.app.state.counting_adapter
     search = guard_client.post("/search", json={"query": "anonymous search"})
     fetch = guard_client.post("/fetch", json={"url": "https://example.com/x"})
-    assert search.status_code == 200
-    assert fetch.status_code == 200
-    assert adapter.search_calls == 1
-    assert adapter.fetch_calls == 1
+    assert search.status_code == 401
+    assert fetch.status_code == 401
+    assert search.headers["www-authenticate"] == "Bearer"
+    assert fetch.headers["www-authenticate"] == "Bearer"
+    assert adapter.search_calls == 0
+    assert adapter.fetch_calls == 0
 
     invalid_headers = {"Authorization": "Bearer invalid-access-token"}
     rejected_search = guard_client.post(
@@ -147,11 +155,11 @@ def test_search_and_fetch_allow_anonymous_calls_but_reject_bad_bearer(
     assert rejected_fetch.status_code == 401
     assert rejected_search.headers["www-authenticate"] == "Bearer"
     assert rejected_fetch.headers["www-authenticate"] == "Bearer"
-    assert adapter.search_calls == 1
-    assert adapter.fetch_calls == 1
+    assert adapter.search_calls == 0
+    assert adapter.fetch_calls == 0
 
 
-def test_rejected_requests_create_no_trace_root(guard_client: TestClient) -> None:
+async def test_rejected_requests_create_no_trace_root(guard_client: TestClient) -> None:
     invalid = guard_client.post(
         "/search",
         json={"query": "ghost"},
@@ -161,13 +169,28 @@ def test_rejected_requests_create_no_trace_root(guard_client: TestClient) -> Non
 
     pair = register_and_login(guard_client, temp_email("guard-trace"))
     headers = raw_auth_headers(pair["access_token"])
-    items = guard_client.get("/api/v1/traces", headers=headers).json()["items"]
+    pid = str(
+        (
+            await seed_app_bound_project(
+                guard_client.execution_repository,
+                user_id=account_id_from_pair(pair),
+                app=guard_client.app,
+                monkeypatch=guard_client.execution_patcher,
+            )
+        ).project_id
+    )
+    items = guard_client.get(f"/api/v1/projects/{pid}/traces", headers=headers).json()["items"]
     assert items == []
 
     assert (
-        guard_client.post("/search", json={"query": "visible"}, headers=headers).status_code == 200
+        guard_client.post(
+            "/search",
+            json={"project_id": pid, "query": "visible"},
+            headers=headers,
+        ).status_code
+        == 200
     )
-    items = guard_client.get("/api/v1/traces", headers=headers).json()["items"]
+    items = guard_client.get(f"/api/v1/projects/{pid}/traces", headers=headers).json()["items"]
     assert len(items) == 1
     assert items[0]["operation"] == "search"
     assert items[0]["outcome"] == "success"
@@ -179,7 +202,9 @@ def test_public_exceptions_need_no_credential(guard_client: TestClient) -> None:
         "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
     )
     assert registered.status_code == 201
-    assert registered.json()["role"] == "agent"
+    # A1: public signup returns the safe account projection with no role.
+    assert "role" not in registered.json()
+    assert "is_superuser" not in registered.json()
 
     logged_in = guard_client.post(
         "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}

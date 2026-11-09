@@ -1,6 +1,6 @@
 ---
 name: backend-code-structure
-description: "Guidelines and conventions for backend module boundaries, package responsibilities, import hygiene, and mirrored unit/integration/BDD test layouts. Use when creating new modules, refactoring backend code, structuring tests, or auditing package boundaries."
+description: Use when creating new modules, refactoring backend code, structuring tests, or auditing package boundaries. Guidelines and conventions for backend module boundaries, package responsibilities, import hygiene, and mirrored unit/integration/BDD test layouts.
 ---
 
 # Backend Code Structure & Architecture Guidelines

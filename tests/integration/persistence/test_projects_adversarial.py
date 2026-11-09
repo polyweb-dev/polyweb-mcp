@@ -27,7 +27,7 @@ from freesearch.models.projects import (
     BuiltinRole,
     ProjectCreate,
 )
-from freesearch.models.users import AuthProvider, UserRole
+from freesearch.models.users import AuthProvider
 from freesearch.persistence.database_migrations import (
     upgrade_database,
 )
@@ -220,11 +220,28 @@ async def test_gap_bootstrap_creates_admin_even_if_account_or_user_inactive(
 async def test_gap_in_memory_role_authority_lost_on_fresh_session(
     tmp_path: Path,
 ) -> None:
-    """Persistence Seam: Role changes persist durably via system role assignments."""
+    """Persistence Seam (A1): system authority persists only as durable assignments."""
+
+    from sqlalchemy import select
+
+    from freesearch.persistence.projects import SystemRoleAssignmentRow
+    from freesearch.services.users import AuthLastSystemAdmin
+
+    async def _roles(user_id: object) -> set[str]:
+        async with repo.session() as session:
+            return set(
+                (
+                    await session.execute(
+                        select(SystemRoleAssignmentRow.role_key).where(
+                            SystemRoleAssignmentRow.user_id == str(user_id)
+                        )
+                    )
+                ).scalars()
+            )
+
     db_path = tmp_path / "in_memory_authority_seam.db"
     repo = await create_alpha_test_db(db_path)
     try:
-        # Create user via UserDatabase
         async with repo.session() as session:
             user_db = UserDatabase(session, UserRow)
             user = await user_db.create(
@@ -237,46 +254,38 @@ async def test_gap_in_memory_role_authority_lost_on_fresh_session(
             )
             await session.commit()
             user_id = user.id
-            assert user.role == "agent"
+        assert await _roles(user_id) == set()
 
-        # 1. Promote to ADMIN via set_role
-        async with repo.session() as session:
-            user_db = UserDatabase(session, UserRow)
-            updated = await user_db.set_role(user_id, UserRole.ADMIN)
-            assert updated is True
-            await session.commit()
-
-        # 2. Reload user in a fresh session directly from SQLite
-        # Demonstrates durable seam: role and is_superuser are derived from system_role_assignments!
-        async with repo.session() as session:
-            reloaded = await session.get(UserRow, user_id)
-            assert reloaded is not None
-            assert reloaded.role == "admin", "Durable system role assignment persists across reload"
-            assert reloaded.is_superuser is True, (
-                "Durable system admin grant sets is_superuser=True"
-            )
-
-        # 3. Setting role to AGENT revokes system admin assignment durably
-        async with repo.session() as session:
-            user_db = UserDatabase(session, UserRow)
-            updated = await user_db.set_role(user_id, UserRole.AGENT)
-            assert updated is True
-            await session.commit()
-
-        async with repo.session() as session:
-            reloaded = await session.get(UserRow, user_id)
-            assert reloaded is not None
-            assert reloaded.role == "agent"
-            assert reloaded.is_superuser is False
-
-        # 4. Obsolete developer role is explicitly rejected
+        # 1. Grant through the trusted operation (bootstrap path of the CLI).
         auth_service = auth_service_for(repo)
-        with pytest.raises(Exception) as exc_info:
-            await auth_service.change_role(user_id, UserRole.DEVELOPER)
-        assert (
-            "obsolete" in str(exc_info.value).lower()
-            or "unsupported" in str(exc_info.value).lower()
-        )
+        assert await auth_service.grant_system_admin(user_id) is True
+        assert await auth_service.grant_system_admin(user_id) is False
+
+        # 2. A fresh session sees the durable assignment; no flag mirrors it.
+        assert await _roles(user_id) == {"system_admin"}
+        async with repo.session() as session:
+            reloaded = await session.get(UserRow, user_id)
+            assert reloaded is not None
+            assert reloaded.is_superuser is False
+            assert not hasattr(reloaded, "role")
+
+        # 3. The last active system administrator cannot be revoked ...
+        with pytest.raises(AuthLastSystemAdmin):
+            await auth_service.revoke_system_admin(user_id)
+        assert await _roles(user_id) == {"system_admin"}
+
+        # ... but with a second administrator the revocation is durable.
+        async with repo.session() as session:
+            other = await UserDatabase(session, UserRow).create(
+                {"email": "second-admin@freesearch.local", "hashed_password": "h"}
+            )
+        assert await auth_service.grant_system_admin(other.id) is True
+        assert await auth_service.revoke_system_admin(user_id) is True
+        assert await auth_service.revoke_system_admin(user_id) is False
+        assert await _roles(user_id) == set()
+
+        # 4. The obsolete role-change operation no longer exists.
+        assert not hasattr(auth_service, "change_role")
     finally:
         await repo.close()
 

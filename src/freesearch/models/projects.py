@@ -3,18 +3,16 @@
 Defines the core P00 contracts for:
 - Rollout states (preview, strict, fair)
 - Scoped RBAC, permission actions, and role definitions
-- Human principal, project token principal, and deeply immutable project context
+- Human principal, project API key principal, and deeply immutable project context
 - Common authorization query, decision, protocol, and deny-by-default evaluator
-- Target account representation and preserved current legacy schema seam
-- Target human user schema contracts preserving local/WorkOS provider invariants
+- Target account representation
 - Project lifecycle and membership DTOs with atomic initial admin
-- Project token issue, read, and rotation contracts with optional expiry and one-time wire boundary
+- Project API key issue, read, and rotation contracts with optional expiry and one-time key
 - Provider credential instance, grant, binding, and quota pool DTOs with ownership invariants
 - Typed settings scope, document, field resolution, and provenance contracts
 """
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Final, Literal, Protocol, cast, runtime_checkable
 from uuid import UUID
@@ -24,19 +22,27 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    WithJsonSchema,
+    field_serializer,
     field_validator,
     model_serializer,
     model_validator,
 )
 
-from freesearch.models.contracts import ContractModel, CostPreset, FallbackPolicy
-from freesearch.models.users import AuthProvider, normalize_email
+from freesearch.models.contracts import ContractModel, FallbackPolicy
+from freesearch.models.observability import ActorType
+from freesearch.models.project_permissions import DEVELOPER_BITS, STANDARD, validate_permission_bits
+from freesearch.models.users import normalize_email
 
-#: Policy proposal for default token lifetime in days when omitted by caller.
-DEFAULT_TOKEN_LIFETIME_DAYS: Final[int] = 90
+#: Lifetime of a project API key whose create request omits ``expires_at``.
+DEFAULT_API_KEY_LIFETIME_DAYS: Final[int] = 90
 
-#: Opaque project token prefix identifier.
-PROJECT_TOKEN_PREFIX: Final[str] = "fs_live_"
+#: Recognizable prefix of every raw project API key.
+PROJECT_API_KEY_PREFIX: Final[str] = "fs_live_"
+
+#: Default and maximum seconds an old key stays valid after its rotation.
+DEFAULT_ROTATION_OVERLAP_SECONDS: Final[int] = 86_400
+MAX_ROTATION_OVERLAP_SECONDS: Final[int] = 604_800
 
 #: Canonical single internal installation account identifier.
 DEFAULT_INSTALLATION_ACCOUNT_ID: Final[UUID] = UUID("00000000-0000-4000-8000-000000000001")
@@ -78,13 +84,13 @@ class PermissionAction(StrEnum):
     # Provider and credential operations
     PROVIDERS_READ = "providers.read"
     PROVIDERS_CONFIGURE = "providers.configure"
+    PROVIDERS_SUPPLY = "providers.supply"
     CREDENTIALS_MANAGE_PRIVATE = "credentials.manage_private"
 
     # Token operations
     TOKENS_MANAGE = "tokens.manage"
 
     # Execution and routing operations
-    ROUTING_WRITE = "routing.write"
     TRACES_READ = "traces.read"
     USAGE_READ = "usage.read"
     SEARCH_EXECUTE = "search.execute"
@@ -125,13 +131,21 @@ def action_scope(action: PermissionAction) -> ScopeType:
     return ScopeType.SYSTEM if action in _SYSTEM_SCOPED_ACTIONS else ScopeType.PROJECT
 
 
-#: Permitted execution actions for project API tokens (strictly limited to runtime execution).
-ALLOWED_TOKEN_ACTIONS: Final[frozenset[PermissionAction]] = frozenset(
+#: Execution actions a project API key can hold; keys never hold other authority.
+API_KEY_ACTIONS: Final[frozenset[PermissionAction]] = frozenset(
     {PermissionAction.SEARCH_EXECUTE, PermissionAction.FETCH_EXECUTE}
 )
-ALLOWED_TOKEN_SCOPES: Final[frozenset[str]] = frozenset(
-    {action.value for action in ALLOWED_TOKEN_ACTIONS}
-)
+API_KEY_SCOPES: Final[frozenset[str]] = frozenset({action.value for action in API_KEY_ACTIONS})
+
+
+def _validate_api_key_scopes(scopes: frozenset[str]) -> frozenset[str]:
+    forbidden = scopes - API_KEY_SCOPES
+    if forbidden:
+        raise ValueError(
+            "Project API key scopes must be execution scopes "
+            f"({', '.join(sorted(API_KEY_SCOPES))}); unknown: {sorted(forbidden)}"
+        )
+    return scopes
 
 
 class BuiltinRole(StrEnum):
@@ -197,7 +211,6 @@ BUILTIN_ROLE_DEFINITIONS: Final[dict[str, RoleDefinition]] = {
                 PermissionAction.PROVIDERS_CONFIGURE,
                 PermissionAction.CREDENTIALS_MANAGE_PRIVATE,
                 PermissionAction.TOKENS_MANAGE,
-                PermissionAction.ROUTING_WRITE,
                 PermissionAction.TRACES_READ,
                 PermissionAction.USAGE_READ,
                 PermissionAction.SEARCH_EXECUTE,
@@ -205,7 +218,7 @@ BUILTIN_ROLE_DEFINITIONS: Final[dict[str, RoleDefinition]] = {
             }
         ),
         is_builtin=True,
-        description="Project administrator managing membership, settings, tokens, and credentials.",
+        description="Project administrator managing members, settings, API keys, and credentials.",
     ),
     BuiltinRole.PROJECT_MEMBER: RoleDefinition(
         role_key=BuiltinRole.PROJECT_MEMBER,
@@ -233,7 +246,6 @@ BUILTIN_ROLE_DEFINITIONS: Final[dict[str, RoleDefinition]] = {
                 PermissionAction.PROJECT_READ,
                 PermissionAction.SETTINGS_READ,
                 PermissionAction.PROVIDERS_READ,
-                PermissionAction.ROUTING_WRITE,
             }
         ),
         is_builtin=True,
@@ -266,7 +278,11 @@ BUILTIN_ROLE_DEFINITIONS: Final[dict[str, RoleDefinition]] = {
             }
         ),
         is_builtin=True,
-        description="Extra role permitting creation and revocation of project tokens.",
+        description=(
+            "Extra role permitting issue, rotation, and revocation of project API keys. "
+            "It grants no execution, so issuing a key also needs the key's scopes from "
+            "another role such as project_member."
+        ),
     ),
 }
 
@@ -297,75 +313,6 @@ class AccountRead(ContractModel):
     created_at: AwareDatetime | None = None
 
 
-class TargetUserCreate(ContractModel):
-    """Target schema representation for creating an ordinary human user.
-
-    Preserves internal UUID and local/WorkOS provider constraints without
-    admin/developer/agent account types. Extra fields are strictly forbidden.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    email: str
-    auth_provider: AuthProvider = AuthProvider.LOCAL
-    auth_provider_id: str | None = None
-    hashed_password: str | None = None
-    is_active: bool = True
-    is_verified: bool = False
-
-    @field_validator("email")
-    @classmethod
-    def _normalize_email(cls, email: str) -> str:
-        return normalize_email(email)
-
-    @model_validator(mode="after")
-    def _validate_provider_invariants(self) -> "TargetUserCreate":
-        if self.auth_provider == AuthProvider.LOCAL:
-            if not self.hashed_password or len(self.hashed_password.strip()) == 0:
-                raise ValueError("Local user requires a non-empty hashed_password")
-            if self.auth_provider_id is not None:
-                raise ValueError("Local user must not have auth_provider_id")
-        elif self.auth_provider == AuthProvider.WORKOS:
-            if self.hashed_password is not None:
-                raise ValueError("WorkOS user must not have hashed_password")
-            if not self.auth_provider_id or len(self.auth_provider_id.strip()) == 0:
-                raise ValueError("WorkOS user requires a non-empty auth_provider_id")
-        return self
-
-
-class TargetUserRead(ContractModel):
-    """Target schema projection of an ordinary human user.
-
-    Preserves internal UUID and local/WorkOS provider constraints without
-    admin/developer/agent account types. Extra fields are strictly forbidden.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    id: UUID
-    email: str
-    auth_provider: AuthProvider
-    auth_provider_id: str | None = None
-    is_active: bool = True
-    is_verified: bool = False
-
-    @field_validator("email")
-    @classmethod
-    def _normalize_email(cls, email: str) -> str:
-        return normalize_email(email)
-
-    @model_validator(mode="after")
-    def _validate_provider_invariants(self) -> "TargetUserRead":
-        if self.auth_provider == AuthProvider.LOCAL:
-            if self.auth_provider_id is not None:
-                raise ValueError("Local user must not have auth_provider_id")
-        elif self.auth_provider == AuthProvider.WORKOS and (
-            not self.auth_provider_id or len(self.auth_provider_id.strip()) == 0
-        ):
-            raise ValueError("WorkOS user requires a non-empty auth_provider_id")
-        return self
-
-
 class HumanPrincipal(ContractModel):
     """Verified human user identity and session family."""
 
@@ -375,32 +322,49 @@ class HumanPrincipal(ContractModel):
     user_id: UUID
     session_id: UUID
 
+    @property
+    def actor_type(self) -> ActorType:
+        """Return the attribution class of this principal."""
+        return ActorType.HUMAN
 
-class ProjectTokenPrincipal(ContractModel):
-    """Verified machine identity authenticated via project API token."""
+    @property
+    def actor_id(self) -> UUID:
+        """Return the attribution identifier of this principal."""
+        return self.user_id
+
+
+class ProjectApiKeyPrincipal(ContractModel):
+    """Verified machine identity of one project API key.
+
+    The key belongs to exactly one project and holds only execution scopes; it
+    never inherits any role of the human who created it.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    principal_type: Literal["project_token"] = "project_token"
-    token_id: UUID
+    principal_type: Literal["project_api_key"] = "project_api_key"
+    api_key_id: UUID
     project_id: UUID
     scopes: frozenset[str]
 
     @field_validator("scopes")
     @classmethod
     def _validate_execution_scopes_only(cls, scopes: frozenset[str]) -> frozenset[str]:
-        forbidden = scopes - ALLOWED_TOKEN_SCOPES
-        if forbidden:
-            raise ValueError(
-                f"Project token scopes must be restricted to execution actions "
-                f"({', '.join(sorted(ALLOWED_TOKEN_SCOPES))}). "
-                f"Forbidden authority: {sorted(forbidden)}"
-            )
-        return scopes
+        return _validate_api_key_scopes(scopes)
+
+    @property
+    def actor_type(self) -> ActorType:
+        """Return the attribution class of this principal."""
+        return ActorType.PROJECT_API_KEY
+
+    @property
+    def actor_id(self) -> UUID:
+        """Return the attribution identifier of this principal."""
+        return self.api_key_id
 
 
 type Principal = Annotated[
-    HumanPrincipal | ProjectTokenPrincipal, Field(discriminator="principal_type")
+    HumanPrincipal | ProjectApiKeyPrincipal, Field(discriminator="principal_type")
 ]
 
 
@@ -411,18 +375,18 @@ class ProjectContext(ContractModel):
 
     account_id: UUID
     project_id: UUID
-    principal: HumanPrincipal | ProjectTokenPrincipal
+    principal: HumanPrincipal | ProjectApiKeyPrincipal
     effective_permissions: frozenset[PermissionAction]
     policy_revision: int = 1
 
     @model_validator(mode="after")
     def _validate_principal_invariants(self) -> "ProjectContext":
         if (
-            isinstance(self.principal, ProjectTokenPrincipal)
+            isinstance(self.principal, ProjectApiKeyPrincipal)
             and self.principal.project_id != self.project_id
         ):
             raise ValueError(
-                f"Project token principal project_id ({self.principal.project_id}) "
+                f"Project API key principal project_id ({self.principal.project_id}) "
                 f"does not match ProjectContext project_id ({self.project_id})"
             )
         return self
@@ -437,7 +401,7 @@ class AuthorizationQuery(ContractModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    principal: HumanPrincipal | ProjectTokenPrincipal
+    principal: HumanPrincipal | ProjectApiKeyPrincipal
     action: PermissionAction
     scope_type: ScopeType
     scope_id: UUID | None = None
@@ -465,7 +429,7 @@ class AuthorizationService(Protocol):
        or evaluation error results in allowed=False.
     2. No system-admin project bypass: A system_admin does NOT automatically have
        project-level permissions (e.g. searching or fetching within a project or
-       reading project tokens) unless explicitly granted a project-scoped role or
+       reading project API keys) unless explicitly granted a project-scoped role or
        operating strictly within system scope.
     3. Live assignments: The runtime implementation reloads durable scoped role
        assignments on every decision; token claims or account-type flags are not
@@ -501,12 +465,12 @@ def evaluate_authorization(
             scope_id=query.scope_id,
         )
 
-    # Invariant: project token restrictions
-    if isinstance(query.principal, ProjectTokenPrincipal):
+    # Invariant: project API key restrictions
+    if isinstance(query.principal, ProjectApiKeyPrincipal):
         if query.scope_type != ScopeType.PROJECT:
             return AuthorizationDecision(
                 allowed=False,
-                reason="Project token cannot execute at system scope",
+                reason="Project API key cannot execute at system scope",
                 required_permission=query.action,
                 scope_type=query.scope_type,
                 scope_id=query.scope_id,
@@ -514,7 +478,7 @@ def evaluate_authorization(
         if query.scope_id != query.principal.project_id:
             return AuthorizationDecision(
                 allowed=False,
-                reason="Token project_id does not match target scope_id",
+                reason="API key project_id does not match target scope_id",
                 required_permission=query.action,
                 scope_type=query.scope_type,
                 scope_id=query.scope_id,
@@ -522,7 +486,7 @@ def evaluate_authorization(
         if query.action.value not in query.principal.scopes:
             return AuthorizationDecision(
                 allowed=False,
-                reason=f"Action {query.action.value!r} not allowed by token scopes",
+                reason=f"Action {query.action.value!r} not allowed by API key scopes",
                 required_permission=query.action,
                 scope_type=query.scope_type,
                 scope_id=query.scope_id,
@@ -575,13 +539,32 @@ class ProjectStatus(StrEnum):
 
 
 class ProjectCreate(ContractModel):
-    """Request to create a new project with an initial administrator."""
+    """Request to create a new project with an initial administrator.
+
+    The initial administrator is identified by exactly one of
+    ``initial_admin_user_id`` or ``initial_admin_email``; the service resolves
+    an email to a durable user id inside the creation transaction.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str = Field(min_length=1, max_length=100)
     slug: str | None = Field(default=None, max_length=100)
-    initial_admin_user_id: UUID
+    initial_admin_user_id: UUID | None = None
+    initial_admin_email: str | None = None
+
+    @field_validator("initial_admin_email")
+    @classmethod
+    def _normalize_admin_email(cls, email: str | None) -> str | None:
+        return None if email is None else normalize_email(email)
+
+    @model_validator(mode="after")
+    def _validate_one_admin_identifier(self) -> "ProjectCreate":
+        if (self.initial_admin_user_id is None) == (self.initial_admin_email is None):
+            raise ValueError(
+                "exactly one of initial_admin_user_id or initial_admin_email must be set"
+            )
+        return self
 
 
 class ProjectUpdate(ContractModel):
@@ -624,12 +607,29 @@ class MembershipStatus(StrEnum):
 
 
 class ProjectMemberAdd(ContractModel):
-    """Request to add a user to a project with an initial role."""
+    """Request to add a user to a project with an initial role.
+
+    The new member is identified by exactly one of ``user_id`` or ``email``;
+    the service resolves an email to a durable user id inside the write
+    transaction after every authorization check has passed.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    user_id: UUID
+    user_id: UUID | None = None
+    email: str | None = None
     initial_role: str = BuiltinRole.PROJECT_MEMBER
+    permissions: int = STANDARD
+
+    @field_validator("permissions")
+    @classmethod
+    def _developer_permissions(cls, bits: int) -> int:
+        return validate_permission_bits(bits) & DEVELOPER_BITS
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, email: str | None) -> str | None:
+        return None if email is None else normalize_email(email)
 
     @field_validator("initial_role")
     @classmethod
@@ -642,7 +642,15 @@ class ProjectMemberAdd(ContractModel):
                 f"Initial project member role must have project scope. "
                 f"Role {role!r} has scope {definition.scope_type.value!r}"
             )
+        if role not in {BuiltinRole.PROJECT_ADMIN, BuiltinRole.PROJECT_MEMBER}:
+            raise ValueError(f"Role {role!r} is not assignable")
         return role
+
+    @model_validator(mode="after")
+    def _validate_one_member_identifier(self) -> "ProjectMemberAdd":
+        if (self.user_id is None) == (self.email is None):
+            raise ValueError("exactly one of user_id or email must be set")
+        return self
 
 
 class ProjectMemberUpdate(ContractModel):
@@ -650,7 +658,20 @@ class ProjectMemberUpdate(ContractModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    status: MembershipStatus
+    status: MembershipStatus | None = None
+    role: Literal["admin", "developer", "project_admin", "project_member"] | None = None
+    permissions: int | None = None
+
+    @field_validator("permissions")
+    @classmethod
+    def _developer_permissions(cls, bits: int | None) -> int | None:
+        return None if bits is None else validate_permission_bits(bits) & DEVELOPER_BITS
+
+    @model_validator(mode="after")
+    def _require_change(self) -> "ProjectMemberUpdate":
+        if self.status is None and self.role is None and self.permissions is None:
+            raise ValueError("a membership change is required")
+        return self
 
 
 class ProjectMemberChange(ContractModel):
@@ -660,25 +681,18 @@ class ProjectMemberChange(ContractModel):
 
     user_id: UUID
     status: MembershipStatus | None = None
-    add_roles: frozenset[str] = Field(default_factory=frozenset)
-    remove_roles: frozenset[str] = Field(default_factory=frozenset)
+    role: Literal["admin", "developer", "project_admin", "project_member"] | None = None
+    permissions: int | None = None
 
-    @field_validator("add_roles", "remove_roles")
+    @field_validator("permissions")
     @classmethod
-    def _validate_project_roles(cls, roles: frozenset[str]) -> frozenset[str]:
-        for role_key in roles:
-            if role_key not in BUILTIN_ROLE_DEFINITIONS:
-                raise ValueError(f"Unknown project role {role_key!r}")
-            if BUILTIN_ROLE_DEFINITIONS[role_key].scope_type is not ScopeType.PROJECT:
-                raise ValueError(f"Role {role_key!r} is not a project-scoped role")
-        return roles
+    def _developer_permissions(cls, bits: int | None) -> int | None:
+        return None if bits is None else validate_permission_bits(bits) & DEVELOPER_BITS
 
     @model_validator(mode="after")
     def _validate_change_is_effective(self) -> "ProjectMemberChange":
-        if self.status is None and not self.add_roles and not self.remove_roles:
+        if self.status is None and self.role is None and self.permissions is None:
             raise ValueError("A membership change must set status or change roles")
-        if self.add_roles & self.remove_roles:
-            raise ValueError("A role cannot be added and removed by the same change")
         return self
 
 
@@ -704,9 +718,45 @@ class ProjectMemberRead(ContractModel):
 
     project_id: UUID
     user_id: UUID
+    email: str
     status: MembershipStatus
     roles: list[str]
     version: int
+    role: Literal["admin", "developer"] = "developer"
+    permissions: int = 0
+    provider_owner: bool = False
+    account_active: bool = True
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, email: str) -> str:
+        return normalize_email(email)
+
+
+class ProviderOwnerChange(ContractModel):
+    """Target administrator for a provider ownership transfer."""
+
+    user_id: UUID
+
+
+class ProviderOwnerRead(ContractModel):
+    """Public identity of a provider owner."""
+
+    user_id: UUID
+    email: str
+
+
+class UnassignedPoolRead(ContractModel):
+    """A pool that no longer serves the project."""
+
+    pool_id: UUID
+    label: str
+
+
+class ProviderOwnerTransferRead(ProviderOwnerRead):
+    """The new provider owner and the pools removed from the project."""
+
+    unassigned_pools: list[UnassignedPoolRead]
 
 
 class RoleAssignmentRead(ContractModel):
@@ -735,54 +785,134 @@ class RoleAssignmentRead(ContractModel):
         return self
 
 
-def _default_token_scopes() -> frozenset[str]:
-    return ALLOWED_TOKEN_SCOPES
+class SystemAccessRead(ContractModel):
+    """Live system-scope access descriptor for the authenticated caller."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rollout_state: ProjectRolloutState
+    permissions: list[str]
 
 
-class ProjectTokenCreate(ContractModel):
-    """Request to create a project API token.
+class ProjectAccessRead(ContractModel):
+    """Live project-scope access descriptor for the authenticated caller."""
 
-    Supports optional expiration:
-    - Omitted ``expires_at``: defaults to policy proposal (90 days from creation).
-    - Explicit ``expires_at: null``: token has no expiration date (perpetual token).
-    - Explicit timestamp: token expires at the specified UTC datetime.
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    project_id: UUID
+    permissions: list[str]
+    roles: list[str]
+    policy_revision: int
+
+
+def _default_api_key_scopes() -> frozenset[str]:
+    return API_KEY_SCOPES
+
+
+def _require_future_expiry(expires_at: datetime | None) -> datetime | None:
+    if expires_at is not None and expires_at <= datetime.now(UTC):
+        raise ValueError("expires_at must be in the future")
+    return expires_at
+
+
+class ApiKeyStatus(StrEnum):
+    """Derived lifecycle state of one project API key."""
+
+    ACTIVE = "active"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
+class ProjectApiKeyCreate(ContractModel):
+    """Request to issue one project API key.
+
+    - Omitted ``expires_at``: the key expires ``DEFAULT_API_KEY_LIFETIME_DAYS``
+      days after issue.
+    - Explicit ``expires_at: null``: the key never expires.
+    - Explicit timestamp: the key expires then; it must be in the future.
+
+    Omitted ``scopes`` grants both execution scopes; an empty or unknown scope
+    is rejected.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    label: str = Field(min_length=1, max_length=128)
-    scopes: frozenset[str] = Field(default_factory=_default_token_scopes)
-    expires_at: AwareDatetime | None = None
+    label: str = Field(min_length=1, max_length=100)
+    scopes: frozenset[str] = Field(default_factory=_default_api_key_scopes, min_length=1)
+    expires_at: AwareDatetime | None = Field(
+        default=None,
+        description=(
+            f"Omit for the default lifetime of {DEFAULT_API_KEY_LIFETIME_DAYS} days; "
+            "null means no expiration."
+        ),
+    )
 
     @field_validator("scopes")
     @classmethod
     def _validate_execution_scopes_only(cls, scopes: frozenset[str]) -> frozenset[str]:
-        forbidden = scopes - ALLOWED_TOKEN_SCOPES
-        if forbidden:
-            raise ValueError(
-                f"Project token scopes must be restricted to execution actions "
-                f"({', '.join(sorted(ALLOWED_TOKEN_SCOPES))}). "
-                f"Forbidden authority: {sorted(forbidden)}"
-            )
-        return scopes
+        return _validate_api_key_scopes(scopes)
+
+    @field_validator("expires_at")
+    @classmethod
+    def _validate_future_expiry(cls, expires_at: datetime | None) -> datetime | None:
+        return _require_future_expiry(expires_at)
 
     @model_serializer(mode="wrap")
-    def _serialize(self, handler: Any) -> dict[str, Any]:
+    def _omit_unset_expiry(self, handler: Any) -> dict[str, Any]:
+        """Keep an omitted ``expires_at`` omitted, so a round trip never turns it into null."""
+
         data = cast(dict[str, Any], handler(self))
         if "expires_at" not in self.model_fields_set:
             data.pop("expires_at", None)
         return data
 
-    def resolve_expires_at(self, *, now: datetime | None = None) -> AwareDatetime | None:
-        """Resolve effective expiration date based on whether expires_at was explicitly provided."""
+    def resolve_expires_at(self, *, now: datetime) -> datetime | None:
+        """Return the effective expiry: default when omitted, ``None`` when null."""
+
         if "expires_at" not in self.model_fields_set:
-            current_time = now or datetime.now(UTC)
-            return current_time + timedelta(days=DEFAULT_TOKEN_LIFETIME_DAYS)
+            return now + timedelta(days=DEFAULT_API_KEY_LIFETIME_DAYS)
         return self.expires_at
 
 
-class ProjectTokenRead(ContractModel):
-    """Safe projection of a project API token (never contains raw secret)."""
+class ProjectApiKeyRotate(ContractModel):
+    """Request to rotate one active project API key.
+
+    - Omitted ``expires_at``: the new key keeps the old key's lifetime; a key
+      without expiration stays without expiration.
+    - Explicit ``expires_at: null``: the new key never expires.
+    - Explicit timestamp: the new key expires then; it must be in the future.
+
+    The old key stays valid for ``overlap_seconds`` (never beyond its own
+    expiry); ``0`` revokes it at once.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    overlap_seconds: int = Field(
+        default=DEFAULT_ROTATION_OVERLAP_SECONDS, ge=0, le=MAX_ROTATION_OVERLAP_SECONDS
+    )
+    expires_at: AwareDatetime | None = Field(
+        default=None,
+        description="Omit to keep the old key's lifetime; null means no expiration.",
+    )
+
+    @field_validator("expires_at")
+    @classmethod
+    def _validate_future_expiry(cls, expires_at: datetime | None) -> datetime | None:
+        return _require_future_expiry(expires_at)
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_expiry(self, handler: Any) -> dict[str, Any]:
+        """Keep an omitted ``expires_at`` omitted, so a round trip never turns it into null."""
+
+        data = cast(dict[str, Any], handler(self))
+        if "expires_at" not in self.model_fields_set:
+            data.pop("expires_at", None)
+        return data
+
+
+class ProjectApiKeyRead(ContractModel):
+    """Safe metadata of one project API key; it never carries the key or its verifier."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -790,87 +920,31 @@ class ProjectTokenRead(ContractModel):
     project_id: UUID
     label: str
     prefix: str
-    scopes: frozenset[str]
+    scopes: list[str]
     created_by: UUID
     created_at: AwareDatetime
-    expires_at: AwareDatetime | None
+    expires_at: AwareDatetime | None = Field(description="null means no expiration.")
     revoked_at: AwareDatetime | None = None
     last_used_at: AwareDatetime | None = None
-
-    @property
-    def is_active(self) -> bool:
-        """Return whether the token is currently unrevoked and not expired."""
-        if self.revoked_at is not None:
-            return False
-        return self.expires_at is None or self.expires_at > datetime.now(UTC)
+    rotated_from_id: UUID | None = None
+    status: ApiKeyStatus
 
 
-class ProjectTokenIssueResponse(ContractModel):
-    """One-time response returning the generated token secret and metadata.
+class ProjectApiKeyIssued(ProjectApiKeyRead):
+    """Issue or rotation result: the metadata plus the raw key, exactly once.
 
-    Boundary isolation:
-    - Default repr and str suppress the secret value to prevent accidental logging leaks.
-    - Dedicated wire payload exposes raw secret once for the client.
-    - Validates cleanly from wire payload with secret / raw_token fields.
+    ``key`` is a :class:`~pydantic.SecretStr`, so a repr, a log line, or a
+    Python-mode dump never reveals it. Only the JSON wire serialization of the
+    issue and rotation responses writes its value.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    key: Annotated[SecretStr, WithJsonSchema({"type": "string"})] = Field(
+        description="The raw API key. It is shown only in this response."
+    )
 
-    token: ProjectTokenRead
-    secret: str
-    raw_token: str | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _unify_secret_and_raw_token(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            data = dict(data)
-            sec = data.get("secret") or data.get("raw_token")
-            if isinstance(sec, SecretStr):
-                sec = sec.get_secret_value()
-            if sec is not None:
-                data["secret"] = sec
-                data["raw_token"] = sec
-        return data
-
-    @model_validator(mode="after")
-    def _sync_raw_token(self) -> "ProjectTokenIssueResponse":
-        if self.raw_token is None:
-            object.__setattr__(self, "raw_token", self.secret)
-        return self
-
-    def __repr__(self) -> str:
-        return (
-            f"ProjectTokenIssueResponse(token={self.token!r}, "
-            "secret='**********', raw_token='**********')"
-        )
-
-    def __str__(self) -> str:
-        return self.__repr__()
-
-    def to_one_time_wire_payload(self) -> dict[str, Any]:
-        """Expose the raw token secret strictly once for the initial HTTP response."""
-        return {
-            "token": self.token.model_dump(mode="json"),
-            "secret": self.secret,
-            "raw_token": self.secret,
-        }
-
-
-class ProjectTokenRotate(ContractModel):
-    """Request to rotate an existing project token with an overlap period."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    overlap_seconds: int = Field(default=300, ge=0, le=86400)
-    expires_at: AwareDatetime | None = None
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler: Any) -> dict[str, Any]:
-        data = cast(dict[str, Any], handler(self))
-        if "expires_at" not in self.model_fields_set:
-            data.pop("expires_at", None)
-        return data
+    @field_serializer("key", when_used="json")
+    def _reveal_once(self, key: SecretStr) -> str:
+        return key.get_secret_value()
 
 
 class CredentialOwnerScope(StrEnum):
@@ -929,47 +1003,24 @@ class ProjectBindingRead(ContractModel):
     version: int
 
 
-class UpstreamQuotaPoolRead(ContractModel):
-    """Shared upstream capacity boundary across credentials and operations."""
+class TraceDetailPolicy(StrEnum):
+    """How much request/response payload a project trace may persist.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    ``METADATA`` stores timing, provider, outcome, counts, and span metadata
+    only. ``FULL`` also stores the query/URL and the normalized results payload.
+    The system value is the most permissive detail the deployment allows; a
+    project may choose a stricter value but never a looser one.
+    """
 
-    id: UUID
-    provider_type: str
-    upstream_scope: str
-    constraints: dict[str, Any] = Field(default_factory=dict)
-    version: int
+    METADATA = "metadata"
+    FULL = "full"
 
 
-class ProjectPoolAllocationRead(ContractModel):
-    """Project-specific capacity entitlement and ceiling within a quota pool."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    project_id: UUID
-    pool_id: UUID
-    operation_scope: str
-    base_rate: Decimal
-    window_seconds: int = 1
-    borrow_enabled: bool = False
-    max_rate: Decimal
-    weight: int = 1
-    max_concurrency: int = 1
-    queue_policy: str = "strict"
-    version: int
-
-    @field_validator("base_rate", "max_rate")
-    @classmethod
-    def _validate_non_negative_rate(cls, value: Decimal) -> Decimal:
-        if value < 0:
-            raise ValueError("Rate values must be non-negative")
-        return value
-
-    @model_validator(mode="after")
-    def _validate_rate_envelope(self) -> "ProjectPoolAllocationRead":
-        if self.max_rate < self.base_rate:
-            raise ValueError("max_rate cannot be less than base_rate")
-        return self
+#: Constraint order for :class:`TraceDetailPolicy`, strictest first.
+TRACE_DETAIL_CONSTRAINT_ORDER: Final[tuple[str, ...]] = (
+    TraceDetailPolicy.METADATA.value,
+    TraceDetailPolicy.FULL.value,
+)
 
 
 class SettingsScope(StrEnum):
@@ -1019,24 +1070,12 @@ def normalize_preferred_providers(value: Any) -> tuple[str, ...]:
 
 
 class RoutingSettings(ContractModel):
-    """Typed project routing preferences.
-
-    ``None`` means inherit the system default. ``preferred_providers`` accepts
-    an explicit empty tuple to clear the preference order. A non-empty tuple is
-    a complete ordered replacement, never a merge with the system preference.
-    """
+    """Typed project routing preferences; ``None`` inherits the default."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     fallback_policy: FallbackPolicy | None = None
-    cost_optimization_preset: CostPreset | None = None
     max_attempts: int | None = Field(default=None, ge=1, le=10)
-    preferred_providers: tuple[str, ...] | None = None
-
-    @field_validator("preferred_providers")
-    @classmethod
-    def _ordered_provider_preferences(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
-        return None if value is None else normalize_preferred_providers(value)
 
 
 class ExecutionSettings(ContractModel):
@@ -1055,6 +1094,15 @@ class ExecutionSettings(ContractModel):
     cache_ttl_seconds: int | None = Field(default=None, ge=0, le=86400)
 
 
+class TraceSettings(ContractModel):
+    """Typed project trace policy with explicit inheritance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    detail: TraceDetailPolicy | None = None
+    retention_days: int | None = Field(default=None, ge=1, le=365)
+
+
 class ProjectSettingsDocument(ContractModel):
     """Typed project settings document with inheritance and revision constraints."""
 
@@ -1062,7 +1110,29 @@ class ProjectSettingsDocument(ContractModel):
 
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
+    trace: TraceSettings = Field(default_factory=TraceSettings)
     revision: int = Field(default=1, ge=1)
+
+
+class ProjectTracePolicy(ContractModel):
+    """Effective trace policy of one project, resolved for capture and retention.
+
+    Only trusted call sites build this: the execution boundary resolves it from
+    the durable settings rows once per request and stamps the resulting
+    decision on every span, and the retention service resolves the same fields
+    for one explicit project.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    detail: TraceDetailPolicy = TraceDetailPolicy.FULL
+    retention_days: int | None = Field(default=None, ge=1, le=365)
+
+    @property
+    def captures_payload(self) -> bool:
+        """Return whether request/response content may be persisted."""
+
+        return self.detail is TraceDetailPolicy.FULL
 
 
 class SettingsFieldResolution(ContractModel):

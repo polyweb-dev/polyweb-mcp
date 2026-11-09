@@ -48,13 +48,21 @@ without an upstream equivalent remain FreeSearch-only and are not forwarded.
 `providerOptions` does not change `routing.providers`, routing mode, or
 fallback behavior.
 
-REST `POST /search` and `POST /fetch`, and the MCP Search and Fetch tools, are
-public data operations. A Bearer token is optional; when supplied, it is
-validated and its account can be attached to local traces. Anonymous calls
-have no account attribution. Provider-level quota and rate admission still
-applies, with server-configured provider credentials and shared budgets; there
-is no per-caller spend cap. Account, trace, and provider-control routes remain
-protected. Project-scoped API keys are outside this contract.
+REST `POST /search` and `POST /fetch`, and the MCP Search and Fetch tools,
+always require a credential; there is no anonymous execution. REST accepts a
+human access JWT (with a `project_id` where the account is an active member) or
+a project API key (`Authorization: Bearer fs_live_...`); MCP over HTTP and stdio
+accepts project API keys only. A key executes only in its own project with its
+own `search.execute`/`fetch.execute` scopes; a supplied `project_id` must name
+that project. Unknown, expired and revoked keys receive a generic 401, a missing
+scope 403, a foreign project 404 and an archived project 409, all before any
+provider access. Keys are issued with a default 90-day lifetime when
+`expires_at` is omitted, never expire when `expires_at` is `null`, and keep
+their lifetime on rotation unless it is changed; see the README section
+"Project API keys". Provider-level quota and rate admission still applies, with
+server-configured provider credentials and shared budgets; there is no
+per-caller spend cap. Account, trace, and provider-control routes accept human
+sessions only.
 
 The shared `mode` and vendor modes are distinct contracts. Where both express
 the same provider setting, an explicit nested option wins; Tavily rejects a
@@ -144,6 +152,12 @@ Official references: [Search](https://docs.parallel.ai/api-reference/search/sear
 Parallel's `/v1/search` does not document `extra_bundles`; non-zero
 `extra_bundles` is rejected before the request. Parallel Task, Responses,
 Image Search, and other endpoints are not part of this Search/Extract surface.
+
+Parallel also supports per-credential OAuth (`auth_mode: "oauth"`), connected
+through the device flow routes described in the README section "Provider
+credentials, bindings, pools and allocations". Its grant is scoped to account
+balance reads (`balance:read`), so an OAuth credential serves no Search or
+Fetch operation and a binding of it cannot enable one.
 
 ### Tavily (`tavily`)
 

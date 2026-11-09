@@ -29,7 +29,7 @@ export interface UseClipboard {
 /**
  * Shared clipboard feedback for both legacy modes: transient auto-reset
  * (features/playground/model/useResultPreview.ts) and sticky retention with
- * availability/rejection silence (features/oauth/model/usePairingFlow.ts).
+ * availability/rejection silence (no auto-reset option).
  * Repeat copies restart the reset window; timers die on reset and unmount.
  */
 export function useClipboard(options?: UseClipboardOptions): UseClipboard {

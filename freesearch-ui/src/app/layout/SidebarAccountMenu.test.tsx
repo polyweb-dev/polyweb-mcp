@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router"
 import { SidebarAccountMenu } from "./SidebarAccountMenu"
@@ -50,25 +50,48 @@ afterEach(() => {
 })
 
 describe("SidebarAccountMenu identity", () => {
-  it("shows the account name and the username in the expanded row", () => {
-    // SB4-ROLE: the outside row shows the account role, not the email.
+  it("shows the email and no role text in the expanded row of an unnamed account", () => {
     renderMenu(adminAccountFixture({ email: "lead@example.com" }))
 
     const trigger = screen.getByRole("button", { name: "Open user menu" })
-    expect(trigger).toHaveTextContent("lead")
-    expect(trigger).toHaveTextContent("Admin")
-    expect(trigger).not.toHaveTextContent("lead@example.com")
+    expect(trigger).toHaveTextContent("lead@example.com")
+    expect(trigger.textContent ?? "").not.toMatch(/Admin|Developer|Agent/)
   })
 
-  it("shows both approved identity values and Sign out in the popup", async () => {
+  it("shows the full name above the email when the account has one", async () => {
+    const user = userEvent.setup()
+    renderMenu(
+      adminAccountFixture({ email: "ada@example.com", first_name: "Ada", last_name: "Lovelace", username: "ada" })
+    )
+
+    const trigger = screen.getByRole("button", { name: "Open user menu" })
+    expect(trigger).toHaveTextContent("Ada Lovelace")
+    expect(trigger).toHaveTextContent("ada@example.com")
+
+    // The expanded row already names the account; the popup does not repeat it.
+    await openPopup(user)
+    const dialog = screen.getByRole("dialog", { name: "User account" })
+    expect(dialog).not.toHaveTextContent("Ada Lovelace")
+    expect(dialog).not.toHaveTextContent("ada@example.com")
+  })
+
+  it("shows the username when the account has no full name", () => {
+    renderMenu(adminAccountFixture({ email: "ops@example.com", username: "ops-lead" }))
+
+    const trigger = screen.getByRole("button", { name: "Open user menu" })
+    expect(trigger).toHaveTextContent("ops-lead")
+    expect(trigger).toHaveTextContent("ops@example.com")
+  })
+
+  it("shows only Account and Sign out in the expanded popup", async () => {
     const user = userEvent.setup()
     renderMenu(adminAccountFixture())
 
     await openPopup(user)
 
     const dialog = screen.getByRole("dialog", { name: "User account" })
-    expect(dialog).toHaveTextContent("admin")
-    expect(dialog).toHaveTextContent("admin@example.com")
+    expect(dialog).not.toHaveTextContent("admin@example.com")
+    expect(within(dialog).getByRole("link", { name: "Account" })).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: "Sign out" })
     ).toBeInTheDocument()
@@ -241,21 +264,29 @@ describe("AccountPage.test.tsx", () => {
 })
 
 describe("SidebarAccountMenu SB4 refinements", () => {
-  it("uses a size-8 avatar with centered letter classes outside", () => {
+  it("uses a size-7 avatar on the raised surface with centered letter classes outside", () => {
     renderMenu(adminAccountFixture())
 
     const trigger = screen.getByRole("button", { name: "Open user menu" })
     const avatar = trigger.querySelector('span[aria-hidden="true"]')
     expect(avatar).not.toBeNull()
-    for (const token of ["size-8", "grid", "place-items-center", "leading-none", "rounded-full"]) {
+    for (const token of [
+      "size-7",
+      "bg-[var(--raised)]",
+      "grid",
+      "place-items-center",
+      "leading-none",
+      "rounded-full",
+    ]) {
       expect(avatar?.classList.contains(token)).toBe(true)
     }
+    expect(avatar?.classList.contains("size-8")).toBe(false)
     expect(avatar?.textContent).toBe("A")
   })
 
-  it("uses a size-10 avatar with centered letter classes inside the popup", async () => {
+  it("uses a size-10 avatar with centered letter classes inside the collapsed popup", async () => {
     const user = userEvent.setup()
-    renderMenu(adminAccountFixture())
+    renderMenu(adminAccountFixture(), true)
 
     await openPopup(user)
 
@@ -274,7 +305,8 @@ describe("SidebarAccountMenu SB4 refinements", () => {
     const dividers = container.querySelectorAll("div.mx-2")
     expect(dividers).toHaveLength(1)
     const divider = dividers[0]
-    expect(divider.classList.contains("mb-1")).toBe(true)
+    expect(divider.classList.contains("mb-2")).toBe(true)
+    expect(divider.classList.contains("mb-1")).toBe(false)
     expect(divider.classList.contains("h-px")).toBe(true)
     expect(divider.getAttribute("aria-hidden")).toBe("true")
     const trigger = screen.getByRole("button", { name: "Open user menu" })
@@ -293,21 +325,25 @@ describe("SidebarAccountMenu SB4 refinements", () => {
     ["admin", adminAccountFixture()],
     ["developer", developerAccountFixture()],
     ["agent", agentAccountFixture()],
-  ])("shows role outside and email inside for %s", async (_role, account) => {
-    // SB4-ROLE: username and role outside, username and email inside.
+  ])("shows the email outside and inside without role text for the %s persona", async (_persona, account) => {
     const user = userEvent.setup()
     renderMenu(account)
 
     const trigger = screen.getByRole("button", { name: "Open user menu" })
-    expect(trigger.textContent).not.toContain(account.email)
+    expect(trigger).toHaveTextContent(account.email)
+    expect(trigger.textContent ?? "").not.toMatch(/Admin|Developer|Agent/)
+    cleanup()
+    // Only the collapsed avatar row hides the email, so only its popup names the account.
+    renderMenu(account, true)
 
     await openPopup(user)
 
     const dialog = screen.getByRole("dialog", { name: "User account" })
     expect(dialog).toHaveTextContent(account.email)
+    expect(dialog.textContent ?? "").not.toMatch(/Admin|Developer|Agent/)
   })
 
-  it("shows the role outside and the full email inside for long identity text", async () => {
+  it("keeps the full long email in the truncating row and inside the collapsed popup", async () => {
     const user = userEvent.setup()
     const account = adminAccountFixture({
       email: "very-long-identity-local-part-that-must-truncate@example.com",
@@ -315,11 +351,12 @@ describe("SidebarAccountMenu SB4 refinements", () => {
     renderMenu(account)
 
     const trigger = screen.getByRole("button", { name: "Open user menu" })
-    expect(trigger).toHaveTextContent("very-long-identity-local-part-that-must-truncate")
-    expect(trigger).toHaveTextContent("Admin")
-    expect(trigger.textContent).not.toContain(
+    expect(trigger).toHaveTextContent(
       "very-long-identity-local-part-that-must-truncate@example.com"
     )
+    expect(trigger.textContent ?? "").not.toMatch(/Admin/)
+    cleanup()
+    renderMenu(account, true)
 
     await openPopup(user)
 

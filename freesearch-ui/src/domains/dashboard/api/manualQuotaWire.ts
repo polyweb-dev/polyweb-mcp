@@ -23,3 +23,23 @@ export interface BackendManualQuotaPayload {
   current_usage: string
   note?: string | null
 }
+
+/** Decode a provider-wide entry. A successful null response means no entry. */
+export function decodeManualQuota(value: unknown): BackendManualQuota | null {
+  if (value === null) return null
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid manual quota response")
+  }
+  const row = value as Record<string, unknown>
+  const required = ["provider", "billing_start", "billing_end", "allowance", "current_usage"] as const
+  const optional = ["remaining", "remaining_percent", "source", "note", "updated_at"] as const
+  for (const key of required) {
+    if (typeof row[key] !== "string") throw new Error("Invalid manual quota response")
+  }
+  for (const key of optional) {
+    if (row[key] !== undefined && row[key] !== null && typeof row[key] !== "string") {
+      throw new Error("Invalid manual quota response")
+    }
+  }
+  return row as unknown as BackendManualQuota
+}

@@ -1,7 +1,6 @@
 import type {
   BrowserAccessResponse,
   UserAccount,
-  UserRole,
 } from "@/domains/auth/model/types"
 
 /**
@@ -10,15 +9,21 @@ import type {
  * Every UUID is fixed, so snapshots and persistence keys stay stable. No
  * fixture holds a refresh credential: the browser keeps that value in its
  * strict cookie, and tests assert wire bodies instead of seeding storage.
+ *
+ * An account carries no role. The three personas below differ only by id and
+ * email; their authority comes from the system access fixture a test serves
+ * (see `accessFixtures.ts`): the admin persona usually pairs with the system
+ * administrator permissions, the developer persona with settings read, and the
+ * agent persona with no system permission.
  */
 
-/** Confirmed Admin account of the test workspace. */
+/** Account id of the admin persona. */
 export const ADMIN_ACCOUNT_ID = "11111111-1111-4111-8111-111111111111"
 
-/** Confirmed Developer account of the test workspace. */
+/** Account id of the developer persona. */
 export const DEVELOPER_ACCOUNT_ID = "22222222-2222-4222-8222-222222222222"
 
-/** Confirmed Agent account of the test workspace. */
+/** Account id of the agent persona. */
 export const AGENT_ACCOUNT_ID = "33333333-3333-4333-8333-333333333333"
 
 /** Opaque access value for wire bodies. It is not a signed JWT. */
@@ -27,39 +32,45 @@ export const TEST_ACCESS_TOKEN = "test-access-token-value"
 /** Renewed opaque access value for rotation assertions. */
 export const RENEWED_ACCESS_TOKEN = "renewed-access-token-value"
 
-const FIXTURE_IDS: Record<UserRole, string> = {
+/** Fixture persona: an id and an email prefix, never an authority. */
+export type AccountPersona = "admin" | "developer" | "agent"
+
+const FIXTURE_IDS: Record<AccountPersona, string> = {
   admin: ADMIN_ACCOUNT_ID,
   developer: DEVELOPER_ACCOUNT_ID,
   agent: AGENT_ACCOUNT_ID,
 }
 
-/** Build one safe account projection for a role. */
+/** Build one safe account projection, matching the backend `UserAccount` shape. */
 export function accountFixture(
-  role: UserRole,
+  persona: AccountPersona,
   overrides?: Partial<UserAccount>
 ): UserAccount {
   return {
-    id: FIXTURE_IDS[role],
-    email: `${role}@example.com`,
-    role,
+    id: FIXTURE_IDS[persona],
+    email: `${persona}@example.com`,
+    auth_provider: "local",
+    auth_provider_id: null,
+    username: null,
+    first_name: null,
+    last_name: null,
     is_active: true,
-    is_superuser: role === "admin",
     is_verified: true,
     ...overrides,
   }
 }
 
-/** Build the confirmed Admin account. */
+/** Build the admin persona account. */
 export function adminAccountFixture(overrides?: Partial<UserAccount>): UserAccount {
   return accountFixture("admin", overrides)
 }
 
-/** Build the confirmed Developer account. */
+/** Build the developer persona account. */
 export function developerAccountFixture(overrides?: Partial<UserAccount>): UserAccount {
   return accountFixture("developer", overrides)
 }
 
-/** Build the confirmed Agent account. */
+/** Build the agent persona account. */
 export function agentAccountFixture(overrides?: Partial<UserAccount>): UserAccount {
   return accountFixture("agent", overrides)
 }

@@ -73,6 +73,12 @@ This installs both core runtime and development dependencies (FastAPI, Alembic, 
 
 FreeSearch uses SQLite for telemetry, quota snapshots, runtime settings, and provider health. The default database path is `freesearch.db` (override with the `FREESEARCH_DB` environment variable).
 
+For manual project testing, `uv run python scripts/seed_dev.py` creates a disposable
+`freesearch.dev.db` with five users, three projects, and encrypted provider credentials
+imported from `.env`. Set `FREESEARCH_DB=freesearch.dev.db` and restart the backend.
+See [the development database guide](docs/development-database.md) for accounts,
+memberships, provider-key variables, and recreation instructions.
+
 FreeSearch includes a dedicated database management CLI tool (`freesearch-db`):
 
 - **Check migration & schema status:**
@@ -80,24 +86,26 @@ FreeSearch includes a dedicated database management CLI tool (`freesearch-db`):
   uv run freesearch-db status
   ```
 
-- **Run migrations up to the latest revision:**
+- **Create or validate the database:**
   ```bash
   uv run freesearch-db upgrade
   ```
-  *(Note: `upgrade` automatically makes an integrity-verified pre-migration backup before applying schema changes, preserving existing data.)*
+  *(Note: a missing or empty database is created at the alpha baseline revision `0001_alpha_baseline`; a database already at the baseline is validated. There are no incremental migrations and no automatic backup.)*
 
-> **Tip:** You do not have to run `freesearch-db upgrade` manually every time. When the backend server starts, it will automatically verify the schema and run pending migrations up to Alembic head.
+> **Alpha reset:** The alpha keeps no compatibility with databases from earlier revisions. The backend, MCP server, and CLIs refuse such a database without changing it and print reset steps: stop FreeSearch, move or delete the database file together with its `-wal`/`-shm` side files (or point `FREESEARCH_DB` at a new path), and start again. Accounts, provider credentials, and settings must then be entered again.
 
 #### Local account bootstrap
 
-Public registration creates Agent accounts only. Create the first Admin account with the operator CLI, and assign a later role by explicit account UUID:
+Accounts have no role or account type. Public registration creates an ordinary human account with no system role and no project membership. System authority comes only from an explicit `system_admin` assignment, which the operator CLI creates and removes by explicit account UUID:
 
 ```bash
 uv run freesearch-users create-admin --email admin@example.com
-uv run freesearch-users set-role --user-id <account-uuid> --role developer
+uv run freesearch-users grant-system-admin --user-id <account-uuid>
+uv run freesearch-users revoke-system-admin --user-id <account-uuid>
+uv run freesearch-users deactivate --user-id <account-uuid>
 ```
 
-The command reads the password from a masked terminal prompt, refuses a password argument, and prints only the account UUID and the role. It requires a database file that is present, so run `freesearch-db upgrade` first. A failed promotion leaves an Agent account, and the command reports that state.
+`create-admin` reads the password from a masked terminal prompt, refuses a password argument, and prints only the account UUID and the system role outcome. The commands require a database file that is present, so run `freesearch-db upgrade` first. A failed grant leaves an ordinary account, and the command reports that state. `revoke-system-admin` and `deactivate` refuse to remove the last active system administrator. The CLI `deactivate` command also refuses to leave any project, including archived projects, without an active project administrator. Every system role change and deactivation writes a system audit event.
 
 ---
 
@@ -237,20 +245,44 @@ uv run freesearch-api
 
 ### Local accounts and access control
 
-`POST /search` and `POST /fetch` are public on REST and MCP. A Bearer token is optional on these operations; if supplied, it must be valid and the account is attached to local trace records. Anonymous calls have no account attribution. All other REST routes, including provider controls, account management, and trace reads, require a JWT Bearer credential. The MCP transport exposes only the Search and Fetch tools; its other paths remain guarded.
+`POST /search` and `POST /fetch` always require a credential; there is no anonymous execution. They accept either a human access JWT (the browser session; the request must name a `project_id` where the account is an active member) or a project API key (see [Project API keys](#project-api-keys)). All other REST routes, including projects, members, API key management, provider controls, account management, and trace reads, accept only a human access JWT; a project API key is rejected there with HTTP 401. The MCP transport exposes only the Search and Fetch tools and accepts only project API keys.
 
-- **Register:** `POST /auth/register` with `{"email": ..., "password": ...}` creates an active Agent account and returns no token.
+- **Register:** `POST /auth/register` with `{"email": ..., "password": ...}` creates an active ordinary account with no role and returns no token. A request that also sends a role, privilege, or status field is rejected with HTTP 422.
 - **Log in:** `POST /auth/jwt/login` with the OAuth2 form (`username` holds the email) returns `access_token`, `refresh_token`, `token_type`, `expires_in`, and `refresh_expires_in`.
 - **Refresh:** `POST /auth/jwt/refresh` takes the opaque refresh credential in the Bearer header and rotates it once. A second use of a consumed credential revokes that family.
 - **Log out:** `POST /auth/jwt/logout` revokes the current family, so its access and refresh credentials stop at once.
-- **Current account:** `GET /users/me` returns the account record without the password hash.
-- **Roles:** Admin changes provider controls and provider OAuth, Developer reads the sanitized control views and statistics, and Agent searches and fetches. Every role reads only its own traces.
-- **Provider usage:** Search and Fetch still pass through provider quota and rate admission and use the server's configured provider credentials. These limits and provider budgets are shared across anonymous and authenticated requests; there is no per-caller spend cap.
+- **Current account:** `GET /users/me` returns the account record (identity, provider, profile and status fields) without the password hash and without any role or privilege flag.
+- **Authority:** every decision reloads scoped role assignments. A `system_admin` assignment governs installation-wide controls (provider controls, provider OAuth, account provisioning, project creation) and confers no project membership. Project authority comes only from an active project membership and its project roles (`project_admin`, `project_member`, and the extra `routing_editor`, `provider_editor` and `token_manager` roles). Every project keeps at least one active human `project_admin`; removals, demotions, suspensions and account deactivations that would break this fail with `409 LAST_PROJECT_ADMIN`. On project-scoped routes (project, members, roles, API keys) an unknown project and a caller who is not an active member get the same `404`; a member without the needed permission gets `403`.
+- **Provider usage:** Search and Fetch still pass through provider quota and rate admission and use the server's configured provider credentials. These limits and provider budgets are shared across callers; there is no per-caller spend cap.
 - **Public documentation:** `/docs`, `/redoc`, and `/openapi.json` are accessible anonymously without authentication.
 - **Limits:** 5 pair attempts and 20 peer-address attempts per 900 seconds for login, 5 peer-address attempts and 100 deployment attempts per 900 seconds for registration, and a 4096-byte cap on a public auth body.
 - **Token lifetime:** 900 seconds for an access JWT and 604800 seconds for the absolute refresh family. An ordinary API call and an ordinary MCP call never extend a token.
 
 The API and the MCP transports read `FREESEARCH_API_PORT` and `FREESEARCH_MCP_PORT` from the gitignored `.env` file, so a launch command never hardcodes a port. The full account rules and the release procedure are in [docs/releases/local-users.md](docs/releases/local-users.md).
+
+### Project API keys
+
+REST machine clients and MCP clients authenticate with a project API key instead of a user account. A key belongs to one project, holds only the `search.execute` and/or `fetch.execute` scopes, and never inherits any role of the person who created it. Browser and playground calls use the human session and project membership and never need a key.
+
+- **Format:** `fs_live_<prefix>_<secret>`. The 12-character `prefix` is public and identifies the key in lists and audit records; the secret has 256 bits. Only a SHA-256 verifier of the secret is stored. Send the key only in `Authorization: Bearer <key>`, never in a URL.
+- **Issue:** `POST /api/v1/projects/{project_id}/api-keys` with `{"label": ..., "scopes": [...], "expires_at": ...}` returns `201` with the key metadata and the raw `key`. The raw key appears only in this response and in a rotation response. Omitted `scopes` grants both scopes; an empty or unknown scope is `422`. **Omitted `expires_at` means the default lifetime of 90 days from issue; an explicit `"expires_at": null` means no expiration;** a past timestamp is `422`.
+- **List:** `GET /api/v1/projects/{project_id}/api-keys` returns `id`, `label`, `prefix`, `scopes`, `created_by`, `created_at`, `expires_at` (`null` = no expiration), `revoked_at`, `last_used_at`, `rotated_from_id` and `status` (`active`, `expired` or `revoked`).
+- **Rotate:** `POST /api/v1/projects/{project_id}/api-keys/{key_id}/rotate` with optional `{"overlap_seconds": 0..604800, "expires_at": ...}` returns `201` with a new key of the same label and scopes. Omitted `expires_at` keeps the old key's lifetime (no expiration stays no expiration); `null` means no expiration. The old key stays valid for `overlap_seconds` (default 86400, never beyond its own expiry); `0` revokes it at once. Rotating a revoked, expired or already rotated key is `409 API_KEY_INACTIVE`.
+- **Revoke:** `DELETE /api/v1/projects/{project_id}/api-keys/{key_id}` returns `204`, also when the key is already revoked.
+- **Permissions:** managing keys needs `tokens.manage` in the project (`project_admin` or `token_manager`) and a human session; a non-member gets `404`, a member without `tokens.manage` `403`. A key cannot carry authority its issuer lacks: every requested scope must be among the issuer's own live project permissions, and rotation requires the rotating person to hold every scope of the key (`403` otherwise). `token_manager` grants no execution, so pair it with `project_member` (or hold `project_admin`) to issue keys. A key id of another project is `404`. An archived project cannot issue or rotate keys (`409 PROJECT_ARCHIVED`).
+- **Execution:** with a key, `project_id` in a Search or Fetch request is optional; when given it must name the key's project, otherwise the call is `404`. An unknown, malformed, expired or revoked key is a generic `401`; a missing scope is `403`; an archived project is `409`. Every rejection happens before any provider access, and the key, its revocation, expiry and scope are checked again on every REST request and every MCP tool call.
+- **Audit:** issue, rotation and revocation write project audit events, and a rejected use of an existing key writes a system security event identified by its prefix. Security events and `last_used_at` stamps are written off the request path by one background writer (at most one event per key and reason per 60 seconds per process; a full queue of 1024 drops the write with a prefix-only warning). No raw key or verifier is ever logged, traced or audited.
+
+### Provider credentials, bindings, pools and allocations
+
+A provider type (for example `tavily`) can have several labelled credential instances. A credential is either system-owned (shared) or private to one project, and no response ever contains its secret, slot name or digest. Execution does not use these routes yet; the request path switches to credential instances in a later card.
+
+- **Credentials:** system administrators manage shared credentials under `/api/v1/system/credentials` and grant them to projects with `PUT /api/v1/system/credentials/{id}/grants/{project_id}` (`{"permitted_operations": [...]}`). Project administrators manage private credentials under `/api/v1/projects/{project_id}/credentials`. A shared credential keeps one encrypted secret, whatever the number of projects it is granted to. Narrowing a grant removes the dropped operations from the project's bindings; revoking a grant deletes the project's bindings of that credential in the same transaction.
+- **OAuth credentials:** create a credential with `"auth_mode": "oauth"` and no `secret` (Parallel only). `POST .../credentials/{id}/oauth/device` starts a device flow and returns only `user_code`, `verification_uri`, `interval` and `expires_in`; `POST .../oauth/poll` makes one exchange; `GET .../oauth` reports `status` (`pending`, `connected`, `refresh_failed`, `disconnected`), timestamps and scopes; `DELETE .../oauth` disconnects (idempotent). The routes exist under `/api/v1/system/credentials/{id}` (`system.credentials.manage`) and `/api/v1/projects/{project_id}/credentials/{id}` (`credentials.manage_private`; status needs `providers.read`). Each credential has its own connection: disconnecting or expiring one leaves the others usable. If the person who started a flow loses permission before it completes, the tokens are discarded and the flow ends.
+- **Bindings:** `POST /api/v1/projects/{project_id}/bindings` with `credential_id`, `route_label` and `priority` binds the project's private credential or a granted shared one. A new binding always starts with no enabled operations (sending `enabled_operations` on create is `422`). `PATCH .../bindings/{binding_id}` sets `enabled_operations`, `priority` and `route_label`; enabled operations must be within the adapter capability, the credential's support and, for shared credentials, the grant (`422 OPERATION_NOT_PERMITTED`). Writes need `providers.configure`, reads `providers.read`.
+- **Provider view:** `GET /api/v1/projects/{project_id}/providers` lists every provider type with its capability, system kill switch, available credentials (label, owner scope, auth mode, status, health, granted operations, pool ownership) and bindings, plus `effective_operations` = capability AND not killed AND ownership/grant AND binding enablement. It also lists the project's own pool allocations. It never shows other projects' bindings, allocations or usage, or pool balances.
+- **Pools and allocations:** only system administrators manage upstream pools (`/api/v1/system/pools`), credential links (`PUT/DELETE /api/v1/system/pools/{pool_id}/links/{credential_id}?operation_scope=search|fetch`, same provider type only) and project allocations (`PUT/GET/DELETE /api/v1/system/projects/{project_id}/allocations/{pool_id}?operation_scope=...`). Allocations are strict by default (`borrow_enabled` false, `max_rate` omitted or equal to `base_rate`); a zero `base_rate` needs `best_effort`. Base rates promised on one pool must fit its rate constraint of the same window, otherwise `409 ALLOCATION_INFEASIBLE`.
+- **Audit:** credential, grant, OAuth, binding, pool, link and allocation changes write audit events in the same transaction: system scope for shared resources, project scope for private credentials and bindings, and both for grants and allocations.
 
 ### Start the Frontend Dashboard
 
@@ -349,8 +381,9 @@ uv run freesearch-mcp --transport stdio
 ```
 
 - Exposes provider-neutral `search` and `fetch` tools with automatic route selection and quota tracking.
-- The HTTP transport exposes Search and Fetch on `/mcp` without requiring a JWT. If a Bearer token is supplied, it is verified and can attribute traces; invalid tokens are rejected. Unknown paths remain guarded.
-- The stdio transport accepts anonymous Search and Fetch. `FREESEARCH_MCP_BEARER_TOKEN` is optional and adds account attribution; if configured, it is verified at each tool call. Do not give the child a refresh credential.
+- MCP accepts only [project API keys](#project-api-keys); human JWTs and anonymous calls are rejected. The tools' `project_id` is optional and, when given, must name the key's project.
+- The HTTP transport requires `Authorization: Bearer fs_live_...` on every `/mcp` request (HTTP 401 otherwise), and every tool call uses the key principal verified on the HTTP request that carried it, then re-reads the key at the execution boundary, so revocation, expiry, archive and scope changes stop a persistent session at its next call. Unknown paths remain guarded.
+- The stdio transport reads the project API key from `FREESEARCH_MCP_BEARER_TOKEN` (the process credential channel) and verifies it at each tool call; without it every tool call is rejected. The HTTP transport never reads this variable. Do not give the child a human or refresh credential.
 - Transports and flags can also be configured via `FREESEARCH_MCP_TRANSPORT` (`stdio` or `streamable-http`) and `FREESEARCH_MCP_STATELESS` (`true`/`false`).
 
 ---
@@ -363,7 +396,7 @@ uv run freesearch-mcp --transport stdio
 # Run unit and integration tests
 uv run pytest
 
-# Run BDD feature scenarios
+# Run BDD feature scenarios (default run excludes @live; includes the offline @latency gate)
 uv run behave tests/bdd/features
 
 # Linting and formatting checks
@@ -373,6 +406,49 @@ uv run ruff format --check .
 # Static type checking
 uv run mypy src
 ```
+
+### Routing Latency Checks
+
+FreeSearch must add under 80 ms at p95, per provider, for a warm search and a warm fetch
+over both REST and MCP. FreeSearch latency is measured server-side: from the request
+reaching the FreeSearch app until its response leaves it, minus provider time. The Behave
+latency scenarios serve the real REST app and the MCP Streamable HTTP app with uvicorn on
+`127.0.0.1` using OS-assigned ports, call them over TCP, and wrap each served app in a
+timing middleware. Each request pins one provider; per request the report lists
+`server_ms` (inside the app), `provider_ms` (the adapter call), the gated
+`added_ms = server_ms - provider_ms`, and, reported only, the client `wall_ms`,
+`client_overhead_ms = wall_ms - server_ms`, and database reads per request (never
+pass/fail). Brave has no fetch, so Brave fetch rows are reported as N/A (skipped).
+
+- **Offline gate (default suite):** `tests/bdd/features/routing_latency.feature` (`@latency`)
+  uses instant fake adapters that mirror each provider's capability flags and limit rail,
+  so provider time is near zero. It runs in every default `uv run behave` run
+  (5 warmup + 30 measured requests per row) and writes
+  `test_reports/routing_latency_offline.{csv,md}`.
+- **Server-side profiles (opt-in):** set `FREESEARCH_LATENCY_PROFILE=1` to profile every
+  measured request with pyinstrument; combined sessions per transport are written to
+  `test_reports/routing_latency_<mode>_<rest|mcp>_profile.{html,txt,pyisession}`. Profiling
+  adds overhead, so use the unprofiled run for the latency numbers.
+- **Live performance checks (opt-in, real credits):** `@live` scenarios never run by
+  default — `pyproject.toml` sets `[tool.behave] default_tags = ["not @live"]`, and an
+  explicit `--tags` replaces that default. The one command for the live latency checks
+  (and a later CI job) is:
+
+  ```bash
+  uv run behave --tags="@live and @latency"
+  ```
+
+  Each provider runs only when its key is set in the process environment:
+  `FREESEARCH_BRAVE_SEARCH_API_KEY`, `FREESEARCH_EXA_API_KEY`,
+  `FREESEARCH_FIRECRAWL_API_KEY`, `FREESEARCH_PARALLEL_API_KEY`,
+  `FREESEARCH_TAVILY_API_KEY`, `TINYFISH_API_KEY`, `FREESEARCH_YOU_API_KEY`. Keenable is
+  keyless and runs only with `FREESEARCH_RUN_LIVE=1` (an optional
+  `FREESEARCH_KEENABLE_API_KEY` selects its keyed rail). A provider without its variable
+  is skipped with a reason naming the variable, never its value. Sample counts default to
+  1 warmup + 5 measured requests per row; override them with
+  `FREESEARCH_LATENCY_LIVE_WARMUP` and `FREESEARCH_LATENCY_LIVE_SAMPLES`. Requests are
+  spaced to each provider's documented per-second/per-minute rate windows. Results land in
+  `test_reports/routing_latency_live.{csv,md}`.
 
 ### Frontend Checks
 

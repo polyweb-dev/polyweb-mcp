@@ -2,21 +2,34 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
 from freesearch.models.contracts import FallbackPolicy
-from freesearch.models.projects import ExecutionSettings, RoutingSettings
+from freesearch.models.projects import (
+    TRACE_DETAIL_CONSTRAINT_ORDER,
+    ExecutionSettings,
+    ProjectSettingsDocument,
+    RoutingSettings,
+    TraceDetailPolicy,
+    TraceSettings,
+)
 from freesearch.models.settings import (
     SETTINGS_FIELD_CATALOG,
     SETTINGS_NAMESPACE,
     SETTINGS_SCHEMA_VERSION,
     ProjectSettingsUpdate,
+    SettingsCopyMode,
+    SettingsCopyRequest,
     SettingsFieldPolicy,
     SystemExecutionDefaults,
     SystemSafetyLimits,
     SystemSettingsDocument,
     SystemSettingsPayload,
+    SystemTraceDefaults,
+    resolve_trace_policy,
 )
 
 
@@ -26,7 +39,7 @@ def test_catalog_publishes_consistent_defaults_and_resolution_rules() -> None:
     field_ids = [spec.field_id for spec in SETTINGS_FIELD_CATALOG]
     assert len(field_ids) == len(set(field_ids))
     assert SETTINGS_NAMESPACE == "projects"
-    assert SETTINGS_SCHEMA_VERSION == 1
+    assert SETTINGS_SCHEMA_VERSION == 3
 
     system = SystemSettingsDocument(revision=0)
     policies = {spec.field_id: spec.policy for spec in SETTINGS_FIELD_CATALOG}
@@ -34,7 +47,11 @@ def test_catalog_publishes_consistent_defaults_and_resolution_rules() -> None:
         field_id
         for field_id, policy in policies.items()
         if policy is SettingsFieldPolicy.SYSTEM_ONLY
-    } == {"system.max_timeout_seconds", "system.max_fanout_concurrency"}
+    } == {
+        "system.max_timeout_seconds",
+        "system.max_fanout_concurrency",
+        "system.max_trace_retention_days",
+    }
     assert {
         field_id
         for field_id, policy in policies.items()
@@ -42,9 +59,12 @@ def test_catalog_publishes_consistent_defaults_and_resolution_rules() -> None:
     } == {
         "execution.default_timeout_seconds",
         "execution.max_fanout_concurrency",
+        "trace.detail",
+        "trace.retention_days",
     }
     assert policies["routing.fallback_policy"] is SettingsFieldPolicy.PROJECT_OVERRIDE
-    assert policies["routing.preferred_providers"] is SettingsFieldPolicy.PROJECT_OVERRIDE
+    assert "routing.preferred_providers" not in policies
+    assert "routing.cost_optimization_preset" not in policies
     assert policies["execution.cache_enabled"] is SettingsFieldPolicy.PROJECT_OVERRIDE
     assert policies["execution.default_timeout_seconds"] is SettingsFieldPolicy.SYSTEM_CONSTRAINED
     assert policies["execution.max_fanout_concurrency"] is SettingsFieldPolicy.SYSTEM_CONSTRAINED
@@ -52,7 +72,7 @@ def test_catalog_publishes_consistent_defaults_and_resolution_rules() -> None:
     assert policies["system.max_fanout_concurrency"] is SettingsFieldPolicy.SYSTEM_ONLY
 
     for spec in SETTINGS_FIELD_CATALOG:
-        default = getattr(getattr(system, spec.section), spec.attribute)
+        default = getattr(getattr(system, spec.section), spec.attribute, None)
         assert default == spec.default, spec.field_id
         if spec.safety_limit_attribute is not None:
             assert getattr(system.safety_limits, spec.safety_limit_attribute) is not None
@@ -91,19 +111,14 @@ def test_project_update_distinguishes_omission_null_false_and_zero() -> None:
     assert "routing" in reset_section.model_fields_set
     assert reset_section.routing is None
 
-    empty_list = ProjectSettingsUpdate(
-        expected_revision=0,
-        routing=RoutingSettings(preferred_providers=()),
-    )
-    assert empty_list.routing is not None
-    assert empty_list.routing.model_fields_set == {"preferred_providers"}
-    assert empty_list.routing.preferred_providers == ()
+    with pytest.raises(ValidationError):
+        RoutingSettings.model_validate({"preferred_providers": []})
 
 
 def test_project_update_requires_a_section_and_known_fields() -> None:
     """A project write must name an editable section and cannot smuggle fields."""
 
-    with pytest.raises(ValidationError, match="must name routing or execution"):
+    with pytest.raises(ValidationError, match="must name routing, execution or trace"):
         ProjectSettingsUpdate(expected_revision=0)
     with pytest.raises(ValidationError):
         ProjectSettingsUpdate.model_validate({"expected_revision": 0, "project_id": "other"})
@@ -202,3 +217,130 @@ def test_timeout_minimum_boundary_is_exact_and_matches_catalog() -> None:
     )
     assert system_payload.execution.default_timeout_seconds == 1.0
     assert system_payload.safety_limits.max_timeout_seconds == 1.0
+
+
+def test_trace_catalog_marks_inheritance_and_system_ceiling_policies() -> None:
+    """Trace fields expose their override policy, bounds, and ceiling rules."""
+
+    by_id = {spec.field_id: spec for spec in SETTINGS_FIELD_CATALOG}
+    assert "trace.sampling_rate" not in by_id
+    assert "trace.payload_redaction" not in by_id
+    assert by_id["trace.detail"].policy is SettingsFieldPolicy.SYSTEM_CONSTRAINED
+    assert by_id["trace.retention_days"].policy is SettingsFieldPolicy.SYSTEM_CONSTRAINED
+    assert by_id["trace.retention_days"].safety_limit_attribute == "max_trace_retention_days"
+    assert by_id["trace.retention_days"].minimum == 1
+    assert by_id["trace.retention_days"].maximum == 365
+    assert by_id["trace.detail"].constraint_order == TRACE_DETAIL_CONSTRAINT_ORDER
+
+    system = SystemSettingsDocument(revision=0)
+    assert by_id["trace.detail"].default == system.trace.detail
+    assert by_id["trace.retention_days"].default is None
+    assert by_id["system.max_trace_retention_days"].policy is SettingsFieldPolicy.SYSTEM_ONLY
+
+
+def test_trace_update_distinguishes_values_from_omission_and_reset() -> None:
+    """Explicit trace values are real overrides, not inheritance."""
+
+    explicit = ProjectSettingsUpdate(
+        expected_revision=0,
+        trace=TraceSettings(
+            detail=TraceDetailPolicy.METADATA,
+            retention_days=7,
+        ),
+    )
+    assert explicit.trace is not None
+    assert explicit.trace.model_fields_set == {
+        "detail",
+        "retention_days",
+    }
+
+    reset_section = ProjectSettingsUpdate(trace=None, expected_revision=0)
+    assert "trace" in reset_section.model_fields_set
+    assert reset_section.trace is None
+
+    reset_field = ProjectSettingsUpdate(
+        expected_revision=0,
+        trace=TraceSettings(retention_days=None),
+    )
+    assert reset_field.trace is not None
+    assert reset_field.trace.model_fields_set == {"retention_days"}
+    assert reset_field.trace.retention_days is None
+
+    with pytest.raises(ValidationError):
+        TraceSettings.model_validate({"sampling_rate": 0})
+    with pytest.raises(ValidationError):
+        TraceSettings.model_validate({"payload_redaction": "strict"})
+    with pytest.raises(ValidationError):
+        ProjectSettingsUpdate(
+            expected_revision=0,
+            trace=TraceSettings(retention_days=366),
+        )
+    with pytest.raises(ValidationError):
+        SystemTraceDefaults.model_validate({"payload_redaction": "strict"})
+    with pytest.raises(ValidationError):
+        SystemTraceDefaults.model_validate({"sampling_rate": 0})
+
+
+def test_resolve_trace_policy_applies_project_values_with_system_ceilings() -> None:
+    """Stricter project trace values win; looser ones fall back to the system."""
+
+    system = SystemSettingsDocument(revision=0)
+    inherited = resolve_trace_policy(system=system, project=ProjectSettingsDocument())
+    assert inherited.detail is TraceDetailPolicy.FULL
+    assert inherited.retention_days is None
+    assert inherited.captures_payload is True
+
+    stricter = resolve_trace_policy(
+        system=system,
+        project=ProjectSettingsDocument(
+            trace=TraceSettings(
+                detail=TraceDetailPolicy.METADATA,
+                retention_days=7,
+            )
+        ),
+    )
+    assert stricter.detail is TraceDetailPolicy.METADATA
+    assert stricter.retention_days == 7
+    assert stricter.captures_payload is False
+
+    stricter_system = SystemSettingsDocument(
+        revision=0,
+        trace=SystemTraceDefaults(
+            detail=TraceDetailPolicy.METADATA,
+        ),
+        safety_limits=SystemSafetyLimits(max_trace_retention_days=14),
+    )
+    capped = resolve_trace_policy(
+        system=stricter_system,
+        project=ProjectSettingsDocument(
+            trace=TraceSettings(
+                detail=TraceDetailPolicy.FULL,
+                retention_days=60,
+            )
+        ),
+    )
+    assert capped.detail is TraceDetailPolicy.METADATA
+    assert capped.retention_days == 14
+
+
+def test_copy_request_rejects_repeated_fields() -> None:
+    """A copy field list must not repeat the same field id."""
+
+    source = uuid4()
+    with pytest.raises(ValidationError, match="must not repeat"):
+        SettingsCopyRequest(
+            source_project_id=source,
+            expected_source_revision=0,
+            expected_target_revision=0,
+            expected_system_revision=0,
+            mode=SettingsCopyMode.OVERRIDES_ONLY,
+            fields=("routing.max_attempts", "routing.max_attempts"),
+        )
+    request = SettingsCopyRequest(
+        source_project_id=source,
+        expected_source_revision=1,
+        expected_target_revision=2,
+        expected_system_revision=3,
+    )
+    assert request.mode is SettingsCopyMode.OVERRIDES_ONLY
+    assert request.fields is None

@@ -20,7 +20,9 @@ def step_given_youcom_adapter(context: Any) -> None:
 @when('I perform a live You.com search for "{query}" with limit {limit:d}')
 def step_when_youcom_live_search(context: Any, query: str, limit: int) -> None:
     """Execute a live search request through the You.com adapter."""
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     context.youcom_query = query
     context.search_response = context.loop.run_until_complete(
         context.youcom_adapter.search(request)
@@ -56,7 +58,9 @@ def step_then_youcom_search_results_valid(context: Any) -> None:
 @when('I perform a live You.com fetch for "{url}" with max {max_chars:d} chars')
 def step_when_youcom_live_fetch(context: Any, url: str, max_chars: int) -> None:
     """Execute a live content extraction request through the You.com adapter."""
-    request = FetchRequest(url=HttpUrl(url), max_chars=max_chars)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=HttpUrl(url), max_chars=max_chars
+    )
     context.fetch_url = url
     context.fetch_response = context.loop.run_until_complete(context.youcom_adapter.fetch(request))
 

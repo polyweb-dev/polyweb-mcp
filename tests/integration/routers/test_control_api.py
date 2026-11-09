@@ -7,11 +7,11 @@ no provider network is ever touched.
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 import pytest_asyncio
@@ -21,6 +21,7 @@ from pydantic import SecretStr, ValidationError
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.config import get_settings
 from freesearch.configuration.provider_config import ProviderConfigUpdate
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
 from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.mcp.server import create_server
 from freesearch.models.contracts import (
@@ -35,24 +36,29 @@ from freesearch.models.contracts import (
     SearchRequest,
     SearchResponse,
     SearchResult,
-    SecretStatusResponse,
     UsageEvent,
     UsageOperation,
     UsageStatus,
 )
 from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, ProjectCreate
-from freesearch.models.users import UserRole
 from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from tests.fixtures.api_keys import key_for_account
 from tests.fixtures.auth import (
     account_id_from_pair,
     http_jwt_service,
     raw_auth_headers,
     register_and_login,
-    register_promote_login,
+    register_system_admin_login,
     temp_email,
 )
+from tests.fixtures.execution import (
+    install_adapter_map,
+    seed_execution_project,
+    seed_provider_bindings,
+)
+from tests.fixtures.usage_ledger import all_usage_events
 
 
 class AsyncVaultDouble:
@@ -69,6 +75,35 @@ class AsyncVaultDouble:
 
     async def delete(self, name: str) -> None:
         self.values.pop(name, None)
+
+
+def _execution_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
+    """Return the same encrypted runtime store the app composition builds."""
+
+    return EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
+
+
+def _create_bound_provider(client, project_id, provider, secret, headers):
+    key = client.post(
+        "/api/v1/account/vault/keys",
+        headers=headers,
+        json={"provider_type": provider, "label": "control key", "secret": secret},
+    )
+    assert key.status_code == 201, key.text
+    assert secret not in key.text
+    pool = client.post(
+        f"/api/v1/account/vault/keys/{key.json()['id']}/pools",
+        headers=headers,
+        json={
+            "label": "control pool",
+            "project_id": project_id,
+            "rate": {"limit": None, "window_seconds": 60},
+            "operations": ["search"],
+        },
+    )
+    assert pool.status_code == 201, pool.text
+    assert secret not in pool.text
+    return key
 
 
 class ControlAdapter(ProviderAdapter):
@@ -211,9 +246,7 @@ async def test_get_providers_enumerates_canonical_status_contract(
         assert anonymous.status_code == 401
         assert anonymous.headers["www-authenticate"] == "Bearer"
 
-        pair = await register_promote_login(
-            client, repository, temp_email("control-list"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-list"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.get("/api/v1/providers", headers=headers)
 
@@ -237,8 +270,10 @@ async def test_get_providers_enumerates_canonical_status_contract(
             "enabled",
             "enable_mask",
             "support_mask",
-            "priority",
+            "call_cost_usd",
+            "keyless_call_cost_usd",
             "health",
+            "health_checked_at",
             "circuit_breaker",
             "latency_p95_ms",
             "secret_presence",
@@ -256,9 +291,20 @@ async def test_get_providers_enumerates_canonical_status_contract(
         assert item["support_mask"] == expected_support
         assert item["enabled"] is bool(item["enable_mask"] & item["support_mask"] & 1)
         assert item["enabled"] is True
-        assert isinstance(item["priority"], int)
-        assert item["priority"] >= 1
+        assert "priority" not in item
+        assert isinstance(item["call_cost_usd"], dict)
+        keyless_prices = item["keyless_call_cost_usd"]
+        if item["provider_id"] in {"keenable", "tavily"}:
+            assert set(keyless_prices) == {"search", "fetch"}
+            assert all(_json_decimal(price) == 0 for price in keyless_prices.values())
+        else:
+            assert keyless_prices == {}
+        if item["provider_id"] in {"keenable", "tinyfish"}:
+            assert _json_decimal(item["call_cost_usd"]["search"]) == 0
+        if item["provider_id"] == "brave":
+            assert "fetch" not in item["call_cost_usd"]
         assert item["health"] is None
+        assert item["health_checked_at"] is None
         assert item["circuit_breaker"]["state"] == "closed"
         assert item["latency_p95_ms"] is None
         assert item["secret_presence"] in {"configured", "missing", "keyless_public"}
@@ -268,6 +314,71 @@ async def test_get_providers_enumerates_canonical_status_contract(
             assert item["tavily_key_environment"] == "dev"
         else:
             assert item["tavily_key_environment"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_providers_reports_the_newest_credential_scoped_health(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
+) -> None:
+    """A call through a live credential is the last real result; an unbacked wide fact is not."""
+    from freesearch.models.projects import CredentialOwnerScope
+    from freesearch.persistence.credentials import CredentialRepository
+    from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+    from freesearch.services.pool_materializer import materialize_pools
+    from tests.fixtures.a2_execution import PoolSpec, build_execution_world
+
+    world = await build_execution_world(
+        tmp_path, monkeypatch, labels=("a1",), pool=PoolSpec(constraints=[]), limits=False
+    )
+    repository = world.repository
+    earlier = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
+    later = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    try:
+        async with repository.session() as session:
+            credential = await CredentialRepository(session).insert_credential(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                provider_type="exa",
+                owner_scope=CredentialOwnerScope.SYSTEM,
+                owner_project_id=None,
+                owner_user_id=world.project.actor_id,
+                label="vault-key",
+                auth_mode="api_key",
+                created_by=world.project.actor_id,
+            )
+            await KeyPoolRepository(session).create(
+                credential_id=credential.id,
+                project_id=world.project.project_id,
+                provider_type="exa",
+                created_by=world.project.actor_id,
+                values=KeyPoolValues(label="pool", operations=frozenset({"search"})),
+            )
+            await materialize_pools(session, project_id=world.project.project_id)
+            await session.commit()
+        await repository.record_health(
+            ProviderHealth(provider="exa", status=HealthStatus.HEALTHY, checked_at=later),
+            credential_id=credential.id,
+        )
+        await repository.record_health(
+            ProviderHealth(provider="firecrawl", status=HealthStatus.DEGRADED, checked_at=earlier)
+        )
+        app = create_app([], repository=repository)
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(
+                client, repository, temp_email("control-health")
+            )
+            body = client.get(
+                "/api/v1/providers", headers=raw_auth_headers(pair["access_token"])
+            ).json()
+    finally:
+        await world.aclose()
+
+    exa = _provider(body, "exa")
+    assert exa["health"] == "healthy"
+    assert datetime.fromisoformat(exa["health_checked_at"].replace("Z", "+00:00")) == later
+    # No key backs a provider-wide Firecrawl observation, so it stays hidden.
+    firecrawl = _provider(body, "firecrawl")
+    assert firecrawl["health"] is None
+    assert firecrawl["health_checked_at"] is None
 
 
 @pytest.mark.parametrize(
@@ -294,14 +405,15 @@ async def test_unknown_provider_item_routes_return_404(
         anonymous = client.request(method.upper(), path, json=payload)
         assert anonymous.status_code == 401
 
-        pair = await register_promote_login(
-            client, repository, temp_email("control-ghost"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-ghost"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.request(method.upper(), path, json=payload, headers=headers)
 
     assert response.status_code == 404
-    assert "ghost" in response.text
+    if not path.endswith("/secret"):
+        assert "ghost" in response.text
+    else:
+        assert response.json() == {"detail": "Not Found"}
 
 
 @pytest.mark.parametrize(
@@ -341,8 +453,8 @@ async def test_provider_patch_rejects_non_strict_or_unknown_fields(
         anonymous = client.patch("/api/v1/providers/exa", json=payload)
         assert anonymous.status_code == 401
 
-        pair = await register_promote_login(
-            client, repository, temp_email("control-patch-bad"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-patch-bad")
         )
         headers = raw_auth_headers(pair["access_token"])
         response = client.patch("/api/v1/providers/exa", json=payload, headers=headers)
@@ -360,9 +472,7 @@ async def test_provider_patch_rejects_read_only_support_mask(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-readonly"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-readonly"))
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
         rejected = client.patch("/api/v1/providers/exa", json={"support_mask": 7}, headers=headers)
@@ -385,33 +495,37 @@ async def test_provider_patch_merges_estimates_and_returns_updated_status(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-patch"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-patch"))
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
+        rejected_priority = client.patch(
+            "/api/v1/providers/exa", json={"priority": 7}, headers=headers
+        )
+        schema = client.get("/openapi.json").json()
         response = client.patch(
             "/api/v1/providers/exa",
-            json={"enabled": False, "priority": 7, "free_tier_estimates": {"search": "2"}},
+            json={"enabled": False, "free_tier_estimates": {"search": "2"}},
             headers=headers,
         )
         after = client.get("/api/v1/providers/exa", headers=headers)
 
     assert before.status_code == 200
+    assert rejected_priority.status_code == 422
+    assert "priority" not in schema["components"]["schemas"]["CatalogProviderUpdate"]["properties"]
     assert response.status_code == 200
     updated = response.json()
     assert updated["provider_id"] == "exa"
     assert updated["enabled"] is False
     assert updated["enable_mask"] == 6
     assert updated["support_mask"] == 7
-    assert updated["priority"] == 7
+    assert "priority" not in updated
     assert _json_decimal(updated["free_tier_estimates"]["search"]) == Decimal("2")
     assert "fetch" in updated["free_tier_estimates"]
     assert "cost_estimate" in updated["free_tier_estimates"]
     assert after.json()["enabled"] is False
     assert after.json()["enable_mask"] == 6
     assert after.json()["support_mask"] == 7
-    assert after.json()["priority"] == 7
+    assert "priority" not in after.json()
     assert _json_decimal(after.json()["free_tier_estimates"]["fetch"]) == _json_decimal(
         before.json()["free_tier_estimates"]["fetch"]
     )
@@ -427,8 +541,8 @@ async def test_provider_patch_global_toggle_preserves_tool_bits(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-global-bits"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-global-bits")
         )
         headers = raw_auth_headers(pair["access_token"])
         off = client.patch("/api/v1/providers/exa", json={"enabled": False}, headers=headers)
@@ -451,8 +565,8 @@ async def test_provider_patch_search_toggle_changes_only_search_bit(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-search-bit"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-search-bit")
         )
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
@@ -479,8 +593,8 @@ async def test_provider_patch_fetch_toggle_changes_only_fetch_bit(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-fetch-bit"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-fetch-bit")
         )
         headers = raw_auth_headers(pair["access_token"])
         off = client.patch("/api/v1/providers/exa", json={"fetch_enabled": False}, headers=headers)
@@ -502,8 +616,8 @@ async def test_provider_patch_enable_mask_replaces_all_bits(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-mask-replace"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-mask-replace")
         )
         headers = raw_auth_headers(pair["access_token"])
         replaced = client.patch("/api/v1/providers/exa", json={"enable_mask": 3}, headers=headers)
@@ -525,8 +639,8 @@ async def test_provider_patch_empty_body_is_allowed(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-empty-body"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-empty-body")
         )
         headers = raw_auth_headers(pair["access_token"])
         before = client.get("/api/v1/providers/exa", headers=headers)
@@ -539,7 +653,7 @@ async def test_provider_patch_empty_body_is_allowed(
     assert updated["enabled"] == previous["enabled"]
     assert updated["enable_mask"] == previous["enable_mask"]
     assert updated["support_mask"] == previous["support_mask"]
-    assert updated["priority"] == previous["priority"]
+    assert updated["call_cost_usd"] == previous["call_cost_usd"]
     assert updated["free_tier_estimates"] == previous["free_tier_estimates"]
     assert updated["reset_schedule"] == previous["reset_schedule"]
 
@@ -555,13 +669,11 @@ async def test_provider_patch_persists_across_repository_reopen(
     try:
         app = create_app([ControlAdapter("exa")], repository=first)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, first, temp_email("control-reopen"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, first, temp_email("control-reopen"))
             headers = raw_auth_headers(pair["access_token"])
             response = client.patch(
                 "/api/v1/providers/exa",
-                json={"enabled": False, "priority": 9},
+                json={"enabled": False},
                 headers=headers,
             )
         assert response.status_code == 200
@@ -579,7 +691,7 @@ async def test_provider_patch_persists_across_repository_reopen(
         assert reopened.json()["enabled"] is False
         assert reopened.json()["enable_mask"] == 6
         assert reopened.json()["support_mask"] == 7
-        assert reopened.json()["priority"] == 9
+        assert "priority" not in reopened.json()
     finally:
         await second.close()
 
@@ -594,8 +706,8 @@ async def test_provider_patch_mask_persists_across_repository_reopen(
     try:
         app = create_app([ControlAdapter("exa")], repository=first)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, first, temp_email("control-mask-reopen"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, first, temp_email("control-mask-reopen")
             )
             headers = raw_auth_headers(pair["access_token"])
             response = client.patch(
@@ -631,9 +743,7 @@ async def test_provider_test_unknown_health_is_ok_and_has_exact_shape(
     )
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-probe"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-probe"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.post("/api/v1/providers/exa/test", headers=headers)
 
@@ -660,9 +770,7 @@ async def test_provider_test_unavailable_is_not_ok(
     )
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-unavail"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-unavail"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.post("/api/v1/providers/exa/test", headers=headers)
 
@@ -695,8 +803,8 @@ async def test_provider_test_without_constructed_adapter_returns_503(
 
     with TestClient(app) as client:
         assert client.post("/api/v1/providers/exa/test").status_code == 401
-        pair = await register_promote_login(
-            client, repository, temp_email("control-no-adapter"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-no-adapter")
         )
         headers = raw_auth_headers(pair["access_token"])
         response = client.post("/api/v1/providers/exa/test", headers=headers)
@@ -715,9 +823,7 @@ async def test_circuit_breaker_reset_returns_closed_persisted_state(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-reset"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-reset"))
         headers = raw_auth_headers(pair["access_token"])
         response = client.post("/api/v1/providers/exa/circuit-breaker/reset", headers=headers)
         status = client.get("/api/v1/providers/exa", headers=headers)
@@ -734,172 +840,151 @@ async def test_circuit_breaker_reset_returns_closed_persisted_state(
 
 @pytest.mark.asyncio
 async def test_secret_put_writes_vault_and_never_exposes_raw_key(
-    repository: SQLiteRepository,
-    vault_env: None,
-    caplog: pytest.LogCaptureFixture,
-    auth_secret: str,
-) -> None:
-    """AC-V2/AC-V5: vault-only writes return only a stable masked fingerprint."""
-    # Use one Admin account for the write.
+    repository,
+    vault_env,
+    caplog,
+    auth_secret,
+):
+    """Original singleton security case now covers the actual A4 credential endpoint."""
+    from freesearch.models.vault import VaultKeyDetails
+    from freesearch.services.credentials import credential_secret_slot
+
     raw_key = "secret-value-that-must-not-leak"
-    app = create_app([ControlAdapter("exa")], repository=repository)
-
-    with caplog.at_level("INFO"), TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-put"), UserRole.ADMIN
-        )
+    with caplog.at_level("INFO"), TestClient(create_app([], repository=repository)) as client:
+        pair = await register_system_admin_login(client, repository, temp_email("control-put"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.put(
-            "/api/v1/providers/exa/secret", json={"key": raw_key}, headers=headers
+        response = client.post(
+            "/api/v1/account/vault/keys",
+            headers=headers,
+            json={"provider_type": "exa", "label": "vault proof", "secret": raw_key},
         )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert set(body) == {"provider", "presence", "fingerprint", "updated_at", "source"}
-    assert body["provider"] == "exa"
-    assert body["presence"] == "configured"
-    assert body["source"] == "encrypted_db"
-    assert re.fullmatch(r"[A-Z]{3}_•{8}[0-9a-f]{4}", body["fingerprint"])
-    _assert_iso_timestamp(body["updated_at"])
-    assert raw_key not in response.text
-    assert raw_key not in caplog.text
-
-    # The target response model must itself remain secret-free.
-    model = SecretStatusResponse.model_validate(body)
-    assert raw_key not in repr(model.model_dump())
-
-    # The vault row holds a ciphertext envelope, never the plaintext.
-    envelope = await repository.get_runtime_setting("secret.enc:exa")
-    assert isinstance(envelope, str)
-    assert raw_key not in envelope
-
-    async with repository._engine.connect() as connection:
-        table_rows = await connection.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        assert response.status_code == 201, response.text
+        body = response.json()
+        model = VaultKeyDetails.model_validate(body)
+        assert set(body) == set(VaultKeyDetails.model_fields)
+        assert model.provider_type == "exa" and model.status == "active"
+        assert raw_key not in response.text and raw_key not in caplog.text
+        assert raw_key not in repr(model.model_dump())
+        envelope = await repository.get_runtime_setting(
+            "secret.enc:" + credential_secret_slot(model.id, model.generation)
         )
-        table_names = [row[0] for row in table_rows.fetchall()]
-        persisted_rows: list[object] = []
-        for table_name in table_names:
-            quoted_name = table_name.replace('"', '""')
-            rows = await connection.exec_driver_sql(f'SELECT * FROM "{quoted_name}"')
-            persisted_rows.extend(rows.fetchall())
-        database_dump = repr(persisted_rows)
-    assert raw_key not in database_dump
+        assert isinstance(envelope, str) and raw_key not in envelope
+    from tests.fixtures.api_keys import database_dump
+
+    assert raw_key not in (database_dump(repository))
 
 
 @pytest.mark.asyncio
-async def test_secret_put_rejects_empty_key(repository: SQLiteRepository, auth_secret: str) -> None:
-    """AC-5: SecretStr(min_length=1) rejects empty JSON strings."""
-    # Use one Admin account for the write.
-    store = AsyncVaultDouble()
-    app = create_app(
-        [ControlAdapter("exa")],
-        repository=repository,
-        secret_store=store,  # type: ignore[call-arg]
-    )
+async def test_secret_put_rejects_empty_key(repository, auth_secret):
+    """Empty key is rejected by A4 without any vault write."""
+    from sqlalchemy import select
 
-    with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-empty"), UserRole.ADMIN
+    from freesearch.persistence.storage import RuntimeSettingRow
+
+    with TestClient(create_app([], repository=repository)) as client:
+        pair = await register_system_admin_login(client, repository, temp_email("control-empty"))
+        response = client.post(
+            "/api/v1/account/vault/keys",
+            headers=raw_auth_headers(pair["access_token"]),
+            json={"provider_type": "exa", "label": "empty", "secret": ""},
         )
-        headers = raw_auth_headers(pair["access_token"])
-        response = client.put("/api/v1/providers/exa/secret", json={"key": ""}, headers=headers)
-
-    assert response.status_code == 422
-    assert store.values == {}
+        assert response.status_code == 422
+    async with repository.session() as session:
+        assert (
+            list(
+                (
+                    await session.scalars(
+                        select(RuntimeSettingRow).where(RuntimeSettingRow.key.like("secret.enc:%"))
+                    )
+                ).all()
+            )
+            == []
+        )
 
 
 @pytest.mark.asyncio
 async def test_secret_delete_is_idempotent_and_removes_stored_value(
-    repository: SQLiteRepository,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    auth_secret: str,
-) -> None:
-    """AC-6: repeated deletes are successful and leave a missing presence."""
-    # Use one Admin account for the deletes.
-    monkeypatch.chdir(tmp_path)
-    store = AsyncVaultDouble()
-    await store.set("exa", "vault-only-value")
-    app = create_app(
-        [ControlAdapter("exa")],
-        repository=repository,
-        secret_store=store,  # type: ignore[call-arg]
-    )
+    repository,
+    monkeypatch,
+    tmp_path,
+    auth_secret,
+):
+    """A4 credential deletion is idempotent and removes its encrypted generation."""
+    from freesearch.services.credentials import credential_secret_slot
 
+    app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-del"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-delete"))
         headers = raw_auth_headers(pair["access_token"])
-        first = client.delete("/api/v1/providers/exa/secret", headers=headers)
-        second = client.delete("/api/v1/providers/exa/secret", headers=headers)
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert first.json()["presence"] == "missing"
-    assert second.json()["presence"] == "missing"
-    assert first.json()["source"] == "none"
-    assert await store.get("exa") is None
+        write = client.post(
+            "/api/v1/account/vault/keys",
+            headers=headers,
+            json={"provider_type": "exa", "label": "delete", "secret": "vault-only-value"},
+        )
+        assert write.status_code == 201
+        body = write.json()
+        slot = credential_secret_slot(UUID(body["id"]), body["generation"])
+        assert await app.state.secret_store.get(slot) == "vault-only-value"
+        for expected in (200, 404):
+            response = client.delete(f"/api/v1/account/vault/keys/{body['id']}", headers=headers)
+            assert response.status_code == expected
+        assert await app.state.secret_store.get(slot) is None
+        assert await repository.get_runtime_setting("secret.enc:" + slot) is None
+        listed = client.get("/api/v1/account/vault/keys", headers=headers)
+        assert listed.status_code == 200 and listed.json() == []
 
 
 @pytest.mark.asyncio
-async def test_secret_delete_ejects_adapter_and_disables_routing(
+async def test_secret_delete_ejects_global_adapter_and_keeps_project_credential(
     repository: SQLiteRepository,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     auth_secret: str,
 ) -> None:
-    """Deleting a provider secret ejects it from routes and blocks search/test."""
-    # Use one Admin account for all calls. Admin also reads and searches.
-    monkeypatch.chdir(tmp_path)
-    store = AsyncVaultDouble()
-    await store.set("exa", "test-key-value")
+    """Deleting one vault key leaves another key's project pool usable."""
+    from freesearch.services.credentials import credential_secret_slot
+
     adapter = ControlAdapter("exa")
-    fallback = ControlAdapter("brave")
-    app = create_app(
-        [adapter, fallback],
-        repository=repository,
-        secret_store=store,  # type: ignore[call-arg]
-    )
-
+    install_adapter_map(monkeypatch, [adapter], secrets={"exa": "project-only-key"})
+    app = create_app([adapter], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-eject"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-eject"))
         headers = raw_auth_headers(pair["access_token"])
-        assert any(r.name == "exa" for r in app.state._routes)
-        search_res = client.post(
-            "/search",
-            json={"query": "test query", "routing": {"mode": "require", "providers": ["exa"]}},
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        project_key = _create_bound_provider(
+            client, str(project.project_id), "exa", "project-only-key", headers
+        ).json()
+        system = client.post(
+            "/api/v1/account/vault/keys",
             headers=headers,
+            json={"provider_type": "exa", "label": "independent", "secret": "system-only-key"},
         )
-        assert search_res.status_code == 200
-
-        delete_res = client.delete("/api/v1/providers/exa/secret", headers=headers)
-        assert delete_res.status_code == 200
-        assert delete_res.json()["presence"] == "missing"
-
-        assert not any(r.name == "exa" for r in app.state._routes)
-
-        post_delete_search = client.post(
-            "/search",
-            json={"query": "test query", "routing": {"mode": "require", "providers": ["exa"]}},
-            headers=headers,
+        assert system.status_code == 201
+        body = system.json()
+        system_slot = credential_secret_slot(UUID(body["id"]), body["generation"])
+        payload = {
+            "project_id": str(project.project_id),
+            "query": "test query",
+            "routing": {"mode": "require", "providers": ["exa"]},
+        }
+        assert client.post("/search", json=payload, headers=headers).status_code == 200
+        assert (
+            client.delete(f"/api/v1/account/vault/keys/{body['id']}", headers=headers).status_code
+            == 200
         )
-        assert post_delete_search.status_code == 503
-        assert "no required provider is eligible" in post_delete_search.text
-
-        test_res = client.post("/api/v1/providers/exa/test", headers=headers)
-        assert test_res.status_code == 503
-
-        provider_res = client.get("/api/v1/providers/exa", headers=headers)
-        assert provider_res.status_code == 200
-        assert provider_res.json()["health"] is None
-
-    latest_h = await repository.latest_health("exa")
-    assert latest_h is not None
-    assert latest_h.status == HealthStatus.UNAVAILABLE
+        assert await app.state.secret_store.get(system_slot) is None
+        assert (
+            await app.state.secret_store.get(
+                credential_secret_slot(UUID(project_key["id"]), project_key["generation"])
+            )
+            == "project-only-key"
+        )
+        assert client.post("/search", json=payload, headers=headers).status_code == 200
+        assert adapter.search_calls == 2
+        assert client.delete("/api/v1/providers/exa/secret", headers=headers).status_code == 404
+        assert (
+            "system-only-key" not in client.get("/api/v1/account/vault/keys", headers=headers).text
+        )
 
 
 @pytest.mark.asyncio
@@ -909,56 +994,53 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
     tmp_path: Path,
     auth_secret: str,
 ) -> None:
-    """Deleting Keenable secret downgrades the adapter to keyless public tier."""
-    # Use one Admin account for the delete.
+    """Origin: keyless transition; deletion cannot silently bypass a project binding."""
     import httpx
-    from pydantic import SecretStr
 
     from freesearch.adapters.keenable import KeenableAdapter
 
-    monkeypatch.chdir(tmp_path)
-    store = AsyncVaultDouble()
-    await store.set("keenable", "keenable-api-key")
-
-    keenable_adapter = KeenableAdapter(httpx.AsyncClient(), api_key=SecretStr("keenable-api-key"))
-    assert keenable_adapter.capabilities.quota is True
-
-    app = create_app(
-        [keenable_adapter],
-        repository=repository,
-        secret_store=store,  # type: ignore[call-arg]
-    )
-
+    async with httpx.AsyncClient() as http:
+        assert KeenableAdapter(http, api_key=SecretStr("keyed-capability")).capabilities.quota
+        assert not KeenableAdapter(http).capabilities.quota
+    adapter = ControlAdapter("keenable")
+    app = create_app([adapter], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-keen"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-keen"))
         headers = raw_auth_headers(pair["access_token"])
-        initial_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
-        assert initial_limits.status_code == 200
-        assert initial_limits.json()["active_auth_mode"] == "keyed"
-
-        delete_res = client.delete("/api/v1/providers/keenable/secret", headers=headers)
-        assert delete_res.status_code == 200
-        assert delete_res.json()["presence"] == "keyless_public"
-
-        keyless_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
-        assert keyless_limits.status_code == 200
-        assert keyless_limits.json()["active_auth_mode"] == "keyless"
-
-        active = next((r for r in app.state._routes if r.name == "keenable"), None)
-        assert active is not None
-        assert active.capabilities.quota is False
-
-        write_res = client.put(
-            "/api/v1/providers/keenable/secret",
-            json={"key": "keenable-api-key-rotated"},
-            headers=headers,
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        credential = _create_bound_provider(client, pid, "keenable", "keenable-key", headers).json()
+        install_adapter_map(monkeypatch, [adapter], secrets={"keenable": "keenable-key"})
+        payload = {
+            "project_id": pid,
+            "query": "bound",
+            "routing": {"mode": "require", "providers": ["keenable"]},
+        }
+        assert client.post("/search", headers=headers, json=payload).status_code == 200
+        assert (
+            client.delete(
+                f"/api/v1/account/vault/keys/{credential['id']}", headers=headers
+            ).status_code
+            == 200
         )
-        assert write_res.status_code == 200
-        keyed_limits = client.get("/api/v1/providers/keenable/limits", headers=headers)
-        assert keyed_limits.status_code == 200
-        assert keyed_limits.json()["active_auth_mode"] == "keyed"
+
+        def keyless_factory(name):
+            if name != "keenable":
+                return None
+
+            def build(client, api_key=None):
+                assert api_key is None
+                return adapter
+
+            return build
+
+        monkeypatch.setattr("freesearch.services.execution.adapter_factory", keyless_factory)
+        assert client.post("/search", headers=headers, json=payload).status_code == 200
+        assert adapter.search_calls == 2
+        _create_bound_provider(client, pid, "keenable", "keenable-key-rotated", headers)
+        install_adapter_map(monkeypatch, [adapter], secrets={"keenable": "keenable-key-rotated"})
+        assert client.post("/search", headers=headers, json=payload).status_code == 200
+        assert adapter.search_calls == 3
 
 
 @pytest.mark.asyncio
@@ -988,9 +1070,7 @@ async def test_env_key_is_ignored_empty_vault_reports_missing_and_503(
     app = create_app([], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-env"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-env"))
         headers = raw_auth_headers(pair["access_token"])
         status = client.get("/api/v1/providers/exa", headers=headers)
         probe = client.post("/api/v1/providers/exa/test", headers=headers)
@@ -1010,42 +1090,31 @@ async def test_secret_write_constructs_missing_adapter_on_demand(
     tmp_path: Path,
     auth_secret: str,
 ) -> None:
-    """AC-3/AC-5: a key written after startup makes a missing adapter testable."""
-    # Use one Admin account for all calls. Admin also reads.
-    from freesearch.adapters import registry as registry_module
-
-    store = AsyncVaultDouble()
+    """Origin: lazy construction now requires an enabled A4 credential binding."""
     replacement = ControlAdapter("exa", health_status=HealthStatus.UNKNOWN)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        registry_module,
-        "_ADAPTERS",
-        {ProviderName.EXA: lambda _client: replacement},
-    )
-    monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)
-    app = create_app(repository=repository, secret_store=store)  # type: ignore[call-arg]
-
+    install_adapter_map(monkeypatch, [replacement], secrets={"exa": "on-demand-key"})
+    app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-demand"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-demand"))
         headers = raw_auth_headers(pair["access_token"])
-        initial = client.get("/api/v1/providers/exa", headers=headers)
-        write = client.put(
-            "/api/v1/providers/exa/secret", json={"key": "on-demand-key"}, headers=headers
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        payload = {
+            "project_id": str(project.project_id),
+            "query": "construct",
+            "routing": {"mode": "require", "providers": ["exa"]},
+        }
+        assert client.post("/search", json=payload, headers=headers).status_code == 503
+        write = _create_bound_provider(
+            client, str(project.project_id), "exa", "on-demand-key", headers
         )
-        after = client.get("/api/v1/providers/exa", headers=headers)
-        probe = client.post("/api/v1/providers/exa/test", headers=headers)
-
-    assert initial.status_code == 200
-    assert write.status_code == 200
-    assert after.status_code == 200
-    assert after.json()["enabled"] is True
-    assert after.json()["secret_presence"] == "configured"
-    assert probe.status_code == 200
-    assert probe.json()["provider"] == "exa"
-    assert probe.json()["ok"] is True
-    assert replacement.search_calls == 0
+        assert "on-demand-key" not in write.text
+        assert replacement.search_calls == 0
+        response = client.post("/search", json=payload, headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["provider"] == "exa" and replacement.search_calls == 1
+        assert "on-demand-key" not in response.text
+        # Admin probes cannot reconstruct singleton credentials from the execution key.
+        assert client.post("/api/v1/providers/exa/test", headers=headers).status_code == 503
 
 
 @pytest.mark.asyncio
@@ -1057,9 +1126,7 @@ async def test_routing_config_defaults_validate_and_persist(
     app = create_app([ControlAdapter("exa")], repository=repository)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-routing"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-routing"))
         headers = raw_auth_headers(pair["access_token"])
         initial = client.get("/api/v1/routing/config", headers=headers)
         invalid_extra = client.put(
@@ -1067,11 +1134,15 @@ async def test_routing_config_defaults_validate_and_persist(
             json={"fallback_policy": "chained", "unknown": True},
             headers=headers,
         )
+        invalid_preset = client.put(
+            "/api/v1/routing/config",
+            json={"cost_optimization_preset": "free_first"},
+            headers=headers,
+        )
         invalid_attempts = client.put(
             "/api/v1/routing/config",
             json={
                 "fallback_policy": "chained",
-                "cost_optimization_preset": "balanced",
                 "max_attempts": 0,
             },
             headers=headers,
@@ -1080,7 +1151,6 @@ async def test_routing_config_defaults_validate_and_persist(
             "/api/v1/routing/config",
             json={
                 "fallback_policy": "first_only",
-                "cost_optimization_preset": "free_first",
                 "max_attempts": 2,
             },
             headers=headers,
@@ -1090,51 +1160,63 @@ async def test_routing_config_defaults_validate_and_persist(
     assert initial.status_code == 200
     assert initial.json() == {
         "fallback_policy": "chained",
-        "cost_optimization_preset": "balanced",
         "max_attempts": 3,
     }
     assert invalid_extra.status_code == 422
+    assert invalid_preset.status_code == 422
     assert invalid_attempts.status_code == 422
     assert updated.status_code == 200
     assert updated.json() == {
         "fallback_policy": "first_only",
-        "cost_optimization_preset": "free_first",
         "max_attempts": 2,
     }
     assert reread.json() == updated.json()
 
 
 @pytest.mark.asyncio
-async def test_free_first_pins_keenable_in_status_and_search_order(
+async def test_project_free_first_orders_search_without_system_pin(
     repository: SQLiteRepository,
+    monkeypatch: pytest.MonkeyPatch,
     auth_secret: str,
 ) -> None:
-    """AC-7: free-first affects both the visible list and candidate selection."""
+    """Free-first is project-scoped and does not reorder the system catalog."""
+    from tests.fixtures.project_order import seed_order_pools
+
     # Use one Admin account for all calls. Admin also reads and searches.
     brave = ControlAdapter("brave", health_status=HealthStatus.HEALTHY)
     keenable = ControlAdapter("keenable", health_status=HealthStatus.HEALTHY)
-    app = create_app([brave, keenable], repository=repository)
+    store = _execution_store(repository)
+    fixture_secrets: dict[str, str] = {}
+    install_adapter_map(monkeypatch, [brave, keenable], secrets=fixture_secrets)
+    app = create_app([brave, keenable], repository=repository, secret_store=store)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-free"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-free"))
         headers = raw_auth_headers(pair["access_token"])
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        await seed_order_pools(
+            repository,
+            project_id=project.project_id,
+            actor_id=project.actor_id,
+            store=store,
+            providers=("brave", "keenable"),
+            secrets=fixture_secrets,
+        )
         configured = client.put(
-            "/api/v1/routing/config",
-            json={
-                "fallback_policy": "chained",
-                "cost_optimization_preset": "free_first",
-                "max_attempts": 3,
-            },
+            f"/api/v1/projects/{pid}/routing/order/search",
+            json={"strategy": "free_first"},
             headers=headers,
         )
         providers = client.get("/api/v1/providers", headers=headers)
-        search = client.post("/search", json={"query": "free-first"}, headers=headers)
+        search = client.post(
+            "/search", json={"project_id": pid, "query": "free-first"}, headers=headers
+        )
 
     assert configured.status_code == 200
     assert providers.status_code == 200
-    assert providers.json()[0]["provider_id"] == "keenable"
+    assert providers.json()[0]["provider_id"] == "brave"
+    assert configured.json()["search"]["providers"][0]["provider"] == "keenable"
     assert search.status_code == 200
     assert search.json()["provider"] == "keenable"
     assert keenable.search_calls == 1
@@ -1144,29 +1226,42 @@ async def test_free_first_pins_keenable_in_status_and_search_order(
 @pytest.mark.asyncio
 async def test_first_only_does_not_fallback_after_primary_failure(
     repository: SQLiteRepository,
+    monkeypatch: pytest.MonkeyPatch,
     auth_secret: str,
 ) -> None:
     """AC-7: first_only consumes one candidate even when it raises."""
     # Use one Admin account for policy and search. Admin also searches.
     primary = ControlAdapter("brave", health_status=HealthStatus.HEALTHY, fail=True)
     fallback = ControlAdapter("exa", health_status=HealthStatus.HEALTHY)
-    app = create_app([primary, fallback], repository=repository)
+    store = _execution_store(repository)
+    fixture_secrets: dict[str, str] = {}
+    install_adapter_map(monkeypatch, [primary, fallback], secrets=fixture_secrets)
+    app = create_app([primary, fallback], repository=repository, secret_store=store)
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-first"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-first"))
         headers = raw_auth_headers(pair["access_token"])
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        await seed_provider_bindings(
+            repository,
+            project_id=project.project_id,
+            actor_id=project.actor_id,
+            store=store,
+            providers=("brave", "exa"),
+            secrets=fixture_secrets,
+        )
         policy = client.put(
             "/api/v1/routing/config",
             json={
                 "fallback_policy": "first_only",
-                "cost_optimization_preset": "balanced",
                 "max_attempts": 3,
             },
             headers=headers,
         )
-        response = client.post("/search", json={"query": "no fallback"}, headers=headers)
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "no fallback"}, headers=headers
+        )
 
     assert policy.status_code == 200
     assert response.status_code == 500
@@ -1187,12 +1282,27 @@ async def test_search_filters_a_constructed_provider_persisted_disabled(
     await repository.set_runtime_setting("provider.exa", {"config": {"enabled": False}})
     disabled = ControlAdapter("exa")
     enabled = ControlAdapter("brave")
-    app = create_app([disabled, enabled], repository=repository)
+    store = _execution_store(repository)
+    fixture_secrets: dict[str, str] = {}
+    install_adapter_map(monkeypatch, [disabled, enabled], secrets=fixture_secrets)
+    app = create_app([disabled, enabled], repository=repository, secret_store=store)
 
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("control-disabled"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "skip disabled"}, headers=headers)
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        await seed_provider_bindings(
+            repository,
+            project_id=project.project_id,
+            actor_id=project.actor_id,
+            store=store,
+            providers=("exa", "brave"),
+            secrets=fixture_secrets,
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "skip disabled"}, headers=headers
+        )
 
     assert response.status_code == 200
     assert response.json()["provider"] == "brave"
@@ -1214,12 +1324,27 @@ async def test_search_filters_provider_with_global_mask_off(
     )
     disabled = ControlAdapter("exa")
     enabled = ControlAdapter("brave")
-    app = create_app([disabled, enabled], repository=repository)
+    store = _execution_store(repository)
+    fixture_secrets: dict[str, str] = {}
+    install_adapter_map(monkeypatch, [disabled, enabled], secrets=fixture_secrets)
+    app = create_app([disabled, enabled], repository=repository, secret_store=store)
 
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("control-mask-off"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "skip mask-off"}, headers=headers)
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        await seed_provider_bindings(
+            repository,
+            project_id=project.project_id,
+            actor_id=project.actor_id,
+            store=store,
+            providers=("exa", "brave"),
+            secrets=fixture_secrets,
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "skip mask-off"}, headers=headers
+        )
 
     assert response.status_code == 200
     assert response.json()["provider"] == "brave"
@@ -1241,15 +1366,30 @@ async def test_search_filters_provider_with_search_bit_off_keeps_fetch_eligible(
     )
     search_off = ControlAdapter("exa")
     fallback = ControlAdapter("brave")
-    app = create_app([search_off, fallback], repository=repository)
+    store = _execution_store(repository)
+    fixture_secrets: dict[str, str] = {}
+    install_adapter_map(monkeypatch, [search_off, fallback], secrets=fixture_secrets)
+    app = create_app([search_off, fallback], repository=repository, secret_store=store)
 
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-search-off"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-search-off")
         )
         headers = raw_auth_headers(pair["access_token"])
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        await seed_provider_bindings(
+            repository,
+            project_id=project.project_id,
+            actor_id=project.actor_id,
+            store=store,
+            providers=("exa", "brave"),
+            secrets=fixture_secrets,
+        )
         status = client.get("/api/v1/providers/exa", headers=headers)
-        response = client.post("/search", json={"query": "search bit off"}, headers=headers)
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "search bit off"}, headers=headers
+        )
 
     assert status.status_code == 200
     assert status.json()["enable_mask"] == 5
@@ -1263,31 +1403,63 @@ async def test_search_filters_provider_with_search_bit_off_keeps_fetch_eligible(
 @pytest.mark.asyncio
 async def test_rest_and_mcp_success_record_latency_and_success_status(
     repository: SQLiteRepository,
+    monkeypatch: pytest.MonkeyPatch,
     auth_secret: str,
 ) -> None:
     """AC-8: both surfaces write the measured integer latency and status."""
     # Use one Agent account for the REST search.
     rest_adapter = ControlAdapter("exa")
     mcp_adapter = ControlAdapter("brave")
-    rest_app = create_app([rest_adapter], repository=repository)
+    store = _execution_store(repository)
+    fixture_secrets: dict[str, str] = {}
+    install_adapter_map(monkeypatch, [rest_adapter, mcp_adapter], secrets=fixture_secrets)
+    rest_app = create_app([rest_adapter], repository=repository, secret_store=store)
 
     with TestClient(rest_app) as client:
         pair = register_and_login(client, temp_email("control-telemetry"))
         headers = raw_auth_headers(pair["access_token"])
-        rest_response = client.post("/search", json={"query": "telemetry"}, headers=headers)
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        await seed_provider_bindings(
+            repository,
+            project_id=project.project_id,
+            actor_id=project.actor_id,
+            store=store,
+            providers=("exa", "brave"),
+            secrets=fixture_secrets,
+        )
+        rest_response = client.post(
+            "/search",
+            json={
+                "project_id": pid,
+                "query": "telemetry",
+                "routing": {"mode": "require", "providers": ["exa"]},
+            },
+            headers=headers,
+        )
     # The MCP tool reuses the same access JWT through the explicit stdio seam.
     server = create_server(
         [mcp_adapter],
         repository=repository,
         auth_service=http_jwt_service(repository),
-        stdio_token=SecretStr(pair["access_token"]),
+        # A1: MCP takes a project key, issued by the human project admin.
+        stdio_token=(await key_for_account(repository, account_id_from_pair(pair), UUID(pid))).key,
     )
-    mcp_result = await server.call_tool("search", {"request": {"query": "telemetry"}})
+    mcp_result = await server.call_tool(
+        "search",
+        {
+            "request": {
+                "project_id": pid,
+                "query": "telemetry",
+                "routing": {"mode": "require", "providers": ["brave"]},
+            }
+        },
+    )
 
     assert rest_response.status_code == 200
     assert rest_response.json()["provider"] == "exa"
     assert mcp_result[1]["provider"] == "brave"
-    events = await repository.list_usage()
+    events = await all_usage_events(repository)
     assert [(event.provider, event.status) for event in events] == [
         ("exa", UsageStatus.SUCCESS),
         ("brave", UsageStatus.SUCCESS),
@@ -1297,50 +1469,81 @@ async def test_rest_and_mcp_success_record_latency_and_success_status(
 
 @pytest.mark.asyncio
 async def test_success_without_usage_writes_no_usage_row(
-    repository: SQLiteRepository, auth_secret: str
+    repository: SQLiteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_secret: str,
 ) -> None:
     """AC-8: the existing no-usage success contract remains unchanged."""
     # Use one Agent account for the search.
     adapter = ControlAdapter("exa", with_usage=False)
-    app = create_app([adapter], repository=repository)
+    store = _execution_store(repository)
+    fixture_secrets: dict[str, str] = {}
+    install_adapter_map(monkeypatch, [adapter], secrets=fixture_secrets)
+    app = create_app([adapter], repository=repository, secret_store=store)
 
     with TestClient(app) as client:
         pair = register_and_login(client, temp_email("control-nousage"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "no usage"}, headers=headers)
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        await seed_provider_bindings(
+            repository,
+            project_id=project.project_id,
+            actor_id=project.actor_id,
+            store=store,
+            providers=("exa",),
+            secrets=fixture_secrets,
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "no usage"}, headers=headers
+        )
 
     assert response.status_code == 200
-    assert await repository.list_usage() == []
+    assert await all_usage_events(repository) == []
 
 
 @pytest.mark.asyncio
 async def test_failure_records_zero_unit_failure_usage_and_degraded_health(
     repository: SQLiteRepository,
+    monkeypatch: pytest.MonkeyPatch,
     auth_secret: str,
 ) -> None:
     """AC-8: failed REST calls expose a zero-unit failure event and health row."""
     # Use one Admin account for search, stats, and dashboard.
     adapter = ControlAdapter("exa", fail=True)
-    app = create_app([adapter], repository=repository)
+    store = _execution_store(repository)
+    fixture_secrets: dict[str, str] = {}
+    install_adapter_map(monkeypatch, [adapter], secrets=fixture_secrets)
+    app = create_app([adapter], repository=repository, secret_store=store)
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-fail"), UserRole.ADMIN
-        )
+        pair = await register_system_admin_login(client, repository, temp_email("control-fail"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.post("/search", json={"query": "failure"}, headers=headers)
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        seeded = await seed_provider_bindings(
+            repository,
+            project_id=project.project_id,
+            actor_id=project.actor_id,
+            store=store,
+            providers=("exa",),
+            secrets=fixture_secrets,
+        )
+        response = client.post(
+            "/search", json={"project_id": pid, "query": "failure"}, headers=headers
+        )
         stats = client.get("/stats", headers=headers)
         dashboard = client.get("/dashboard", headers=headers)
 
     assert response.status_code == 500
-    events = await repository.list_usage()
+    events = await all_usage_events(repository)
     assert len(events) == 1
     assert events[0].provider == "exa"
     assert events[0].operation is UsageOperation.SEARCH
     assert events[0].units == Decimal("0")
     assert events[0].latency_ms is not None and events[0].latency_ms >= 0
     assert events[0].status is UsageStatus.FAILURE
-    health = await repository.latest_health("exa")
+    health = await repository.latest_health("exa", credential_id=seeded["exa"][0])
     assert health is not None
     assert health.status is HealthStatus.DEGRADED
     assert stats.status_code == 200
@@ -1381,7 +1584,6 @@ async def test_provider_status_response_model_requires_both_masks() -> None:
     base = {
         "provider_id": "exa",
         "enabled": True,
-        "priority": 100,
         "health": None,
         "circuit_breaker": {"state": "closed", "updated_at": "2026-01-01T00:00:00Z"},
         "latency_p95_ms": None,
@@ -1406,7 +1608,6 @@ async def test_provider_status_response_model_rejects_non_strict_masks() -> None
     base = {
         "provider_id": "exa",
         "enabled": True,
-        "priority": 100,
         "health": None,
         "circuit_breaker": {"state": "closed", "updated_at": "2026-01-01T00:00:00Z"},
         "latency_p95_ms": None,
@@ -1474,7 +1675,11 @@ def test_control_secret_backend_is_async_vault_only() -> None:
         f"RED: SecretBackend must be AsyncSecretStore, got {backend_name}"
     )
     assert callable(getattr(control_module, "_resolve_secret", None))
-    assert callable(getattr(control_module, "_build_with_resolved_secret", None))
+    from freesearch.services.credentials import CredentialService
+    from freesearch.services.provider_runtime import build_adapter_with_secret
+
+    assert callable(CredentialService.resolve_material)
+    assert callable(build_adapter_with_secret)
 
 
 def test_api_module_has_no_keyring_or_environ_snapshot() -> None:
@@ -1502,8 +1707,8 @@ def test_pyproject_has_no_keyring_or_dotenv() -> None:
 
 
 async def _reset_control_caches() -> None:
-    from freesearch.routers.control import clear_config_cache
     from freesearch.services.monitoring import clear_quota_poll_cache
+    from freesearch.services.provider_runtime import clear_config_cache
 
     clear_config_cache()
     clear_quota_poll_cache()
@@ -1517,7 +1722,7 @@ async def test_supported_admin_writes_invalidate_warm_cache(
     """M3: every supported admin write refreshes the next read without restart."""
     from freesearch.configuration.provider_config import ProviderConfigUpdate
     from freesearch.models.contracts import RoutingConfigResponse
-    from freesearch.routers.control import (
+    from freesearch.services.provider_runtime import (
         _CONFIG_CACHE,
         _POLICY_CACHE,
         _reconcile_provider_config,
@@ -1549,22 +1754,21 @@ async def test_supported_admin_writes_invalidate_warm_cache(
         assert id(repository) in _POLICY_CACHE
 
         patched = await patch_provider_config(
-            repository, ProviderName.EXA, ProviderConfigUpdate(priority=11)
+            repository, ProviderName.EXA, ProviderConfigUpdate(search_enabled=False)
         )
-        assert patched.priority == 11
-        assert (await effective_config_for_name(repository, "exa")).priority == 11
+        assert patched.enable_mask == 5
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 5
 
         full = (await effective_config_for_name(repository, "exa")).model_copy(
-            update={"priority": 21}
+            update={"enable_mask": 7}
         )
         await persist_provider_config(repository, ProviderName.EXA, full)
-        assert (await effective_config_for_name(repository, "exa")).priority == 21
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 7
 
         await persist_routing_config(
             repository,
             RoutingConfigResponse(
                 fallback_policy="first_only",  # type: ignore[arg-type]
-                cost_optimization_preset="balanced",  # type: ignore[arg-type]
                 max_attempts=3,
             ),
         )
@@ -1572,34 +1776,32 @@ async def test_supported_admin_writes_invalidate_warm_cache(
 
         await repository.set_runtime_setting(
             "provider.exa",
-            {"config": {"enable_mask": 7, "support_mask": 7, "priority": 31}},
+            {"config": {"enable_mask": 6, "support_mask": 7}},
         )
-        assert (await effective_config_for_name(repository, "exa")).priority == 31
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 6
 
         def _to_41(current: Any) -> Any:
             payload = dict(current)
             config = dict(payload["config"])
-            config["priority"] = 41
+            config["enable_mask"] = 5
             payload["config"] = config
             return payload
 
         await repository.update_runtime_setting("provider.exa", _to_41)
-        assert (await effective_config_for_name(repository, "exa")).priority == 41
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 5
 
         await _reconcile_provider_config(repository, ProviderName.EXA)
-        assert (await effective_config_for_name(repository, "exa")).priority == 41
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 5
 
         app = create_app([ControlAdapter("exa")], repository=repository)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, repository, temp_email("control-warm"), UserRole.ADMIN
-            )
+            pair = await register_system_admin_login(client, repository, temp_email("control-warm"))
             headers = raw_auth_headers(pair["access_token"])
             patched_rest = client.patch(
-                "/api/v1/providers/exa", json={"priority": 51}, headers=headers
+                "/api/v1/providers/exa", json={"enabled": False}, headers=headers
             )
             assert patched_rest.status_code == 200
-        assert (await effective_config_for_name(repository, "exa")).priority == 51
+        assert (await effective_config_for_name(repository, "exa")).enable_mask == 4
 
         committed = await effective_config_for_name(repository, "exa")
         original_update = repository.update_runtime_setting
@@ -1611,12 +1813,12 @@ async def test_supported_admin_writes_invalidate_warm_cache(
         try:
             with pytest.raises(RuntimeError, match="storage unavailable"):
                 await patch_provider_config(
-                    repository, ProviderName.EXA, ProviderConfigUpdate(priority=99)
+                    repository, ProviderName.EXA, ProviderConfigUpdate(enabled=True)
                 )
         finally:
             repository.update_runtime_setting = original_update  # type: ignore[method-assign]
         preserved = await effective_config_for_name(repository, "exa")
-        assert preserved.priority == committed.priority == 51
+        assert preserved.enable_mask == committed.enable_mask == 4
 
         original_set = repository.set_runtime_setting
 
@@ -1630,7 +1832,6 @@ async def test_supported_admin_writes_invalidate_warm_cache(
                     repository,
                     RoutingConfigResponse(
                         fallback_policy="chained",  # type: ignore[arg-type]
-                        cost_optimization_preset="balanced",  # type: ignore[arg-type]
                         max_attempts=3,
                     ),
                 )
@@ -1647,7 +1848,7 @@ async def test_supported_admin_writes_invalidate_warm_cache(
 @pytest.mark.asyncio
 async def test_rest_lifespan_clears_config_cache(repository: SQLiteRepository) -> None:
     """M3: REST lifespan exit clears repo entries; scopes narrow and widen correctly."""
-    from freesearch.routers.control import (
+    from freesearch.services.provider_runtime import (
         _CONFIG_CACHE,
         _POLICY_CACHE,
         clear_config_cache,
@@ -1733,12 +1934,12 @@ async def test_tavily_patch_persists_key_environment_and_paygo(
     repository: SQLiteRepository, auth_secret: str, vault_env: None
 ) -> None:
     """PATCH stores the non-secret Tavily values through the persisted path."""
-    from freesearch.routers.control import effective_config_for_name
+    from freesearch.services.provider_runtime import effective_config_for_name
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-patch"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-patch")
         )
         headers = raw_auth_headers(pair["access_token"])
         response = client.patch(
@@ -1758,15 +1959,15 @@ async def test_tavily_patch_survives_repository_reopen(
     tmp_path: Path, auth_secret: str, vault_env: None
 ) -> None:
     """The Tavily values travel the persisted JSON path across a reopen."""
-    from freesearch.routers.control import effective_config_for_name
+    from freesearch.services.provider_runtime import effective_config_for_name
 
     db_path = tmp_path / "control-tavily.db"
     first = await SQLiteRepository.open(db_path)
     try:
         app = create_app([], repository=first)
         with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, first, temp_email("control-tavily-reopen"), UserRole.ADMIN
+            pair = await register_system_admin_login(
+                client, first, temp_email("control-tavily-reopen")
             )
             headers = raw_auth_headers(pair["access_token"])
             response = client.patch(
@@ -1796,12 +1997,14 @@ async def test_tavily_keyless_secret_presence_and_rebuild(
     from freesearch.adapters.tavily import TavilyAdapter
     from freesearch.configuration.provider_config import ProviderConfig
     from freesearch.models.provider_limits import AuthMode
-    from freesearch.routers.control import _build_with_resolved_secret
+    from freesearch.services.provider_runtime import (
+        build_adapter_with_secret as _build_with_resolved_secret,
+    )
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-rebuild"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-rebuild")
         )
         headers = raw_auth_headers(pair["access_token"])
         listing = client.get("/api/v1/providers", headers=headers)
@@ -1834,8 +2037,8 @@ async def test_tavily_env_patch_list_get_readback_dev_prod(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-readback"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-readback")
         )
         headers = raw_auth_headers(pair["access_token"])
 
@@ -1869,8 +2072,8 @@ async def test_tavily_env_patch_list_get_readback_dev_prod(
     # Restart with the same repository keeps the confirmed stored value.
     restarted = create_app([], repository=repository)
     with TestClient(restarted) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-restart"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-restart")
         )
         headers = raw_auth_headers(pair["access_token"])
         assert (
@@ -1887,12 +2090,10 @@ async def test_tavily_env_patch_denied_for_project_scoped_admin(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        system_pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-system"), UserRole.ADMIN
+        system_pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-system")
         )
-        project_admin_pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-project"), UserRole.AGENT
-        )
+        project_admin_pair = register_and_login(client, temp_email("control-tavily-project"))
         async with repository.session() as session:
             await ProjectRepository(session).create_project_with_admin(
                 account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
@@ -1924,7 +2125,7 @@ async def test_tavily_env_patch_denied_for_project_scoped_admin(
         )
         assert denied.status_code == 403
 
-    from freesearch.routers.control import effective_config_for_name
+    from freesearch.services.provider_runtime import effective_config_for_name
 
     assert (await effective_config_for_name(repository, "tavily")).tavily_key_environment == "dev"
 
@@ -1937,8 +2138,8 @@ async def test_tavily_env_patch_rejects_invalid_value(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-invalid"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-invalid")
         )
         headers = raw_auth_headers(pair["access_token"])
         rejected = client.patch(
@@ -1961,8 +2162,6 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
 ) -> None:
     """Dev-to-prod and prod-to-dev keep bucket/pool/caps/terminal with zero vendor I/O."""
 
-    from datetime import date
-
     import httpx
 
     from freesearch.adapters.tavily import TavilyAdapter
@@ -1976,8 +2175,8 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
         LimitOperation,
         NativeUsageSnapshot,
     )
-    from freesearch.routers.control import effective_config_for_name
     from freesearch.services.provider_limits import ProviderLimitsService
+    from freesearch.services.provider_runtime import effective_config_for_name
 
     pool_id = "tavily:keyed:credit"
 
@@ -2037,8 +2236,7 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
         "tavily",
         CRDGrantPayload(
             version=0,
-            period_start=date(2026, 10, 1),
-            period_end=date(2026, 11, 1),
+            period="month",
             search_crd=Decimal("10"),
             fetch_crd=Decimal("4"),
         ),
@@ -2082,8 +2280,8 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-bucket"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-bucket")
         )
         headers = raw_auth_headers(pair["access_token"])
 
@@ -2129,8 +2327,8 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
     # Restart with the same repository keeps the confirmed stored value.
     restarted = create_app([], repository=repository)
     with TestClient(restarted) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("control-tavily-bucket-restart"), UserRole.ADMIN
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-tavily-bucket-restart")
         )
         headers = raw_auth_headers(pair["access_token"])
         assert (
@@ -2155,3 +2353,49 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
         await adapter.aclose()
         await transport_client.aclose()
     assert recorded == []
+
+
+@pytest.mark.asyncio
+async def test_secret_delete_ejects_adapter_and_disables_routing(
+    repository: SQLiteRepository, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, auth_secret: str
+) -> None:
+    """HEAD origin: deleting the execution credential blocks subsequent search and probing."""
+    from freesearch.services.credentials import credential_secret_slot
+
+    adapter = ControlAdapter("exa")
+    install_adapter_map(monkeypatch, [adapter], secrets={"exa": "private-delete-proof"})
+    app = create_app([], repository=repository)
+    with TestClient(app) as client:
+        pair = await register_system_admin_login(
+            client, repository, temp_email("control-head-delete")
+        )
+        headers = raw_auth_headers(pair["access_token"])
+        project = await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+        pid = str(project.project_id)
+        written = _create_bound_provider(client, pid, "exa", "private-delete-proof", headers).json()
+        payload = {
+            "project_id": pid,
+            "query": "test query",
+            "routing": {"mode": "require", "providers": ["exa"]},
+        }
+        assert client.post("/search", json=payload, headers=headers).status_code == 200
+        assert (
+            client.delete(
+                f"/api/v1/account/vault/keys/{written['id']}", headers=headers
+            ).status_code
+            == 200
+        )
+        rejected = client.post("/search", json=payload, headers=headers)
+        assert rejected.status_code == 503 and "required provider" in rejected.text
+        assert adapter.search_calls == 1
+        assert (
+            await app.state.secret_store.get(
+                credential_secret_slot(UUID(written["id"]), written["generation"])
+            )
+            is None
+        )
+        assert client.post("/api/v1/providers/exa/test", headers=headers).status_code == 503
+        status = client.get("/api/v1/providers/exa", headers=headers)
+        assert status.status_code == 200 and status.json()["health"] is None
+        assert "private-delete-proof" not in status.text + rejected.text
+        assert client.delete("/api/v1/providers/exa/secret", headers=headers).status_code == 404

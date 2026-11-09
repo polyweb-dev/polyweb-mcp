@@ -11,13 +11,13 @@ describe("LatencyWaterfallValue", () => {
   it("renders the recorded duration in milliseconds", () => {
     render(<LatencyWaterfallValue durationMs={250} resultCount={null} />)
 
-    expect(screen.getByText("250ms")).toBeInTheDocument()
+    expect(screen.getByText("250 ms")).toBeInTheDocument()
   })
 
   it("renders the result count when the caller records one", () => {
     render(<LatencyWaterfallValue durationMs={250} resultCount={5} />)
 
-    expect(screen.getByText("250ms")).toBeInTheDocument()
+    expect(screen.getByText("250 ms")).toBeInTheDocument()
     expect(screen.getByText("5 res")).toBeInTheDocument()
     expect(screen.getByText("5 res").parentElement?.className).toContain("gap-x-2")
   })
@@ -27,15 +27,15 @@ describe("LatencyWaterfallValue", () => {
       <LatencyWaterfallValue durationMs={250} resultCount={null} />
     )
 
-    expect(screen.getByText("250ms")).toBeInTheDocument()
-    expect(container).toHaveTextContent("250ms")
+    expect(screen.getByText("250 ms")).toBeInTheDocument()
+    expect(container).toHaveTextContent("250 ms")
     expect(container.querySelectorAll("span")).toHaveLength(2)
   })
 
   it("renders a non-success outcome beside the duration", () => {
     render(<LatencyWaterfallValue durationMs={830} resultCount={null} outcome="failed" />)
 
-    expect(screen.getByText("830ms")).toBeInTheDocument()
+    expect(screen.getByText("830 ms")).toBeInTheDocument()
     expect(screen.getByText("failed")).toBeInTheDocument()
   })
 
@@ -44,7 +44,7 @@ describe("LatencyWaterfallValue", () => {
       <LatencyWaterfallValue durationMs={130} resultCount={2} />
     )
 
-    expect(screen.getByText("130ms")).toBeInTheDocument()
+    expect(screen.getByText("130 ms")).toBeInTheDocument()
     expect(screen.getByText("2 res")).toBeInTheDocument()
     expect(container).not.toHaveTextContent("success")
     expect(container).not.toHaveTextContent("failed")

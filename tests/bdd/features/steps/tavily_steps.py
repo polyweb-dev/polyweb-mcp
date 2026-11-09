@@ -22,7 +22,9 @@ def step_given_tavily_adapter(context: Any) -> None:
 @when('I perform a live search for "{query}" with limit {limit:d}')
 def step_when_live_search(context: Any, query: str, limit: int) -> None:
     """Execute a live search request through the Tavily adapter."""
-    request = SearchRequest(query=query, limit=limit)
+    request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", query=query, limit=limit
+    )
     context.search_response = context.loop.run_until_complete(context.adapter.search(request))
 
 
@@ -63,7 +65,9 @@ def step_then_search_reports_usage(context: Any) -> None:
 @when('I perform a live fetch for "{url}" with max {max_chars:d} chars')
 def step_when_live_fetch(context: Any, url: str, max_chars: int) -> None:
     """Execute a live content extraction request through the Tavily adapter."""
-    request = FetchRequest(url=HttpUrl(url), max_chars=max_chars)
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa", url=HttpUrl(url), max_chars=max_chars
+    )
     context.fetch_response = context.loop.run_until_complete(context.adapter.fetch(request))
 
 
@@ -116,9 +120,7 @@ def step_when_request_quota(context: Any) -> None:
     observed = datetime.now(UTC)
     usage = context.loop.run_until_complete(
         adapter.usage_snapshot(
-            UsageSyncRequest(
-                provider="tavily", auth_mode=auth_mode, observed_at=observed
-            )
+            UsageSyncRequest(provider="tavily", auth_mode=auth_mode, observed_at=observed)
         )
     )
     assert usage is not None, "Live usage snapshot is None"

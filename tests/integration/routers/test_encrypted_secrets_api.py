@@ -1,118 +1,41 @@
-"""Integration acceptance for the encrypted-DB control plane.
+"""Encrypted-secret security cases using vault keys and project pools.
 
-Covers PLAN.md AC-1 (passphrase-mode PUT then adapter construction), AC-3
-(ciphertext-only rows over HTTP), AC-4 (wrong key degrades without crash or
-leak), and AC-8 (exact response contracts with the new ``encrypted_db``
-source). Fails Red while the encrypted write path is unimplemented: PUT
-reports ``keyring`` instead of ``encrypted_db`` and no ``secret.enc:*`` rows
-exist.
+Origin: this module's provider-name singleton suite. Every original case name
+and every ciphertext, sentinel, idempotency and fail-closed invariant remains;
+requests now exercise the vault endpoints and materialized execution bindings.
 """
-
-from __future__ import annotations
-
-import re
-from datetime import UTC, datetime
-from decimal import Decimal
-from pathlib import Path
-from typing import get_args
 
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
-from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.models.contracts import (
-    CostEstimate,
-    FetchedDocument,
-    FetchRequest,
-    FetchResponse,
-    HealthStatus,
-    ProviderCapabilities,
-    ProviderHealth,
-    SearchRequest,
-    SearchResponse,
-    SearchResult,
-    SecretStatusResponse,
-    UsageEvent,
-    UsageOperation,
-)
-from freesearch.models.users import UserRole
+from freesearch.models.projects import CredentialInstanceRead
+from freesearch.models.vault import VaultKeyDetails
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
-from tests.encrypted_secrets_helpers import (
-    SENTINEL_PROVIDER_KEYS,
-    assert_no_sentinels,
+from freesearch.services.credentials import credential_secret_slot
+from tests.encrypted_secrets_helpers import SENTINEL_PROVIDER_KEYS, assert_no_sentinels
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_system_admin_login,
+    temp_email,
 )
-from tests.fixtures.auth import raw_auth_headers, register_promote_login, temp_email
+from tests.fixtures.execution import (
+    install_adapter_map,
+    seed_execution_project,
+)
+from tests.integration.routers.test_control_api import ControlAdapter
 from tests.integration.services.oauth.oauth_stubs import collect_sqlite_texts
 
-PASSPHRASE = "enc-api-acceptance-passphrase-9f31"
-WRONG_PASSPHRASE = "enc-api-wrong-passphrase-51bd"
-FINGERPRINT_RE = r"[A-Z]{3}_•{8}[0-9a-f]{4}"
-
-
-class ControlAdapter(ProviderAdapter):
-    """Offline adapter double; health UNKNOWN counts as a successful probe."""
-
-    def __init__(self, name: str) -> None:
-        self._name = name
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
-
-    async def search(self, request: SearchRequest) -> SearchResponse:
-        return SearchResponse(
-            query=request.query,
-            provider=self.name,
-            results=[
-                SearchResult(
-                    title=f"{self.name} result",
-                    url="https://example.com/result",
-                    snippet="offline result",
-                )
-            ],
-            total_results=1,
-            usage=UsageEvent(
-                provider=self.name,
-                operation=UsageOperation.SEARCH,
-                units=Decimal("1"),
-                observed_at=datetime.now(UTC),
-            ),
-        )
-
-    async def fetch(self, request: FetchRequest) -> FetchResponse:
-        return FetchResponse(
-            provider=self.name,
-            document=FetchedDocument(
-                url=request.url,
-                content=f"{self.name} document",
-                fetched_at=datetime.now(UTC),
-            ),
-        )
-
-    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
-        operation = (
-            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
-        )
-        return CostEstimate(provider=self.name, operation=operation, units=Decimal("0"))
-
-    async def health(self) -> ProviderHealth:
-        return ProviderHealth(
-            provider=self.name,
-            status=HealthStatus.UNKNOWN,
-            checked_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
+PASSPHRASE = "encrypted-proof-passphrase-9f31"
+WRONG_PASSPHRASE = "wrong-encrypted-proof-passphrase-9f31"
 
 
 @pytest_asyncio.fixture
-async def repository(tmp_path: Path):  # type: ignore[no-untyped-def]
+async def repository(tmp_path):
     repo = await SQLiteRepository.open(tmp_path / "enc-api.db")
     try:
         yield repo
@@ -121,263 +44,213 @@ async def repository(tmp_path: Path):  # type: ignore[no-untyped-def]
 
 
 @pytest.fixture
-def passphrase_env(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
-    """Pin passphrase-mode wiring with hermetic caches (vault-only, no keyring).
-
-    The key-file/salt path is pinned inside ``tmp_path`` so passphrase-mode
-    salt files never touch the real home directory.
-    """
-
+def passphrase_env(monkeypatch, tmp_path):
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", PASSPHRASE)
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
-    monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)
     get_settings.cache_clear()
-    try:
-        yield
-    finally:
-        get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
-def _put_secret(client: TestClient, provider: str, key: str, headers: dict[str, str]):  # type: ignore[no-untyped-def]
-    return client.put(f"/api/v1/providers/{provider}/secret", json={"key": key}, headers=headers)
-
-
-# --- AC-8: contracts ---------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_secret_source_includes_encrypted_db() -> None:
-    annotation = SecretStatusResponse.model_fields["source"].annotation
-    assert "encrypted_db" in get_args(annotation), (
-        "RED (AC-8): SecretSource must gain the 'encrypted_db' literal (PLAN.md 2d)"
+def _put_secret(client, provider, key, headers):
+    return client.post(
+        "/api/v1/account/vault/keys",
+        headers=headers,
+        json={"provider_type": provider, "label": "encrypted proof", "secret": key},
     )
 
 
-@pytest.mark.asyncio
-async def test_put_secret_reports_encrypted_db_fingerprint_only(
-    repository: SQLiteRepository,
-    passphrase_env: None,
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    auth_secret: str,
-) -> None:
-    # Use one Admin account for the write.
-    monkeypatch.chdir(tmp_path)
-    sentinel = SENTINEL_PROVIDER_KEYS["exa"]
-    app = create_app([ControlAdapter("exa")], repository=repository)
-
-    with caplog.at_level("INFO"), TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-put"), UserRole.ADMIN
-        )
-        headers = raw_auth_headers(pair["access_token"])
-        response = _put_secret(client, "exa", sentinel, headers)
-
-    assert response.status_code == 200
+def _assert_metadata(response, sentinel):
+    assert response.status_code == 201, response.text
     body = response.json()
-    assert set(body) == {"provider", "presence", "fingerprint", "updated_at", "source"}
-    assert body["provider"] == "exa"
-    assert body["presence"] == "configured"
-    assert body["source"] == "encrypted_db"
-    assert re.fullmatch(FINGERPRINT_RE, body["fingerprint"])
-    assert_no_sentinels(response.text, (sentinel,), "PUT secret response")
-    assert_no_sentinels(caplog.text, (sentinel,), "PUT secret logs")
-    assert_no_sentinels(repr(SecretStatusResponse.model_validate(body)), (sentinel,), "model")
+    assert set(body) == set(VaultKeyDetails.model_fields)
+    assert body["provider_type"] == "exa" and body["generation"] == 1
+    assert body["status"] == "active"
+    assert_no_sentinels(response.text, (sentinel,), "credential response")
+    assert_no_sentinels(repr(VaultKeyDetails.model_validate(body)), (sentinel,), "model")
+    return body
 
 
-@pytest.mark.asyncio
-async def test_unknown_provider_secret_routes_stay_404(
-    repository: SQLiteRepository, passphrase_env: None, auth_secret: str
-) -> None:
-    # Use one Admin account for both verbs. Admin also reads.
-    app = create_app([], repository=repository)
+def _create_bound_provider(client, project_id, provider, secret, headers):
+    key = _put_secret(client, provider, secret, headers)
+    _assert_metadata(key, secret)
+    pool = client.post(
+        f"/api/v1/account/vault/keys/{key.json()['id']}/pools",
+        headers=headers,
+        json={
+            "label": "encrypted proof pool",
+            "project_id": project_id,
+            "rate": {"limit": None, "window_seconds": 60},
+            "operations": ["search"],
+        },
+    )
+    assert pool.status_code == 201, pool.text
+    assert_no_sentinels(pool.text, (secret,), "pool response")
+    return key
 
-    with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-ghost"), UserRole.ADMIN
-        )
-        headers = raw_auth_headers(pair["access_token"])
+
+async def _admin(client, repository, prefix):
+    pair = await register_system_admin_login(client, repository, temp_email(prefix))
+    return pair, raw_auth_headers(pair["access_token"])
+
+
+async def test_secret_source_includes_encrypted_db():
+    """Replacement contract is metadata-only and rejects a secret read field."""
+    for model in (CredentialInstanceRead, VaultKeyDetails):
+        assert "secret" not in model.model_fields
+        with pytest.raises(ValidationError):
+            model.model_validate({"secret": "forbidden"})
+
+
+async def test_put_secret_reports_encrypted_db_fingerprint_only(
+    repository,
+    passphrase_env,
+    caplog,
+    monkeypatch,
+    tmp_path,
+    auth_secret,
+):
+    sentinel = SENTINEL_PROVIDER_KEYS["exa"]
+    with caplog.at_level("INFO"), TestClient(create_app([], repository=repository)) as client:
+        _, headers = await _admin(client, repository, "enc-put")
+        response = _put_secret(client, "exa", sentinel, headers)
+        _assert_metadata(response, sentinel)
+        listed = client.get("/api/v1/account/vault/keys", headers=headers)
+        assert listed.status_code == 200
+        assert response.json() in listed.json()
+    assert_no_sentinels(caplog.text + listed.text, (sentinel,), "logs and list")
+
+
+async def test_unknown_provider_secret_routes_stay_404(repository, passphrase_env, auth_secret):
+    with TestClient(create_app([], repository=repository)) as client:
+        _, headers = await _admin(client, repository, "enc-ghost")
         put = client.put("/api/v1/providers/ghost/secret", json={"key": "unused"}, headers=headers)
         delete = client.delete("/api/v1/providers/ghost/secret", headers=headers)
+        assert put.status_code == delete.status_code == 404
+        # The removed routes never create a singleton slot, even with an admin token.
+        assert await repository.get_runtime_setting("secret.enc:ghost") is None
 
-    assert put.status_code == 404
-    assert delete.status_code == 404
 
-
-@pytest.mark.asyncio
-async def test_keenable_reports_keyless_public(
-    repository: SQLiteRepository, passphrase_env: None, auth_secret: str
-) -> None:
-    # Use one Developer account for the read.
-    app = create_app([], repository=repository)
-
-    with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-keen"), UserRole.DEVELOPER
-        )
-        headers = raw_auth_headers(pair["access_token"])
+async def test_keenable_reports_keyless_public(repository, passphrase_env, auth_secret):
+    with TestClient(create_app([], repository=repository)) as client:
+        _, headers = await _admin(client, repository, "enc-keen")
         response = client.get("/api/v1/providers/keenable", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["secret_presence"] == "keyless_public"
+        # A nonmember cannot use even a project's implicit keyless credentials.
+        pid = str((await seed_execution_project(repository)).project_id)
+        denied = client.post("/search", headers=headers, json={"project_id": pid, "query": "q"})
+        assert denied.status_code == 404
 
-    assert response.status_code == 200
-    assert response.json()["secret_presence"] == "keyless_public"
 
-
-# --- AC-3: ciphertext-only at rest over HTTP ---------------------------------
-
-
-@pytest.mark.asyncio
 async def test_put_secret_persists_ciphertext_only_rows(
-    repository: SQLiteRepository,
-    passphrase_env: None,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    auth_secret: str,
-) -> None:
-    # Use one Admin account for write and read. Admin also reads.
-    monkeypatch.chdir(tmp_path)
+    repository,
+    passphrase_env,
+    monkeypatch,
+    tmp_path,
+    auth_secret,
+):
     sentinel = SENTINEL_PROVIDER_KEYS["exa"]
-    app = create_app([ControlAdapter("exa")], repository=repository)
-
-    with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-persist"), UserRole.ADMIN
-        )
-        headers = raw_auth_headers(pair["access_token"])
+    with TestClient(create_app([], repository=repository)) as client:
+        _, headers = await _admin(client, repository, "enc-persist")
         response = _put_secret(client, "exa", sentinel, headers)
-        status = client.get("/api/v1/providers/exa", headers=headers)
+        body = _assert_metadata(response, sentinel)
+    from uuid import UUID
 
-    assert response.status_code == 200
-    assert response.json()["source"] == "encrypted_db"
-    assert status.json()["secret_presence"] == "configured"
-
-    envelope = await repository.get_runtime_setting("secret.enc:exa")
+    slot = credential_secret_slot(UUID(body["id"]), body["generation"])
+    envelope = await repository.get_runtime_setting("secret.enc:" + slot)
     assert isinstance(envelope, str)
-    assert_no_sentinels(envelope, (sentinel,), "secret.enc:exa row")
-
-    record = await repository.get_runtime_setting("secret.exa")
-    assert isinstance(record, dict)
-    assert set(record) == {"fingerprint", "updated_at"}
-    assert_no_sentinels(repr(record), (sentinel,), "secret.exa fingerprint record")
-
-    db_path = tmp_path / "enc-api.db"
+    assert_no_sentinels(envelope, (sentinel,), "credential ciphertext row")
+    assert await repository.get_runtime_setting("secret.exa") is None
+    assert await repository.get_runtime_setting("secret.enc:exa") is None
     assert_no_sentinels(
-        "\n".join(collect_sqlite_texts(db_path)), (sentinel,), "whole database file"
+        "\n".join(collect_sqlite_texts(tmp_path / "enc-api.db")), (sentinel,), "whole database file"
     )
 
 
-# --- AC-1: passphrase-mode PUT then adapter construction ---------------------
-
-
-@pytest.mark.asyncio
 async def test_put_key_makes_missing_adapter_testable(
-    repository: SQLiteRepository,
-    passphrase_env: None,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    auth_secret: str,
-) -> None:
-    # Use one Admin account for write and probe.
-    from freesearch.adapters import registry as registry_module
-
-    replacement = ControlAdapter("exa")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(registry_module, "_ADAPTERS", {ProviderName.EXA: lambda _c: replacement})
-    monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)
-    app = create_app(repository=repository)
-
-    with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-demand"), UserRole.ADMIN
+    repository,
+    passphrase_env,
+    monkeypatch,
+    tmp_path,
+    auth_secret,
+):
+    sentinel = SENTINEL_PROVIDER_KEYS["exa"]
+    adapter = ControlAdapter("exa")
+    install_adapter_map(monkeypatch, [adapter], secrets={"exa": sentinel})
+    with TestClient(create_app(None, repository=repository)) as client:
+        pair, headers = await _admin(client, repository, "enc-demand")
+        pid = str(
+            (
+                await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            ).project_id
         )
-        headers = raw_auth_headers(pair["access_token"])
-        write = _put_secret(client, "exa", SENTINEL_PROVIDER_KEYS["exa"], headers)
-        probe = client.post("/api/v1/providers/exa/test", headers=headers)
-
-    assert write.status_code == 200
-    assert write.json()["source"] == "encrypted_db"
-    assert probe.status_code == 200
-    assert probe.json()["ok"] is True
-    assert_no_sentinels(probe.text, (SENTINEL_PROVIDER_KEYS["exa"],), "probe response")
+        write = _create_bound_provider(client, pid, "exa", sentinel, headers)
+        assert write.status_code == 201
+        probe = client.post("/search", headers=headers, json={"project_id": pid, "query": "q"})
+        assert probe.status_code == 200, probe.text
+        assert probe.json()["provider"] == "exa"
+        assert adapter.search_calls == 1
+    assert_no_sentinels(probe.text, (sentinel,), "probe response")
 
 
-# --- DELETE semantics --------------------------------------------------------
-
-
-@pytest.mark.asyncio
 async def test_delete_secret_is_idempotent_and_clears_encrypted_row(
-    repository: SQLiteRepository,
-    passphrase_env: None,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    auth_secret: str,
-) -> None:
-    # Use one Admin account for all calls.
-    monkeypatch.chdir(tmp_path)
-    sentinel = SENTINEL_PROVIDER_KEYS["exa"]
-    app = create_app([ControlAdapter("exa")], repository=repository)
+    repository,
+    passphrase_env,
+    monkeypatch,
+    tmp_path,
+    auth_secret,
+):
+    from uuid import UUID
 
+    sentinel = SENTINEL_PROVIDER_KEYS["exa"]
+    app = create_app([], repository=repository)
     with TestClient(app) as client:
-        pair = await register_promote_login(
-            client, repository, temp_email("enc-del"), UserRole.ADMIN
-        )
-        headers = raw_auth_headers(pair["access_token"])
-        assert _put_secret(client, "exa", sentinel, headers).status_code == 200
-        first = client.delete("/api/v1/providers/exa/secret", headers=headers)
-        second = client.delete("/api/v1/providers/exa/secret", headers=headers)
-
-    for response in (first, second):
-        assert response.status_code == 200
-        assert response.json()["presence"] == "missing"
-        assert response.json()["source"] == "none"
-        assert_no_sentinels(response.text, (sentinel,), "DELETE secret response")
-    assert await repository.get_runtime_setting("secret.enc:exa") is None
+        _, headers = await _admin(client, repository, "enc-delete")
+        write = _put_secret(client, "exa", sentinel, headers)
+        body = _assert_metadata(write, sentinel)
+        slot = credential_secret_slot(UUID(body["id"]), body["generation"])
+        for expected in (200, 404):
+            response = client.delete(f"/api/v1/account/vault/keys/{body['id']}", headers=headers)
+            assert response.status_code == expected
+            assert_no_sentinels(response.text, (sentinel,), "delete credential")
+        assert await app.state.secret_store.get(slot) is None
+        listed = client.get("/api/v1/account/vault/keys", headers=headers)
+        assert listed.status_code == 200 and listed.json() == []
+    assert await repository.get_runtime_setting("secret.enc:" + slot) is None
 
 
-# --- AC-4: wrong key degrades without crash or leak ---------------------------
-
-
-@pytest.mark.asyncio
 async def test_wrong_passphrase_degrades_reads_without_crash_or_leak(
-    passphrase_env: None,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    auth_secret: str,
-) -> None:
-    # Use one Admin account. The token works after reopen on the same file.
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)
+    passphrase_env,
+    monkeypatch,
+    tmp_path,
+    auth_secret,
+):
     sentinel = SENTINEL_PROVIDER_KEYS["exa"]
-    db_path = tmp_path / "wrong-key.db"
-
-    first = await SQLiteRepository.open(db_path)
+    path = tmp_path / "wrong-key.db"
+    first = await SQLiteRepository.open(path)
     try:
-        app = create_app([ControlAdapter("exa")], repository=first)
-        with TestClient(app) as client:
-            pair = await register_promote_login(
-                client, first, temp_email("enc-wrong"), UserRole.ADMIN
+        with TestClient(create_app([], repository=first)) as client:
+            pair, headers = await _admin(client, first, "enc-wrong")
+            pid = str(
+                (await seed_execution_project(first, user_id=account_id_from_pair(pair))).project_id
             )
-            headers = raw_auth_headers(pair["access_token"])
-            assert _put_secret(client, "exa", sentinel, headers).status_code == 200
+            write = _create_bound_provider(client, pid, "exa", sentinel, headers)
+            assert write.status_code == 201
     finally:
         await first.close()
-
     monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", WRONG_PASSPHRASE)
     get_settings.cache_clear()
-    second = await SQLiteRepository.open(db_path)
+    second = await SQLiteRepository.open(path)
+    adapter = ControlAdapter("exa")
+    install_adapter_map(monkeypatch, [adapter], secrets={"exa": sentinel})
     try:
-        app = create_app([ControlAdapter("exa")], repository=second)
-        with TestClient(app) as client:
-            status = client.get("/api/v1/providers/exa", headers=headers)
-            probe = client.post("/api/v1/providers/exa/test", headers=headers)
-            bodies = status.text + probe.text
+        with TestClient(create_app([], repository=second)) as client:
+            status = client.get("/api/v1/account/vault/keys", headers=headers)
+            probe = client.post("/search", headers=headers, json={"project_id": pid, "query": "q"})
+        assert status.status_code == 200
+        assert probe.status_code == 503 and adapter.search_calls == 0
+        assert_no_sentinels(status.text + probe.text, (sentinel,), "wrong-key responses")
     finally:
         await second.close()
-
-    assert status.status_code == 200
-    assert status.json()["secret_presence"] in {"missing", "keyless_public"}
-    assert probe.status_code in {200, 503}
-    assert_no_sentinels(bodies, (sentinel,), "wrong-key API responses")
-    assert_no_sentinels(
-        "\n".join(collect_sqlite_texts(db_path)), (sentinel,), "wrong-key database file"
-    )
+    assert_no_sentinels("\n".join(collect_sqlite_texts(path)), (sentinel,), "wrong-key database")

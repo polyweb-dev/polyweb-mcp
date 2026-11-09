@@ -13,9 +13,10 @@ Feature: All-providers fanout search with ranked fusion
       | provider | urls                                                                                       | behavior |
       | exa      | https://example.com/exa-exclusive, https://example.com/consensus-page?utm_source=exa       | succeed  |
       | brave    | https://example.com/brave-exclusive, https://www.example.com/consensus-page/               | succeed  |
-    When I submit a fanout search for "fusion probe" with limit 10
+    And the fanout providers have pooled vault keys
+    When I submit a fanout search for "fusion probe" restricted to providers "exa, brave"
     Then the response provider should be "aggregated"
-    And the participating providers should be "exa, brave"
+    And the participating providers should include exactly "exa, brave" in any order
     And the fused result count should be 3
     And the top fused result URL should contain "consensus-page"
     And the top fused result should fuse sources "exa, brave"

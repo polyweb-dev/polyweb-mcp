@@ -15,7 +15,8 @@ from freesearch.configuration.provider_config import ProviderConfig
 from freesearch.infrastructure.resilience import ProviderOperationError
 from freesearch.models.contracts import ProviderError, SearchRequest
 from freesearch.models.provider_limits import AuthMode, LimitOperation
-from freesearch.routers.api import _fanout_outcomes, _terminal_tavily_402
+from freesearch.services.execution import _fanout_outcomes
+from freesearch.services.monitoring import _terminal_quota_402
 
 
 class _FakeSDK:
@@ -32,13 +33,13 @@ def _keyless_adapter() -> tuple[TavilyAdapter, httpx.AsyncClient]:
 
 
 def test_construction_keyless_without_key() -> None:
-    from freesearch.routers.control import _build_with_resolved_secret
+    from freesearch.services.provider_runtime import (
+        build_adapter_with_secret as _build_with_resolved_secret,
+    )
 
     client = httpx.AsyncClient(timeout=30.0)
     try:
-        adapter = _build_with_resolved_secret(
-            TavilyAdapter, client, None, config=ProviderConfig()
-        )
+        adapter = _build_with_resolved_secret(TavilyAdapter, client, None, config=ProviderConfig())
         assert isinstance(adapter, TavilyAdapter)
         assert adapter.limit_auth_mode is AuthMode.KEYLESS
     finally:
@@ -75,7 +76,7 @@ def _terminal_402() -> ProviderOperationError:
 
 def test_terminal_402_single_preserved() -> None:
     error = _terminal_402()
-    assert _terminal_tavily_402(error) is error
+    assert _terminal_quota_402(error) is True
     other = ProviderOperationError(
         ProviderError(
             provider="tavily",
@@ -85,8 +86,8 @@ def test_terminal_402_single_preserved() -> None:
             status_code=429,
         )
     )
-    assert _terminal_tavily_402(other) is None
-    assert _terminal_tavily_402(ValueError("boom")) is None
+    assert _terminal_quota_402(other) is False
+    assert _terminal_quota_402(ValueError("boom")) is False
 
 
 async def test_terminal_402_fanout_cancels_and_raises() -> None:
@@ -116,14 +117,12 @@ async def test_terminal_402_single_call_propagates() -> None:
     assert excinfo.value.error.code == "quota_exhausted"
     assert excinfo.value.error.status_code == 402
     assert excinfo.value.error.retryable is False
-    assert excinfo.value.error.message == (
-        "Tavily is out of Credits. Wait until reset or upgrade."
-    )
+    assert excinfo.value.error.message == ("Tavily is out of Credits. Wait until reset or upgrade.")
 
 
 def test_mcp_keyless_build_registers_tavily() -> None:
     namespace = SimpleNamespace(name="tavily", limit_auth_mode=AuthMode.KEYLESS)
     assert namespace.limit_auth_mode is AuthMode.KEYLESS
-    request = SearchRequest(query="q", limit=1)
+    request = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=1)
     assert request.query == "q"
     assert LimitOperation.SEARCH is not None

@@ -4,17 +4,21 @@ import type { FetchResponse, SearchResponse } from "@/domains/execution"
 import { initialPlaygroundState } from "./playgroundSlice"
 import type { ExecutionStatus, PlaygroundMode, PlaygroundState } from "./playgroundSlice"
 
-/** Legacy unowned key. It is discarded, never migrated to an account. */
-export const PLAYGROUND_PERSIST_KEY = "freesearch:playground:v1"
-export const PLAYGROUND_PERSIST_VERSION = 1
+/**
+ * Legacy v1 prefix: the unowned key and every account key below it. They are
+ * discarded, never migrated to a project.
+ */
+export const LEGACY_PLAYGROUND_PERSIST_KEY = "freesearch:playground:v1"
+export const PLAYGROUND_PERSIST_KEY = "freesearch:playground:v2"
+export const PLAYGROUND_PERSIST_VERSION = 2
 
 /**
- * Account-scoped storage key. Account B can never rehydrate the drafts, the
- * results, or the dialogs that account A stored, because rehydration reads one
- * key only.
+ * Project-scoped storage key. Another account or another project can never
+ * rehydrate the drafts or results that one project stored, because
+ * rehydration reads one key only.
  */
-export function playgroundPersistKey(accountId: string): string {
-  return `${PLAYGROUND_PERSIST_KEY}:${accountId}`
+export function playgroundPersistKey(accountId: string, projectId: string): string {
+  return `${PLAYGROUND_PERSIST_KEY}:${accountId}:${projectId}`
 }
 
 /**
@@ -48,7 +52,7 @@ function isFetchResponse(value: unknown): value is FetchResponse {
   return isRecord(value) && isRecord(value.document) && typeof value.document.url === "string"
 }
 
-/** Only version-1 payloads are trusted; anything else falls back to defaults. */
+/** Only current-version payloads are trusted; anything else falls back to defaults. */
 function hasSupportedVersion(value: Record<string, unknown>): boolean {
   const persist = value._persist
   return isRecord(persist) && persist.version === PLAYGROUND_PERSIST_VERSION
@@ -221,27 +225,43 @@ export function createPlaygroundStorage(): PlaygroundStorage {
   }
 }
 
-/**
- * Discard the legacy unowned snapshot.
- *
- * The old key belongs to no account, so the client drops it instead of
- * assigning those results to whoever signs in first.
- */
-export function discardLegacyPlaygroundSnapshot(): void {
-  removeQuietly(readLocalStorage(), PLAYGROUND_PERSIST_KEY)
+function legacyKeys(storage: Storage): string[] {
+  const keys: string[] = []
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index)
+      if (key !== null && key.startsWith(LEGACY_PLAYGROUND_PERSIST_KEY)) keys.push(key)
+    }
+  } catch {
+    // Unreadable storage holds nothing this client can restore.
+  }
+  return keys
 }
 
 /**
- * Persistence policy for one confirmed account: one account key, one version,
- * and bounded writes. The legacy unowned snapshot is discarded here, before any
- * rehydration, so the first mount after this change cannot restore it.
+ * Discard every legacy v1 snapshot: the unowned key and the account keys.
+ *
+ * A v1 snapshot belongs to no project, so the client drops it instead of
+ * assigning those drafts and results to whichever project opens first.
+ */
+export function discardLegacyPlaygroundSnapshot(): void {
+  const storage = readLocalStorage()
+  if (storage === null) return
+  for (const key of legacyKeys(storage)) removeQuietly(storage, key)
+}
+
+/**
+ * Persistence policy for one project of one confirmed account: one project
+ * key, one version, and bounded writes. It touches no storage; the store
+ * provider discards the legacy snapshots in its mount effect, before
+ * persistence starts.
  */
 export function createPlaygroundPersistConfig(
-  accountId: string
+  accountId: string,
+  projectId: string
 ): PersistConfig<PlaygroundState> {
-  discardLegacyPlaygroundSnapshot()
   return {
-    key: playgroundPersistKey(accountId),
+    key: playgroundPersistKey(accountId, projectId),
     keyPrefix: "",
     version: PLAYGROUND_PERSIST_VERSION,
     storage: createPlaygroundStorage(),

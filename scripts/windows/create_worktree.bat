@@ -247,6 +247,8 @@ if "%COPY_DB%"=="1" (
         set "DB_USED=copied"
         echo [WARNING] The copied freesearch.db contains stored provider credentials
         echo           and real request history - treat it as sensitive.
+        echo [INFO] The copy opens only if it is at the alpha baseline revision;
+        echo        an older database is refused with reset instructions.
     ) else (
         echo [2/6] [INFO] --copy-db given but no freesearch.db found in main checkout. Skipping copy.
     )
@@ -353,7 +355,9 @@ echo.
 echo Options:
 echo   --base ^<ref^>   Base ref for a NEW branch (default: main; ignored if the branch exists)
 echo   --slot ^<N^>     Worktree slot 1-9; sets .env ports MCP 80N0 / API 80N1 / VITE 5174+N
-echo   --copy-db      Copy the main checkout's freesearch.db (contains credentials/history)
+echo   --copy-db      Copy the main checkout's freesearch.db (contains credentials/history).
+echo                  A copy works only if the main database is already at the alpha
+echo                  baseline; otherwise the new worktree refuses it with reset steps.
 echo.
 echo Examples:
 echo   create_worktree.bat my-feature docker

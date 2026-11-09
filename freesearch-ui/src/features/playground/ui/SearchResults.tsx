@@ -1,10 +1,14 @@
 import type { ReactNode } from "react"
 import type { SearchResponse } from "@/domains/execution"
-import { providerIdentity } from "@/domains/providers"
+import { getProviderPrices, providerIdentity } from "@/domains/providers"
+import { useScopedResource } from "@/shared/lib/useScopedResource"
+import { formatLatency } from "@/shared/lib/formatTime"
+import { Button } from "@/shared/ui/button"
 import { InspectorSplitPane } from "@/shared/ui/InspectorSplitPane"
 import { JsonViewer } from "@/shared/ui/JsonViewer"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import type { PlaygroundController } from "../model/usePlaygroundController"
+import { usageTelemetry } from "../model/usageTelemetry"
 import { ResultCard } from "./ResultCard"
 import { ResultInspector } from "./ResultInspector"
 import { WaterfallPanel } from "./WaterfallPanel"
@@ -18,19 +22,34 @@ export interface SearchResultsProps {
 function jsonInspector(search: SearchResponse, copied: boolean, onCopy: () => void): ReactNode {
   return (
     <div className="min-w-0 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)]">
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-3 py-1.5">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-3 py-1">
         <span className="text-[12px] text-[var(--muted)]">Raw response</span>
-        <button
-          type="button"
-          onClick={onCopy}
-          className="text-[13px] text-[var(--signal)] hover:underline transition-colors"
-        >
+        <Button type="button" variant="ghost" size="sm" onClick={onCopy}>
           {copied ? "Copied" : "Copy JSON"}
-        </button>
+        </Button>
       </div>
       <JsonViewer value={search} ariaLabel="Raw search response" className="p-3" />
     </div>
   )
+}
+
+/** One label/value pair of the telemetry bar. */
+function telemetryItem(label: string, value: ReactNode): ReactNode {
+  return (
+    <div className="flex items-center gap-2">
+      <span>{label}</span>
+      <span className="font-medium text-[var(--text-strong)]">{value}</span>
+    </div>
+  )
+}
+
+/** Who answered: the provider's logo and name, or the fused provider count. */
+function resolvedBy(search: SearchResponse): ReactNode {
+  if (search.selectedProviderId === "aggregated") {
+    return <span>All providers ({search.participatingProviders?.length ?? "multiple"} fused)</span>
+  }
+  const identity = providerIdentity(search.selectedProviderId)
+  return <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
 }
 
 /** Widescreen search results: telemetry bar, JSON inspector, list + inspector. */
@@ -44,55 +63,42 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
     copyToClipboard,
     isSearching,
     isFetching,
+    canFetch,
     handleFetchResult,
   } = controller
-  const resolvedIdentity = providerIdentity(activeSearch.selectedProviderId)
-  // Tavily reports its native usage in vendor Credits; every other provider
-  // keeps the generic Units label.
-  const usageLabel = activeSearch.selectedProviderId === "tavily" ? "Credits" : "Units"
+  const needsPrice = activeSearch.costUnitKind !== "USD" && activeSearch.costUnitKind !== "FREE" &&
+    activeSearch.selectedProviderId !== "aggregated"
+  const prices = useScopedResource({
+    scopeKey: activeSearch.selectedProviderId,
+    load: getProviderPrices,
+    enabled: needsPrice,
+  })
+  const price = prices.status === "ready" ? prices.data.find((item) =>
+    providerIdentity(item.providerType).id === providerIdentity(activeSearch.selectedProviderId).id) : undefined
+  const usage = usageTelemetry(activeSearch, price)
+  const showAttribution = new Set(activeSearch.results.flatMap((result) =>
+    (result.sources?.length ? result.sources : [result.providerId]).map((id) => providerIdentity(id).id)
+  )).size > 1
   return (
     <div className="space-y-6 pt-2">
-      {/* Telemetry bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 text-[13px] py-3.5 px-4.5 rounded-xl bg-[var(--elevated)] border border-[var(--border-subtle)] text-[var(--muted)]">
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--elevated)] py-2 pl-4 pr-2 text-[13px] text-[var(--muted)]">
         <div className="flex flex-wrap items-center gap-6 sm:gap-8 tnum">
-          <div className="flex items-center gap-2">
-            <span>Latency</span>
-            <span className="font-medium text-[var(--text-strong)]">{activeSearch.executionTimeMs}ms</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span>{usageLabel}</span>
-            <span className="font-medium text-[var(--text-strong)]">{activeSearch.costEstimateCredits}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span>Resolved by</span>
-            <span className="inline-flex items-center gap-1.5 font-medium text-[var(--signal)]">
-              {activeSearch.selectedProviderId === "aggregated" ? (
-                <span>All Providers ({activeSearch.participatingProviders?.length ?? "multiple"} fused)</span>
-              ) : (
-                <ProviderBadge
-                  providerId={resolvedIdentity.id}
-                  name={resolvedIdentity.name}
-                  logoClassName="size-3.5"
-                />
-              )}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span>Results</span>
-            <span className="font-medium text-[var(--text-strong)]">{activeSearch.results.length}</span>
-          </div>
+          {telemetryItem("Latency", formatLatency(activeSearch.executionTimeMs))}
+          {telemetryItem(usage.label, usage.value)}
+          {telemetryItem("Resolved by", resolvedBy(activeSearch))}
         </div>
 
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="form"
+          aria-expanded={showJsonInspector}
           onClick={() => setShowJsonInspector(!showJsonInspector)}
-          className="text-[13px] font-medium text-[var(--signal)] hover:underline transition-colors"
         >
           {showJsonInspector ? "Hide raw JSON" : "Inspect raw JSON"}
-        </button>
+        </Button>
       </div>
 
-      {/* JSON inspector toggle */}
       {showJsonInspector &&
         jsonInspector(activeSearch, copied, () =>
           copyToClipboard(JSON.stringify(activeSearch, null, 2))
@@ -105,10 +111,9 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
         detailLabel="Result inspector and execution waterfall"
         primary={
           <div className="min-w-0 space-y-3">
-            <div className="flex items-center justify-between text-[13px] text-[var(--muted)] pb-1">
-              <span>Returned results ({activeSearch.results.length})</span>
-              <span>Select item to inspect</span>
-            </div>
+            <p className="pb-1 text-[13px] text-[var(--muted)]">
+              Returned results ({activeSearch.results.length})
+            </p>
 
             <div className="space-y-2">
               {activeSearch.results.map((res) => (
@@ -118,6 +123,8 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
                   selected={selectedResultForPreview?.id === res.id}
                   isSearching={isSearching}
                   isFetching={isFetching}
+                  canFetch={canFetch}
+                  showAttribution={showAttribution}
                   onSelect={setSelectedResultForPreview}
                   onFetch={(selected) => void handleFetchResult(selected)}
                 />

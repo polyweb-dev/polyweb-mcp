@@ -42,7 +42,7 @@ Feature: Tavily keyed Credits through synthetic headers
     Given Tavily keyed and keyless adapters with recording SDKs
     When I send Tavily full search and extract params on both rails
     Then both Tavily rails forward identical search depth topic domains answer content images country and extract depth format query chunks images
-    And a Tavily explicit depth conflict denies before vendor I/O
+    And a Tavily nested depth overrides common mode on both rails with two-Credit cost
 
   Scenario: T08 Tavily search debits basic 1 and advanced 2 Credits
     Given a Tavily dev pool with 1000 Credits remaining
@@ -155,10 +155,11 @@ Feature: Tavily keyed Credits through synthetic headers
 
   Scenario: T20 Tavily fanout holds other task with terminal 402 then local denial
     Given a Tavily fanout app with a held other task and vendor 402
-    When I run Tavily fanout search with client fallback enabled
+    And the Tavily fanout uses pooled Tavily and Brave credentials
+    When I run pooled Tavily fanout search with client fallback enabled
     Then the Tavily fanout held answer is terminal 402 with the other task cancelled
-    And the Tavily fanout released answer fuses other success with local denial and no new vendor attempt
-    And the Tavily single fallback answer is a local 402 with no new vendor attempt
+    And the pooled Tavily fanout released answer has Brave success and local denial without another vendor attempt
+    And the pooled Tavily single fallback is a local 402 with no new vendor attempt or debit
 
   Scenario: T21 Tavily 429 then success sleeps exact Retry-After on both operations
     Given a Tavily adapter with 429 then success and recording sleeper

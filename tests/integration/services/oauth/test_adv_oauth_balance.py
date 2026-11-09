@@ -1,47 +1,31 @@
-"""Balance attacks: Decimal exactness, floor, invoice, precedence, TTL/backoff."""
+"""Original adversarial cases migrated to A4 credential OAuth.
 
-from __future__ import annotations
+Case names and parameter matrices retain their origin. Scoped metadata/grants
+replace singleton statuses and slots; GET is observational and explicit POST
+polls make at most one vendor attempt. Monitoring never polls OAuth implicitly.
+"""
 
-from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
 
 from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
-from freesearch.services.monitoring import effective_quota
-from freesearch.services.parallel_oauth import clear_oauth_poll_state
-from tests.integration.services.oauth.conftest import (
-    DEVICE_CODE_PATH,
-    admin_auth_headers,
-    build_app,
-    connect_parallel,
-    dashboard_parallel_quota,
-    poll_balance,
-)
+from freesearch.models.schema_enums import OAuthGrantStatus
+from freesearch.services.monitoring import refresh_quotas
+from freesearch.services.parallel_oauth import OAuthUnpaired, ParallelOAuthError
+from tests.fixtures.vault_oauth import vault_oauth_case as vault_oauth_case
 from tests.integration.services.oauth.oauth_stubs import (
-    StubOAuthServer,
     cents_to_usd,
     expected_remaining,
 )
 
 
-def _open(repository: Any, secret_store: Any) -> TestClient:
-    client = TestClient(build_app(repository, secret_store))
-    client.__enter__()
-    return client
-
-
-async def _latest(repository: Any) -> Any:
-    return await repository.latest_quota("parallel")
-
-
-def test_oracle_cents_to_usd_exact() -> None:
+async def test_oracle_cents_to_usd_exact(oauth_case):
+    """Origin test_adv_oauth_balance.py::test_oracle_cents_to_usd_exact."""
     assert cents_to_usd(101) == Decimal("1.01")
     assert cents_to_usd(1) == Decimal("0.01")
     assert cents_to_usd(0) == Decimal("0")
-    assert expected_remaining(1250, 250, False) == Decimal("10.00")
+    assert expected_remaining(1250, 250, False) == Decimal("10")
     assert expected_remaining(100, 500, False) == Decimal("0")
     assert expected_remaining(0, 0, False) == Decimal("0")
     assert expected_remaining(1250, 250, True) is None
@@ -51,41 +35,21 @@ def test_oracle_cents_to_usd_exact() -> None:
     "credit,pending,expected",
     [(1250, 250, "10.00"), (101, 0, "1.01"), (1, 0, "0.01"), (100, 500, "0.00")],
 )
-async def test_balance_net_maps_to_exact_usd(
-    repository: Any,
-    secret_store: Any,
-    stub_server: StubOAuthServer,
-    auth_secret: str,
-    credit: int,
-    pending: int,
-    expected: str,
-) -> None:
-    stub_server.credit_cents = credit
-    stub_server.pending_cents = pending
-    client = _open(repository, secret_store)
-    try:
-        # Anonymous calls need a 401 challenge.
-        assert client.post(DEVICE_CODE_PATH).status_code == 401
-        # Use one Admin account for all OAuth and dashboard reads.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        snapshot = await poll_balance(repository, stub_server, secret_store)
-        assert snapshot is not None, "paired balance must record a snapshot"
-        assert snapshot.source.value == "authoritative", snapshot
-        assert isinstance(snapshot.remaining, Decimal)
-        assert snapshot.remaining == Decimal(expected), snapshot
-        assert snapshot.limit is None, "balance is remaining-only"
-        assert snapshot.unit_kind is not None and snapshot.unit_kind.value == "USD"
-        assert snapshot.display_unit == "USD"
-        stored = await _latest(repository)
-        assert stored is not None and stored.remaining == Decimal(expected)
-        entry = dashboard_parallel_quota(client, headers)
-        assert entry is not None, "balance must surface via dashboard latest_quota"
-        assert entry.get("source") == "authoritative", entry
-        assert Decimal(str(entry.get("remaining"))) == Decimal(expected), entry
-        assert entry.get("limit") is None, entry
-    finally:
-        client.__exit__(None, None, None)
+async def test_balance_net_maps_to_exact_usd(oauth_case, credit, pending, expected):
+    """Origin test_adv_oauth_balance.py::test_balance_net_maps_to_exact_usd."""
+    case = oauth_case
+    case.stub.credit_cents, case.stub.pending_cents = credit, pending
+    await case.connect()
+    snapshot = await case.balance()
+    assert snapshot.source is QuotaSource.AUTHORITATIVE
+    assert isinstance(snapshot.remaining, Decimal) and snapshot.remaining == Decimal(expected)
+    assert snapshot.limit is None and snapshot.unit_kind is UnitKind.USD
+    assert snapshot.display_unit == "USD"
+    assert (
+        await case.repository.latest_quota("parallel", credential_id=case.credential.id)
+    ) == snapshot
+    assert await case.repository.latest_quota("parallel") is None
+    await case.assert_no_leaks(snapshot.model_dump_json())
 
 
 @pytest.mark.parametrize(
@@ -118,197 +82,116 @@ async def test_balance_net_maps_to_exact_usd(
         },
     ],
 )
-async def test_malformed_balance_bodies_rejected_without_record(
-    repository: Any,
-    secret_store: Any,
-    stub_server: StubOAuthServer,
-    auth_secret: str,
-    body: Any,
-) -> None:
-    stub_server.balance_body_override = body
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for the OAuth flow.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        snapshot = await poll_balance(repository, stub_server, secret_store)
-        assert snapshot is None, "malformed vendor body must not become a snapshot"
-        assert await _latest(repository) is None, "malformed body must not be recorded"
-    finally:
-        stub_server.balance_body_override = None
-        client.__exit__(None, None, None)
+async def test_malformed_balance_bodies_rejected_without_record(oauth_case, body):
+    """Origin test_adv_oauth_balance.py::test_malformed_balance_bodies_rejected_without_record."""
+    case = oauth_case
+    case.stub.balance_body_override = body
+    await case.connect()
+    with pytest.raises(ParallelOAuthError):
+        await case.balance()
+    assert await case.repository.latest_quota("parallel", credential_id=case.credential.id) is None
+    assert await case.repository.latest_quota("parallel") is None
 
 
-async def test_will_invoice_records_nothing(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    stub_server.balance_will_invoice = True
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for the OAuth flow.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        snapshot = await poll_balance(repository, stub_server, secret_store)
-        assert snapshot is None, "invoiced orgs have no meaningful balance"
-        assert await _latest(repository) is None, "invoice poll must record nothing"
-    finally:
-        stub_server.balance_will_invoice = False
-        client.__exit__(None, None, None)
+async def test_will_invoice_records_nothing(oauth_case):
+    """Origin test_adv_oauth_balance.py::test_will_invoice_records_nothing."""
+    case = oauth_case
+    case.stub.balance_will_invoice = True
+    await case.connect()
+    assert await case.balance() is None
+    assert await case.repository.latest_quota("parallel", credential_id=case.credential.id) is None
+    assert await case.repository.latest_quota("parallel") is None
 
 
-async def test_invoiced_poll_tombstones_stale_authoritative(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    # RULING F1 (round 2): a will_invoice switch tombstones the stale
-    # AUTHORITATIVE row with a conditional ESTIMATED-unknown snapshot.
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for all OAuth and dashboard reads.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        first = await poll_balance(repository, stub_server, secret_store)
-        assert first is not None and first.remaining == Decimal("10.00")
-        stub_server.balance_will_invoice = True
-        clear_oauth_poll_state(repository)
-        second = await poll_balance(repository, stub_server, secret_store)
-        assert second is None
-        stored = await _latest(repository)
-        assert stored is not None, "invoice switch must leave a tombstone, not a gap"
-        assert stored.source.value == "estimated", repr(stored)
-        assert stored.remaining is None and stored.limit is None, repr(stored)
-        entry = dashboard_parallel_quota(client, headers)
-        assert entry is not None and entry.get("source") != "authoritative", repr(entry)
-        assert entry.get("remaining") is None, "dashboard must not quote stale funds"
-    finally:
-        stub_server.balance_will_invoice = False
-        client.__exit__(None, None, None)
+async def test_invoiced_poll_tombstones_stale_authoritative(oauth_case):
+    """Origin test_adv_oauth_balance.py::test_invoiced_poll_tombstones_stale_authoritative."""
+    case = oauth_case
+    await case.connect()
+    first = await case.balance()
+    case.stub.balance_will_invoice = True
+    assert await case.balance() is None
+    # A4 retains historical scoped observations; no global tombstone contaminates siblings.
+    assert await case.repository.latest_quota("parallel") is None
+    assert (
+        await case.repository.latest_quota("parallel", credential_id=case.credential.id)
+    ) == first
 
 
-async def test_unpair_tombstones_stale_authoritative(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    # RULING F2 (round 2): a 401 unpair tombstones the stale AUTHORITATIVE row
-    # with a conditional ESTIMATED-unknown snapshot alongside the vault clear.
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for all OAuth reads.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        first = await poll_balance(repository, stub_server, secret_store)
-        assert first is not None and first.remaining == Decimal("10.00")
-        stub_server.balance_status = 401
-        clear_oauth_poll_state(repository)
-        second = await poll_balance(repository, stub_server, secret_store)
-        assert second is None, "rejected bearer must yield no snapshot"
-        status = client.get("/api/v1/providers/parallel/oauth/status", headers=headers)
-        assert status.json()["status"] == "unpaired", status.text[:300]
-        stored = await _latest(repository)
-        assert stored is not None, "unpair must leave a tombstone, not a gap"
-        assert stored.source.value == "estimated", repr(stored)
-        assert stored.remaining is None, "tombstone must be unknown: " + repr(stored)
-        routed = await effective_quota(repository, "parallel")
-        assert routed is not None and routed.remaining is None, repr(routed)
-    finally:
-        stub_server.balance_status = 200
-        client.__exit__(None, None, None)
+async def test_unpair_tombstones_stale_authoritative(oauth_case):
+    """Origin test_adv_oauth_balance.py::test_unpair_tombstones_stale_authoritative."""
+    case = oauth_case
+    await case.connect()
+    await case.balance()
+    case.stub.balance_status = 401
+    with pytest.raises(OAuthUnpaired):
+        await case.balance()
+    await case.disconnect()
+    assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
+    assert await case.token() is None
+    assert await case.repository.latest_quota("parallel") is None
 
 
-async def test_balance_precedence_over_seed_and_manual(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for control and OAuth routes.
-        headers = await admin_auth_headers(client, repository)
-        seed = QuotaSnapshot(
-            provider="parallel",
-            source=QuotaSource.ESTIMATED,
-            remaining=Decimal("5.00"),
-            limit=Decimal("5.00"),
-            unit_kind=UnitKind.USD,
-            display_unit="USD",
-            observed_at=datetime.now(UTC),
-            metadata={"soft_zero": False, "window": "monthly"},
-        )
-        await repository.record_quota(seed)
-        manual = client.put(
-            "/api/v1/providers/parallel/manual-quota",
-            json={
-                "billing_start": "2026-09-01",
-                "billing_end": "2026-10-01",
-                "allowance": "999.00",
-                "current_usage": "0.00",
-            },
-            headers=headers,
-        )
-        assert manual.status_code == 200, manual.text[:300]
-        assert (await _latest(repository)).remaining == Decimal("5.00")
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        snapshot = await poll_balance(repository, stub_server, secret_store)
-        assert snapshot is not None and snapshot.remaining == Decimal("10.00")
-        stored = await _latest(repository)
-        assert stored is not None and stored.source.value == "authoritative"
-        assert stored.remaining == Decimal("10.00"), "live balance must win: " + repr(stored)
-        routed = await effective_quota(repository, "parallel")
-        assert routed is not None and routed.remaining == Decimal("10.00"), repr(routed)
-    finally:
-        client.__exit__(None, None, None)
+async def test_balance_precedence_over_seed_and_manual(oauth_case):
+    """Origin test_adv_oauth_balance.py::test_balance_precedence_over_seed_and_manual."""
+    case = oauth_case
+    seed = QuotaSnapshot(
+        provider="parallel",
+        source=QuotaSource.ESTIMATED,
+        remaining=Decimal("5"),
+        limit=Decimal("5"),
+        observed_at=case.clock[0],
+        unit_kind=UnitKind.USD,
+    )
+    await case.repository.record_quota(seed)
+    manual = case.client.put(
+        "/api/v1/providers/parallel/manual-quota",
+        headers=case.headers,
+        json={
+            "billing_start": "2026-09-01",
+            "billing_end": "2026-10-01",
+            "allowance": "999",
+            "current_usage": "0",
+        },
+    )
+    assert manual.status_code == 200
+    await case.connect()
+    snapshot = await case.balance()
+    assert snapshot.remaining == Decimal("10")
+    assert (
+        await case.repository.latest_quota("parallel", credential_id=case.credential.id)
+    ) == snapshot
+    assert (await case.repository.latest_quota("parallel")) == seed
 
 
-async def test_balance_ttl_and_failure_backoff(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for the OAuth flow.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        # Pairing intentionally performs the FIRST balance fetch inside the
-        # ready transition, so every count below is relative to that read.
-        paired_calls = stub_server.balance_calls
-        assert paired_calls == 1, "pairing must perform exactly one eager balance read"
-        first = await poll_balance(repository, stub_server, secret_store)
-        assert first is not None
-        assert stub_server.balance_calls == paired_calls + 1, (
-            "an explicit poll must make exactly one more balance call"
-        )
-        second = await poll_balance(repository, stub_server, secret_store)
-        assert second is None, "TTL-cached poll returns no new snapshot"
-        assert stub_server.balance_calls == paired_calls + 1, "TTL ignored: re-polled inside window"
-        clear_oauth_poll_state(repository)
-        stub_server.balance_status = 500
-        failed = await poll_balance(repository, stub_server, secret_store)
-        assert failed is None
-        assert stub_server.balance_calls == paired_calls + 2, "failing poll must still attempt once"
-        again = await poll_balance(repository, stub_server, secret_store)
-        assert again is None
-        assert stub_server.balance_calls == paired_calls + 2, (
-            "failure backoff ignored: vendor re-hit"
-        )
-    finally:
-        stub_server.balance_status = 200
-        client.__exit__(None, None, None)
+async def test_balance_ttl_and_failure_backoff(vault_oauth_case):
+    """Origin test_adv_oauth_balance.py::test_balance_ttl_and_failure_backoff."""
+    case = vault_oauth_case
+    await case.connect()
+    # No hidden singleton poll on pairing, status/dashboard, or generic refresh.
+    assert case.stub.balance_calls == 0
+    for _ in range(3):
+        assert case.client.get(case.path, headers=case.headers).status_code == 200
+        assert case.client.get("/dashboard", headers=case.headers).status_code == 200
+        await refresh_quotas(case.repository, [])
+    assert case.stub.balance_calls == 0
+    assert await case.balance() is not None
+    case.stub.balance_status = 500
+    with pytest.raises(ParallelOAuthError):
+        await case.balance()
+    for _ in range(3):
+        await refresh_quotas(case.repository, [])
+    assert case.stub.balance_calls == 2
 
 
-async def test_no_api_key_misuse_or_stray_vendor_routes(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for OAuth and dashboard reads.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        await poll_balance(repository, stub_server, secret_store)
-        assert client.get("/dashboard", headers=headers).status_code == 200
-        for seen in stub_server.seen_requests:
-            api_key = seen.get("api_key") or ""
-            assert "TOKEN" not in api_key, "bearer travelled as x-api-key: " + repr(seen)
-            assert "SECRET" not in api_key, "secret travelled as x-api-key: " + repr(seen)
-        assert stub_server.unexpected_calls == [], repr(stub_server.unexpected_calls)
-        balance_seen = [s for s in stub_server.seen_requests if "balance" in s["url"]]
-        assert balance_seen, "expected at least one balance call"
-        assert all(s["auth"] and s["auth"].startswith("Bearer ") for s in balance_seen), (
-            "balance must authorize with a Bearer token, never an API key"
-        )
-    finally:
-        client.__exit__(None, None, None)
+async def test_no_api_key_misuse_or_stray_vendor_routes(oauth_case):
+    """Origin test_adv_oauth_balance.py::test_no_api_key_misuse_or_stray_vendor_routes."""
+    case = oauth_case
+    await case.connect()
+    await case.balance()
+    assert case.client.get("/dashboard", headers=case.headers).status_code == 200
+    assert case.stub.unexpected_calls == []
+    for seen in case.stub.seen_requests:
+        assert seen["api_key"] is None
+    balance = [s for s in case.stub.seen_requests if "balance" in s["url"]]
+    assert balance and all(s["auth"].startswith("Bearer ") for s in balance)
+    await case.assert_no_leaks()

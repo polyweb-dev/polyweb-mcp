@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
@@ -34,8 +34,10 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.users import AuthProvider, UserRole, normalize_email
+from freesearch.models.project_permissions import ProjectPermission
+from freesearch.models.users import AuthProvider, normalize_email
 from freesearch.persistence.database_migrations import (
+    DatabaseResetRequired,
     database_status,
     migration_head,
     upgrade_database,
@@ -44,7 +46,9 @@ from freesearch.persistence.database_migrations import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow, local_password_hash
 from freesearch.routers.api import create_app
-from tests.fixtures.auth import configure_bdd_secret
+from tests.fixtures.auth import account_id_from_pair, configure_bdd_secret
+from tests.fixtures.execution import _install_bdd_adapters, bdd_project_id
+from tests.fixtures.project_order import seed_order_pools
 
 _TEST_PASSWORD = "StrongPass123!x-UsersBDD"
 
@@ -122,7 +126,6 @@ def _create_local_account(context: Any, email: str) -> None:
             created = await database.create({"email": email, "hashed_password": hashed})
             await session.refresh(created)
             context.created_email = created.email
-            context.created_role = created.role
             context.created_hash = str(created.hashed_password)
             context.created_id = str(created.id)
             return created
@@ -140,11 +143,23 @@ def step_when_create_local_account(context: Any, email: str) -> None:
     _create_local_account(context, email)
 
 
-@then('the stored account should use email "{email}" and role "{role}"')
-def step_then_account_email_role(context: Any, email: str, role: str) -> None:
+@then('the stored account should use email "{email}" and hold no system role')
+def step_then_account_email_no_role(context: Any, email: str) -> None:
+    from freesearch.persistence.projects import SystemRoleAssignmentRow
+
     assert context.created_email == email
-    assert context.created_role == role
     assert normalize_email("Ops@Example.COM") == "ops@example.com"
+
+    async def _roles() -> list[str]:
+        async with context.repository.session() as session:
+            rows = await session.execute(
+                select(SystemRoleAssignmentRow.role_key).where(
+                    SystemRoleAssignmentRow.user_id == context.created_id
+                )
+            )
+            return list(rows.scalars())
+
+    assert context.loop.run_until_complete(_roles()) == []
 
 
 @then("the stored password hash should verify with the password helper")
@@ -170,11 +185,9 @@ async def _try_invalid_rows(context: Any) -> list[bool]:
             "email": "null-hash@example.com",
             "hashed_password": None,
             "is_active": True,
-            "is_superuser": False,
             "is_verified": False,
             "auth_provider": "local",
             "auth_provider_id": None,
-            "role": "agent",
         },
         # Local row with an empty hash.
         {
@@ -182,11 +195,9 @@ async def _try_invalid_rows(context: Any) -> list[bool]:
             "email": "empty-hash@example.com",
             "hashed_password": "",
             "is_active": True,
-            "is_superuser": False,
             "is_verified": False,
             "auth_provider": "local",
             "auth_provider_id": None,
-            "role": "agent",
         },
         # WorkOS row with a password hash.
         {
@@ -194,11 +205,9 @@ async def _try_invalid_rows(context: Any) -> list[bool]:
             "email": "workos-hash@example.com",
             "hashed_password": "some-hash",
             "is_active": True,
-            "is_superuser": False,
             "is_verified": False,
             "auth_provider": "workos",
             "auth_provider_id": "ext-1",
-            "role": "agent",
         },
         # WorkOS row without an external id.
         {
@@ -206,11 +215,9 @@ async def _try_invalid_rows(context: Any) -> list[bool]:
             "email": "workos-noid@example.com",
             "hashed_password": None,
             "is_active": True,
-            "is_superuser": False,
             "is_verified": False,
             "auth_provider": "workos",
             "auth_provider_id": None,
-            "role": "agent",
         },
         # Local row with an external id.
         {
@@ -218,23 +225,19 @@ async def _try_invalid_rows(context: Any) -> list[bool]:
             "email": "local-extid@example.com",
             "hashed_password": "some-hash",
             "is_active": True,
-            "is_superuser": False,
             "is_verified": False,
             "auth_provider": "local",
             "auth_provider_id": "ext-2",
-            "role": "agent",
         },
-        # Admin role without the superuser flag.
+        # A foreign provider value (A1: the old role/superuser shape is gone).
         {
             "id": str(uuid4()),
-            "email": "admin-flag@example.com",
-            "hashed_password": "some-hash",
+            "email": "foreign-provider@example.com",
+            "hashed_password": None,
             "is_active": True,
-            "is_superuser": False,
             "is_verified": False,
-            "auth_provider": "local",
+            "auth_provider": "github",
             "auth_provider_id": None,
-            "role": "admin",
         },
     ]
     async with context.repository.session() as session:
@@ -265,11 +268,9 @@ def step_then_workos_null_hash(context: Any) -> None:
                 email="workos-null@example.com",
                 hashed_password=None,
                 is_active=True,
-                is_superuser=False,
                 is_verified=False,
                 auth_provider=AuthProvider.WORKOS.value,
                 auth_provider_id="ext-workos-1",
-                role=UserRole.AGENT.value,
             )
             session.add(row)
             await session.flush()
@@ -282,7 +283,7 @@ def step_then_workos_null_hash(context: Any) -> None:
     assert context.workos_hash_result is None
 
 
-@then("the Agent account should not carry the superuser flag")
+@then("the ordinary account should not carry the superuser flag")
 def step_then_agent_not_superuser(context: Any) -> None:
     async def _read() -> bool:
         async with context.repository.session() as session:
@@ -330,7 +331,11 @@ def step_given_prealembic_users_db(context: Any) -> None:
 
 @when("I run the users database migration")
 def step_when_users_migration(context: Any) -> None:
-    context.migration_result = upgrade_database(Path(str(context.database_path)))
+    context.migration_error = None
+    try:
+        context.migration_result = upgrade_database(Path(str(context.database_path)))
+    except DatabaseResetRequired as error:
+        context.migration_error = error
 
 
 @then('the users database should be at head "{revision}" with a valid schema')
@@ -342,17 +347,21 @@ def step_then_users_db_at_head(context: Any, revision: str) -> None:
     validate_database_schema(Path(str(context.database_path)))
 
 
-@then("the historical usage rows should remain unchanged")
-def step_then_users_history_unchanged(context: Any) -> None:
-    with sqlite3.connect(str(context.database_path)) as connection:
-        rows = connection.execute(
-            "SELECT id, provider, operation, units FROM usage_events ORDER BY id"
-        ).fetchall()
-    assert rows == context.rows_before
+@then("the users database migration should be refused with a reset message")
+def step_then_users_migration_refused(context: Any) -> None:
+    error = context.migration_error
+    assert isinstance(error, DatabaseResetRequired)
+    message = str(error)
+    assert "unversioned" in message
+    assert migration_head() in message
+    assert "FREESEARCH_DB" in message
+    status = database_status(Path(str(context.database_path)))
+    assert status.current_revision is None
+    assert status.schema_valid is False
 
 
-@then("the migration should create the account tables and trace ownership column")
-def step_then_users_migration_objects(context: Any) -> None:
+@then("the refused users database should have no account tables")
+def step_then_refused_users_db_untouched(context: Any) -> None:
     with sqlite3.connect(str(context.database_path)) as connection:
         tables = {
             str(row[0])
@@ -360,14 +369,18 @@ def step_then_users_migration_objects(context: Any) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        trace_columns = {
-            str(row[1]) for row in connection.execute('PRAGMA table_info("trace_spans")')
-        }
-        backup_check = connection.execute("PRAGMA integrity_check").fetchone()
-    assert {"user", "login_throttle", "auth_sessions", "refresh_tokens"} <= tables
-    assert "user_id" in trace_columns
-    assert backup_check == ("ok",)
-    assert context.migration_result.backup is not None
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()
+    assert tables == {"usage_events"}
+    assert integrity == ("ok",)
+
+
+@then("the historical usage rows should remain unchanged")
+def step_then_users_history_unchanged(context: Any) -> None:
+    with sqlite3.connect(str(context.database_path)) as connection:
+        rows = connection.execute(
+            "SELECT id, provider, operation, units FROM usage_events ORDER BY id"
+        ).fetchall()
+    assert rows == context.rows_before
 
 
 @when("I check the users settings contracts")
@@ -421,7 +434,10 @@ def step_when_users_search(context: Any) -> None:
         token = logged_in.json()["access_token"]
         context.search_response = client.post(
             "/search",
-            json={"query": "local accounts"},
+            json={
+                "project_id": bdd_project_id(context, {"Authorization": f"Bearer {token}"}),
+                "query": "local accounts",
+            },
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -476,13 +492,14 @@ def step_when_auth_register(context: Any, email: str) -> None:
         )
 
 
-@then("the registration should create an Agent account without tokens")
+@then("the registration should create an ordinary account without tokens")
 def step_then_auth_register_ok(context: Any) -> None:
     response = context.register_response
     assert response.status_code == 201
     body = response.json()
     assert body["email"] == context.auth_email.lower()
-    assert body["role"] == "agent"
+    assert "role" not in body
+    assert "is_superuser" not in body
     assert body["is_active"] is True
     assert "access_token" not in body
     assert "refresh_token" not in body
@@ -525,7 +542,7 @@ def step_then_auth_me_ok(context: Any) -> None:
     assert context.me_response.status_code == 200
     body = context.me_response.json()
     assert body["email"] == context.auth_email.lower()
-    assert body["role"] == "agent"
+    assert "role" not in body
     assert "hashed_password" not in body
 
 
@@ -768,10 +785,10 @@ def step_when_auth_anonymous_provider_operations(context: Any) -> None:
         context.anonymous_fetch = client.post("/fetch", json={"url": "https://example.com/public"})
 
 
-@then("both provider operations should succeed")
+@then("both provider operations should be rejected with 401")
 def step_then_auth_anonymous_provider_operations(context: Any) -> None:
-    assert context.anonymous_search.status_code == 200
-    assert context.anonymous_fetch.status_code == 200
+    assert context.anonymous_search.status_code == 401
+    assert context.anonymous_fetch.status_code == 401
 
 
 @then("the call should fail with HTTP 401 and a Bearer challenge")
@@ -786,7 +803,10 @@ def step_when_auth_misplaced_credentials(context: Any) -> None:
     with _auth_client(context) as client:
         context.misplaced_search = client.post(
             "/search",
-            json={"query": "misplaced probe"},
+            json={
+                "project_id": "00000000-0000-4000-8000-0000000000aa",
+                "query": "misplaced probe",
+            },
             headers={"Authorization": f"Bearer {pair['refresh_token']}"},
         )
         context.misplaced_refresh = client.post(
@@ -801,39 +821,49 @@ def step_then_auth_misplaced_401(context: Any) -> None:
     assert context.misplaced_refresh.status_code == 401
 
 
-@when("I prepare Admin, Developer, and Agent accounts")
+@when("I prepare system admin, project admin, and member accounts")
 def step_when_auth_prepare_roles(context: Any) -> None:
+    """A1 scoped model: one trusted system admin, one project admin, one member.
+
+    Internal keys stay "admin", "developer" and "agent" for traceability with
+    the replaced Admin/Developer/Agent matrix.
+    """
+
     from tests.fixtures.auth import create_temp_user
+    from tests.fixtures.execution import add_execution_member, seed_execution_project
 
     context.role_pairs = {}
+    ids: dict[str, Any] = {}
     with _auth_client(context) as client:
-        admin_email = f"matrix-admin-{uuid4().hex[:6]}@example.com"
-        registered = client.post(
-            "/auth/register",
-            json={"email": admin_email, "password": _AUTH_PASSWORD, "role": "admin"},
-        )
-        assert registered.status_code == 201
-        assert registered.json()["role"] == "admin"
-        logged_in = client.post(
-            "/auth/jwt/login", data={"username": admin_email, "password": _AUTH_PASSWORD}
-        )
-        assert logged_in.status_code == 200
-        context.role_pairs["admin"] = logged_in.json()
-        for role_name in ("developer", "agent"):
-            email = f"matrix-{role_name}-{uuid4().hex[:6]}@example.com"
-            context.loop.run_until_complete(
+        for key, system_admin in (("admin", True), ("developer", False), ("agent", False)):
+            email = f"matrix-{key}-{uuid4().hex[:6]}@example.com"
+            row = context.loop.run_until_complete(
                 create_temp_user(
-                    context.repository,
-                    email,
-                    role=UserRole.DEVELOPER if role_name == "developer" else UserRole.AGENT,
-                    password=_AUTH_PASSWORD,
+                    context.repository, email, system_admin=system_admin, password=_AUTH_PASSWORD
                 )
             )
+            ids[key] = row.id
             logged_in = client.post(
                 "/auth/jwt/login", data={"username": email, "password": _AUTH_PASSWORD}
             )
             assert logged_in.status_code == 200
-            context.role_pairs[role_name] = logged_in.json()
+            context.role_pairs[key] = logged_in.json()
+    project = context.loop.run_until_complete(
+        seed_execution_project(context.repository, user_id=ids["developer"])
+    )
+    context.loop.run_until_complete(
+        add_execution_member(
+            context.repository,
+            project_id=project.project_id,
+            user_id=ids["agent"],
+            granted_by=ids["developer"],
+        )
+    )
+    context.matrix_project_id = str(project.project_id)
+    from tests.fixtures.execution import bdd_bind_project
+
+    with _auth_client(context):
+        bdd_bind_project(context, context.app, project.project_id, project.actor_id)
 
 
 def _role_headers(context: Any, role: str) -> dict[str, str]:
@@ -847,18 +877,18 @@ def step_then_matrix_anonymous_401(context: Any) -> None:
         assert client.patch("/api/v1/providers/tavily", json={"enabled": False}).status_code == 401
 
 
-@then("provider reads should allow Admin and Developer but deny Agent")
+@then("provider reads should allow only the system admin")
 def step_then_matrix_reads(context: Any) -> None:
     with _auth_client(context) as client:
-        for role in ("admin", "developer"):
-            response = client.get("/api/v1/providers", headers=_role_headers(context, role))
-            assert response.status_code == 200
-            assert isinstance(response.json(), list)
-        denied = client.get("/api/v1/providers", headers=_role_headers(context, "agent"))
-        assert denied.status_code == 403
+        response = client.get("/api/v1/providers", headers=_role_headers(context, "admin"))
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
+        for role in ("developer", "agent"):
+            denied = client.get("/api/v1/providers", headers=_role_headers(context, role))
+            assert denied.status_code == 403
 
 
-@then("provider mutations should allow Admin but deny Developer and Agent")
+@then("provider mutations should allow only the system admin")
 def step_then_matrix_mutations(context: Any) -> None:
     with _auth_client(context) as client:
         for role in ("developer", "agent"):
@@ -877,16 +907,62 @@ def step_then_matrix_mutations(context: Any) -> None:
         assert allowed.json()["provider_id"] == "tavily"
 
 
-@then("Agent search should succeed")
+@then("the member should search its project but the system admin should not")
 def step_then_matrix_agent_search(context: Any) -> None:
     with _auth_client(context) as client:
-        response = client.post(
-            "/search",
-            json={"query": "matrix probe"},
-            headers=_role_headers(context, "agent"),
-        )
+        body = {"project_id": context.matrix_project_id, "query": "matrix probe"}
+        response = client.post("/search", json=body, headers=_role_headers(context, "agent"))
         assert response.status_code == 200
         assert response.json()["provider"] == "stubby"
+        bypass = client.post("/search", json=body, headers=_role_headers(context, "admin"))
+        assert bypass.status_code == 404
+
+
+@given("a Brave stub for the scoped authority scenario")
+def step_given_authority_brave_stub(context: Any) -> None:
+    context.adapters = [_UsersStubAdapter("brave")]
+    context.app = create_app(context.adapters, repository=context.repository)
+
+
+@when("the member has search permission and the project has a Brave pool")
+def step_when_authority_pool_and_permission(context: Any) -> None:
+    member_id = account_id_from_pair(context.role_pairs["agent"])
+    owner_id = account_id_from_pair(context.role_pairs["developer"])
+    with _auth_client(context) as client:
+        updated = client.patch(
+            f"/api/v1/projects/{context.matrix_project_id}/members/{member_id}",
+            json={"permissions": int(ProjectPermission.SEARCH)},
+            headers=_role_headers(context, "developer"),
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["permissions"] == int(ProjectPermission.SEARCH)
+        secrets: dict[str, str] = {}
+        context.loop.run_until_complete(
+            seed_order_pools(
+                context.repository,
+                project_id=UUID(context.matrix_project_id),
+                actor_id=owner_id,
+                store=context.app.state.secret_store,
+                providers=("brave",),
+                secrets=secrets,
+            )
+        )
+    _install_bdd_adapters(context, context.adapters, secrets)
+
+
+@then("the member should search the pooled project but the system admin should not")
+def step_then_authority_pooled_search(context: Any) -> None:
+    with _auth_client(context) as client:
+        body = {
+            "project_id": context.matrix_project_id,
+            "query": "matrix probe",
+            "routing": {"mode": "require", "providers": ["brave"]},
+        }
+        response = client.post("/search", json=body, headers=_role_headers(context, "agent"))
+        assert response.status_code == 200, response.text
+        assert response.json()["provider"] == "brave"
+        bypass = client.post("/search", json=body, headers=_role_headers(context, "admin"))
+        assert bypass.status_code == 404, bypass.text
 
 
 _BROWSER_ORIGIN = "http://localhost:5177"
@@ -1092,13 +1168,6 @@ def step_then_browser_logout_ok(context: Any) -> None:
         )
 
 
-def _role_account_id(context: Any, role: str) -> str:
-    with _auth_client(context) as client:
-        me = client.get("/users/me", headers=_role_headers(context, role))
-        assert me.status_code == 200
-        return str(me.json()["id"])
-
-
 @when('I register with role "{role}" as "{email}"')
 def step_when_register_with_role(context: Any, role: str, email: str) -> None:
     context.auth_email = email
@@ -1109,284 +1178,14 @@ def step_when_register_with_role(context: Any, role: str, email: str) -> None:
         )
 
 
-@then('the role signup should create "{role}" without tokens')
-def step_then_role_signup_ok(context: Any, role: str) -> None:
+@then("the role signup should be refused with HTTP 422")
+def step_then_role_signup_refused(context: Any) -> None:
     response = context.register_response
-    assert response.status_code == 201
-    body = response.json()
-    assert body["email"] == context.auth_email.lower()
-    assert body["role"] == role
-    assert body["is_active"] is True
-    assert body["is_superuser"] is (role == "admin")
-    assert "access_token" not in body
-    assert "refresh_token" not in body
-    assert "hashed_password" not in body
-
-
-@when('I log in with role "{role}" as "{email}"')
-def step_when_login_with_role(context: Any, role: str, email: str) -> None:
-    context.auth_email = email
-    with _auth_client(context) as client:
-        context.login_response = client.post(
-            "/auth/jwt/login", data={"username": email, "password": _AUTH_PASSWORD}
-        )
-        if context.login_response.status_code == 200:
-            context.auth_pair = context.login_response.json()
-
-
-@then('the role login should report "{role}" with a 900-second access token')
-def step_then_role_login_ok(context: Any, role: str) -> None:
-    assert context.login_response.status_code == 200
-    assert context.login_response.json()["access_token"]
-    with _auth_client(context) as client:
-        me = client.get(
-            "/users/me",
-            headers={"Authorization": f"Bearer {context.auth_pair['access_token']}"},
-        )
-    assert me.status_code == 200
-    assert me.json()["role"] == role
-
-
-@when('the Admin provisions an "{role}" account')
-@when('the Admin provisions a "{role}" account')
-def step_when_admin_provisions(context: Any, role: str) -> None:
-    email = f"provision-{role}-{uuid4().hex[:6]}@example.com"
-    context.provision_email = email
-    context.provision_role = role
-    with _auth_client(context) as client:
-        context.provision_response = client.post(
-            "/api/v1/users",
-            json={"email": email, "password": _AUTH_PASSWORD, "role": role},
-            headers=_role_headers(context, "admin"),
-        )
-
-
-@then('the provisioning should create "{role}" without credentials and keep the caller live')
-def step_then_provision_ok(context: Any, role: str) -> None:
-    response = context.provision_response
-    assert response.status_code == 201
-    body = response.json()
-    assert body["email"] == context.provision_email.lower()
-    assert body["role"] == role
-    assert set(body.keys()) == {"id", "email", "role", "is_active", "is_superuser", "is_verified"}
-    assert "access_token" not in body
-    assert "refresh_token" not in body
-    assert "hashed_password" not in body
-    assert "set-cookie" not in response.headers
-    with _auth_client(context) as client:
-        assert client.get("/users/me", headers=_role_headers(context, "admin")).status_code == 200
-        logged_in = client.post(
-            "/auth/jwt/login",
-            data={"username": context.provision_email, "password": _AUTH_PASSWORD},
-        )
-        assert logged_in.status_code == 200
-        me = client.get(
-            "/users/me",
-            headers={"Authorization": f"Bearer {logged_in.json()['access_token']}"},
-        )
-        assert me.status_code == 200
-        assert me.json()["role"] == role
-
-
-@then("a Developer provisioning should fail with HTTP 403")
-def step_then_developer_provision_403(context: Any) -> None:
-    with _auth_client(context) as client:
-        denied = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"blocked-dev-{uuid4().hex[:6]}@example.com",
-                "password": _AUTH_PASSWORD,
-                "role": "agent",
-            },
-            headers=_role_headers(context, "developer"),
-        )
-        assert denied.status_code == 403
-        assert (
-            client.get("/users/me", headers=_role_headers(context, "developer")).status_code == 200
-        )
-
-
-@then("an Agent provisioning should fail with HTTP 403")
-def step_then_agent_provision_403(context: Any) -> None:
-    with _auth_client(context) as client:
-        denied = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"blocked-agent-{uuid4().hex[:6]}@example.com",
-                "password": _AUTH_PASSWORD,
-                "role": "agent",
-            },
-            headers=_role_headers(context, "agent"),
-        )
-        assert denied.status_code == 403
-        assert client.get("/users/me", headers=_role_headers(context, "agent")).status_code == 200
-
-
-@then("an anonymous provisioning should fail with HTTP 401")
-def step_then_anonymous_provision_401(context: Any) -> None:
-    with _auth_client(context) as client:
-        assert (
-            client.post(
-                "/api/v1/users",
-                json={
-                    "email": f"blocked-anon-{uuid4().hex[:6]}@example.com",
-                    "password": _AUTH_PASSWORD,
-                    "role": "agent",
-                },
-            ).status_code
-            == 401
-        )
-
-
-@then("legacy account routes should deny every role with HTTP 403 and keep sessions live")
-def step_then_legacy_deny_all(context: Any) -> None:
-    denied_detail = "account management is not available before project association"
-    with _auth_client(context) as client:
-        me = client.get("/users/me", headers=_role_headers(context, "agent"))
-        assert me.status_code == 200
-        target = str(me.json()["id"])
-        unknown = str(uuid4())
-        for role in ("admin", "developer", "agent"):
-            headers = _role_headers(context, role)
-            for path in (
-                f"/api/v1/users/{target}",
-                f"/api/v1/users/{unknown}",
-                "/api/v1/users/not-a-uuid",
-            ):
-                denied = client.get(path, headers=headers)
-                assert denied.status_code == 403
-                assert denied.json() == {"detail": denied_detail}
-            for path in (f"/api/v1/users/{target}/role", f"/api/v1/users/{unknown}/role"):
-                denied = client.patch(path, json={"role": "agent"}, headers=headers)
-                assert denied.status_code == 403
-                assert denied.json() == {"detail": denied_detail}
-        # No denial changed a role and no denial revoked a family.
-        check = client.get("/users/me", headers=_role_headers(context, "agent"))
-        assert check.status_code == 200
-        assert check.json()["role"] == "agent"
-        for role in ("admin", "developer", "agent"):
-            assert client.get("/users/me", headers=_role_headers(context, role)).status_code == 200
-
-
-@when("I prepare one Admin account")
-def step_when_prepare_one_admin(context: Any) -> None:
-    context.role_pairs = {}
-    email = f"matrix-admin-{uuid4().hex[:6]}@example.com"
-    with _auth_client(context) as client:
-        registered = client.post(
-            "/auth/register", json={"email": email, "password": _AUTH_PASSWORD, "role": "admin"}
-        )
-        assert registered.status_code == 201
-        logged_in = client.post(
-            "/auth/jwt/login", data={"username": email, "password": _AUTH_PASSWORD}
-        )
-        assert logged_in.status_code == 200
-        context.role_pairs["admin"] = logged_in.json()
-
-
-@when("I consume the shared creation limit")
-def step_when_consume_shared_limit(context: Any) -> None:
-    with _auth_client(context) as client:
-        for index in range(4):
-            email = f"limit-share-{index}-{uuid4().hex[:4]}@example.com"
-            if index < 2:
-                response = client.post(
-                    "/auth/register", json={"email": email, "password": _AUTH_PASSWORD}
-                )
-            else:
-                response = client.post(
-                    "/api/v1/users",
-                    json={"email": email, "password": _AUTH_PASSWORD, "role": "agent"},
-                    headers=_role_headers(context, "admin"),
-                )
-            assert response.status_code == 201
-        context.limit_email = f"limit-share-5-{uuid4().hex[:4]}@example.com"
-        context.limit_response = client.post(
-            "/api/v1/users",
-            json={"email": context.limit_email, "password": _AUTH_PASSWORD, "role": "agent"},
-            headers=_role_headers(context, "admin"),
-        )
-
-
-@then("the sixth creation should fail with HTTP 429 and a retry delay")
-def step_then_shared_limit_429(context: Any) -> None:
-    response = context.limit_response
-    assert response.status_code == 429
-    assert response.headers.get("retry-after")
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid authentication request"}
     assert _AUTH_PASSWORD not in response.text
-
-
-@then("invalid creation roles should fail with safe HTTP 422")
-def step_then_invalid_creation_roles_422(context: Any) -> None:
     with _auth_client(context) as client:
-        for bad in ("superadmin", "ADMIN", None):
-            rejected = client.post(
-                "/api/v1/users",
-                json={
-                    "email": f"bad-{uuid4().hex[:4]}@example.com",
-                    "password": _AUTH_PASSWORD,
-                    "role": bad,
-                },
-                headers=_role_headers(context, "admin"),
-            )
-            assert rejected.status_code == 422
-            assert rejected.json() == {"detail": "invalid authentication request"}
-
-
-@then("privileged creation fields should fail with safe HTTP 422")
-def step_then_privileged_fields_422(context: Any) -> None:
-    with _auth_client(context) as client:
-        rejected = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"widen-{uuid4().hex[:4]}@example.com",
-                "password": _AUTH_PASSWORD,
-                "role": "agent",
-                "extra": "agent",
-            },
-            headers=_role_headers(context, "admin"),
+        login = client.post(
+            "/auth/jwt/login", data={"username": context.auth_email, "password": _AUTH_PASSWORD}
         )
-        assert rejected.status_code == 422
-        assert rejected.json() == {"detail": "invalid authentication request"}
-        flagged = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"flag-{uuid4().hex[:4]}@example.com",
-                "password": _AUTH_PASSWORD,
-                "role": "agent",
-                "is_superuser": True,
-            },
-            headers=_role_headers(context, "admin"),
-        )
-        assert flagged.status_code == 201
-        assert flagged.json()["role"] == "agent"
-        assert flagged.json()["is_superuser"] is False
-
-
-@then("weak provisioned passwords and duplicate email should fail safely")
-def step_then_weak_and_duplicate_safe(context: Any) -> None:
-    with _auth_client(context) as client:
-        weak = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"weak-{uuid4().hex[:4]}@example.com",
-                "password": "short",
-                "role": "agent",
-            },
-            headers=_role_headers(context, "admin"),
-        )
-        assert weak.status_code == 400
-        assert "short" not in weak.text
-        email = f"dup-bdd-{uuid4().hex[:6]}@example.com"
-        first = client.post(
-            "/api/v1/users",
-            json={"email": email, "password": _AUTH_PASSWORD, "role": "agent"},
-            headers=_role_headers(context, "admin"),
-        )
-        assert first.status_code == 201
-        second = client.post(
-            "/api/v1/users",
-            json={"email": email, "password": _AUTH_PASSWORD, "role": "agent"},
-            headers=_role_headers(context, "admin"),
-        )
-        assert second.status_code == 400
+        assert login.status_code == 400

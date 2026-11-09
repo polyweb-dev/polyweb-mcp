@@ -91,8 +91,16 @@ async def test_keyless_search_and_fetch_use_public_paths_and_title() -> None:
     runner = _Runner()
     adapter = _adapter(transport, runner)
 
-    search = await adapter.search(SearchRequest(query="keenable", limit=2))
-    fetch = await adapter.fetch(FetchRequest(url="https://example.com/document", max_chars=3))
+    search = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=2)
+    )
+    fetch = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/document",
+            max_chars=3,
+        )
+    )
 
     assert [request.url.path for request in transport.requests] == [
         "/v1/search/public",
@@ -126,7 +134,7 @@ async def test_keyed_requests_use_private_paths_and_only_api_key() -> None:
     transport = _Transport()
 
     await _adapter(transport, api_key=SecretStr("keen_secret")).search(
-        SearchRequest(query="keenable")
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable")
     )
 
     request = transport.requests[0]
@@ -139,7 +147,9 @@ async def test_keyed_requests_use_private_paths_and_only_api_key() -> None:
 async def test_estimates_are_zero_without_network() -> None:
     adapter = _adapter(_Transport())
 
-    estimate = await adapter.estimate_cost(SearchRequest(query="keenable"))
+    estimate = await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable")
+    )
 
     assert estimate.operation is UsageOperation.SEARCH
     assert estimate.units == Decimal("0")
@@ -149,7 +159,11 @@ async def test_estimates_are_zero_without_network() -> None:
 async def test_fetch_cost_estimate_uses_fetch_operation() -> None:
     adapter = _adapter(_Transport())
 
-    estimate = await adapter.estimate_cost(FetchRequest(url="https://example.com/document"))
+    estimate = await adapter.estimate_cost(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/document"
+        )
+    )
 
     assert estimate.operation is UsageOperation.FETCH
     assert estimate.units == Decimal("0")
@@ -166,7 +180,9 @@ async def test_invalid_response_and_vendor_errors_are_normalized_without_key() -
     )
 
     with pytest.raises(ProviderOperationError) as raised:
-        await adapter.search(SearchRequest(query="keenable"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable")
+        )
 
     assert raised.value.error.status_code == 401
     assert not raised.value.error.retryable
@@ -187,7 +203,11 @@ async def test_search_limit_is_capped_at_50_without_clamping_at_boundary(
 ) -> None:
     transport = _Transport()
 
-    await _adapter(transport).search(SearchRequest(query="keenable", limit=limit))
+    await _adapter(transport).search(
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=limit
+        )
+    )
 
     assert json.loads(transport.requests[0].content)["max_results"] == expected_max_results
 
@@ -198,6 +218,7 @@ async def test_search_forwards_all_keenable_options_and_provider_site_overrides_
 ):
     transport = _Transport()
     request = SearchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         query="provider options",
         limit=70,
         domains=("common.example",),
@@ -249,7 +270,13 @@ async def test_search_maps_one_common_domain_and_preserves_top_level_metadata() 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = KeenableAdapter(client)
 
-    response = await adapter.search(SearchRequest(query="common domain", domains=("only.example",)))
+    response = await adapter.search(
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="common domain",
+            domains=("only.example",),
+        )
+    )
 
     assert json.loads(requests[0].content)["site"] == "only.example"
     assert response.provider_metadata == {"request_id": "search-42", "search_time_ms": 19}
@@ -258,7 +285,11 @@ async def test_search_maps_one_common_domain_and_preserves_top_level_metadata() 
 @pytest.mark.asyncio
 async def test_search_provider_options_reject_invalid_mode() -> None:
     with pytest.raises(ValidationError):
-        SearchRequest(query="bad", provider_options={"keenable": {"mode": "fast"}})
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="bad",
+            provider_options={"keenable": {"mode": "fast"}},
+        )
 
 
 @pytest.mark.asyncio
@@ -272,7 +303,11 @@ async def test_fetch_truncates_only_when_content_exceeds_max_chars(
     transport = _Transport()
 
     fetch = await _adapter(transport).fetch(
-        FetchRequest(url="https://example.com/document", max_chars=max_chars)
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/document",
+            max_chars=max_chars,
+        )
     )
 
     assert fetch.document.content == expected_content
@@ -283,6 +318,7 @@ async def test_fetch_truncates_only_when_content_exceeds_max_chars(
 async def test_fetch_live_and_prompt_options_override_common_enhanced_flag() -> None:
     transport = _Transport()
     request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
         url="https://example.com/document",
         max_chars=20,
         enhanced=True,
@@ -318,7 +354,13 @@ async def test_fetch_maps_enhanced_to_live_and_preserves_response_metadata() -> 
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     adapter = KeenableAdapter(client)
-    response = await adapter.fetch(FetchRequest(url="https://example.com/document", enhanced=True))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/document",
+            enhanced=True,
+        )
+    )
 
     assert dict(requests[0].url.params) == {
         "url": "https://example.com/document",
@@ -336,6 +378,7 @@ async def test_fetch_maps_enhanced_to_live_and_preserves_response_metadata() -> 
 async def test_fetch_provider_options_reject_overlong_prompt() -> None:
     with pytest.raises(ValidationError):
         FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             url="https://example.com/document",
             provider_options={"keenable": {"prompt": "x" * 2001}},
         )
@@ -357,7 +400,9 @@ async def test_malformed_search_payloads_raise_normalized_invalid_response(paylo
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     with pytest.raises(ProviderOperationError) as raised:
-        await adapter.search(SearchRequest(query="keenable"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable")
+        )
 
     assert raised.value.error.code == "invalid_response"
     assert raised.value.error.message == "malformed search response"
@@ -440,7 +485,9 @@ async def test_search_skips_invalid_items_and_records_errors(
 ) -> None:
     adapter = _search_adapter_for({"results": items}, api_key)
 
-    response = await adapter.search(SearchRequest(query="keenable", limit=10))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=10)
+    )
 
     assert [str(item.url) for item in response.results] == expected_urls
     assert response.query == "keenable"
@@ -468,7 +515,9 @@ async def test_search_all_invalid_items_returns_empty_success(
 ) -> None:
     adapter = _search_adapter_for({"results": items}, api_key)
 
-    response = await adapter.search(SearchRequest(query="keenable", limit=10))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=10)
+    )
 
     assert response.results == []
     assert response.total_results == 0
@@ -485,7 +534,9 @@ async def test_search_all_invalid_items_returns_empty_success(
 async def test_search_empty_list_has_no_parse_errors() -> None:
     adapter = _search_adapter_for({"results": []})
 
-    response = await adapter.search(SearchRequest(query="keenable", limit=10))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=10)
+    )
 
     assert response.results == []
     assert response.total_results == 0
@@ -516,7 +567,11 @@ async def test_search_limit_applies_after_invalid_item_filter(
 ) -> None:
     adapter = _search_adapter_for({"results": items})
 
-    response = await adapter.search(SearchRequest(query="keenable", limit=limit))
+    response = await adapter.search(
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=limit
+        )
+    )
 
     assert [str(item.url) for item in response.results] == expected_urls
     assert response.total_results == len(expected_urls)
@@ -531,7 +586,9 @@ async def test_search_invalid_tail_item_does_not_fail_response() -> None:
         {"results": [_GOOD_KEENABLE_ITEM, _SECOND_GOOD_ITEM, _BAD_URL_ITEM]}
     )
 
-    response = await adapter.search(SearchRequest(query="keenable", limit=1))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=1)
+    )
 
     assert [str(item.url) for item in response.results] == ["https://example.com/result"]
     assert response.total_results == 1
@@ -555,7 +612,9 @@ async def test_search_parse_errors_do_not_expose_payload_or_key() -> None:
         _KEYED_KEY,
     )
 
-    response = await adapter.search(SearchRequest(query="keenable", limit=10))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=10)
+    )
 
     assert [str(item.url) for item in response.results] == ["https://example.com/result"]
     errors = _keenable_parse_errors(response)
@@ -573,7 +632,9 @@ async def test_non_json_success_body_is_normalized() -> None:
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     with pytest.raises(ProviderOperationError) as raised:
-        await adapter.search(SearchRequest(query="keenable"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable")
+        )
 
     assert raised.value.error.code == "invalid_response"
     assert raised.value.error.message == "malformed search response"
@@ -591,7 +652,12 @@ async def test_malformed_fetch_payloads_raise_normalized_invalid_response(payloa
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
     with pytest.raises(ProviderOperationError) as raised:
-        await adapter.fetch(FetchRequest(url="https://example.com/document"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://example.com/document",
+            )
+        )
 
     assert raised.value.error.code == "invalid_response"
     assert raised.value.error.message == "malformed fetch response"
@@ -608,7 +674,9 @@ async def test_http_error_retryable_flag_matches_status_policy(status: int) -> N
     )
 
     with pytest.raises(ProviderOperationError) as raised:
-        await adapter.search(SearchRequest(query="keenable"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable")
+        )
 
     error = raised.value.error
     assert error.code == "http_error"
@@ -636,7 +704,9 @@ async def test_published_at_is_parsed_or_dropped(raw: object, expected: datetime
 
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
-    response = await adapter.search(SearchRequest(query="keenable"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable")
+    )
 
     assert response.results[0].published_at == expected
 
@@ -651,7 +721,9 @@ async def test_minimal_search_result_uses_defaults_and_drops_none_metadata() -> 
 
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
-    response = await adapter.search(SearchRequest(query="keenable"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable")
+    )
 
     result = response.results[0]
     assert result.title == ""
@@ -670,7 +742,11 @@ async def test_fetch_uses_request_url_and_tolerates_non_string_title() -> None:
 
     adapter = KeenableAdapter(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
-    fetch = await adapter.fetch(FetchRequest(url="https://example.com/document"))
+    fetch = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/document"
+        )
+    )
 
     assert str(fetch.document.url) == "https://example.com/document"
     assert fetch.document.title is None
@@ -686,8 +762,16 @@ async def test_caller_client_default_api_key_does_not_leak_into_keyless_requests
     )
     adapter = KeenableAdapter(client, runner=_Runner())
 
-    await adapter.search(SearchRequest(query="keenable", limit=2))
-    await adapter.fetch(FetchRequest(url="https://example.com/document", max_chars=3))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=2)
+    )
+    await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/document",
+            max_chars=3,
+        )
+    )
 
     assert [request.url.path for request in transport.requests] == [
         "/v1/search/public",
@@ -716,8 +800,16 @@ async def test_caller_client_basic_auth_does_not_leak_into_keyless_requests() ->
     await control_client.get("https://example.com/control")
     assert control.requests[0].headers.get("Authorization") is not None
 
-    await adapter.search(SearchRequest(query="keenable", limit=2))
-    await adapter.fetch(FetchRequest(url="https://example.com/document", max_chars=3))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=2)
+    )
+    await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/document",
+            max_chars=3,
+        )
+    )
 
     assert [request.url.path for request in transport.requests] == [
         "/v1/search/public",
@@ -738,8 +830,16 @@ async def test_keyed_requests_send_injected_key_only_without_caller_basic_auth()
     )
     adapter = KeenableAdapter(client, runner=_Runner(), api_key=SecretStr("keen_secret"))
 
-    await adapter.search(SearchRequest(query="keenable", limit=2))
-    await adapter.fetch(FetchRequest(url="https://example.com/document", max_chars=3))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="keenable", limit=2)
+    )
+    await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/document",
+            max_chars=3,
+        )
+    )
 
     assert [request.url.path for request in transport.requests] == [
         "/v1/search",
@@ -756,7 +856,9 @@ async def test_keyed_fetch_uses_private_path_and_api_key_only() -> None:
     transport = _Transport()
 
     await _adapter(transport, api_key=SecretStr("keen_secret")).fetch(
-        FetchRequest(url="https://example.com/document")
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/document"
+        )
     )
 
     request = transport.requests[0]
@@ -828,7 +930,11 @@ class TestKeenableTraceSpans:
         adapter, runtime, exporter = _traced_adapter(handler)
 
         with use_observability(runtime), runtime.span(TraceSpanName.PROVIDER):
-            response = await adapter.search(SearchRequest(query="consensus", limit=2))
+            response = await adapter.search(
+                SearchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa", query="consensus", limit=2
+                )
+            )
 
         assert [item.title for item in response.results] == ["Consensus"]
         spans = _spans_by_name(exporter)
@@ -870,7 +976,12 @@ class TestKeenableTraceSpans:
         adapter, runtime, exporter = _traced_adapter(handler)
 
         with use_observability(runtime), runtime.span(TraceSpanName.PROVIDER):
-            fetched = await adapter.fetch(FetchRequest(url="https://example.com/document"))
+            fetched = await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://example.com/document",
+                )
+            )
 
         assert fetched.document.content == "abcdef"
         spans = _spans_by_name(exporter)
@@ -902,7 +1013,9 @@ class TestKeenableTraceSpans:
             pytest.raises(ProviderOperationError) as raised,
             runtime.span(TraceSpanName.PROVIDER),
         ):
-            await adapter.search(SearchRequest(query="consensus"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="consensus")
+            )
 
         assert raised.value.error.code == "invalid_response"
         spans = _spans_by_name(exporter)
@@ -933,7 +1046,9 @@ class TestKeenableTraceSpans:
             pytest.raises(ProviderOperationError) as raised,
             runtime.span(TraceSpanName.PROVIDER),
         ):
-            await adapter.search(SearchRequest(query="consensus"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="consensus")
+            )
 
         assert raised.value.error.code == "http_error"
         assert raised.value.error.status_code == 502
@@ -958,7 +1073,12 @@ class TestKeenableTraceSpans:
             pytest.raises(ProviderOperationError) as raised,
             runtime.span(TraceSpanName.PROVIDER),
         ):
-            await adapter.fetch(FetchRequest(url="https://example.com/document"))
+            await adapter.fetch(
+                FetchRequest(
+                    project_id="00000000-0000-4000-8000-0000000000aa",
+                    url="https://example.com/document",
+                )
+            )
 
         assert raised.value.error.code == "http_error"
         spans = _spans_by_name(exporter)
@@ -992,7 +1112,9 @@ class TestKeenableTraceSpans:
         adapter, runtime, exporter = _traced_adapter(handler, api_key=SecretStr(secret))
 
         with use_observability(runtime), runtime.span(TraceSpanName.PROVIDER):
-            await adapter.search(SearchRequest(query="consensus"))
+            await adapter.search(
+                SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="consensus")
+            )
 
         # Control: the key really was on the wire, so the absence below is not vacuous.
         assert seen[0].headers["X-API-Key"] == secret

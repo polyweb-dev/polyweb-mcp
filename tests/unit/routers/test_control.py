@@ -15,19 +15,19 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
-import freesearch.routers.control as control_module
+import freesearch.services.provider_runtime as provider_runtime
 from freesearch.configuration.provider_config import ProviderConfigUpdate
 from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import FallbackPolicy, RoutingConfigResponse
 from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.control import (
+from freesearch.services.monitoring import clear_quota_poll_cache
+from freesearch.services.provider_runtime import (
     clear_config_cache,
     effective_config_for_name,
     patch_provider_config,
     persist_routing_config,
     routing_policy,
 )
-from freesearch.services.monitoring import clear_quota_poll_cache
 
 
 @pytest.fixture(autouse=True)
@@ -145,9 +145,11 @@ async def test_cache_identity_reuse_after_clear(monkeypatch: pytest.MonkeyPatch,
 
     repo_a = await SQLiteRepository.open(tmp_path / "control-unit-a.db")
     try:
-        await patch_provider_config(repo_a, ProviderName.TAVILY, ProviderConfigUpdate(priority=11))
+        await patch_provider_config(
+            repo_a, ProviderName.TAVILY, ProviderConfigUpdate(tavily_key_environment="prod")
+        )
         config_a = await effective_config_for_name(repo_a, "tavily")
-        assert config_a.priority == 11
+        assert config_a.tavily_key_environment == "prod"
         assert (await routing_policy(repo_a)).fallback_policy is FallbackPolicy.CHAINED
 
         clear_config_cache(repo_a)
@@ -158,7 +160,9 @@ async def test_cache_identity_reuse_after_clear(monkeypatch: pytest.MonkeyPatch,
 
     repo_b = await SQLiteRepository.open(tmp_path / "control-unit-b.db")
     try:
-        await patch_provider_config(repo_b, ProviderName.TAVILY, ProviderConfigUpdate(priority=77))
+        await patch_provider_config(
+            repo_b, ProviderName.TAVILY, ProviderConfigUpdate(tavily_key_environment="dev")
+        )
         await persist_routing_config(
             repo_b, RoutingConfigResponse(fallback_policy=FallbackPolicy.FIRST_ONLY)
         )
@@ -171,12 +175,12 @@ async def test_cache_identity_reuse_after_clear(monkeypatch: pytest.MonkeyPatch,
                 return id_of_a
             return real_id(obj)
 
-        monkeypatch.setattr(control_module, "id", _reused_id, raising=False)
+        monkeypatch.setattr(provider_runtime, "id", _reused_id, raising=False)
 
         config_b = await effective_config_for_name(repo_b, "tavily")
         policy_b = await routing_policy(repo_b)
 
-        assert config_b.priority == 77
+        assert config_b.tavily_key_environment == "dev"
         assert policy_b.fallback_policy is FallbackPolicy.FIRST_ONLY
     finally:
         await repo_b.close()

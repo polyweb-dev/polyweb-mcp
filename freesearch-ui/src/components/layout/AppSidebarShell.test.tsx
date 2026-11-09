@@ -18,6 +18,7 @@ import {
   agentAccountFixture,
 } from "@/test/authFixtures"
 import type { UserAccount } from "@/domains/auth"
+import { answerWorkspaceAccess, personaSystemPermissions } from "@/test/accessFixtures"
 import {
   allProvidersFixture,
   routingConfigFixture,
@@ -37,11 +38,12 @@ import {
  * Preserved: AC-SB-8a (flex-row aside+main), AC-SB-8b (no legacy header),
  * AC-SB-8c (five links swap intact views — now link queries + URL asserts),
  * AC-SB-8e (PillTabs gold standard untouched), AC-SB-8f (Sidebar wiring +
- * collapse toggle). TabId unchanged — quotas renders at /usage.
+ * collapse toggle). TabId unchanged — quotas renders at /system/quotas.
  *
  * P1-FINAL (blessed inversion, NOT a regression): the standalone Providers
- * page is retired into the Settings Providers tab — five workspace links,
- * no /providers view, legacy /providers redirects to /settings.
+ * page is retired into the System Providers page — no /providers view;
+ * legacy /providers, /settings and /usage redirect to /system/providers and
+ * /system/quotas. System credentials and capacity redirect to the account vault.
  */
 
 const testDir = import.meta.dirname
@@ -64,13 +66,17 @@ const packageJson = JSON.parse(packageJsonRaw) as {
 
 function LocationProbe() {
   const location = useLocation()
-  return <div data-testid="test-location">{location.pathname}</div>
+  return <div data-testid="test-location">{`${location.pathname}${location.search}`}</div>
 }
 
-async function renderApp(route = "/playground", account: UserAccount = adminAccountFixture()) {
+async function renderApp(route = "/account", account: UserAccount = adminAccountFixture(), vaultAccess = false) {
   installImmediateLocks()
   installFakeChannel()
   const backendHandler: FetchHandler = (req) => {
+    const access = answerWorkspaceAccess(req, {
+      systemPermissions: [...personaSystemPermissions(account), ...(vaultAccess ? ["vault.manage"] : [])],
+    })
+    if (access !== null) return access
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -88,6 +94,9 @@ async function renderApp(route = "/playground", account: UserAccount = adminAcco
     </MemoryRouter>
   )
   await screen.findByRole("navigation", { name: "Primary" })
+  // The project selector renders once the system access and the project list
+  // have loaded, so every permitted link is present from here on.
+  await screen.findByRole("navigation", { name: "Projects" })
   return result
 }
 
@@ -96,13 +105,10 @@ function testPath(): string {
 }
 
 const EXPECTED_VIEWS: Array<{ link: string; heading: string; path: string }> = [
-  { link: "Playground", heading: "Search Playground", path: "/playground" },
-  { link: "Routing", heading: "Routing", path: "/routing" },
-  { link: "Usage", heading: "Usage", path: "/usage" },
-  { link: "Activity", heading: "Activity", path: "/activity" },
-  { link: "Settings", heading: "Settings", path: "/settings" },
+  { link: "Providers", heading: "Providers", path: "/system/providers" },
+  { link: "Quotas", heading: "Quotas", path: "/system/quotas" },
+  { link: "Projects", heading: "Projects", path: "/projects" },
   { link: "Account", heading: "Account", path: "/account" },
-  { link: "Admin", heading: "Account roles", path: "/admin/users" },
 ]
 
 beforeEach(() => {
@@ -122,7 +128,7 @@ describe("AC-SB-8a: App is a flex-row shell with aside + main", () => {
     expect(screen.getByRole("main")).toBeInTheDocument()
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { name: "Search Playground" })
+        within(screen.getByRole("main")).getByRole("heading", { name: "Account" })
       ).toBeInTheDocument()
     })
   })
@@ -148,7 +154,7 @@ describe("AC-SB-8a: App is a flex-row shell with aside + main", () => {
 
 describe("AC-SB-8b: legacy header topbar is gone", () => {
   it("renders no <header> element", async () => {
-    await renderApp()
+    await renderApp("/system/quotas")
     expect(document.querySelector("header")).toBeNull()
   })
 
@@ -158,8 +164,8 @@ describe("AC-SB-8b: legacy header topbar is gone", () => {
   })
 })
 
-describe("AC-SB-8c (C4, P1-FINAL, R-UI): seven sidebar links swap intact views via the URL", () => {
-  it("sidebar exposes all seven workspaces as links with exact route hrefs", async () => {
+describe("AC-SB-8c (C4, P1-FINAL, R-UI, U1, U2): sidebar links swap intact views via the URL", () => {
+  it("sidebar exposes workspaces as links with exact route hrefs", async () => {
     await renderApp()
     const nav = screen.getByRole("navigation", { name: "Primary" })
     for (const { link, path } of EXPECTED_VIEWS) {
@@ -173,7 +179,7 @@ describe("AC-SB-8c (C4, P1-FINAL, R-UI): seven sidebar links swap intact views v
     "sidebar '$link' navigates to '$path' showing the '$heading' view",
     async ({ link, heading, path }) => {
       const user = userEvent.setup()
-      await renderApp("/playground")
+      await renderApp("/account")
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
           "link",
@@ -191,9 +197,31 @@ describe("AC-SB-8c (C4, P1-FINAL, R-UI): seven sidebar links swap intact views v
     }
   )
 
+  it("deep link '/system/credentials' redirects to Keys and pools", async () => {
+    await renderApp("/system/credentials", adminAccountFixture(), true)
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", { name: "Keys and pools" })
+      ).toBeInTheDocument()
+    })
+    expect(testPath()).toBe("/account/keys")
+    expect(await screen.findByRole("button", { name: "Add key" })).toBeInTheDocument()
+    const nav = screen.getByRole("navigation", { name: "Primary" })
+    expect(within(nav).queryByRole("link", { name: "System credentials" })).not.toBeInTheDocument()
+    expect(within(nav).queryByRole("link", { name: "Capacity", exact: true })).not.toBeInTheDocument()
+  })
+
+  it("deep link '/system/capacity' redirects to Keys and pools", async () => {
+    await renderApp("/system/capacity", adminAccountFixture(), true)
+    await waitFor(() => {
+      expect(within(screen.getByRole("main")).getByRole("heading", { name: "Keys and pools" })).toBeInTheDocument()
+    })
+    expect(testPath()).toBe("/account/keys")
+  })
+
   it("full click-through visits every view with exactly one active marker", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground")
+    await renderApp("/account")
     for (const { link, heading, path } of EXPECTED_VIEWS) {
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
@@ -219,7 +247,7 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
     await renderApp()
     const aside = document.querySelector("aside") as HTMLElement
     const nav = within(aside).getByRole("navigation", { name: "Primary" })
-    expect(within(nav).getAllByRole("link")).toHaveLength(7)
+    expect(within(nav).getAllByRole("link")).toHaveLength(EXPECTED_VIEWS.length)
     expect(within(nav).queryByRole("button")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tab")).not.toBeInTheDocument()
     expect(within(aside).queryByRole("tablist")).not.toBeInTheDocument()
@@ -228,8 +256,8 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
 
   it("switching views changes the URL through the route table", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground")
-    expect(testPath()).toBe("/playground")
+    await renderApp("/account")
+    expect(testPath()).toBe("/account")
     for (const { link, path } of EXPECTED_VIEWS) {
       await user.click(
         within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
@@ -250,16 +278,16 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
     expect(appSource).toContain("AppProviders")
   })
 
-  it("P1-FINAL: legacy /providers redirects to the merged Settings registry", async () => {
+  it("P1-FINAL: legacy /providers redirects to the System Providers page", async () => {
     await renderApp("/providers")
     await waitFor(() => {
       expect(
         within(screen.getByRole("main")).getByRole("heading", {
-          name: "Settings",
+          name: "Providers",
         })
       ).toBeInTheDocument()
     })
-    expect(testPath()).toBe("/settings")
+    expect(testPath()).toBe("/system/providers")
   })
 
   it("App source declares the Routes table with redirect + catch-all", () => {
@@ -268,71 +296,45 @@ describe("AC-SB-8d (C4): shell keeps the link+router contract", () => {
     for (const routePath of [
       "/playground",
       "/routing",
+      "/system/quotas",
       "/usage",
       "/activity",
+      "/system/providers",
       "/settings",
+      "/providers",
+      "/projects",
       "/account",
-      "/admin/users",
     ]) {
       expect(routesSource).toContain(`"${routePath}"`)
     }
-    // Root redirect and unknown-path fallback both land on the playground.
+    // U1: the root and unknown paths land on the last valid project, else
+    // the project list; the legacy global redirects stay Navigates.
+    expect(dashboardShellSource).toContain("LEGACY_GLOBAL_REDIRECTS")
     expect(dashboardShellSource).toMatch(/<Navigate/)
-    expect(dashboardShellSource).toContain('"/playground"')
+    expect(dashboardShellSource).toMatch(/path="\/"[^>]*element=\{<WorkspaceLanding/)
+    expect(dashboardShellSource).toMatch(/path="\*"[^>]*element=\{<WorkspaceLanding/)
     // Thin App shim renders the shell that owns the table.
     expect(appSource).toContain("DashboardShell")
   })
 })
 
-describe("AC-SB-8e: PillTabs gold standard untouched", () => {
-  it("Routing view still exposes Strategy/Simulator/Ranks/Resilience pill tabs", async () => {
+describe("AC-SB-8e: Providers catalog", () => {
+  it("shows the provider catalog without a legacy Keys tab", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground")
+    await renderApp("/account")
     await user.click(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
         "link",
-        { name: "Routing", exact: true }
+        { name: "Providers", exact: true }
       )
     )
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { name: "Routing" })
+        screen.getByRole("heading", { name: "Providers" })
       ).toBeInTheDocument()
     })
-    const pillList = document.querySelector(
-      '[data-slot="tabs-list"][data-variant="pill"]'
-    )
-    expect(pillList).not.toBeNull()
-    expect(
-      within(pillList as HTMLElement)
-        .getAllByRole("tab")
-        .map((t) => t.textContent)
-    ).toEqual(["Strategy", "Simulator"])
-  })
-
-  it("Settings view still exposes Providers/Keys/Failover pill tabs", async () => {
-    const user = userEvent.setup()
-    await renderApp("/playground")
-    await user.click(
-      within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
-        "link",
-        { name: "Settings", exact: true }
-      )
-    )
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Settings" })
-      ).toBeInTheDocument()
-    })
-    const pillList = document.querySelector(
-      '[data-slot="tabs-list"][data-variant="pill"]'
-    )
-    expect(pillList).not.toBeNull()
-    expect(
-      within(pillList as HTMLElement)
-        .getAllByRole("tab")
-        .map((t) => t.textContent)
-    ).toEqual(["Providers", "Keys", "Failover"])
+    expect(within(screen.getByRole("main")).queryByRole("tablist")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Add key" })).not.toBeInTheDocument()
   })
 })
 
@@ -365,40 +367,40 @@ describe("AC-SB-8f: App source wires Sidebar into the flex-row shell", () => {
   })
 })
 
-describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
-  it("admin direct /admin/users URL renders the creation screen", async () => {
+describe("Retired Accounts route", () => {
+  it("redirects the old URL for a system administrator", async () => {
     await renderApp("/admin/users", adminAccountFixture())
     await waitFor(() => {
       expect(
         within(screen.getByRole("main")).getByRole("heading", {
-          name: "Account roles",
+          name: "Projects",
         })
       ).toBeInTheDocument()
     })
-    expect(testPath()).toBe("/admin/users")
-    expect(
-      within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
-        "link",
-        { name: "Admin", exact: true }
-      )
-    ).toBeInTheDocument()
-    expect(screen.getByLabelText("Email")).toBeInTheDocument()
-    expect(screen.getByLabelText("Account role")).toBeInTheDocument()
-    expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
-  })
-
-  it("agent sees no Admin link and direct /admin/users URL renders no creation form", async () => {
-    await renderApp("/admin/users", agentAccountFixture())
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Search Playground" })
-      ).toBeInTheDocument()
-    })
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe("/projects")
     expect(
       within(screen.getByRole("navigation", { name: "Primary" })).queryByRole(
         "link",
-        { name: "Admin", exact: true }
+        { name: "Accounts", exact: true }
+      )
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "New account" })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Account role")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Account UUID")).not.toBeInTheDocument()
+  })
+
+  it("without system permissions: no Admin link, and the direct URL redirects to the landing", async () => {
+    await renderApp("/admin/users", agentAccountFixture())
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", { name: "Projects" })
+      ).toBeInTheDocument()
+    })
+    expect(testPath()).toBe("/projects")
+    expect(
+      within(screen.getByRole("navigation", { name: "Primary" })).queryByRole(
+        "link",
+        { name: "Accounts", exact: true }
       )
     ).not.toBeInTheDocument()
     expect(screen.queryByLabelText("Account role")).not.toBeInTheDocument()
@@ -409,7 +411,7 @@ describe("AC4/AC5 (R-UI): auth session gate filters Admin by role", () => {
 describe("SB-ACTIONS (R-UI): shell Sign out exits the session", () => {
   it("Sign out from the account popup reaches the login screen", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground", adminAccountFixture())
+    await renderApp("/account", adminAccountFixture())
 
     await user.click(
       screen.getByRole("button", { name: "Open user menu", exact: true })
@@ -429,7 +431,7 @@ describe("SB-ACTIONS (R-UI): shell Sign out exits the session", () => {
 
   it("a route change resets the open account popup", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground", adminAccountFixture())
+    await renderApp("/account", adminAccountFixture())
 
     await user.click(
       screen.getByRole("button", { name: "Open user menu", exact: true })
@@ -438,7 +440,7 @@ describe("SB-ACTIONS (R-UI): shell Sign out exits the session", () => {
     await user.click(
       within(screen.getByRole("navigation", { name: "Primary" })).getByRole(
         "link",
-        { name: "Routing", exact: true }
+        { name: "Quotas", exact: true }
       )
     )
 
@@ -447,14 +449,14 @@ describe("SB-ACTIONS (R-UI): shell Sign out exits the session", () => {
         screen.queryByRole("dialog", { name: "User account" })
       ).not.toBeInTheDocument()
     })
-    expect(testPath()).toBe("/routing")
+    expect(testPath()).toBe("/system/quotas")
   })
 })
 
 describe("SB4-BRAND: shell header-control journey", () => {
   it("collapse then logo-button expansion restores the rail", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground", adminAccountFixture())
+    await renderApp("/account", adminAccountFixture())
 
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })
@@ -476,12 +478,12 @@ describe("SB4-BRAND: shell header-control journey", () => {
     expect(
       (document.querySelector("aside") as HTMLElement).className
     ).not.toMatch(/w-16/)
-    expect(testPath()).toBe("/playground")
+    expect(testPath()).toBe("/account")
   })
 
   it("collapsed rail exposes exactly one expansion control", async () => {
     const user = userEvent.setup()
-    await renderApp("/playground", adminAccountFixture())
+    await renderApp("/account", adminAccountFixture())
 
     await user.click(
       screen.getByRole("button", { name: "Collapse sidebar", exact: true })

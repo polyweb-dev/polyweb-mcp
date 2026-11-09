@@ -346,8 +346,14 @@ async def test_real_sdk_routes_mock_transport_end_to_end() -> None:
         adapter = ExaAdapter(caller, api_key=SecretStr("sk-e2e-exa-99"))
         # Route the SDK's lazily created owned client over the mock transport.
         adapter._sdk._client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
-        search_response = await adapter.search(SearchRequest(query="e2e", limit=5))
-        fetch_response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        search_response = await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="e2e", limit=5)
+        )
+        fetch_response = await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
         await adapter.aclose()
         assert adapter._sdk.client.is_closed is True
         assert caller.is_closed is False
@@ -388,7 +394,12 @@ async def test_search_passes_exact_query_limit_domains_and_highlights() -> None:
     adapter = make_adapter(sdk=sdk)
 
     response = await adapter.search(
-        SearchRequest(query="python async", limit=7, domains=("example.com", "docs.org"))
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="python async",
+            limit=7,
+            domains=("example.com", "docs.org"),
+        )
     )
 
     assert sdk.search_calls == [
@@ -409,7 +420,9 @@ async def test_search_omits_domains_kwarg_when_unset() -> None:
     sdk.search_response = _response([_result()])
     adapter = make_adapter(sdk=sdk)
 
-    await adapter.search(SearchRequest(query="bare"))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bare")
+    )
 
     call = sdk.search_calls[0]
     assert call == {"query": "bare", "num_results": 10, "contents": {"highlights": True}}
@@ -422,6 +435,7 @@ async def test_search_forwards_exa_search_and_contents_options() -> None:
 
     await adapter.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="typed options",
             limit=6,
             country_code="gb",
@@ -523,6 +537,7 @@ async def test_search_explicit_empty_include_domains_overrides_common_domains() 
 
     await adapter.search(
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="no domain filter",
             domains=("common.example",),
             provider_options={"exa": {"include_domains": []}},
@@ -537,7 +552,11 @@ async def test_search_maps_common_country_when_user_location_is_not_overridden()
     sdk.search_response = _response([_result()])
     adapter = make_adapter(sdk=sdk)
 
-    await adapter.search(SearchRequest(query="country", country_code="gb"))
+    await adapter.search(
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", query="country", country_code="gb"
+        )
+    )
 
     assert sdk.search_calls[0]["user_location"] == {"country": "GB"}
 
@@ -565,7 +584,9 @@ async def test_search_preserves_exa_content_and_response_metadata() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="metadata"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="metadata")
+    )
 
     assert response.provider_metadata == {
         "resolved_search_type": "neural",
@@ -611,7 +632,9 @@ async def test_search_normalizes_results_and_metadata() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="norm"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="norm")
+    )
 
     first = response.results[0]
     assert first.title == "Example"
@@ -647,7 +670,9 @@ async def test_search_snippet_prefers_first_highlight_then_text() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="snippet"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="snippet")
+    )
 
     assert response.results[0].snippet == "First highlight."
     assert response.results[1].snippet == "fallback text"
@@ -660,7 +685,9 @@ async def test_search_out_of_range_score_is_dropped(score: float) -> None:
     sdk.search_response = _response([_result(score=score)])
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="score"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="score")
+    )
 
     assert response.results[0].score is None
 
@@ -670,7 +697,9 @@ async def test_search_reports_real_numeric_cost_dollars_total() -> None:
     sdk.search_response = _response([_result()], cost=_cost(0.0042))
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="cost"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cost")
+    )
 
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.SEARCH
@@ -684,7 +713,9 @@ async def test_search_missing_telemetry_uses_pricing_fallback() -> None:
     sdk.search_response = _response([_result()])
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="telemetry"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="telemetry")
+    )
 
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.SEARCH
@@ -700,7 +731,9 @@ async def test_search_negative_cost_is_dropped_not_reported() -> None:
     sdk.search_response = _response([_result()], cost=_cost(-1))
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.search(SearchRequest(query="negative"))
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="negative")
+    )
 
     assert response.usage is None
 
@@ -712,7 +745,9 @@ async def test_search_malformed_cost_is_sanitized_invalid_response(total: object
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="cost"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cost")
+        )
 
     error = excinfo.value
     assert error.error.code == "invalid_response"
@@ -731,7 +766,9 @@ async def test_search_malformed_payload_is_sanitized_invalid_response() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.provider == "exa"
     assert excinfo.value.error.code == "invalid_response"
@@ -746,7 +783,9 @@ async def test_search_malformed_result_item_is_sanitized_invalid_response() -> N
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.provider == "exa"
     assert excinfo.value.error.code == "invalid_response"
@@ -766,7 +805,9 @@ async def test_malformed_search_payload_suppresses_cause_and_secret() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     error = excinfo.value
     assert error.error.code == "invalid_response"
@@ -782,7 +823,9 @@ async def test_search_invokes_shared_runner_exactly_once() -> None:
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
 
-    await adapter.search(SearchRequest(query="routed"))
+    await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="routed")
+    )
 
     assert runner.entries == ["exa"]
     assert len(sdk.search_calls) == 1
@@ -796,7 +839,11 @@ async def test_fetch_calls_get_contents_with_url_list_and_text_flag() -> None:
     sdk.contents_response = _response([_result(text="body")])
     adapter = make_adapter(sdk=sdk)
 
-    await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert sdk.contents_calls == [{"urls": ["https://example.com/doc"], "text": True}]
 
@@ -825,6 +872,7 @@ async def test_fetch_forwards_exa_contents_options_and_preserves_content_metadat
 
     response = await adapter.fetch(
         FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             url="https://example.com/doc",
             provider_options={
                 "exa": {
@@ -895,6 +943,7 @@ async def test_fetch_uses_requested_summary_when_text_extraction_is_disabled() -
 
     response = await adapter.fetch(
         FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             url="https://example.com/doc",
             provider_options={"exa": {"text": False, "summary": True}},
         )
@@ -913,14 +962,20 @@ async def test_fetch_uses_requested_summary_when_text_extraction_is_disabled() -
 
 def test_exa_provider_options_validate_modes_and_location_coordinates() -> None:
     with pytest.raises(ValidationError):
-        SearchRequest(query="bad type", provider_options={"exa": {"type": "wrong"}})
+        SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            query="bad type",
+            provider_options={"exa": {"type": "wrong"}},
+        )
     with pytest.raises(ValidationError):
         SearchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             query="one coordinate",
             provider_options={"exa": {"user_location": {"latitude": 10}}},
         )
     with pytest.raises(ValidationError):
         FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
             url="https://example.com/doc",
             provider_options={"exa": {"max_age_hours": 721}},
         )
@@ -933,7 +988,11 @@ async def test_fetch_matches_normalized_url_and_extracts_text() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.document.content == "body"
     assert str(response.document.url) == "https://example.com/doc"
@@ -947,7 +1006,10 @@ async def test_fetch_matches_scheme_and_host_case_insensitively_and_retains_path
     )
     adapter = make_adapter(sdk=sdk)
 
-    request = FetchRequest(url="https://example.com/Docs?Query=Alpha")
+    request = FetchRequest(
+        project_id="00000000-0000-4000-8000-0000000000aa",
+        url="https://example.com/Docs?Query=Alpha",
+    )
     response = await adapter.fetch(request)
 
     assert response.document.content == "kept"
@@ -963,7 +1025,12 @@ async def test_fetch_path_and_query_case_differences_do_not_match() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/docs?query=alpha"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa",
+                url="https://example.com/docs?query=alpha",
+            )
+        )
 
     assert excinfo.value.error.code == "fetch_failed"
     assert excinfo.value.error.retryable is False
@@ -977,7 +1044,9 @@ async def test_fetch_treats_root_only_slash_as_equal_to_empty_path() -> None:
     sdk.contents_response = _response([_result(url="https://example.com", id="c-1", text="root")])
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/"))
+    response = await adapter.fetch(
+        FetchRequest(project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/")
+    )
 
     assert response.document.content == "root"
 
@@ -988,7 +1057,11 @@ async def test_fetch_missing_matching_result_raises_fetch_failed() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.provider == "exa"
     assert excinfo.value.error.code == "fetch_failed"
@@ -1002,7 +1075,13 @@ async def test_fetch_truncates_content_over_max_chars() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=100))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/doc",
+            max_chars=100,
+        )
+    )
 
     assert response.document.content == "x" * 100
     assert response.document.metadata == {"id": "c-1", "truncated": True}
@@ -1015,7 +1094,13 @@ async def test_fetch_exact_max_chars_boundary_is_not_truncated() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc", max_chars=100))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com/doc",
+            max_chars=100,
+        )
+    )
 
     assert response.document.content == "x" * 100
     assert response.document.metadata == {"id": "c-1"}
@@ -1028,7 +1113,11 @@ async def test_fetch_without_max_chars_returns_full_content() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.document.content == "full body"
     assert response.document.metadata == {"id": "c-1"}
@@ -1041,7 +1130,11 @@ async def test_fetch_matching_result_without_string_text_is_invalid_response(tex
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+        await adapter.fetch(
+            FetchRequest(
+                project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+            )
+        )
 
     assert excinfo.value.error.provider == "exa"
     assert excinfo.value.error.code == "invalid_response"
@@ -1053,7 +1146,11 @@ async def test_fetch_empty_string_text_is_accepted() -> None:
     sdk.contents_response = _response([_result(url="https://example.com/doc", id="c-1", text="")])
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.document.content == ""
     assert response.document.metadata == {"id": "c-1"}
@@ -1066,7 +1163,11 @@ async def test_fetch_reports_only_real_usage() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.FETCH
@@ -1082,7 +1183,11 @@ async def test_fetch_missing_telemetry_uses_pricing_fallback() -> None:
     )
     adapter = make_adapter(sdk=sdk)
 
-    response = await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    response = await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert response.usage is not None
     assert response.usage.operation is UsageOperation.FETCH
@@ -1100,7 +1205,11 @@ async def test_fetch_invokes_shared_runner_exactly_once() -> None:
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
 
-    await adapter.fetch(FetchRequest(url="https://example.com/doc"))
+    await adapter.fetch(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert runner.entries == ["exa"]
     assert len(sdk.contents_calls) == 1
@@ -1114,8 +1223,14 @@ async def test_estimate_cost_projects_published_fallback_network_free() -> None:
     runner = _RecordingRunner()
     adapter = make_adapter(sdk=sdk, runner=runner)
 
-    search_estimate = await adapter.estimate_cost(SearchRequest(query="cost"))
-    fetch_estimate = await adapter.estimate_cost(FetchRequest(url="https://example.com/doc"))
+    search_estimate = await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="cost")
+    )
+    fetch_estimate = await adapter.estimate_cost(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa", url="https://example.com/doc"
+        )
+    )
 
     assert search_estimate.operation is UsageOperation.SEARCH
     assert fetch_estimate.operation is UsageOperation.FETCH
@@ -1204,7 +1319,9 @@ async def test_sdk_error_surfaces_as_normalized_redacted_nonretryable() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     error = excinfo.value
     assert error.error.code == "invalid_api_key"
@@ -1222,7 +1339,9 @@ async def test_sdk_error_body_never_leaks_for_any_status(status: int) -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     error = excinfo.value
     assert error.error.status_code == status
@@ -1236,7 +1355,9 @@ async def test_unknown_sdk_exception_surfaces_as_exa_error() -> None:
     adapter = make_adapter(sdk=sdk)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="bad"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="bad")
+        )
 
     assert excinfo.value.error.code == "exa_error"
     assert excinfo.value.error.message == "RuntimeError"
@@ -1252,7 +1373,9 @@ async def test_sdk_transport_error_passes_through_adapter_untouched() -> None:
     adapter = make_adapter(sdk=sdk, runner=_RecordingRunner())
 
     with pytest.raises(httpx.ConnectError):
-        await adapter.search(SearchRequest(query="net"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="net")
+        )
 
     assert len(sdk.search_calls) == 1
 
@@ -1264,7 +1387,9 @@ async def test_transport_error_is_normalized_retryable_by_shared_runner() -> Non
     adapter = make_adapter(sdk=sdk, runner=runner)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="net"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="net")
+        )
 
     assert excinfo.value.error.code == "transport_error"
     assert excinfo.value.error.retryable is True
@@ -1279,7 +1404,9 @@ async def test_transport_error_message_is_redacted_by_shared_runner() -> None:
     adapter = make_adapter(sdk=sdk, runner=runner)
 
     with pytest.raises(ProviderOperationError) as excinfo:
-        await adapter.search(SearchRequest(query="net"))
+        await adapter.search(
+            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="net")
+        )
 
     assert excinfo.value.error.code == "transport_error"
     assert "sk-leak-1" not in str(excinfo.value)
@@ -1367,16 +1494,26 @@ async def test_exa_usage_snapshot() -> None:
 async def test_estimate_cost_dynamic_pricing() -> None:
     adapter = make_adapter()
     # <= 10 results
-    est10 = await adapter.estimate_cost(SearchRequest(query="test", limit=10))
+    est10 = await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=10)
+    )
     assert est10.units == Decimal("0.007")
     assert est10.currency == "USD"
 
     # > 10 results: 25 results -> 0.007 + 15 * 0.001 = 0.022
-    est25 = await adapter.estimate_cost(SearchRequest(query="test", limit=25))
+    est25 = await adapter.estimate_cost(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="test", limit=25)
+    )
     assert est25.units == Decimal("0.022")
 
     # Fetch
-    est_fetch = await adapter.estimate_cost(FetchRequest(url="https://example.com", url_count=5))
+    est_fetch = await adapter.estimate_cost(
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com",
+            url_count=5,
+        )
+    )
     assert est_fetch.units == Decimal("0.005")
 
 
@@ -1389,10 +1526,21 @@ def test_request_native_cost_dynamic_pricing() -> None:
     search_rec = next(r for r in records if r.operation is LimitOperation.SEARCH)
     fetch_rec = next(r for r in records if r.operation is LimitOperation.FETCH)
 
-    assert request_native_cost(search_rec, SearchRequest(query="q", limit=10)) == Decimal("0.007")
-    assert request_native_cost(search_rec, SearchRequest(query="q", limit=25)) == Decimal("0.022")
     assert request_native_cost(
-        fetch_rec, FetchRequest(url="https://example.com", url_count=4)
+        search_rec,
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=10),
+    ) == Decimal("0.007")
+    assert request_native_cost(
+        search_rec,
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="q", limit=25),
+    ) == Decimal("0.022")
+    assert request_native_cost(
+        fetch_rec,
+        FetchRequest(
+            project_id="00000000-0000-4000-8000-0000000000aa",
+            url="https://example.com",
+            url_count=4,
+        ),
     ) == Decimal("0.004")
 
 

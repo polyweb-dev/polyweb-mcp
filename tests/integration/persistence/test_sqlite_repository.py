@@ -25,8 +25,10 @@ from freesearch.models.contracts import (
 )
 from freesearch.persistence.database_migrations import DatabaseMigrationError
 from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
-from freesearch.routers.control import clear_config_cache
 from freesearch.services.monitoring import clear_quota_poll_cache, effective_quotas_batch
+from freesearch.services.provider_runtime import clear_config_cache
+from tests.fixtures.execution import seed_execution_project
+from tests.fixtures.usage_ledger import all_usage_events
 
 # Baseline raw-SQL schema contract: column -> (SQLite type, PRAGMA notnull=0 -> nullable).
 _SCHEMA: dict[str, dict[str, object]] = {
@@ -42,9 +44,19 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "latency_ms": ("INTEGER", True),
             "status": ("TEXT", True),
             "unit_kind": ("TEXT", True),
+            "project_id": ("CHAR", False),
+            "actor_type": ("TEXT", False),
+            "actor_id": ("CHAR", False),
+            "trace_id": ("TEXT", True),
+            "credential_id": ("CHAR", True),
+            "binding_id": ("CHAR", True),
+            "pool_id": ("CHAR", True),
         },
         "primary_key": ("id",),
-        "indexes": {"usage_events_provider_observed_at": ["provider", "observed_at"]},
+        "indexes": {
+            "usage_events_provider_observed_at": ["provider", "observed_at"],
+            "usage_events_project_observed_at": ["project_id", "observed_at"],
+        },
     },
     "quota_snapshots": {
         "columns": {
@@ -58,10 +70,13 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "unit_kind": ("TEXT", True),
             "display_unit": ("TEXT", True),
             "metadata": ("TEXT", True),
+            "pool_id": ("CHAR", True),
+            "credential_id": ("CHAR", True),
         },
         "primary_key": ("id",),
         "indexes": {
-            "quota_snapshots_provider_source_observed_at": ["provider", "source", "observed_at"]
+            "quota_snapshots_provider_source_observed_at": ["provider", "source", "observed_at"],
+            "quota_snapshots_pool_observed_at": ["pool_id", "observed_at"],
         },
     },
     "provider_health": {
@@ -71,9 +86,13 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "status": ("TEXT", False),
             "checked_at": ("TEXT", False),
             "message": ("TEXT", True),
+            "credential_id": ("CHAR", True),
         },
         "primary_key": ("id",),
-        "indexes": {"provider_health_provider_checked_at": ["provider", "checked_at"]},
+        "indexes": {
+            "provider_health_provider_checked_at": ["provider", "checked_at"],
+            "provider_health_credential_checked_at": ["credential_id", "checked_at"],
+        },
     },
 }
 
@@ -114,10 +133,10 @@ async def test_schema_initialization_is_idempotent(tmp_path: Path) -> None:
     )
     async with await SQLiteRepository.open(db_path) as repository:
         await repository.initialize()
-        await repository.record_usage(event)
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
     async with await SQLiteRepository.open(db_path) as reopened:
         await reopened.initialize()
-        assert await reopened.list_usage() == [event]
+        assert await all_usage_events(reopened) == [event]
 
 
 async def test_usage_event_round_trips_exactly(repository: SQLiteRepository) -> None:
@@ -129,8 +148,8 @@ async def test_usage_event_round_trips_exactly(repository: SQLiteRepository) -> 
         request_id=None,
         metadata={"tokens": 42, "nested": {"ok": True}, "cost": 1.25},
     )
-    await repository.record_usage(event)
-    assert await repository.list_usage() == [event]
+    await repository.record_usage(event, attribution=await seed_execution_project(repository))
+    assert await all_usage_events(repository) == [event]
 
 
 async def test_list_usage_filters_by_provider_operation_and_time(
@@ -157,13 +176,15 @@ async def test_list_usage_filters_by_provider_operation_and_time(
         observed_at=t0 + timedelta(hours=2),
     )
     for event in (first, second, third):
-        await repository.record_usage(event)
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
 
-    assert await repository.list_usage() == [first, second, third]
-    assert await repository.list_usage(provider="alpha") == [first, second]
-    assert await repository.list_usage(operation=UsageOperation.SEARCH) == [first, third]
-    assert await repository.list_usage(since=t0 + timedelta(hours=1)) == [second, third]
-    assert await repository.list_usage(provider="alpha", operation=UsageOperation.SEARCH) == [first]
+    assert await all_usage_events(repository) == [first, second, third]
+    assert await repository.list_provider_usage(provider="alpha") == [first, second]
+    assert await all_usage_events(repository, operation=UsageOperation.SEARCH) == [first, third]
+    assert await all_usage_events(repository, since=t0 + timedelta(hours=1)) == [second, third]
+    assert await repository.list_provider_usage(
+        provider="alpha", operation=UsageOperation.SEARCH
+    ) == [first]
 
 
 async def test_usage_ordering_and_filtering_use_utc_instants(
@@ -185,15 +206,17 @@ async def test_usage_ordering_and_filtering_use_utc_instants(
     canonical_earlier = earlier.model_copy(
         update={"observed_at": datetime(2026, 1, 1, 10, 0, tzinfo=UTC)}
     )
-    await repository.record_usage(earlier)
-    await repository.record_usage(later)
+    await repository.record_usage(earlier, attribution=await seed_execution_project(repository))
+    await repository.record_usage(later, attribution=await seed_execution_project(repository))
 
-    assert await repository.list_usage() == [canonical_earlier, later]
-    assert await repository.list_usage(
-        since=datetime(2026, 1, 1, 12, 0, tzinfo=plus_two)  # 10:00 UTC
+    assert await all_usage_events(repository) == [canonical_earlier, later]
+    assert await all_usage_events(
+        repository,
+        since=datetime(2026, 1, 1, 12, 0, tzinfo=plus_two),  # 10:00 UTC
     ) == [canonical_earlier, later]
-    assert await repository.list_usage(
-        since=datetime(2026, 1, 1, 11, 15, tzinfo=timezone(timedelta(hours=1)))  # 10:15 UTC
+    assert await all_usage_events(
+        repository,
+        since=datetime(2026, 1, 1, 11, 15, tzinfo=timezone(timedelta(hours=1))),  # 10:15 UTC
     ) == [later]
 
 
@@ -317,8 +340,11 @@ async def test_usage_metadata_blocklist_contract(
     ]
     for metadata in invalid:
         with pytest.raises(ValueError):
-            await repository.record_usage(UsageEvent(metadata=metadata, **base))
-        assert await repository.list_usage() == []
+            await repository.record_usage(
+                UsageEvent(metadata=metadata, **base),
+                attribution=await seed_execution_project(repository),
+            )
+        assert await all_usage_events(repository) == []
     valid = [
         {"note": "string telemetry"},
         {"mode": "keyed", "sku": "search.pro", "paid": True},
@@ -328,8 +354,11 @@ async def test_usage_metadata_blocklist_contract(
         {"x": {"y": "nested benign string"}},
     ]
     for metadata in valid:
-        await repository.record_usage(UsageEvent(metadata=metadata, **base))
-    events = await repository.list_usage()
+        await repository.record_usage(
+            UsageEvent(metadata=metadata, **base),
+            attribution=await seed_execution_project(repository),
+        )
+    events = await all_usage_events(repository)
     assert [event.metadata for event in events] == valid
 
 
@@ -382,13 +411,17 @@ async def test_usage_metadata_alias_blocklist(
     ]
     for metadata in invalid:
         with pytest.raises(ValueError):
-            await repository.record_usage(UsageEvent(metadata=metadata, **base))
-        assert await repository.list_usage() == []
+            await repository.record_usage(
+                UsageEvent(metadata=metadata, **base),
+                attribution=await seed_execution_project(repository),
+            )
+        assert await all_usage_events(repository) == []
     # Lookalikes that merely resemble blocked keys keep working.
     await repository.record_usage(
-        UsageEvent(metadata={"url_count": 4, "content_type": "text/markdown"}, **base)
+        UsageEvent(metadata={"url_count": 4, "content_type": "text/markdown"}, **base),
+        attribution=await seed_execution_project(repository),
     )
-    (event,) = await repository.list_usage()
+    (event,) = await all_usage_events(repository)
     assert event.metadata == {"url_count": 4, "content_type": "text/markdown"}
 
 
@@ -400,7 +433,8 @@ async def test_close_is_safe_after_normal_use(tmp_path: Path) -> None:
             operation=UsageOperation.SEARCH,
             units=Decimal("1"),
             observed_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
-        )
+        ),
+        attribution=await seed_execution_project(repository),
     )
     await repository.close()
     await repository.close()
@@ -434,7 +468,11 @@ async def test_initialized_schema_matches_baseline_contract(
 async def test_initialize_rejects_schema_drift_at_alembic_head(tmp_path: Path) -> None:
     """A stamped database with missing schema must fail instead of hiding drift."""
     async with await SQLiteRepository.open(tmp_path / "repair.db") as repository:
-        usage_index = next(iter(UsageEventRow.__table__.indexes))
+        usage_index = next(
+            index
+            for index in UsageEventRow.__table__.indexes
+            if index.name == "usage_events_provider_observed_at"
+        )
         async with repository._engine.begin() as connection:
             await connection.run_sync(usage_index.drop)
 
@@ -465,10 +503,10 @@ async def test_open_uses_literal_database_path_with_spaces(tmp_path: Path) -> No
         observed_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
     )
     async with await SQLiteRepository.open(db_path) as repository:
-        await repository.record_usage(event)
+        await repository.record_usage(event, attribution=await seed_execution_project(repository))
     assert db_path.is_file()
     async with await SQLiteRepository.open(db_path) as reopened:
-        assert await reopened.list_usage() == [event]
+        assert await all_usage_events(reopened) == [event]
 
 
 async def test_repository_constructs_with_engine_only(tmp_path: Path) -> None:
@@ -484,9 +522,10 @@ async def test_repository_constructs_with_engine_only(tmp_path: Path) -> None:
             operation=UsageOperation.SEARCH,
             units=Decimal("1"),
             observed_at=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
-        )
+        ),
+        attribution=await seed_execution_project(repository),
     )
-    assert len(await repository.list_usage()) == 1
+    assert len(await all_usage_events(repository)) == 1
     await repository.close()
 
 
@@ -769,7 +808,9 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
 
     async with _soft_zero_case(tmp_path, "m2-later-success") as (database, recorded):
         await database.record_quota(_quota_zero(t0, metadata={"origin": "estimate", "depth": 2}))
-        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
+        )
         calls = len(recorded)
         result = await effective_quotas_batch(database, ["parallel"])
         assert len(recorded) - calls == 1
@@ -798,7 +839,9 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
 
     async with _soft_zero_case(tmp_path, "m2-earlier-success") as (database, recorded):
         await database.record_quota(_quota_zero(t0 + timedelta(hours=2)))
-        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
+        )
         calls = len(recorded)
         result = await effective_quotas_batch(database, ["parallel"])
         assert len(recorded) - calls == 0
@@ -807,7 +850,9 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
 
     async with _soft_zero_case(tmp_path, "m2-equal-timestamp") as (database, recorded):
         await database.record_quota(_quota_zero(t0 + timedelta(hours=1)))
-        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
+        )
         calls = len(recorded)
         result = await effective_quotas_batch(database, ["parallel"])
         assert len(recorded) - calls == 0
@@ -816,7 +861,10 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
 
     async with _soft_zero_case(tmp_path, "m2-later-failure") as (database, recorded):
         await database.record_quota(_quota_zero(t0))
-        await database.record_usage(_usage(t0 + timedelta(hours=1), UsageStatus.FAILURE))
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=1), UsageStatus.FAILURE),
+            attribution=await seed_execution_project(database),
+        )
         calls = len(recorded)
         result = await effective_quotas_batch(database, ["parallel"])
         assert len(recorded) - calls == 0
@@ -825,9 +873,15 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
 
     async with _soft_zero_case(tmp_path, "m2-multiple-successes") as (database, recorded):
         await database.record_quota(_quota_zero(t0))
-        await database.record_usage(_usage(t0 - timedelta(hours=1)))
-        await database.record_usage(_usage(t0 + timedelta(hours=1)))
-        await database.record_usage(_usage(t0 + timedelta(hours=3)))
+        await database.record_usage(
+            _usage(t0 - timedelta(hours=1)), attribution=await seed_execution_project(database)
+        )
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
+        )
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=3)), attribution=await seed_execution_project(database)
+        )
         calls = len(recorded)
         result = await effective_quotas_batch(database, ["parallel"])
         assert len(recorded) - calls == 1
@@ -844,7 +898,9 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
             observed_at=t0,
         )
         await database.record_quota(hard)
-        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
+        )
         calls = len(recorded)
         result = await effective_quotas_batch(database, ["parallel"])
         assert len(recorded) - calls == 0
@@ -853,7 +909,9 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
 
     async with _soft_zero_case(tmp_path, "m2-degenerate-zero") as (database, recorded):
         await database.record_quota(_quota_zero(t0, limit=Decimal("0")))
-        await database.record_usage(_usage(t0 + timedelta(hours=1)))
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
+        )
         calls = len(recorded)
         result = await effective_quotas_batch(database, ["parallel"])
         assert len(recorded) - calls == 0
@@ -869,11 +927,16 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
         await database.record_quota(
             _quota_zero(t0, limit=Decimal("250.5"), metadata={"batch": "h1"})
         )
-        await database.record_usage(_usage(t0 + timedelta(hours=2)))
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=2)), attribution=await seed_execution_project(database)
+        )
         await database.record_quota(
             _quota_zero(t0, provider="exa", limit=Decimal("75"), metadata={"batch": "h2"})
         )
-        await database.record_usage(_usage(t0 + timedelta(hours=5), provider="exa"))
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=5), provider="exa"),
+            attribution=await seed_execution_project(database),
+        )
         await database.record_quota(
             QuotaSnapshot(
                 provider="tavily",
@@ -883,7 +946,10 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
                 observed_at=t0,
             )
         )
-        await database.record_usage(_usage(t0 + timedelta(hours=1), provider="tavily"))
+        await database.record_usage(
+            _usage(t0 + timedelta(hours=1), provider="tavily"),
+            attribution=await seed_execution_project(database),
+        )
         calls = len(recorded)
         combined = await effective_quotas_batch(database, ["parallel", "exa", "tavily"])
         assert len(recorded) - calls == 2
@@ -903,3 +969,53 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
         repeated = await effective_quotas_batch(database, ["parallel", "exa", "tavily"])
         assert len(recorded) - repeat_calls == 0
         assert repeated == combined
+
+
+async def test_quota_funds_are_credential_or_pool_scoped_but_provider_outages_apply(
+    tmp_path, monkeypatch
+):
+    """A provider outage and a credential's depleted funds have different scope."""
+    from tests.fixtures.a2_execution import PoolSpec, build_execution_world
+
+    world = await build_execution_world(
+        tmp_path, monkeypatch, labels=("a1", "a2"), pool=PoolSpec(constraints=[]), limits=False
+    )
+    repository = world.repository
+    first, sibling = (world.credentials[label].credential_id for label in ("a1", "a2"))
+    assert world.pool is not None
+    pool = world.pool.id
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def quota(remaining, observed):
+        return QuotaSnapshot(
+            provider="exa",
+            source=QuotaSource.AUTHORITATIVE,
+            remaining=Decimal(remaining),
+            observed_at=observed,
+        )
+
+    try:
+        await repository.record_quota(quota("0", now))
+        assert await repository.latest_quota("exa", credential_id=first) is None
+        assert await repository.latest_quota("exa", credential_id=sibling) is None
+        await repository.record_quota(quota("2", now), credential_id=first)
+        assert (await repository.latest_quota("exa", credential_id=first)).remaining == Decimal("2")
+        assert await repository.latest_quota("exa", credential_id=sibling) is None
+        await repository.record_quota(quota("3", now), credential_id=first, pool_id=pool)
+        for credential in (first, sibling):
+            assert (
+                await repository.latest_quota("exa", credential_id=credential, pool_id=pool)
+            ).remaining == Decimal("3")
+        await repository.record_health(
+            ProviderHealth(provider="exa", status=HealthStatus.HEALTHY, checked_at=now),
+            credential_id=first,
+        )
+        outage = ProviderHealth(
+            provider="exa", status=HealthStatus.UNAVAILABLE, checked_at=now + timedelta(seconds=1)
+        )
+        await repository.record_health(outage)
+        for credential in (first, sibling):
+            assert await repository.latest_health("exa", credential_id=credential) == outage
+        assert (await repository.latest_quota("exa")).remaining == Decimal("0")
+    finally:
+        await world.aclose()

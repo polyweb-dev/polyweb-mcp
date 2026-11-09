@@ -1,166 +1,86 @@
 import { useCallback } from "react";
 import { apiService } from "@/services/api/freesearchApi";
-import { ApiError, errorMessage } from "@/shared/api/http";
-import type { ToastNotification } from "@/shared/notifications/context";
+import { errorMessage } from "@/shared/api/http";
 import type { BackendSearchRequest } from "@/domains/execution/api/wire";
-import type { SearchRequest, SearchResponse } from "@/domains/execution";
-import type { UsageEvent } from "@/domains/dashboard";
+import type { SearchRequest, SearchResponse } from "@/domains/execution/model/types";
 import { mapSearchResponse } from "@/services/api/mappers";
-import { clampLimit, createTimeoutSignal, makeSearchEvent } from "@/domains/execution";
+import { clampLimit, withTimeout } from "@/domains/execution/model/requestUtils";
 import { toBackendId } from "@/domains/providers";
-import type { ProviderConfig } from "@/domains/providers/model/types";
-import type { RoutingPreset } from "@/domains/routing/model/types";
-import { getEligibleProviders } from "@/domains/routing/model/routingPolicy";
-import { pickFallbackSearchProvider } from "@/domains/execution/model/searchFallback";
-import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import { useAppDispatch } from "@/store/hooks";
 import {
-  clearSearch as clearSearchAction,
   searchFailed,
   searchFinished,
   searchStarted,
   searchSucceeded,
-  selectActiveSearch,
-  selectIsSearching,
-  selectSearchError,
 } from "@/store/playgroundSlice";
-
-export type ShowToast = (message: string, type?: ToastNotification["type"]) => void;
+import type { ShowToast } from "./projectExecutionContext";
+import { useScopedRequest } from "./useScopedRequest";
 
 interface SearchRunnerDeps {
+  projectId: string;
   showToast: ShowToast;
-  fallbackEnabled: boolean;
   catalogNameOf: (id: string) => string | undefined;
-  refreshDashboard: () => Promise<void>;
-  prependUsageEvent: (event: UsageEvent) => void;
-  providers: ProviderConfig[];
-  routingPreset: RoutingPreset;
+}
+
+/** Wire body of one project search: the server routes across the project bindings. */
+export function searchBody(projectId: string, request: SearchRequest): BackendSearchRequest {
+  const providerIds = request.providerIds ?? [];
+  const isFanout = Boolean(request.fanout);
+  return {
+    project_id: projectId,
+    query: request.query.trim(),
+    limit: clampLimit(request.maxResults),
+    language: null,
+    country_code: null,
+    domains: [],
+    routing: {
+      mode: isFanout ? "fanout" : providerIds.length > 0 ? "require" : "auto",
+      providers: providerIds.map(toBackendId),
+      allow_fallback: true,
+    },
+    ...(isFanout ? { fanout: true } : {}),
+  };
 }
 
 /**
- * The safe provider id of one failure payload. Local admission denials carry
- * the provider under `detail`; the top level stays the fallback read.
+ * Project search orchestration: request mapping, timeout budget, abort, and
+ * toasts. Every body carries the URL project and travels on the human session;
+ * the server owns provider fallback, so a failure (a Tavily 402 included)
+ * shows the backend message once and is never retried here. Unmount or a
+ * project switch aborts the request, and a late result never dispatches.
  */
-function providerFromRaw(raw: unknown): string | null {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const body = raw as Record<string, unknown>;
-  const providerOf = (value: unknown): string | null =>
-    typeof value === "string" && value.trim() !== "" ? value : null;
-  const top = providerOf(body.provider);
-  if (top !== null) return top;
-  const detail = body.detail;
-  if (detail === null || typeof detail !== "object" || Array.isArray(detail)) return null;
-  return providerOf((detail as Record<string, unknown>).provider);
-}
-
-/** True when the failure is the terminal Tavily out-of-Credits 402. */
-function isTavilyPaymentRequired(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    error.status === 402 &&
-    providerFromRaw(error.raw) === "tavily"
-  );
-}
-
-/**
- * Search API orchestration: request mapping, timeout budget, fallback walk,
- * toasts, usage events, and dashboard refresh stay here. Execution state itself
- * lives in the playground slice so it survives navigation and reload.
- */
-export function useSearchRunner({
-  showToast,
-  fallbackEnabled,
-  catalogNameOf,
-  refreshDashboard,
-  prependUsageEvent,
-  providers,
-  routingPreset,
-}: SearchRunnerDeps) {
+export function useSearchRunner({ projectId, showToast, catalogNameOf }: SearchRunnerDeps) {
   const dispatch = useAppDispatch();
-  const activeSearch = useAppSelector(selectActiveSearch);
-  const isSearching = useAppSelector(selectIsSearching);
-  const searchError = useAppSelector(selectSearchError);
+  const { begin, end } = useScopedRequest();
 
-  const runSearch = useCallback(
+  return useCallback(
     async (request: SearchRequest): Promise<SearchResponse | null> => {
+      const controller = begin();
       dispatch(searchStarted());
       const startedAt = performance.now();
-      const requestedProviderIds = request.providerIds ?? [];
-
-      const isFanout = Boolean(request.fanout);
-      const attempt = async (providerIds: string[]) => {
-        const body: BackendSearchRequest = {
-          query: request.query.trim(),
-          limit: clampLimit(request.maxResults),
-          language: null,
-          country_code: null,
-          domains: [],
-          routing: {
-            mode: isFanout ? "fanout" : providerIds.length > 0 ? "require" : "auto",
-            providers: providerIds.map(toBackendId),
-            allow_fallback: fallbackEnabled,
-          },
-          ...(isFanout ? { fanout: true } : {}),
-        };
-        // Fresh timeout budget per attempt: a hung primary must not steal
-        // the fallback's time.
-        const wire = await apiService.search(body, createTimeoutSignal(request.timeoutMs));
-        return mapSearchResponse(wire, {
+      try {
+        const wire = await apiService.search(
+          searchBody(projectId, request),
+          withTimeout(controller.signal, request.timeoutMs),
+        );
+        if (controller.signal.aborted) return null;
+        const response = mapSearchResponse(wire, {
           wallClockMs: Math.round(performance.now() - startedAt),
           catalogNameOf,
         });
-      };
-
-      const succeed = (response: SearchResponse) => {
         dispatch(searchSucceeded(response));
-        prependUsageEvent(makeSearchEvent(response));
-        void refreshDashboard();
         return response;
-      };
-
-      const fail = (error: unknown) => {
+      } catch (error) {
+        if (controller.signal.aborted) return null;
         const message = errorMessage(error, "Search failed");
         dispatch(searchFailed(message));
         showToast(message, "error");
         return null;
-      };
-
-      try {
-        return succeed(await attempt(requestedProviderIds));
-      } catch (primaryError) {
-        // Fanout searches handle partial failures on the server via ranked fusion;
-        // a total fanout failure must surface directly without falling back to an
-        // arbitrary single provider. A terminal Tavily 402 is the out-of-Credits
-        // rail too: it must reach the caller exactly as the backend sent it, so
-        // no fallback walk and no later error can replace the primary state.
-        if (isFanout || !fallbackEnabled || isTavilyPaymentRequired(primaryError)) {
-          return fail(primaryError);
-        }
-        // Auto mode pins nothing, so the arbitrated pick is unknown — assume
-        // the backend tried the head of the same policy ordering and walk to
-        // the next provider, never retrying the failed one.
-        const triedUiIds =
-          requestedProviderIds.length > 0
-            ? requestedProviderIds
-            : getEligibleProviders(providers, "search", routingPreset)
-                .slice(0, 1)
-                .map((provider) => provider.id);
-        const fallback = pickFallbackSearchProvider(providers, routingPreset, triedUiIds);
-        if (!fallback) return fail(primaryError);
-        try {
-          return succeed(await attempt([fallback.id]));
-        } catch (fallbackError) {
-          return fail(fallbackError);
-        }
       } finally {
-        dispatch(searchFinished());
+        if (!controller.signal.aborted) dispatch(searchFinished());
+        end(controller);
       }
     },
-    [dispatch, fallbackEnabled, refreshDashboard, showToast, catalogNameOf, prependUsageEvent, providers, routingPreset],
+    [begin, end, dispatch, projectId, showToast, catalogNameOf],
   );
-
-  const clearSearch = useCallback(() => {
-    dispatch(clearSearchAction());
-  }, [dispatch]);
-
-  return { activeSearch, isSearching, searchError, runSearch, clearSearch };
 }

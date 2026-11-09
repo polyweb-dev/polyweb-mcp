@@ -6,20 +6,31 @@ transaction is held across vendor I/O. Money and native amounts are stored as
 exact text, so a fractional credit-unit value survives a restart unchanged.
 """
 
+import asyncio
 import json
 import math
+import sqlite3
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
+from typing import cast as type_cast
+from uuid import UUID
 
-from sqlalchemy import Numeric, cast, delete, func, select, update
+from sqlalchemy import Numeric, cast, delete, func, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from freesearch.models.contracts import UnitKind
+from freesearch.models.budget_period import BudgetPeriod, window_bounds
+from freesearch.models.contracts import ProviderError, UnitKind
+from freesearch.models.observability import ActorType
 from freesearch.models.provider_limits import (
+    DEFAULT_ATTEMPT_LEASE_SECONDS,
+    LOCAL_RATE_DENIAL_CODE,
     AuthMode,
     BudgetBlock,
     Confidence,
@@ -36,6 +47,7 @@ from freesearch.models.provider_limits import (
     LimitOperation,
     LimitRecordNotFound,
     LimitRecordUpdate,
+    LimitStoreUnavailable,
     LimitVersionConflict,
     NativePool,
     NativeUsageSnapshot,
@@ -52,15 +64,18 @@ from freesearch.models.provider_limits import (
     local_funds_denial,
     local_rate_denial,
 )
+from freesearch.persistence.credentials import ProviderCredentialRow
 from freesearch.persistence.limit_rows import (
     CRDGrantRow,
     LimitAdmissionRow,
     LimitEventRow,
     NativePoolRow,
+    ProviderBudgetRow,
     ProviderLimitRow,
     RateAttemptRow,
     RateWindowObservationRow,
 )
+from freesearch.persistence.pools import CredentialPoolLinkRow
 
 _WINDOW_SECONDS: dict[RateWindowName, int] = {
     RateWindowName.SECOND: 1,
@@ -73,6 +88,241 @@ _SUCCESS_REASON = "local_success"
 _FAILURE_REASON = "local_failure"
 _ATTEMPT_RETENTION_SECONDS = 172_800
 _QUANTUM = Numeric(24, 9)
+
+
+async def _begin_capacity_transaction(session: AsyncSession) -> None:
+    """Retry only a SQLite busy/locked BEGIN, before any capacity work occurs.
+
+    No statements or commits after BEGIN are retried: receipt or commit may be
+    uncertain. Rolling back each failed BEGIN releases the session transaction
+    before the bounded wait and leaves admission identity/debits untouched.
+    """
+
+    for retry in range(5):
+        try:
+            await session.execute(text("BEGIN IMMEDIATE"))
+            return
+        except OperationalError as error:
+            code = getattr(error.orig, "sqlite_errorcode", None)
+            if (
+                not isinstance(code, int)
+                or (code & 0xFF) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                or retry == 4
+            ):
+                raise
+            await session.rollback()
+            await asyncio.sleep(0.01 * 2**retry)
+
+
+@dataclass(frozen=True)
+class StrictWindowSpec:
+    """One declared strict window the reservation must satisfy.
+
+    The bucket is a pool- or project-scoped unit counter (``project:``,
+    ``pool:`` prefix in the bucket id) and ``limit_units`` is a numeric,
+    nonnegative strict ceiling; a reservation unit of ``1`` is one provider
+    attempt.
+    """
+
+    bucket_id: str
+    window_seconds: int
+    limit_units: int
+
+
+@dataclass(frozen=True)
+class StrictAttemptSpec:
+    """Precomputed strict reservation of one attempt against pool and project windows.
+
+    The execution service derives every field from durable binding, pool,
+    allocation, and constraint rows before asking the store; this object
+    carries no trust: the repository rechecks every window inside its
+    ``BEGIN IMMEDIATE`` transaction. ``actor_type``/``actor_id`` name the
+    verified principal that owns the attempt; the strict payload and the
+    settled capacity rows persist them alongside project, credential, binding,
+    pool, and request attribution.
+    """
+
+    project_id: UUID
+    credential_id: UUID
+    binding_id: UUID
+    pool_id: UUID | None = None
+    request_id: str | None = None
+    windows: tuple[StrictWindowSpec, ...] = ()
+    pool_max_concurrency: int | None = None
+    project_max_concurrency: int | None = None
+    units_per_attempt: Decimal = Decimal("1")
+    lease_seconds: int = DEFAULT_ATTEMPT_LEASE_SECONDS
+    actor_type: ActorType | None = None
+    actor_id: UUID | None = None
+
+
+@dataclass(frozen=True)
+class StrictReservation:
+    """The stored reservation outcome of one strict attempt.
+
+    ``state`` reports the persisted admission state: only ``reserved`` holds
+    dispatchable capacity, ``released``/``completed``/``failed`` name a settled
+    attempt whose replay must never grant fresh capacity. ``charge_next_dispatch``
+    lets a dispatch path record one more actual upstream send under the same
+    attempt (a retry that reused an idempotent reservation) before the send
+    happens; it rechecks the strict windows first.
+    """
+
+    attempt_id: str
+    bucket_ids: tuple[str, ...]
+    pool_id: UUID | None
+    created_at: datetime
+    state: str
+    idempotent: bool = False
+    charge_next_dispatch: Callable[[], Awaitable["StrictReservation"]] | None = field(
+        default=None, compare=False, repr=False
+    )
+    complete_dispatch: Callable[[], Awaitable[None]] | None = field(
+        default=None, compare=False, repr=False
+    )
+
+
+@dataclass(frozen=True)
+class AttemptReservation:
+    """One atomic admission lifecycle covering native funds and strict caps.
+
+    The native admission carries the rails reservation (funds, rate units,
+    audit attribution); the strict reservation carries the pool/project
+    windows and concurrency identity. Both share one attempt id and one
+    transaction, so a strict denial never leaves a native reservation behind.
+    """
+
+    attempt_id: str
+    admission: LimitAdmission | None = None
+    strict: StrictReservation | None = None
+
+    @property
+    def bucket_ids(self) -> tuple[str, ...]:
+        return () if self.strict is None else self.strict.bucket_ids
+
+    @property
+    def idempotent(self) -> bool:
+        return bool(self.strict is not None and self.strict.idempotent)
+
+    @property
+    def charge_next_dispatch(self) -> Callable[[], Awaitable["StrictReservation"]] | None:
+        return None if self.strict is None else self.strict.charge_next_dispatch
+
+
+def _strict_spec_payload(spec: StrictAttemptSpec) -> dict[str, Any]:
+    """Return the strict spec summary persisted on the admission row.
+
+    The payload rides the existing ``rate_reservations_json`` column (the
+    settled capacity tables have no dedicated spec columns); the rails decoder
+    skips it, so a strict row never becomes a rails window list.
+    """
+
+    return {
+        "kind": "strict",
+        "units_per_attempt": str(spec.units_per_attempt),
+        "lease_seconds": spec.lease_seconds,
+        "pool_max_concurrency": spec.pool_max_concurrency,
+        "project_max_concurrency": spec.project_max_concurrency,
+        "actor_type": spec.actor_type.value if spec.actor_type is not None else None,
+        "actor_id": None if spec.actor_id is None else str(spec.actor_id),
+        "windows": [
+            {
+                "bucket_id": window.bucket_id,
+                "window_seconds": window.window_seconds,
+                "limit_units": window.limit_units,
+            }
+            for window in spec.windows
+        ],
+    }
+
+
+def _strict_spec_matches(stored_json: str | None, spec: StrictAttemptSpec) -> bool:
+    """Return whether a stored strict payload equals the replaying spec."""
+
+    try:
+        payload = json.loads(stored_json) if stored_json else None
+    except ValueError:
+        return False
+    if not isinstance(payload, dict) or payload.get("kind") != "strict":
+        return False
+    try:
+        stored = _StrictSpecState.model_from_payload(payload)
+    except (ArithmeticError, ValueError, TypeError, KeyError):
+        return False
+    return stored.matches(spec)
+
+
+class _StrictSpecState:
+    """Decoded strict payload used to validate an idempotent replay."""
+
+    __slots__ = (
+        "actor_id",
+        "actor_type",
+        "lease_seconds",
+        "pool_max_concurrency",
+        "project_max_concurrency",
+        "units_per_attempt",
+        "windows",
+    )
+
+    def __init__(
+        self,
+        *,
+        units_per_attempt: Decimal,
+        lease_seconds: int,
+        pool_max_concurrency: int | None,
+        project_max_concurrency: int | None,
+        windows: frozenset[tuple[str, int, int]],
+        actor_type: str | None = None,
+        actor_id: str | None = None,
+    ) -> None:
+        self.units_per_attempt = units_per_attempt
+        self.lease_seconds = lease_seconds
+        self.pool_max_concurrency = pool_max_concurrency
+        self.project_max_concurrency = project_max_concurrency
+        self.windows = windows
+        self.actor_type = actor_type
+        self.actor_id = actor_id
+
+    @classmethod
+    def model_from_payload(cls, payload: dict[str, Any]) -> "_StrictSpecState":
+        units = Decimal(str(payload["units_per_attempt"]))
+        lease = int(payload["lease_seconds"])
+        pool_cap = payload.get("pool_max_concurrency")
+        project_cap = payload.get("project_max_concurrency")
+        windows: set[tuple[str, int, int]] = set()
+        for item in payload.get("windows", []):
+            windows.add(
+                (
+                    str(item["bucket_id"]),
+                    int(item["window_seconds"]),
+                    int(item["limit_units"]),
+                )
+            )
+        return cls(
+            units_per_attempt=units,
+            lease_seconds=lease,
+            pool_max_concurrency=None if pool_cap is None else int(pool_cap),
+            project_max_concurrency=None if project_cap is None else int(project_cap),
+            windows=frozenset(windows),
+            actor_type=None if payload.get("actor_type") is None else str(payload["actor_type"]),
+            actor_id=None if payload.get("actor_id") is None else str(payload["actor_id"]),
+        )
+
+    def matches(self, spec: StrictAttemptSpec) -> bool:
+        incoming = frozenset(
+            (window.bucket_id, window.window_seconds, window.limit_units) for window in spec.windows
+        )
+        return (
+            self.units_per_attempt == spec.units_per_attempt
+            and self.lease_seconds == spec.lease_seconds
+            and self.pool_max_concurrency == spec.pool_max_concurrency
+            and self.project_max_concurrency == spec.project_max_concurrency
+            and self.windows == incoming
+            and self.actor_type == (spec.actor_type.value if spec.actor_type is not None else None)
+            and self.actor_id == (None if spec.actor_id is None else str(spec.actor_id))
+        )
+
 
 # Tavily persistence guarantees: the keyed rails share one aggregate Credits
 # pool, the usage poll runs at most once per 60 seconds, and the durable
@@ -185,6 +435,17 @@ class LimitRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        """Yield one caller-owned read session for a multi-value decision.
+
+        Admission reads several pools and grants; the caller holds them on one
+        snapshot and closes without writing. Writes keep their own transactions.
+        """
+
+        async with self._session_factory() as session:
+            yield session
+
     # ---------------------------------------------------------------- catalog
 
     async def seed_records(self, records: Sequence[ProviderLimitRecord]) -> None:
@@ -251,11 +512,56 @@ class LimitRepository:
             rows = (await session.scalars(statement)).all()
         return [_pool_from_row(row) for row in rows]
 
-    async def get_pool(self, pool_id: str) -> NativePool | None:
-        """Return one native pool by ID."""
+    async def observation_identities(self, provider: str) -> dict[str, tuple[str, set[int]]]:
+        """Map current observation scopes to funds identities and generations."""
 
         async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        ProviderCredentialRow.id,
+                        ProviderCredentialRow.generation,
+                        CredentialPoolLinkRow.pool_id,
+                        CredentialPoolLinkRow.operation_scope,
+                    )
+                    .outerjoin(
+                        CredentialPoolLinkRow,
+                        CredentialPoolLinkRow.credential_id == ProviderCredentialRow.id,
+                    )
+                    .where(
+                        ProviderCredentialRow.provider_type == provider,
+                        ProviderCredentialRow.status == "active",
+                    )
+                )
+            ).all()
+        credentials: dict[str, tuple[int, str | None, str | None]] = {}
+        for credential_id, generation, pool_id, operation in rows:
+            prior = credentials.get(credential_id)
+            if prior is None or operation == "search":
+                credentials[credential_id] = (generation, pool_id, operation)
+        identities: dict[str, tuple[str, set[int]]] = {}
+        for credential_id, (generation, pool_id, _) in credentials.items():
+            identity = f"pool:{pool_id}" if pool_id is not None else f"cred:{credential_id}"
+            identities[f"cred:{credential_id}"] = (identity, {generation})
+            if pool_id is not None:
+                identities.setdefault(identity, (identity, set()))[1].add(generation)
+        return identities
+
+    async def get_pool(
+        self, pool_id: str, *, session: AsyncSession | None = None
+    ) -> NativePool | None:
+        """Return one native pool by ID, optionally inside a caller's session.
+
+        The execution admission reads several pools and grants for one decision;
+        passing its session keeps those reads on one snapshot instead of opening
+        and closing a connection per value.
+        """
+
+        if session is not None:
             row = await session.get(NativePoolRow, pool_id)
+            return _pool_from_row(row) if row is not None else None
+        async with self._session_factory() as own_session:
+            row = await own_session.get(NativePoolRow, pool_id)
         return _pool_from_row(row) if row is not None else None
 
     async def ensure_pool(self, pool: NativePool) -> NativePool:
@@ -290,17 +596,38 @@ class LimitRepository:
         """
 
         async with self._session_factory() as session:
+            await session.execute(text("BEGIN IMMEDIATE"))
+            if snapshot.credential_id is not None:
+                credential = await session.get(ProviderCredentialRow, str(snapshot.credential_id))
+                if (
+                    credential is None
+                    or credential.status != "active"
+                    or (
+                        credential.generation != snapshot.credential_generation
+                        or credential.provider_type != snapshot.provider
+                    )
+                ):
+                    return False
             row = await session.get(NativePoolRow, snapshot.pool_id)
-            if row is not None and snapshot.credential_generation < row.credential_generation:
+            if (
+                row is not None
+                and snapshot.upstream_pool_id is None
+                and snapshot.credential_generation < row.credential_generation
+            ):
+                return False
+            if (
+                row is not None
+                and (_instant(row.observed_at) or snapshot.observed_at) > snapshot.observed_at
+            ):
                 return False
             if _tavily_observation_rejected(row, snapshot):
                 return False
             old_native = _decimal(row.remaining_text) if row is not None else None
             effective = _preserve_known_values(row, snapshot)
-            if _is_tavily_credits_pool(snapshot) and snapshot.source == _TAVILY_VENDOR_API_SOURCE:
-                debits = await _native_debits_after(
-                    session, snapshot.pool_id, snapshot.observed_at
-                )
+            if snapshot.source == _TAVILY_VENDOR_API_SOURCE and (
+                _is_tavily_credits_pool(snapshot) or "#" in snapshot.pool_id
+            ):
+                debits = await _native_debits_after(session, snapshot.pool_id, snapshot.observed_at)
                 adjusted = _remaining_after(snapshot.remaining, debits)
                 if adjusted is not None and adjusted != effective.remaining:
                     effective = effective.model_copy(update={"remaining": adjusted})
@@ -447,13 +774,31 @@ class LimitRepository:
     # --------------------------------------------------------- grants and use
 
     async def save_grant(
-        self, provider: str, update: CRDGrantUpdate, *, auth_mode: AuthMode
+        self,
+        provider: str,
+        update: CRDGrantUpdate,
+        *,
+        auth_mode: AuthMode,
+        now: datetime | None = None,
     ) -> None:
         """Store one period grant and its audit event."""
 
         async with self._session_factory() as session:
-            for operation, granted in update.grants.items():
-                await _upsert_grant(session, provider, auth_mode, operation, update, granted)
+            await session.execute(text("BEGIN IMMEDIATE"))
+            values = dict(
+                provider=provider,
+                auth_mode=auth_mode.value,
+                period=update.period,
+                search_crd_text=_text(update.search_crd),
+                fetch_crd_text=_text(update.fetch_crd),
+                version=update.version + 1,
+            )
+            await session.execute(
+                sqlite_insert(ProviderBudgetRow)
+                .values(**values)
+                .on_conflict_do_update(index_elements=["provider", "auth_mode"], set_=values)
+            )
+            await _budget_rows(session, provider, auth_mode, now=now or datetime.now(UTC))
             await _insert_event(
                 session,
                 LimitAuditEvent(
@@ -464,8 +809,7 @@ class LimitRepository:
                     source="operator",
                     reason="grant",
                     detail={
-                        "period_start": update.period_start.isoformat(),
-                        "period_end": update.period_end.isoformat(),
+                        "period": update.period,
                         "search_crd": _text(update.search_crd),
                         "fetch_crd": _text(update.fetch_crd),
                     },
@@ -474,75 +818,113 @@ class LimitRepository:
             await session.commit()
 
     async def grants(
-        self, provider: str, auth_mode: AuthMode, *, now: datetime
+        self,
+        provider: str,
+        auth_mode: AuthMode,
+        *,
+        now: datetime,
+        session: AsyncSession | None = None,
     ) -> CRDGrantsSummary | None:
-        """Return the current period grant summary, or ``None`` when none exists."""
+        """Return the current period grant summary, or ``None`` when none exists.
 
-        today = now.date().isoformat()
-        statement = select(CRDGrantRow).where(
-            CRDGrantRow.provider == provider,
-            CRDGrantRow.auth_mode == auth_mode.value,
-            CRDGrantRow.period_start <= today,
-            CRDGrantRow.period_end >= today,
-        )
-        async with self._session_factory() as session:
-            rows = (await session.scalars(statement)).all()
+        Accepts the admission's session so the grant and pool reads that feed one
+        decision share a snapshot.
+        """
+
+        if session is not None:
+            rows, period = await _budget_rows(session, provider, auth_mode, now=now)
+        else:
+            async with self._session_factory() as own_session:
+                rows, period = await _budget_rows(own_session, provider, auth_mode, now=now)
+                await own_session.commit()
         if not rows:
             return None
-        return _grants_summary(provider, auth_mode, rows)
+        return _grants_summary(provider, auth_mode, rows).model_copy(update={"period": period})
 
     async def reserve(
-        self, admission: LimitAdmission, *, record: ProviderLimitRecord | None = None
+        self,
+        admission: LimitAdmission,
+        *,
+        record: ProviderLimitRecord | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> LimitAdmission:
-        """Reserve funds and rate units in one transaction.
+        """Reserve funds and rate units in one serialized transaction.
 
+        One ``BEGIN IMMEDIATE`` transaction rechecks, inserts, and commits, so
+        two processes cannot interleave between a window count and its insert.
         A repeated attempt ID keeps its first reservation, so a retried call
-        cannot reserve twice. For Tavily, the same transaction rechecks before
-        the insert: first the documented minute rate window counts unexpired
-        attempts, then the known native funds count the active native
-        reservations of other admissions. A denial raises before the admission
-        row exists, and a funds denial takes status precedence over a rate
-        denial.
+        cannot reserve twice: the replay must carry the same identity
+        (provider, operation, auth rail, attribution, and reserved amounts)
+        or it is refused instead of silently skipping its obligations. For
+        Tavily, the same transaction rechecks before the insert: first the
+        documented minute rate window counts unexpired attempts, then the
+        known native funds count the active native reservations of other
+        admissions. A denial raises before the admission row has funds, and a
+        funds denial takes status precedence over a rate denial.
         """
 
         async with self._session_factory() as session:
-            existing = await session.get(LimitAdmissionRow, admission.attempt_id)
-            if existing is not None:
-                return _admission_from_row(existing)
-            if record is not None and record.provider == _TAVILY_PROVIDER:
-                rate_denial = await _tavily_rate_denial(session, admission, record)
-                if await _tavily_funds_denial(session, admission):
-                    raise local_funds_denial(
-                        provider=_TAVILY_PROVIDER,
-                        operation=admission.operation,
-                        reasons=["funds_exhausted"],
+            try:
+                # The write lock is taken before the first read, so a sibling
+                # connection or process can never count the same free unit.
+                await _begin_capacity_transaction(session)
+                created = _strict_reservation_time(
+                    admission.created_at, clock() if clock is not None else datetime.now(UTC)
+                )
+                admission = _retime_admission(admission, created)
+                existing = await session.get(LimitAdmissionRow, admission.attempt_id)
+                if existing is not None:
+                    stored = _admission_from_row(existing)
+                    if existing.state != "reserved":
+                        raise _strict_replay_denial(existing, reason="attempt_already_settled")
+                    if not _rails_replay_matches(existing, admission):
+                        raise _replay_conflict_denial(admission)
+                    await session.commit()
+                    return stored
+                if record is not None:
+                    await self._recheck_native(session, admission, record)
+                await session.execute(
+                    sqlite_insert(LimitAdmissionRow).values(
+                        **await _budget_admission_values(session, admission)
                     )
-                if rate_denial is not None:
-                    raise rate_denial
-            await session.execute(
-                sqlite_insert(LimitAdmissionRow).values(**_admission_values(admission))
-            )
-            for reservation in admission.rate_reservations:
-                await _insert_rate_attempt(
-                    session,
-                    attempt_id=admission.attempt_id,
-                    bucket_id=reservation.bucket_id,
-                    provider=admission.provider,
-                    auth_mode=admission.auth_mode,
-                    operation=admission.operation,
-                    window=reservation.window,
-                    units=reservation.units,
-                    attempted_at=admission.created_at,
                 )
-            if admission.reserved_crd > 0:
-                await _adjust_grant(
-                    session,
-                    admission.provider,
-                    admission.auth_mode,
-                    admission.operation,
-                    reserved_delta=admission.reserved_crd,
-                )
-            await session.commit()
+                attribution = _attribution_values(admission)
+                for reservation in admission.rate_reservations:
+                    await _insert_rate_attempt(
+                        session,
+                        attempt_id=admission.attempt_id,
+                        bucket_id=reservation.bucket_id,
+                        provider=admission.provider,
+                        auth_mode=admission.auth_mode,
+                        operation=admission.operation,
+                        window=reservation.window,
+                        units=reservation.units,
+                        attempted_at=admission.created_at,
+                        attribution=attribution,
+                    )
+                if admission.reserved_crd > 0:
+                    await _adjust_grant(
+                        session,
+                        admission.provider,
+                        admission.auth_mode,
+                        admission.operation,
+                        reserved_delta=admission.reserved_crd,
+                        window_start=await session.scalar(
+                            select(LimitAdmissionRow.grant_window_start).where(
+                                LimitAdmissionRow.attempt_id == admission.attempt_id
+                            )
+                        ),
+                    )
+                await session.commit()
+            except (OperationalError, IntegrityError) as error:
+                await session.rollback()
+                raise LimitStoreUnavailable(admission.provider) from error
+            except LimitDeniedError:
+                await session.rollback()
+                raise
+            except BaseException:
+                await session.rollback()
+                raise
         return admission
 
     async def finalize(self, debit: LimitDebit) -> bool:
@@ -553,9 +935,14 @@ class LimitRepository:
         """
 
         async with self._session_factory() as session:
+            await session.execute(text("BEGIN IMMEDIATE"))
             row = await session.get(LimitAdmissionRow, debit.attempt_id)
             if row is None or row.state != "reserved":
                 return False
+            payload = _strict_spec_payload_of(row.rate_reservations_json)
+            if payload is not None and debit.reason == "local_uncertain":
+                payload["outcome"] = "uncertain"
+                row.rate_reservations_json = _strict_payload_json(payload)
             old_native = await _pool_remaining(session, row.pool_id)
             new_native, overspend = _debited(old_native, debit)
             if row.pool_id is not None:
@@ -566,6 +953,7 @@ class LimitRepository:
                 debit.auth_mode,
                 debit.operation,
                 reserved_delta=-(_decimal(row.reserved_crd_text) or Decimal("0")),
+                window_start=row.grant_window_start,
                 consumed_delta=debit.crd_debit,
             )
             await session.execute(
@@ -602,10 +990,17 @@ class LimitRepository:
             await session.commit()
         return True
 
-    async def release(self, attempt_id: str, reason: str) -> bool:
-        """Release a reservation after a definite failure before vendor I/O."""
+    async def release(self, attempt_id: str, reason: str, *, refund_rate: bool = False) -> bool:
+        """Release a reservation after a definite failure.
+
+        ``refund_rate`` is the established non-dispatch path: it also deletes
+        the attempt's rate rows because no vendor call happened. A definite
+        vendor failure keeps its consumed rate units (the call did happen) and
+        only refunds the unused funds reservation.
+        """
 
         async with self._session_factory() as session:
+            await session.execute(text("BEGIN IMMEDIATE"))
             row = await session.get(LimitAdmissionRow, attempt_id)
             if row is None or row.state != "reserved":
                 return False
@@ -615,12 +1010,17 @@ class LimitRepository:
                 AuthMode(row.auth_mode),
                 LimitOperation(row.operation),
                 reserved_delta=-(_decimal(row.reserved_crd_text) or Decimal("0")),
+                window_start=row.grant_window_start,
             )
             await session.execute(
                 update(LimitAdmissionRow)
                 .where(LimitAdmissionRow.attempt_id == attempt_id)
                 .values(state="released")
             )
+            if refund_rate:
+                await session.execute(
+                    delete(RateAttemptRow).where(RateAttemptRow.attempt_id == attempt_id)
+                )
             await _insert_event(
                 session,
                 LimitAuditEvent(
@@ -639,6 +1039,561 @@ class LimitRepository:
             )
             await session.commit()
         return True
+
+    # ------------------------------------------------- strict pool/project caps
+
+    async def reserve_strict(
+        self,
+        *,
+        attempt_id: str,
+        provider: str,
+        operation: LimitOperation,
+        auth_mode: AuthMode,
+        spec: StrictAttemptSpec,
+        created_at: datetime | None = None,
+    ) -> StrictReservation:
+        """Reserve one attempt against strict pool and project windows atomically.
+
+        One ``BEGIN IMMEDIATE`` transaction rechecks each declared window and
+        both concurrency caps, and only then inserts the admission row with its
+        full attribution plus one rate-attempt row per declared window. The
+        reservation instant is read *inside* the serialized transaction, so the
+        row order matches the commit order, and every window count admits rows
+        stamped slightly ahead of the local clock, so inter-process clock drift
+        can never under-count a committed sibling attempt. A repeated attempt
+        ID replays only when the stored reservation is still ``reserved`` and
+        the spec matches exactly; a terminal or mismatched replay is refused,
+        never re-granted capacity. A lacking window or concurrency slot raises
+        the local rate denial, and a store failure raises
+        :class:`LimitStoreUnavailable`: a failed capacity check means no
+        constrained execution, never a smaller window.
+        """
+
+        outcome = await self.reserve_attempt(
+            attempt_id=attempt_id,
+            provider=provider,
+            operation=operation,
+            auth_mode=auth_mode,
+            spec=spec,
+            created_at=created_at,
+        )
+        if outcome.strict is None:  # pragma: no cover - the spec always yields one
+            raise AssertionError("a strict reservation must return its strict outcome")
+        return outcome.strict
+
+    async def reserve_attempt(
+        self,
+        *,
+        attempt_id: str,
+        provider: str,
+        operation: LimitOperation,
+        auth_mode: AuthMode,
+        admission: LimitAdmission | None = None,
+        spec: StrictAttemptSpec | None = None,
+        record: ProviderLimitRecord | None = None,
+        created_at: datetime | None = None,
+    ) -> AttemptReservation:
+        """Reserve native funds and strict windows in one atomic lifecycle.
+
+        Both obligations share one attempt identity and one transaction: the
+        native admission (funds, rate units, audit attribution) and the strict
+        pool/project windows and concurrency slot either both commit or both
+        roll back. A strict denial therefore never leaves a native reservation
+        behind, and no second ``#s`` attempt identity exists to double count
+        concurrency. Replays follow the same rules as the native and strict
+        single-purpose reservations: only a still-reserved, exactly matching
+        attempt is idempotent.
+        """
+
+        if admission is None and spec is None:
+            raise ValueError("an attempt reservation needs a native admission or a strict spec")
+        async with self._session_factory() as session:
+            try:
+                await _begin_capacity_transaction(session)
+                created, core = self._reservation_inputs(
+                    attempt_id=attempt_id,
+                    provider=provider,
+                    operation=operation,
+                    auth_mode=auth_mode,
+                    admission=admission,
+                    spec=spec,
+                    created_at=created_at,
+                )
+                existing = await session.get(LimitAdmissionRow, attempt_id)
+                if existing is not None:
+                    return await self._replay_existing(
+                        session,
+                        existing,
+                        attempt_id=attempt_id,
+                        provider=provider,
+                        operation=operation,
+                        auth_mode=auth_mode,
+                        spec=spec,
+                        admission=admission,
+                        core=core,
+                        created=created,
+                    )
+                if spec is not None:
+                    await _strict_capacity_check(
+                        session, spec, operation=operation, created=created
+                    )
+                if record is not None:
+                    await self._recheck_native(session, core, record)
+                await self._insert_attempt_rows(
+                    session,
+                    attempt_id=attempt_id,
+                    provider=provider,
+                    operation=operation,
+                    auth_mode=auth_mode,
+                    admission=admission,
+                    spec=spec,
+                    core=core,
+                    created=created,
+                )
+                await session.commit()
+            except (OperationalError, IntegrityError) as error:
+                await session.rollback()
+                raise LimitStoreUnavailable(f"attempt:{attempt_id}") from error
+            except LimitDeniedError:
+                await session.rollback()
+                raise
+            except BaseException:
+                await session.rollback()
+                raise
+            strict = (
+                None
+                if spec is None
+                else StrictReservation(
+                    attempt_id=attempt_id,
+                    bucket_ids=tuple(window.bucket_id for window in spec.windows),
+                    pool_id=spec.pool_id,
+                    created_at=created,
+                    state="reserved",
+                    complete_dispatch=self._dispatch_completion(attempt_id),
+                    charge_next_dispatch=(
+                        None
+                        if admission is not None
+                        else self._dispatch_charger(attempt_id=attempt_id, spec=spec)
+                    ),
+                )
+            )
+            return AttemptReservation(
+                attempt_id=attempt_id,
+                admission=core if admission is not None else None,
+                strict=strict,
+            )
+
+    @staticmethod
+    def _reservation_inputs(
+        *,
+        attempt_id: str,
+        provider: str,
+        operation: LimitOperation,
+        auth_mode: AuthMode,
+        admission: LimitAdmission | None,
+        spec: StrictAttemptSpec | None,
+        created_at: datetime | None,
+    ) -> tuple[datetime, LimitAdmission]:
+        """Validate and build the shared admission contract of one attempt."""
+
+        if spec is not None:
+            _validate_strict_spec(spec)
+            created = _strict_reservation_time(created_at, datetime.now(UTC))
+            if admission is None:
+                core = _strict_admission(
+                    attempt_id=attempt_id,
+                    provider=provider,
+                    operation=operation,
+                    auth_mode=auth_mode,
+                    spec=spec,
+                    created_at=created,
+                )
+            else:
+                core = _retime_admission(admission, created)
+        else:
+            assert admission is not None
+            created = _strict_reservation_time(
+                created_at or admission.created_at, datetime.now(UTC)
+            )
+            core = _retime_admission(admission, created)
+        if (
+            core.attempt_id != attempt_id
+            or core.provider != provider
+            or core.operation is not operation
+            or core.auth_mode is not auth_mode
+        ):
+            raise ValueError("the native admission and attempt identity must match")
+        if spec is not None and (
+            core.project_id,
+            core.credential_id,
+            core.binding_id,
+            core.upstream_pool_id,
+            core.request_id,
+            core.actor_type,
+            core.actor_id,
+        ) != (
+            spec.project_id,
+            spec.credential_id,
+            spec.binding_id,
+            spec.pool_id,
+            spec.request_id,
+            spec.actor_type,
+            spec.actor_id,
+        ):
+            raise ValueError("the native and strict ownership must match")
+        return created, core
+
+    async def _replay_existing(
+        self,
+        session: AsyncSession,
+        existing: LimitAdmissionRow,
+        *,
+        attempt_id: str,
+        provider: str,
+        operation: LimitOperation,
+        auth_mode: AuthMode,
+        spec: StrictAttemptSpec | None,
+        admission: LimitAdmission | None,
+        core: LimitAdmission,
+        created: datetime,
+    ) -> AttemptReservation:
+        """Return an idempotent replay or raise its typed conflict denial."""
+
+        if spec is not None:
+            replay = _strict_replay(
+                existing,
+                provider=provider,
+                operation=operation,
+                auth_mode=auth_mode,
+                spec=spec,
+                now=created,
+                admission=admission,
+            )
+            stored_admission = _admission_from_row(existing) if admission is not None else None
+            await session.rollback()
+            if isinstance(replay, LimitDeniedError):
+                raise replay
+            if replay.charge_next_dispatch is None:
+                replay = replace(
+                    replay,
+                    charge_next_dispatch=self._dispatch_charger(attempt_id=attempt_id, spec=spec),
+                    complete_dispatch=self._dispatch_completion(attempt_id),
+                )
+            return AttemptReservation(
+                attempt_id=attempt_id,
+                admission=stored_admission,
+                strict=replay,
+            )
+        stored = _admission_from_row(existing)
+        if existing.state != "reserved":
+            raise _strict_replay_denial(existing, reason="attempt_already_settled")
+        if not _rails_replay_matches(existing, core):
+            raise _replay_conflict_denial(core)
+        await session.commit()
+        return AttemptReservation(attempt_id=attempt_id, admission=stored)
+
+    async def _recheck_native(
+        self,
+        session: AsyncSession,
+        core: LimitAdmission,
+        record: ProviderLimitRecord,
+    ) -> None:
+        """Recheck every native funds and rate obligation under the write lock."""
+
+        rate_denial = await _native_rate_denial(session, core, record)
+        if await _native_funds_denial(session, core):
+            raise local_funds_denial(
+                provider=core.provider,
+                operation=core.operation,
+                reasons=["funds_exhausted"],
+            )
+        if rate_denial is not None:
+            raise rate_denial
+
+    async def _insert_attempt_rows(
+        self,
+        session: AsyncSession,
+        *,
+        attempt_id: str,
+        provider: str,
+        operation: LimitOperation,
+        auth_mode: AuthMode,
+        admission: LimitAdmission | None,
+        spec: StrictAttemptSpec | None,
+        core: LimitAdmission,
+        created: datetime,
+    ) -> None:
+        """Write the admission, native rate rows, strict rows, and grant hold."""
+
+        values = await _budget_admission_values(session, core)
+        if spec is not None:
+            payload = _strict_spec_payload(spec)
+            if admission is not None:
+                payload["native"] = _native_payload(admission)
+            values["rate_reservations_json"] = _strict_payload_json(payload)
+        await session.execute(sqlite_insert(LimitAdmissionRow).values(**values))
+        attribution = _attribution_values(core)
+        for reservation in core.rate_reservations:
+            await _insert_rate_attempt(
+                session,
+                attempt_id=attempt_id,
+                bucket_id=reservation.bucket_id,
+                provider=provider,
+                auth_mode=auth_mode,
+                operation=operation,
+                window=reservation.window,
+                units=reservation.units,
+                attempted_at=created,
+                attribution=attribution,
+            )
+        if spec is not None:
+            strict_attribution = _strict_attribution(spec, request_id=core.request_id)
+            for window in spec.windows:
+                await _insert_attempt_units(
+                    session,
+                    attempt_id=attempt_id,
+                    bucket_id=window.bucket_id,
+                    provider=provider,
+                    auth_mode=auth_mode,
+                    operation=operation,
+                    window_text=str(window.window_seconds),
+                    window_seconds=window.window_seconds,
+                    units=spec.units_per_attempt,
+                    attempted_at=created,
+                    attribution=strict_attribution,
+                )
+        if core.reserved_crd > 0:
+            await _adjust_grant(
+                session,
+                core.provider,
+                core.auth_mode,
+                core.operation,
+                reserved_delta=core.reserved_crd,
+                window_start=values["grant_window_start"],
+            )
+
+    def _dispatch_charger(
+        self, *, attempt_id: str, spec: StrictAttemptSpec
+    ) -> Callable[[], Awaitable[StrictReservation]]:
+        """Return the per-dispatch charger of one standalone strict attempt."""
+
+        async def charge() -> StrictReservation:
+            return await self.charge_strict_dispatch(attempt_id=attempt_id, spec=spec)
+
+        return charge
+
+    async def charge_strict_dispatch(
+        self, *, attempt_id: str, spec: StrictAttemptSpec
+    ) -> StrictReservation:
+        """Record one more actual upstream send under a strict reservation.
+
+        The runner may retry inside one adapter call. A retry is a real send
+        and consumes another strict unit, but it is the same logical attempt,
+        so it keeps the attempt identity's concurrency slot and writes a child
+        rate debit with a deterministic ``#d<n>`` id. The strict windows are
+        rechecked in the same serialized transaction before the send; at a
+        one-unit ceiling the second send is denied before it happens.
+        """
+
+        async with self._session_factory() as session:
+            try:
+                await _begin_capacity_transaction(session)
+                created = _strict_reservation_time(None, datetime.now(UTC))
+                row = await session.get(LimitAdmissionRow, attempt_id)
+                if row is None or row.state != "reserved":
+                    raise _strict_replay_denial(row, reason="attempt_already_settled")
+                await _strict_capacity_check(
+                    session,
+                    spec,
+                    operation=LimitOperation(row.operation),
+                    created=created,
+                    check_concurrency=True,
+                )
+                payload = _strict_spec_payload_of(row.rate_reservations_json)
+                if payload is not None:
+                    payload["dispatch_completed"] = False
+                    row.rate_reservations_json = _strict_payload_json(payload)
+                existing_ids = (
+                    await session.scalars(
+                        select(RateAttemptRow.attempt_id)
+                        .where(RateAttemptRow.attempt_id.like(f"{attempt_id}#d%"))
+                        .distinct()
+                    )
+                ).all()
+                dispatch = len(set(existing_ids)) + 1
+                child_id = f"{attempt_id}#d{dispatch}"
+                originals = (
+                    await session.scalars(
+                        select(RateAttemptRow).where(RateAttemptRow.attempt_id == attempt_id)
+                    )
+                ).all()
+                for original in originals:
+                    started = _instant(original.attempted_at)
+                    ended = _instant(original.expires_at)
+                    seconds = (
+                        max(1, int((ended - started).total_seconds()))
+                        if started is not None and ended is not None
+                        else 1
+                    )
+                    await _insert_attempt_units(
+                        session,
+                        attempt_id=child_id,
+                        bucket_id=original.bucket_id,
+                        provider=original.provider,
+                        auth_mode=AuthMode(original.auth_mode),
+                        operation=(
+                            LimitOperation(original.operation)
+                            if original.operation is not None
+                            else None
+                        ),
+                        window_text=original.window,
+                        window_seconds=seconds,
+                        units=Decimal(original.units_text),
+                        attempted_at=created,
+                        attribution={
+                            "project_id": original.project_id,
+                            "credential_id": original.credential_id,
+                            "binding_id": original.binding_id,
+                            "upstream_pool_id": original.upstream_pool_id,
+                            "request_id": original.request_id,
+                            "actor_type": original.actor_type,
+                            "actor_id": original.actor_id,
+                        },
+                    )
+                await session.commit()
+            except (OperationalError, IntegrityError) as error:
+                await session.rollback()
+                raise LimitStoreUnavailable(f"attempt:{attempt_id}") from error
+            except LimitDeniedError:
+                await session.rollback()
+                raise
+            except BaseException:
+                await session.rollback()
+                raise
+            return StrictReservation(
+                attempt_id=attempt_id,
+                bucket_ids=tuple(window.bucket_id for window in spec.windows),
+                pool_id=spec.pool_id,
+                created_at=created,
+                state="reserved",
+                charge_next_dispatch=self._dispatch_charger(attempt_id=attempt_id, spec=spec),
+                complete_dispatch=self._dispatch_completion(attempt_id),
+            )
+
+    def _dispatch_completion(self, attempt_id: str) -> Callable[[], Awaitable[None]]:
+        async def complete() -> None:
+            await self.complete_dispatch(attempt_id)
+
+        return complete
+
+    async def complete_dispatch(self, attempt_id: str) -> None:
+        """Release concurrency after a known response while retaining rate and funds."""
+        async with self._session_factory() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                row = await session.get(LimitAdmissionRow, attempt_id)
+                if row is not None and row.state == "reserved":
+                    payload = _strict_spec_payload_of(row.rate_reservations_json)
+                    if payload is not None:
+                        payload["dispatch_completed"] = True
+                        row.rate_reservations_json = _strict_payload_json(payload)
+                await session.commit()
+            except (OperationalError, IntegrityError) as error:
+                raise LimitStoreUnavailable(f"attempt:{attempt_id}") from error
+
+    async def release_strict(self, *, attempt_id: str, bucket_ids: Sequence[str]) -> bool:
+        """Undo one never-dispatched reservation.
+
+        The admission is marked released only while it is still reserved, and
+        in that same transaction the reservation's native grant reservation is
+        refunded and every rate row of the attempt (including per-dispatch
+        child rows) vanishes: an established non-dispatch never consumes
+        funds, rate units, or concurrency. A settled attempt always keeps its
+        debit, and a second release reports ``False`` and changes nothing.
+        The ``bucket_ids`` argument is retained for the documented strict
+        caller contract; deletion is keyed by the attempt id so no obligation
+        of the same attempt is left behind.
+        """
+
+        del bucket_ids
+        async with self._session_factory() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                row = await session.get(LimitAdmissionRow, attempt_id)
+                if row is None or row.state != "reserved":
+                    await session.commit()
+                    return False
+                reserved_crd = _decimal(row.reserved_crd_text) or Decimal("0")
+                if reserved_crd > 0:
+                    await _adjust_grant(
+                        session,
+                        row.provider,
+                        AuthMode(row.auth_mode),
+                        LimitOperation(row.operation),
+                        reserved_delta=-reserved_crd,
+                        window_start=row.grant_window_start,
+                    )
+                await session.execute(
+                    update(LimitAdmissionRow)
+                    .where(LimitAdmissionRow.attempt_id == attempt_id)
+                    .values(state="released")
+                    .execution_options(synchronize_session=False)
+                )
+                await session.execute(
+                    delete(RateAttemptRow).where(RateAttemptRow.attempt_id == attempt_id)
+                )
+                await session.commit()
+            except (OperationalError, IntegrityError) as error:
+                await session.rollback()
+                raise LimitStoreUnavailable(f"attempt:{attempt_id}") from error
+            except BaseException:
+                await session.rollback()
+                raise
+            return True
+
+    async def settle_strict(
+        self,
+        *,
+        attempt_id: str,
+        outcome: Literal["completed", "failed", "uncertain"],
+    ) -> bool:
+        """Mark one strict reservation terminal, retaining its rate debit.
+
+        Every attempt that reached the vendor keeps its window debit whether it
+        succeeded or failed, so an uncertain upstream receipt is never refunded,
+        and settlement is what frees the attempt's concurrency slot. The row
+        lands on the settled ``finalized`` state and records the outcome in its
+        strict payload, because the admission contract has exactly the
+        ``reserved``/``finalized``/``released`` states. Idempotent: a settled
+        attempt reports ``False`` and changes nothing.
+        """
+
+        async with self._session_factory() as session:
+            try:
+                await session.execute(text("BEGIN IMMEDIATE"))
+                row = await session.get(LimitAdmissionRow, attempt_id)
+                if row is None:
+                    return False
+                payload = _strict_spec_payload_of(row.rate_reservations_json)
+                if row.state != "reserved" and not (
+                    row.state == "finalized"
+                    and payload is not None
+                    and payload.get("outcome") == "uncertain"
+                    and outcome != "uncertain"
+                ):
+                    return False
+                if payload is not None:
+                    payload["outcome"] = outcome
+                    row.rate_reservations_json = _strict_payload_json(payload)
+                row.state = "finalized"
+                await session.commit()
+            except (OperationalError, IntegrityError) as error:
+                await session.rollback()
+                raise LimitStoreUnavailable(f"attempt:{attempt_id}") from error
+            except BaseException:
+                await session.rollback()
+                raise
+            return True
 
     async def get_admission(self, attempt_id: str) -> LimitAdmission | None:
         """Return one stored admission."""
@@ -725,7 +1680,22 @@ class LimitRepository:
 
         now = _timestamp(claim.now)
         expiry = _timestamp(claim.now + timedelta(seconds=claim.lease_seconds))
-        if claim.provider == _TAVILY_PROVIDER:
+        if claim.pool_id is not None:
+            statement = (
+                update(NativePoolRow)
+                .where(
+                    NativePoolRow.provider == claim.provider,
+                    NativePoolRow.pool_id == claim.pool_id,
+                    (NativePoolRow.lease_until.is_(None)) | (NativePoolRow.lease_until < now),
+                    (NativePoolRow.next_sync_at.is_(None)) | (NativePoolRow.next_sync_at <= now),
+                )
+                .values(
+                    lease_owner=claim.owner,
+                    lease_until=expiry,
+                    next_sync_at=expiry,
+                )
+            )
+        elif claim.provider == _TAVILY_PROVIDER:
             statement = (
                 update(NativePoolRow)
                 .where(
@@ -747,6 +1717,7 @@ class LimitRepository:
                 update(NativePoolRow)
                 .where(
                     NativePoolRow.provider == claim.provider,
+                    ~NativePoolRow.pool_id.contains("#"),
                     (NativePoolRow.lease_until.is_(None))
                     | (NativePoolRow.lease_until < now)
                     | (NativePoolRow.lease_owner == claim.owner),
@@ -758,13 +1729,18 @@ class LimitRepository:
             await session.commit()
         return bool(_rowcount(result))
 
-    async def complete_sync(self, result: SyncResult) -> None:
+    async def complete_sync(self, result: SyncResult, *, pool_id: str | None = None) -> None:
         """Clear the lease and store the next attempt instant and error state."""
 
         async with self._session_factory() as session:
             await session.execute(
                 update(NativePoolRow)
-                .where(NativePoolRow.provider == result.provider)
+                .where(
+                    NativePoolRow.provider == result.provider,
+                    NativePoolRow.pool_id == pool_id
+                    if pool_id is not None
+                    else ~NativePoolRow.pool_id.contains("#"),
+                )
                 .values(
                     lease_owner=None,
                     lease_until=None,
@@ -780,7 +1756,8 @@ class LimitRepository:
 
         stamp = _timestamp(now)
         statement = select(NativePoolRow.provider).where(
-            (NativePoolRow.next_sync_at.is_(None)) | (NativePoolRow.next_sync_at <= stamp)
+            (NativePoolRow.next_sync_at.is_(None)) | (NativePoolRow.next_sync_at <= stamp),
+            ~NativePoolRow.pool_id.contains("#"),
         )
         async with self._session_factory() as session:
             rows = (await session.scalars(statement)).all()
@@ -819,14 +1796,24 @@ class LimitRepository:
             )
             await session.commit()
 
-    async def list_observations(self, provider: str) -> list[RateObservation]:
-        """Return stored rate observations for one provider."""
+    async def list_observations(
+        self, provider: str, *, session: AsyncSession | None = None
+    ) -> list[RateObservation]:
+        """Return stored rate observations for one provider.
+
+        Accepts the admission's read session so several rate windows share one
+        observation query instead of re-reading the provider's history per
+        window.
+        """
 
         statement = select(RateWindowObservationRow).where(
             RateWindowObservationRow.provider == provider
         )
-        async with self._session_factory() as session:
+        if session is not None:
             rows = (await session.scalars(statement)).all()
+        else:
+            async with self._session_factory() as own_session:
+                rows = (await own_session.scalars(statement)).all()
         observations: list[RateObservation] = []
         for row in rows:
             observed_at = _instant(row.observed_at)
@@ -860,6 +1847,7 @@ class LimitRepository:
         window: RateWindowName,
         now: datetime,
         since: datetime | None = None,
+        session: AsyncSession | None = None,
     ) -> Decimal:
         """Count local rate units still inside one window.
 
@@ -868,10 +1856,58 @@ class LimitRepository:
         after that observation, so a local count is never double counted.
         """
 
-        async with self._session_factory() as session:
+        if session is not None:
             return await _rate_used_in_window(
-                session, bucket_id, window=window, now=now, since=since
+                session, bucket_id, window_seconds=_WINDOW_SECONDS[window], now=now, since=since
             )
+        async with self._session_factory() as own_session:
+            return await _rate_used_in_window(
+                own_session,
+                bucket_id,
+                window_seconds=_WINDOW_SECONDS[window],
+                now=now,
+                since=since,
+            )
+
+    async def count_catalog_attempts(
+        self,
+        provider: str,
+        bucket_id: str,
+        *,
+        window: RateWindowName,
+        now: datetime,
+        since: datetime | None = None,
+    ) -> Decimal:
+        """Count a catalog bucket and its credential and pool scopes for display."""
+
+        start = since or (now - timedelta(seconds=_WINDOW_SECONDS[window]))
+        prefix = f"{bucket_id}#"
+        scope = func.substr(RateAttemptRow.bucket_id, len(prefix) + 1)
+        rows = (
+            select(
+                RateAttemptRow.attempt_id,
+                func.max(cast(RateAttemptRow.units_text, _QUANTUM)).label("units"),
+            )
+            .where(
+                RateAttemptRow.provider == provider,
+                RateAttemptRow.attempted_at >= _timestamp(start),
+                (RateAttemptRow.bucket_id == bucket_id)
+                | (
+                    (func.substr(RateAttemptRow.bucket_id, 1, len(prefix)) == prefix)
+                    & (
+                        (func.substr(scope, 1, 5) == "cred:")
+                        | (func.substr(scope, 1, 5) == "pool:")
+                    )
+                ),
+            )
+            .group_by(RateAttemptRow.attempt_id)
+            .subquery()
+        )
+        async with self._session_factory() as session:
+            total = (
+                await session.execute(select(func.coalesce(func.sum(rows.c.units), 0)))
+            ).scalar_one()
+        return Decimal(str(total))
 
     async def oldest_attempt(
         self, bucket_id: str, *, window: RateWindowName, now: datetime
@@ -882,7 +1918,6 @@ class LimitRepository:
         statement = select(func.min(RateAttemptRow.attempted_at)).where(
             RateAttemptRow.bucket_id == bucket_id,
             RateAttemptRow.attempted_at >= _timestamp(start),
-            RateAttemptRow.attempted_at <= _timestamp(now),
         )
         async with self._session_factory() as session:
             oldest = (await session.execute(statement)).scalar_one_or_none()
@@ -899,9 +1934,15 @@ class LimitRepository:
         window: RateWindowName,
         units: Decimal,
         attempted_at: datetime,
+        actor_type: ActorType,
+        actor_id: UUID,
     ) -> None:
-        """Persist one consumed rate unit, ignoring a duplicate attempt ID."""
+        """Persist one consumed rate unit, ignoring a duplicate attempt ID.
 
+        The verified actor that owns the attempt is required on every row.
+        """
+
+        _require_actor(actor_type, actor_id)
         async with self._session_factory() as session:
             await _insert_rate_attempt(
                 session,
@@ -913,6 +1954,7 @@ class LimitRepository:
                 window=window,
                 units=units,
                 attempted_at=attempted_at,
+                attribution={"actor_type": actor_type.value, "actor_id": str(actor_id)},
             )
             await session.commit()
 
@@ -939,12 +1981,21 @@ class LimitRepository:
         for observation in await self.list_observations(provider):
             if observation.window.value not in _SLOW_WINDOWS:
                 continue
-            used = await self.count_attempts(
-                observation.bucket_id,
-                window=observation.window,
-                now=now,
-                since=observation.observed_at,
-            )
+            if "#" in observation.bucket_id:
+                used = await self.count_attempts(
+                    observation.bucket_id,
+                    window=observation.window,
+                    now=now,
+                    since=observation.observed_at,
+                )
+            else:
+                used = await self.count_catalog_attempts(
+                    provider,
+                    observation.bucket_id,
+                    window=observation.window,
+                    now=now,
+                    since=observation.observed_at,
+                )
             views.append(_progress_from_observation(observation, used))
         return sorted(views, key=lambda view: (view.bucket_id, view.window))
 
@@ -970,6 +2021,463 @@ def _rowcount(result: Any) -> int:
     """Return the affected row count of a DML result, or zero when unknown."""
 
     return int(getattr(result, "rowcount", 0) or 0)
+
+
+def _strict_attribution(spec: StrictAttemptSpec, *, request_id: str | None) -> dict[str, Any]:
+    """Return the attribution column values one strict attempt writes."""
+
+    return {
+        "project_id": str(spec.project_id),
+        "credential_id": str(spec.credential_id),
+        "binding_id": str(spec.binding_id),
+        "upstream_pool_id": None if spec.pool_id is None else str(spec.pool_id),
+        "request_id": request_id,
+        "actor_type": spec.actor_type.value if spec.actor_type is not None else None,
+        "actor_id": None if spec.actor_id is None else str(spec.actor_id),
+    }
+
+
+def _require_actor(actor_type: ActorType | None, actor_id: UUID | None) -> None:
+    """Refuse a capacity write that does not carry the verified actor."""
+
+    if actor_type is None or actor_id is None:
+        raise ValueError("a capacity reservation must carry the verified actor")
+
+
+def _validate_strict_spec(spec: StrictAttemptSpec) -> None:
+    """Reject a malformed strict spec before any transaction starts."""
+
+    if spec.project_id is None or spec.credential_id is None or spec.binding_id is None:
+        raise ValueError("a strict attempt spec must name its project, credential, and binding")
+    _require_actor(spec.actor_type, spec.actor_id)
+    if spec.units_per_attempt < 0:
+        raise ValueError("attempt units must not be negative")
+    if spec.lease_seconds < 1:
+        raise ValueError("the attempt lease must be at least one second")
+    for window in spec.windows:
+        if not window.bucket_id:
+            raise ValueError("a strict window needs a bucket id")
+        if window.window_seconds < 1:
+            raise ValueError(f"{window.bucket_id}: strict window must be at least one second")
+        if window.limit_units < 0:
+            raise ValueError(f"{window.bucket_id}: strict limit must not be negative")
+    distinct = {window.bucket_id for window in spec.windows}
+    if len(distinct) != len(spec.windows):
+        raise ValueError("strict windows must not repeat a bucket id")
+    if spec.pool_max_concurrency is not None and spec.pool_id is None:
+        raise ValueError("pool_concurrent_cap requires an upstream pool id")
+    if spec.pool_max_concurrency is not None and spec.pool_max_concurrency < 1:
+        raise ValueError("the pool concurrency cap must be positive")
+    if spec.project_max_concurrency is not None and spec.project_max_concurrency < 1:
+        raise ValueError("the project concurrency cap must be positive")
+
+
+def _strict_spec_json(spec: StrictAttemptSpec) -> str:
+    """Return the strict summary persisted on the admission row."""
+
+    return _strict_payload_json(_strict_spec_payload(spec))
+
+
+def _is_strict_payload(stored_json: str | None) -> bool:
+    try:
+        payload = json.loads(stored_json) if stored_json else None
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and payload.get("kind") == "strict"
+
+
+def _strict_spec_payload_of(stored_json: str | None) -> dict[str, Any] | None:
+    """Return the stored strict payload when it decodes, else ``None``."""
+
+    try:
+        payload = json.loads(stored_json) if stored_json else None
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) and payload.get("kind") == "strict" else None
+
+
+def _strict_payload_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True)
+
+
+def _rails_replay_matches(stored: LimitAdmissionRow, admission: LimitAdmission) -> bool:
+    """Return whether a replaying rails admission is the stored reservation.
+
+    Same attempt ID, same identity (provider, operation, auth rail,
+    attribution), same reservation amounts, and same rate windows; anything
+    else is an unrelated duplicate that must never skip its own checks.
+    """
+
+    if _is_strict_payload(stored.rate_reservations_json):
+        return False
+    if (
+        stored.pool_id != admission.pool_id
+        or stored.provider != admission.provider
+        or stored.operation != admission.operation.value
+        or stored.auth_mode != admission.auth_mode.value
+    ):
+        return False
+    if (
+        stored.project_id != _optional_text(admission.project_id)
+        or stored.credential_id != _optional_text(admission.credential_id)
+        or stored.binding_id != _optional_text(admission.binding_id)
+        or stored.upstream_pool_id != _optional_text(admission.upstream_pool_id)
+        or stored.request_id != admission.request_id
+        or stored.actor_type
+        != (admission.actor_type.value if admission.actor_type is not None else None)
+        or stored.actor_id != _optional_text(admission.actor_id)
+    ):
+        return False
+    if (_decimal(stored.reserved_crd_text) or Decimal("0")) != admission.reserved_crd:
+        return False
+    if (_decimal(stored.reserved_native_text)) != admission.reserved_native:
+        return False
+    stored_reservations = _load_reservations(stored.rate_reservations_json)
+    stored_windows = frozenset(
+        (item.bucket_id, item.window.value, _text(item.units)) for item in stored_reservations
+    )
+    incoming_windows = frozenset(
+        (item.bucket_id, item.window.value, _text(item.units))
+        for item in admission.rate_reservations
+    )
+    return stored_windows == incoming_windows
+
+
+def _replay_conflict_denial(admission: LimitAdmission) -> LimitDeniedError:
+    """Build the typed denial for a mismatched replay of one attempt ID."""
+
+    return LimitDeniedError(
+        ProviderError(
+            provider=admission.provider,
+            code=LOCAL_RATE_DENIAL_CODE,
+            message="a reservation replay cannot grant dispatchable capacity",
+            retryable=False,
+            status_code=429,
+            details={
+                "origin": "local",
+                "refusal": "rate",
+                "reasons": ["attempt_identity_conflict"],
+            },
+        ),
+        refusal="rate",
+        reasons=["attempt_identity_conflict"],
+    )
+
+
+def _optional_text(value: UUID | None) -> str | None:
+    return None if value is None else str(value)
+
+
+def _strict_replay(
+    stored: LimitAdmissionRow,
+    *,
+    provider: str,
+    operation: LimitOperation,
+    auth_mode: AuthMode,
+    spec: StrictAttemptSpec,
+    now: datetime,
+    admission: LimitAdmission | None = None,
+) -> StrictReservation | LimitDeniedError:
+    """Return the usable replay outcome of one strict attempt, or the denial."""
+
+    if stored.state != "reserved":
+        return _strict_replay_denial(stored, reason="attempt_already_settled")
+    if (
+        stored.provider != provider
+        or stored.operation != operation.value
+        or stored.auth_mode != auth_mode.value
+    ):
+        return _strict_replay_denial(stored, reason="attempt_identity_conflict")
+    if (
+        stored.project_id != str(spec.project_id)
+        or stored.credential_id != str(spec.credential_id)
+        or stored.binding_id != str(spec.binding_id)
+        or stored.upstream_pool_id != _optional_text(spec.pool_id)
+        or stored.request_id != spec.request_id
+    ):
+        return _strict_replay_denial(stored, reason="attempt_identity_conflict")
+    if not _strict_spec_matches(stored.rate_reservations_json, spec):
+        return _strict_replay_denial(stored, reason="attempt_spec_conflict")
+    if not _strict_native_matches(stored.rate_reservations_json, admission):
+        return _strict_replay_denial(stored, reason="attempt_spec_conflict")
+    bucket_ids = tuple(window.bucket_id for window in spec.windows)
+    return StrictReservation(
+        attempt_id=stored.attempt_id,
+        bucket_ids=bucket_ids,
+        pool_id=spec.pool_id if stored.upstream_pool_id is None else UUID(stored.upstream_pool_id),
+        created_at=_instant(stored.created_at) or now,
+        state=stored.state,
+        idempotent=True,
+    )
+
+
+def _native_payload(admission: LimitAdmission) -> dict[str, Any]:
+    """Return the native obligation summary stored on a unified attempt row."""
+
+    return {
+        "pool_id": admission.pool_id,
+        "reserved_crd": _text(admission.reserved_crd) or "0",
+        "reserved_native": _text(admission.reserved_native),
+        "rate_reservations": _dump(list(admission.rate_reservations)),
+        "actor_type": (admission.actor_type.value if admission.actor_type is not None else None),
+        "actor_id": None if admission.actor_id is None else str(admission.actor_id),
+    }
+
+
+def _strict_native_matches(stored_json: str | None, admission: LimitAdmission | None) -> bool:
+    """Return whether a replay's native obligation equals the stored one.
+
+    A strict-only row carries no native obligation; a unified row must be
+    replayed only with the same native reservation, so a replay can never skip
+    a funds or native rate check it did not originally perform.
+    """
+
+    payload = _strict_spec_payload_of(stored_json)
+    if payload is None:
+        return False
+    native = payload.get("native")
+    if admission is None:
+        return native is None
+    if not isinstance(native, dict):
+        return False
+    stored_reservations = _load_reservations(type_cast(str | None, native.get("rate_reservations")))
+    stored_windows = frozenset(
+        (item.bucket_id, item.window.value, _text(item.units)) for item in stored_reservations
+    )
+    incoming_windows = frozenset(
+        (item.bucket_id, item.window.value, _text(item.units))
+        for item in admission.rate_reservations
+    )
+    return (
+        native.get("pool_id") == admission.pool_id
+        and (_decimal(type_cast(str | None, native.get("reserved_crd"))) or Decimal("0"))
+        == admission.reserved_crd
+        and _decimal(type_cast(str | None, native.get("reserved_native")))
+        == admission.reserved_native
+        and native.get("actor_type")
+        == (admission.actor_type.value if admission.actor_type is not None else None)
+        and native.get("actor_id")
+        == (None if admission.actor_id is None else str(admission.actor_id))
+        and stored_windows == incoming_windows
+    )
+
+
+def _strict_replay_denial(stored: LimitAdmissionRow | None, *, reason: str) -> LimitDeniedError:
+    """Build the typed denial for an unusable replay of one attempt ID."""
+
+    label = (
+        f"pool:{stored.upstream_pool_id}"
+        if stored is not None and stored.upstream_pool_id
+        else f"project:{stored.project_id}"
+        if stored is not None
+        else "attempt"
+    )
+    error: LimitDeniedError = LimitDeniedError(
+        ProviderError(
+            provider=label,
+            code=LOCAL_RATE_DENIAL_CODE,
+            message="a reservation replay cannot grant dispatchable capacity",
+            retryable=False,
+            status_code=429,
+            details={"origin": "local", "refusal": "rate", "reasons": [reason]},
+        ),
+        refusal="rate",
+        reasons=[reason],
+    )
+    return error
+
+
+def _strict_admission(
+    *,
+    attempt_id: str,
+    provider: str,
+    operation: LimitOperation,
+    auth_mode: AuthMode,
+    spec: StrictAttemptSpec,
+    created_at: datetime,
+) -> LimitAdmission:
+    """Build the strict admission contract row of one attempt.
+
+    The strict reservation holds no native funds and no credit units: its
+    debit is the window units written in the same transaction, and the
+    ``strict`` admission row exists so attempt idempotency and in-flight
+    concurrency have one durable record.
+    """
+
+    return LimitAdmission(
+        attempt_id=attempt_id,
+        provider=provider,
+        operation=operation,
+        auth_mode=auth_mode,
+        pool_id=None,
+        reserved_crd=Decimal("0"),
+        reserved_native=None,
+        state="reserved",
+        created_at=created_at,
+        expires_at=created_at + timedelta(seconds=max(1, spec.lease_seconds)),
+        rate_reservations=[],
+        local_only=False,
+        project_id=spec.project_id,
+        credential_id=spec.credential_id,
+        binding_id=spec.binding_id,
+        upstream_pool_id=spec.pool_id,
+        request_id=spec.request_id,
+        actor_type=spec.actor_type,
+        actor_id=spec.actor_id,
+    )
+
+
+async def _strict_capacity_check(
+    session: AsyncSession,
+    spec: StrictAttemptSpec,
+    *,
+    operation: LimitOperation,
+    created: datetime,
+    check_concurrency: bool = True,
+) -> None:
+    """Recheck every strict window and concurrency cap inside the caller's transaction.
+
+    Each declared window counts its trailing window over attempts stamped
+    from ``created - window`` onwards, including committed future rows, so a
+    sibling reservation a less-lucky process committed earlier is never
+    under-counted and the check cannot interleave with another process's
+    reservation. The pool cap counts every still-``reserved`` attempt of the
+    same pool and the project cap counts this project's; only settlement or
+    an explicit release frees a slot, because an expired-but-unsettled row
+    cannot prove the upstream call never happened.
+    """
+
+    units = spec.units_per_attempt
+    for window in spec.windows:
+        limit = Decimal(window.limit_units)
+        used = await _rate_used_in_window(
+            session,
+            window.bucket_id,
+            window_seconds=window.window_seconds,
+            now=created,
+        )
+        if used + units > limit:
+            raise local_rate_denial(
+                provider=_strict_provider_label(spec),
+                operation=operation,
+                reasons=[window.bucket_id],
+                retry_after_seconds=await _window_retry_after_seconds(
+                    session,
+                    window.bucket_id,
+                    window_seconds=window.window_seconds,
+                    now=created,
+                    over=used + units - limit,
+                ),
+            )
+    if not check_concurrency:
+        return
+    if spec.pool_max_concurrency is not None and spec.pool_id is not None:
+        open_pool = await _open_reserved_count(session, spec.pool_id, project_id=None)
+        if open_pool + 1 > spec.pool_max_concurrency:
+            raise _strict_concurrency_denial(spec, "pool_concurrent_cap")
+    if spec.project_max_concurrency is not None:
+        open_project = await _open_reserved_count(session, spec.pool_id, project_id=spec.project_id)
+        if open_project + 1 > spec.project_max_concurrency:
+            raise _strict_concurrency_denial(spec, "project_concurrent_cap")
+
+
+def _retime_admission(admission: LimitAdmission, created: datetime) -> LimitAdmission:
+    """Preserve a reservation's duration when serialization moves its start."""
+    return admission.model_copy(
+        update={
+            "created_at": created,
+            "expires_at": created + (admission.expires_at - admission.created_at),
+        }
+    )
+
+
+def _strict_reservation_time(passed: datetime | None, now: datetime) -> datetime:
+    """Return the authoritative reservation instant of one strict attempt.
+
+    The post-lock clock is authoritative, so the commit order is the time
+    order; a caller-supplied stamp only guards against rollback and can never
+    pull the stamp behind the wall clock.
+    """
+
+    return passed if passed is not None and passed > now else now
+
+
+def _strict_provider_label(spec: StrictAttemptSpec) -> str:
+    """Return the denial-facing provider label of one strict attempt."""
+
+    return f"pool:{spec.pool_id}" if spec.pool_id is not None else f"project:{spec.project_id}"
+
+
+def _strict_concurrency_denial(spec: StrictAttemptSpec, bucket: str) -> LimitDeniedError:
+    return LimitDeniedError(
+        ProviderError(
+            provider=_strict_provider_label(spec),
+            code=LOCAL_RATE_DENIAL_CODE,
+            message="local concurrency cap is full; vendor call skipped",
+            retryable=True,
+            status_code=429,
+            details={
+                "origin": "local",
+                "refusal": "rate",
+                "reasons": [bucket],
+            },
+        ),
+        refusal="rate",
+        reasons=[bucket],
+    )
+
+
+async def _open_reserved_count(
+    session: AsyncSession, pool_id: UUID | None, *, project_id: UUID | None
+) -> int:
+    """Count the still-``reserved`` strict reservations of one pool (or project) scope.
+
+    Only strict reservations consume strict concurrency: the sibling rails
+    admission of the same attempt is separate funds/rate capacity, so counting
+    it here would deny the first attempt with its own row. Strict rows carry
+    the ``{"kind": "strict", ...}`` payload; rails rows carry a reservation
+    list and never match. Expiry does not free a slot: an unsettled
+    reservation cannot prove the upstream call never happened, so only a
+    settlement or an explicit release ends its hold (the execution authority's
+    recovery reclaims uncertain attempts).
+    """
+
+    if pool_id is None and project_id is None:
+        return 0
+    statement = (
+        select(func.count())
+        .select_from(LimitAdmissionRow)
+        .where(
+            (
+                (LimitAdmissionRow.state == "reserved")
+                & (
+                    func.coalesce(
+                        func.json_extract(
+                            LimitAdmissionRow.rate_reservations_json, "$.dispatch_completed"
+                        ),
+                        0,
+                    )
+                    == 0
+                )
+            )
+            | (
+                (LimitAdmissionRow.state == "finalized")
+                & (
+                    func.json_extract(LimitAdmissionRow.rate_reservations_json, "$.outcome")
+                    == "uncertain"
+                )
+            ),
+            func.json_extract(LimitAdmissionRow.rate_reservations_json, "$.kind") == "strict",
+        )
+    )
+    if project_id is None:
+        statement = statement.where(LimitAdmissionRow.upstream_pool_id == str(pool_id))
+    else:
+        statement = statement.where(LimitAdmissionRow.project_id == str(project_id))
+        if pool_id is not None:
+            statement = statement.where(LimitAdmissionRow.upstream_pool_id == str(pool_id))
+    total = (await session.execute(statement)).scalar_one()
+    return int(total or 0)
 
 
 def _remaining_after(remaining: Decimal | None, used: Decimal) -> Decimal | None:
@@ -1261,37 +2769,83 @@ async def _apply_pool_debit(
     )
 
 
-async def _upsert_grant(
-    session: AsyncSession,
-    provider: str,
-    auth_mode: AuthMode,
-    operation: LimitOperation,
-    update: CRDGrantUpdate,
-    granted: Decimal,
-) -> None:
-    values = {
-        "provider": provider,
-        "operation": operation.value,
-        "auth_mode": auth_mode.value,
-        "period_start": update.period_start.isoformat(),
-        "period_end": update.period_end.isoformat(),
-        "granted_crd_text": _text(granted) or "0",
-        "consumed_crd_text": "0",
-        "reserved_crd_text": "0",
-        "version": update.version + 1,
-    }
-    await session.execute(
-        sqlite_insert(CRDGrantRow)
-        .values(**values)
-        .on_conflict_do_update(
-            index_elements=["provider", "operation", "auth_mode", "period_start"],
-            set_={
-                "period_end": values["period_end"],
-                "granted_crd_text": values["granted_crd_text"],
-                "version": values["version"],
-            },
+async def _budget_rows(
+    session: AsyncSession, provider: str, auth_mode: AuthMode, *, now: datetime
+) -> tuple[Sequence[CRDGrantRow], BudgetPeriod]:
+    """Materialize only the active calendar window, preserving earlier holds and spend."""
+    config = await session.get(ProviderBudgetRow, (provider, auth_mode.value))
+    if config is None:
+        return [], "month"
+    period = type_cast(BudgetPeriod, config.period)
+    start, end = window_bounds(now, period)
+    statement = (
+        select(CRDGrantRow)
+        .where(
+            CRDGrantRow.provider == provider,
+            CRDGrantRow.auth_mode == auth_mode.value,
+            CRDGrantRow.period_start == start,
         )
+        .execution_options(populate_existing=True)
     )
+    rows = (await session.scalars(statement)).all()
+    amounts = {"search": config.search_crd_text, "fetch": config.fetch_crd_text}
+    if len(rows) == 2 and all(
+        row.version == config.version
+        and row.period_end == end
+        and row.granted_crd_text == amounts[row.operation]
+        for row in rows
+    ):
+        return rows, period
+    for operation, granted in (
+        ("search", config.search_crd_text),
+        ("fetch", config.fetch_crd_text),
+    ):
+        await session.execute(
+            sqlite_insert(CRDGrantRow)
+            .values(
+                provider=provider,
+                operation=operation,
+                auth_mode=auth_mode.value,
+                period_start=start,
+                period_end=end,
+                granted_crd_text=granted,
+                consumed_crd_text="0",
+                reserved_crd_text="0",
+                version=config.version,
+            )
+            .on_conflict_do_update(
+                index_elements=["provider", "operation", "auth_mode", "period_start"],
+                set_=dict(period_end=end, granted_crd_text=granted, version=config.version),
+            )
+        )
+    rows = (await session.scalars(statement)).all()
+    return rows, period
+
+
+async def _budget_admission_values(
+    session: AsyncSession, admission: LimitAdmission
+) -> dict[str, Any]:
+    """Persist the actual budget window with the hold, as pool reservations do."""
+    values = _admission_values(admission)
+    rows, _ = await _budget_rows(
+        session, admission.provider, admission.auth_mode, now=admission.created_at
+    )
+    for row in rows:
+        if row.operation != admission.operation.value:
+            continue
+        available = (
+            Decimal(row.granted_crd_text)
+            - Decimal(row.consumed_crd_text)
+            - Decimal(row.reserved_crd_text)
+        )
+        if admission.reserved_crd > available:
+            raise local_funds_denial(
+                provider=admission.provider,
+                operation=admission.operation,
+                reasons=["budget_exhausted"],
+            )
+    values["grant_window_start"] = rows[0].period_start if rows else None
+    return values
 
 
 async def _adjust_grant(
@@ -1300,14 +2854,17 @@ async def _adjust_grant(
     auth_mode: AuthMode,
     operation: LimitOperation,
     *,
+    window_start: str | None,
     reserved_delta: Decimal | None = None,
     consumed_delta: Decimal | None = None,
 ) -> None:
-    """Adjust the reserved or consumed credit units of the current period grant."""
+    """Settle a hold in its persisted original window, never the current window."""
 
     if reserved_delta in (None, Decimal("0")) and consumed_delta in (None, Decimal("0")):
         return
-    row = await _current_grant_row(session, provider, auth_mode, operation)
+    if window_start is None:
+        return
+    row = await session.get(CRDGrantRow, (provider, operation.value, auth_mode.value, window_start))
     if row is None:
         return
     reserved = (_decimal(row.reserved_crd_text) or Decimal("0")) + (reserved_delta or Decimal("0"))
@@ -1325,20 +2882,6 @@ async def _adjust_grant(
             consumed_crd_text=_text(consumed if consumed > 0 else Decimal("0")),
         )
     )
-
-
-async def _current_grant_row(
-    session: AsyncSession, provider: str, auth_mode: AuthMode, operation: LimitOperation
-) -> CRDGrantRow | None:
-    today = datetime.now(UTC).date().isoformat()
-    statement = select(CRDGrantRow).where(
-        CRDGrantRow.provider == provider,
-        CRDGrantRow.auth_mode == auth_mode.value,
-        CRDGrantRow.operation == operation.value,
-        CRDGrantRow.period_start <= today,
-        CRDGrantRow.period_end >= today,
-    )
-    return (await session.scalars(statement)).first()
 
 
 def _grants_summary(
@@ -1367,6 +2910,43 @@ def _grants_summary(
     return summary
 
 
+def _attribution_values(admission: LimitAdmission) -> dict[str, Any]:
+    """Return the consumer-attribution column values of one admission.
+
+    ``None`` for a consumer key stays ``NULL`` in storage, so the capacity
+    record survives with attribution missing rather than a wrong project
+    claim. The verified actor is required (revision 0002): an admission
+    without one is refused before any row is written.
+    """
+
+    _require_actor(admission.actor_type, admission.actor_id)
+
+    values: dict[str, Any] = {
+        "project_id": None,
+        "credential_id": None,
+        "binding_id": None,
+        "upstream_pool_id": None,
+        "request_id": None,
+        "actor_type": None,
+        "actor_id": None,
+    }
+    if admission.project_id is not None:
+        values["project_id"] = str(admission.project_id)
+    if admission.credential_id is not None:
+        values["credential_id"] = str(admission.credential_id)
+    if admission.binding_id is not None:
+        values["binding_id"] = str(admission.binding_id)
+    if admission.upstream_pool_id is not None:
+        values["upstream_pool_id"] = str(admission.upstream_pool_id)
+    if admission.request_id is not None:
+        values["request_id"] = admission.request_id
+    if admission.actor_type is not None:
+        values["actor_type"] = admission.actor_type.value
+    if admission.actor_id is not None:
+        values["actor_id"] = str(admission.actor_id)
+    return values
+
+
 def _admission_values(admission: LimitAdmission) -> dict[str, Any]:
     return {
         "attempt_id": admission.attempt_id,
@@ -1381,6 +2961,7 @@ def _admission_values(admission: LimitAdmission) -> dict[str, Any]:
         "expires_at": _timestamp(admission.expires_at),
         "rate_reservations_json": _dump(list(admission.rate_reservations)),
         "local_only": 1 if admission.local_only else 0,
+        **_attribution_values(admission),
     }
 
 
@@ -1399,6 +2980,61 @@ def _admission_from_row(row: LimitAdmissionRow) -> LimitAdmission:
         expires_at=_instant(row.expires_at) or created,
         rate_reservations=_load_reservations(row.rate_reservations_json),
         local_only=bool(row.local_only),
+        project_id=_optional_uuid(row.project_id),
+        credential_id=_optional_uuid(row.credential_id),
+        binding_id=_optional_uuid(row.binding_id),
+        upstream_pool_id=_optional_uuid(row.upstream_pool_id),
+        request_id=row.request_id,
+        actor_type=ActorType(row.actor_type) if row.actor_type else None,
+        actor_id=_optional_uuid(row.actor_id),
+    )
+
+
+def _optional_uuid(value: str | None) -> UUID | None:
+    """Decode a stored UUID column, ignoring malformed historical values."""
+
+    if not value:
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
+
+
+async def _insert_attempt_units(
+    session: AsyncSession,
+    *,
+    attempt_id: str,
+    bucket_id: str,
+    provider: str,
+    auth_mode: AuthMode,
+    operation: LimitOperation | None,
+    window_text: str,
+    window_seconds: int,
+    units: Decimal,
+    attempted_at: datetime,
+    attribution: dict[str, Any] | None = None,
+) -> None:
+    """Insert one consumed rate unit; a duplicate attempt/bucket pair is a no-op."""
+
+    values: dict[str, Any] = {
+        "attempt_id": attempt_id,
+        "bucket_id": bucket_id,
+        "provider": provider,
+        "auth_mode": auth_mode.value,
+        "operation": operation.value if operation is not None else None,
+        "window": window_text,
+        "unit": RateUnit.REQUESTS.value,
+        "units_text": _text(units) or "0",
+        "attempted_at": _timestamp(attempted_at),
+        "expires_at": _timestamp(attempted_at + timedelta(seconds=window_seconds)),
+    }
+    if attribution is not None:
+        values.update(attribution)
+    await session.execute(
+        sqlite_insert(RateAttemptRow)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=["attempt_id", "bucket_id"])
     )
 
 
@@ -1413,22 +3049,20 @@ async def _insert_rate_attempt(
     window: RateWindowName,
     units: Decimal,
     attempted_at: datetime,
+    attribution: dict[str, Any] | None = None,
 ) -> None:
-    await session.execute(
-        sqlite_insert(RateAttemptRow)
-        .values(
-            attempt_id=attempt_id,
-            bucket_id=bucket_id,
-            provider=provider,
-            auth_mode=auth_mode.value,
-            operation=operation.value if operation is not None else None,
-            window=window.value,
-            unit=RateUnit.REQUESTS.value,
-            units_text=_text(units) or "0",
-            attempted_at=_timestamp(attempted_at),
-            expires_at=_timestamp(attempted_at + timedelta(seconds=_WINDOW_SECONDS[window])),
-        )
-        .on_conflict_do_nothing(index_elements=["attempt_id", "bucket_id"])
+    await _insert_attempt_units(
+        session,
+        attempt_id=attempt_id,
+        bucket_id=bucket_id,
+        provider=provider,
+        auth_mode=auth_mode,
+        operation=operation,
+        window_text=window.value,
+        window_seconds=_WINDOW_SECONDS[window],
+        units=units,
+        attempted_at=attempted_at,
+        attribution=attribution,
     )
 
 
@@ -1498,14 +3132,11 @@ def _is_tavily_credits_pool(snapshot: NativeUsageSnapshot) -> bool:
     """Return whether one snapshot describes the Tavily keyed Credits pool."""
 
     return (
-        snapshot.provider == _TAVILY_PROVIDER
-        and snapshot.pool_id == _TAVILY_KEYED_CREDITS_POOL_ID
+        snapshot.provider == _TAVILY_PROVIDER and snapshot.pool_id == _TAVILY_KEYED_CREDITS_POOL_ID
     )
 
 
-def _tavily_observation_rejected(
-    row: NativePoolRow | None, snapshot: NativeUsageSnapshot
-) -> bool:
+def _tavily_observation_rejected(row: NativePoolRow | None, snapshot: NativeUsageSnapshot) -> bool:
     """Return whether a vendor_api Tavily observation must not write.
 
     An observation stamped at or before the stored terminal observation stays
@@ -1551,7 +3182,9 @@ async def _native_debits_after(
     statement = select(LimitEventRow.native_debit_text).where(
         LimitEventRow.pool_id == pool_id,
         LimitEventRow.observed_at > _timestamp(observed_at),
-        LimitEventRow.reason.in_((_SUCCESS_REASON, _FAILURE_REASON)),
+        LimitEventRow.reason.in_(
+            (_SUCCESS_REASON, _FAILURE_REASON, "local_uncertain", "local_unknown_charge")
+        ),
     )
     rows = (await session.scalars(statement)).all()
     return sum((_decimal(text) or Decimal("0") for text in rows), Decimal("0"))
@@ -1561,65 +3194,49 @@ async def _rate_used_in_window(
     session: AsyncSession,
     bucket_id: str,
     *,
-    window: RateWindowName,
+    window_seconds: int,
     now: datetime,
     since: datetime | None = None,
 ) -> Decimal:
     """Count local rate units still inside one window in one session.
 
-    This is the one shared window math of ``count_attempts``, so a
-    reservation recheck counts exactly what the rate verification counts.
+    Count committed future rows too: clock rollback must conservatively
+    extend a hold rather than hide a debit. Rows age out when the wall clock
+    passes their timestamp plus the window.
     """
 
-    start = since or (now - timedelta(seconds=_WINDOW_SECONDS[window]))
-    statement = select(
-        func.coalesce(func.sum(cast(RateAttemptRow.units_text, _QUANTUM)), 0)
-    ).where(
+    start = since or (now - timedelta(seconds=window_seconds))
+    statement = select(func.coalesce(func.sum(cast(RateAttemptRow.units_text, _QUANTUM)), 0)).where(
         RateAttemptRow.bucket_id == bucket_id,
         RateAttemptRow.attempted_at >= _timestamp(start),
-        RateAttemptRow.attempted_at <= _timestamp(now),
     )
     total = (await session.execute(statement)).scalar_one()
     return Decimal(str(total))
 
 
-def _minute_window_limit(record: ProviderLimitRecord, bucket_id: str) -> Decimal | None:
-    """Return the documented numeric limit of the minute window for a bucket.
-
-    An unpublished or nonnumeric value stays ``None``, so an unknown limit is
-    never enforced as zero or infinity.
-    """
-
-    if record.rate is None:
-        return None
-    for window in record.rate.windows:
-        if (
-            window.bucket_id == bucket_id
-            and window.window is RateWindowName.MINUTE
-            and window.limit is not None
-        ):
-            return window.limit
-    return None
-
-
-async def _minute_retry_after_seconds(
-    session: AsyncSession, bucket_id: str, *, now: datetime, over: Decimal
+async def _window_retry_after_seconds(
+    session: AsyncSession,
+    bucket_id: str,
+    *,
+    window_seconds: int,
+    now: datetime,
+    over: Decimal,
 ) -> int:
-    """Return the seconds until one minute window can admit the next units.
+    """Return the seconds until one window can admit the next units.
 
     Attempts leave the window oldest first, so their units come back oldest
     first. The answer is the wait until enough oldest attempts expire, with
-    one full minute as the answer when the empty window still cannot admit
-    the reserved units.
+    one full window as the answer when the empty window still cannot admit
+    the reserved units. Future committed rows count in the same way as the
+    strict capacity check.
     """
 
-    start = now - timedelta(seconds=_WINDOW_SECONDS[RateWindowName.MINUTE])
+    start = now - timedelta(seconds=window_seconds)
     statement = (
         select(RateAttemptRow.attempted_at, cast(RateAttemptRow.units_text, _QUANTUM))
         .where(
             RateAttemptRow.bucket_id == bucket_id,
             RateAttemptRow.attempted_at >= _timestamp(start),
-            RateAttemptRow.attempted_at <= _timestamp(now),
         )
         .order_by(RateAttemptRow.attempted_at)
     )
@@ -1635,52 +3252,90 @@ async def _minute_retry_after_seconds(
             sufficient = (attempted, unit)
             break
     if sufficient is None or freed < over:
-        return _WINDOW_SECONDS[RateWindowName.MINUTE]
-    ready_at = sufficient[0] + timedelta(seconds=_WINDOW_SECONDS[RateWindowName.MINUTE])
+        return window_seconds
+    ready_at = sufficient[0] + timedelta(seconds=window_seconds)
     return max(1, math.ceil((ready_at - now).total_seconds()))
 
 
-async def _tavily_rate_denial(
+async def _native_rate_denial(
     session: AsyncSession, admission: LimitAdmission, record: ProviderLimitRecord
 ) -> LimitDeniedError | None:
-    """Recheck the Tavily minute rate capacity inside the reservation flow.
+    """Recheck all reserved catalog windows in the serialized transaction.
 
-    Every minute-window reservation of the admission counts the unexpired
-    attempts of its bucket inside its window on the caller's session. A
-    window whose known limit cannot admit the reserved units builds the
-    denial with the computed wait until one more unit can be admitted. An
-    undocumented window stays unenforced instead of inventing a limit.
+    Counts use the exact scoped bucket, while the catalog identity excludes
+    its credential/pool suffix. Vendor observations replace the prior balance;
+    only subsequent local attempts extend them, as in rate preflight.
     """
 
+    if record.rate is None:
+        return None
     for reservation in admission.rate_reservations:
-        if reservation.window is not RateWindowName.MINUTE:
+        window = next(
+            (
+                item
+                for item in record.rate.windows
+                if item.bucket_id == reservation.bucket_id.split("#", 1)[0]
+                and item.window is reservation.window
+                and item.kind == "rate"
+            ),
+            None,
+        )
+        if window is None:
             continue
-        limit = _minute_window_limit(record, reservation.bucket_id)
-        if limit is None:
+        observation = await session.scalar(
+            select(RateWindowObservationRow)
+            .where(
+                RateWindowObservationRow.bucket_id == reservation.bucket_id,
+                RateWindowObservationRow.provider == admission.provider,
+                RateWindowObservationRow.auth_mode == admission.auth_mode.value,
+                RateWindowObservationRow.window == reservation.window.value,
+            )
+            .order_by(RateWindowObservationRow.observed_at.desc())
+            .limit(1)
+        )
+        limit = window.limit
+        remaining = None
+        since = None
+        reset_at = None
+        if observation is not None:
+            observed_limit = _decimal(observation.limit_text)
+            if observed_limit is not None:
+                limit = observed_limit
+            remaining = _decimal(observation.remaining_text)
+            since = _instant(observation.observed_at)
+            reset_at = _instant(observation.reset_at)
+        available = limit if remaining is None else remaining
+        if available is None:
             continue
+        seconds = _WINDOW_SECONDS[reservation.window]
         used = await _rate_used_in_window(
             session,
             reservation.bucket_id,
-            window=RateWindowName.MINUTE,
+            window_seconds=seconds,
             now=admission.created_at,
+            since=since,
         )
-        if limit - used >= reservation.units:
+        if available - used >= reservation.units:
             continue
+        wait = await _window_retry_after_seconds(
+            session,
+            reservation.bucket_id,
+            window_seconds=seconds,
+            now=admission.created_at,
+            over=used + reservation.units - available,
+        )
+        if reset_at is not None and reset_at > admission.created_at:
+            wait = max(1, math.ceil((reset_at - admission.created_at).total_seconds()))
         return local_rate_denial(
-            provider=_TAVILY_PROVIDER,
+            provider=admission.provider,
             operation=admission.operation,
             reasons=[reservation.bucket_id],
-            retry_after_seconds=await _minute_retry_after_seconds(
-                session,
-                reservation.bucket_id,
-                now=admission.created_at,
-                over=used + reservation.units - limit,
-            ),
+            retry_after_seconds=wait,
         )
     return None
 
 
-async def _tavily_funds_denial(session: AsyncSession, admission: LimitAdmission) -> bool:
+async def _native_funds_denial(session: AsyncSession, admission: LimitAdmission) -> bool:
     """Recheck known native funds against the active native reservations.
 
     When the admission's pool holds a known remaining value, the still-live

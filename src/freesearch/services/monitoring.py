@@ -12,23 +12,30 @@ storage layer.
 
 import asyncio
 import contextlib
+import contextvars
 import inspect
 import logging
 import math
 import os
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import AwareDatetime, Field, model_serializer
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.adapters.brave import COST_USD_PER_REQUEST, FREE_CREDITS_USD, brave_spend_usd
-from freesearch.infrastructure.resilience import ProviderOperationError
+from freesearch.infrastructure.observability import current_observability
+from freesearch.infrastructure.resilience import (
+    ProviderOperationError,
+    install_dispatch_observer,
+    reset_dispatch_observer,
+)
 from freesearch.infrastructure.secrets import AsyncSecretStore, ProviderName
 from freesearch.models.contracts import (
     ContractModel,
@@ -46,6 +53,9 @@ from freesearch.models.contracts import (
     UsageStatus,
     is_soft_quota_zero,
 )
+from freesearch.models.execution_failures import ExecutionError
+from freesearch.models.observability import AttemptBinding, ExecutionAttribution
+from freesearch.models.projects import PermissionAction
 from freesearch.models.provider_limits import (
     AuthMode,
     CRDUsageTotal,
@@ -53,14 +63,41 @@ from freesearch.models.provider_limits import (
     LimitDeniedError,
     LimitOperation,
     LimitStoreUnavailable,
-    ProviderLimitsResponse,
+    ProviderObservationScope,
+    local_rate_denial,
 )
+from freesearch.models.quota_api import USDProviderLimits, USDUsageTotal
+from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import LegacyUsageTotal, SQLiteRepository, UsageTotal
+from freesearch.services.authorization import ScopedAuthorizationService
+from freesearch.services.control_access import require_project_permission, run_control_read
+from freesearch.services.control_errors import ControlStorageUnavailable
 
 if TYPE_CHECKING:
     from freesearch.services.provider_limits import ProviderLimitsService
 
 logger = logging.getLogger(__name__)
+
+#: Queue wait accumulated by the authority for the attempt in this task.
+_QUEUE_WAIT_MS: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "freesearch_queue_wait_ms", default=-1
+)
+
+
+def add_queue_wait(milliseconds: int) -> None:
+    """Accumulate one scheduler grant's wait for the current request task."""
+
+    current = _QUEUE_WAIT_MS.get()
+    _QUEUE_WAIT_MS.set(max(0, current) + max(0, milliseconds))
+
+
+def consume_queue_wait() -> int | None:
+    """Return and clear the request task's accumulated queue wait."""
+
+    value = _QUEUE_WAIT_MS.get()
+    _QUEUE_WAIT_MS.set(-1)
+    return None if value < 0 else value
+
 
 CANONICAL_PROVIDER_NAMES: frozenset[str] = frozenset(provider.value for provider in ProviderName)
 
@@ -77,9 +114,9 @@ DB_ENV_VAR: str = "FREESEARCH_DB"
 # Vendor quota endpoints are account reads, not request instrumentation.
 QUOTA_POLL_TTL_SECONDS: int = 120
 QUOTA_FAILURE_BACKOFF_SECONDS: int = 5
-_quota_poll_cache: dict[tuple[int, int], datetime] = {}
-_quota_failure_cache: dict[tuple[int, int], datetime] = {}
-_quota_poll_locks: dict[tuple[int, int], asyncio.Lock] = {}
+_quota_poll_cache: dict[tuple[int, int, str], datetime] = {}
+_quota_failure_cache: dict[tuple[int, int, str], datetime] = {}
+_quota_poll_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
 
 
 def _quota_ttl_seconds() -> int:
@@ -183,7 +220,7 @@ class StatsResponse(ContractModel):
     recent_usage: list[RecentUsageEntry]
     latest_quota: list[QuotaSnapshot]
     latest_health: list[LatestHealthEntry]
-    crd_usage_totals: list[CRDUsageTotal] = Field(default_factory=list)
+    spend_totals: list[USDUsageTotal] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _serialize_compat(self, handler: Any) -> Any:
@@ -201,7 +238,16 @@ class DashboardResponse(StatsResponse):
     """JSON dashboard snapshot: the stats read plus its generation instant."""
 
     generated_at: AwareDatetime
-    provider_limits: list[ProviderLimitsResponse] = Field(default_factory=list)
+    provider_limits: list[USDProviderLimits] = Field(default_factory=list)
+
+
+class ProjectUsageResponse(ContractModel):
+    """Project-scoped usage totals and a privacy-projected recent ledger."""
+
+    project_id: UUID
+    totals: list[ProviderUsageTotal] = Field(default_factory=list)
+    recent_usage: list[RecentUsageEntry] = Field(default_factory=list)
+    generated_at: AwareDatetime
 
 
 def _environment_file_value(name: str) -> str | None:
@@ -293,8 +339,11 @@ async def record_response_telemetry(
     repository: SQLiteRepository | None,
     response: SearchResponse | FetchResponse,
     *,
+    attribution: ExecutionAttribution,
     latency_ms: int | None = None,
     status: UsageStatus = UsageStatus.SUCCESS,
+    binding: AttemptBinding | None = None,
+    queue_wait_ms: int | None = None,
 ) -> None:
     """Persist ``response.usage`` and a healthy observation; never raise.
 
@@ -303,7 +352,10 @@ async def record_response_telemetry(
     monitoring outage can never fail the user request being observed. Usage and
     health persistence are independent: a rejected usage write must never skip
     the healthy observation. When usage is present, the measured ``latency_ms``
-    and ``status`` are attached to the stored event.
+    and ``status`` are attached to the stored event, which is owned by the
+    execution ``attribution`` and linked to the request trace when one is live.
+    The credential/binding/pool ``binding`` attributes both writes to the exact
+    attempt that produced them.
     """
 
     if repository is None:
@@ -311,8 +363,20 @@ async def record_response_telemetry(
     try:
         usage = response.usage or _estimated_gap_event(response)
         if usage is not None:
-            measured = usage.model_copy(update={"latency_ms": latency_ms, "status": status})
-            await repository.record_usage(measured)
+            metadata = dict(usage.metadata)
+            if queue_wait_ms is not None:
+                metadata["queue_wait_ms"] = max(0, queue_wait_ms)
+            measured = usage.model_copy(
+                update={"latency_ms": latency_ms, "status": status, "metadata": metadata}
+            )
+            await repository.record_usage(
+                measured,
+                attribution=attribution,
+                trace_id=current_observability().current_trace_id(),
+                credential_id=binding.credential_id if binding is not None else None,
+                binding_id=binding.binding_id if binding is not None else None,
+                pool_id=binding.pool_id if binding is not None else None,
+            )
     except Exception:
         logger.warning("response telemetry could not be persisted")
     try:
@@ -322,19 +386,25 @@ async def record_response_telemetry(
                 status=HealthStatus.HEALTHY,
                 checked_at=_response_instant(response),
                 message=None,
-            )
+            ),
+            credential_id=binding.credential_id if binding is not None else None,
         )
     except Exception:
         logger.warning("response telemetry could not be persisted")
 
 
 async def record_failure_telemetry(
-    repository: SQLiteRepository | None, *, provider: str | None
+    repository: SQLiteRepository | None,
+    *,
+    provider: str | None,
+    credential_id: UUID | None = None,
 ) -> None:
     """Persist a degraded health observation for ``provider``; never raise.
 
     This helper records health only; the zero-unit failure usage event is
-    written by :func:`_record_failure_usage` from :func:`tracked_call`.
+    written by :func:`_record_failure_usage` from :func:`tracked_call`. A call
+    through one credential fails that credential, never an unrelated one: the
+    degraded observation is credential-scoped when the binding is known.
     """
 
     if repository is None or provider is None:
@@ -346,7 +416,8 @@ async def record_failure_telemetry(
                 status=HealthStatus.DEGRADED,
                 checked_at=datetime.now(UTC),
                 message=None,
-            )
+            ),
+            credential_id=credential_id,
         )
     except Exception:
         logger.warning("failure telemetry could not be persisted")
@@ -355,15 +426,19 @@ async def record_failure_telemetry(
 async def _record_failure_usage(
     repository: SQLiteRepository | None,
     *,
+    attribution: ExecutionAttribution,
     provider: str,
     operation: UsageOperation,
     latency_ms: int | None,
+    binding: AttemptBinding | None = None,
+    queue_wait_ms: int | None = None,
 ) -> None:
     """Persist a zero-unit failure usage event for a failed call; never raise."""
 
     if repository is None:
         return
     try:
+        metadata = {"queue_wait_ms": max(0, queue_wait_ms)} if queue_wait_ms is not None else {}
         await repository.record_usage(
             UsageEvent(
                 provider=provider,
@@ -372,16 +447,16 @@ async def _record_failure_usage(
                 observed_at=datetime.now(UTC),
                 latency_ms=latency_ms,
                 status=UsageStatus.FAILURE,
-            )
+                metadata=metadata,
+            ),
+            attribution=attribution,
+            trace_id=current_observability().current_trace_id(),
+            credential_id=binding.credential_id if binding is not None else None,
+            binding_id=binding.binding_id if binding is not None else None,
+            pool_id=binding.pool_id if binding is not None else None,
         )
     except Exception:
         logger.warning("failure usage telemetry could not be persisted")
-
-
-def _elapsed_ms(started_at: float) -> int:
-    """Return whole milliseconds elapsed since ``started_at`` (never negative)."""
-
-    return int((time.perf_counter() - started_at) * 1000)
 
 
 def _measured_latency_ms(adapter_name: str, latency_ms: int) -> int | None:
@@ -397,14 +472,452 @@ def _measured_latency_ms(adapter_name: str, latency_ms: int) -> int | None:
     return latency_ms if adapter_name in CANONICAL_PROVIDER_NAMES else None
 
 
+class ProviderTiming:
+    """Actual provider-send time shared across retries and child tasks.
+
+    The mutable object travels with the attempt, so an adapter runner's send
+    observations update the same accumulator the parent task reads. Queue
+    wait, admission, retry backoff, and settlement are never included.
+    """
+
+    __slots__ = ("_open_started", "first_send_at", "seconds")
+
+    def __init__(self) -> None:
+        self.seconds = 0.0
+        self.first_send_at: float | None = None
+        self._open_started: float | None = None
+
+    def begin_send(self) -> None:
+        """Mark one actual send as started."""
+
+        now = time.perf_counter()
+        if self.first_send_at is None:
+            self.first_send_at = now
+        self._open_started = now
+
+    def end_send(self) -> None:
+        """Finish the currently open send and accumulate its duration."""
+
+        if self._open_started is None:
+            return
+        self.seconds += max(0.0, time.perf_counter() - self._open_started)
+        self._open_started = None
+
+    def finish_open_send(self) -> None:
+        """Close an unresolved send at its current elapsed time."""
+
+        self.end_send()
+
+    @property
+    def latency_ms(self) -> int:
+        """Return the accumulated actual send duration in whole milliseconds."""
+
+        return int(max(0.0, self.seconds) * 1000)
+
+
+class _DispatchSend:
+    """One actual upstream send observed inside an adapter call."""
+
+    __slots__ = (
+        "error",
+        "finalized",
+        "outcome",
+        "reservation",
+        "resolved",
+        "response",
+        "started",
+    )
+
+    def __init__(self, reservation: Any) -> None:
+        self.reservation = reservation
+        self.finalized = False
+        self.resolved = False
+        self.started = False
+        self.outcome = "open"
+        self.response: Any = None
+        self.error: BaseException | None = None
+
+    @property
+    def attempt_id(self) -> str:
+        return str(
+            getattr(self.reservation, "attempt_id", None)
+            or getattr(getattr(self.reservation, "strict", None), "attempt_id", "")
+        )
+
+
+class _CapacityCharger:
+    """Charge every actual provider send and finalize each logical attempt once.
+
+    A runner adapter may retry internally; each retry calls ``begin`` before
+    its HTTP operation, so a cap with no room denies the resend before it is
+    sent. The same exception may reuse an idempotent reservation id (a caller
+    hook that keeps one attempt id); those sends group under one attempt and
+    settle once. Distinct attempt ids are charged and settled independently.
+    """
+
+    def __init__(
+        self,
+        *,
+        reserve: Callable[[], Awaitable[Any]],
+        settle: Callable[[str], Awaitable[None]] | None,
+        release: Callable[[Any], Awaitable[None]] | None,
+        limits: "ProviderLimitsService | None",
+        request: SearchRequest | FetchRequest | None,
+        resolve_dispatch: Callable[[str, str], Awaitable[None]] | None = None,
+        timing: ProviderTiming | None = None,
+    ) -> None:
+        self._reserve = reserve
+        self._settle = settle
+        self._release = release
+        self._limits = limits
+        self._request = request
+        self._resolve_dispatch = resolve_dispatch
+        self._timing = timing or ProviderTiming()
+        self._sends: list[_DispatchSend] = []
+        #: ``perf_counter`` instant of the first actual provider send (after
+        #: admission/queue wait), so measured latency excludes queue time.
+        self.provider_started_at: float | None = None
+
+    @property
+    def timing(self) -> ProviderTiming:
+        """The shared actual-send accumulator of this attempt."""
+
+        return self._timing
+
+    def mark_started(self, token: object) -> None:
+        """Mark a non-runner send as actually starting now."""
+
+        if isinstance(token, _DispatchSend):
+            token.started = True
+            self._timing.begin_send()
+            if self.provider_started_at is None:
+                self.provider_started_at = time.perf_counter()
+
+    async def begin(self, *, mark_started: bool = True) -> object:
+        reservation = await _reserve_attempt(self._reserve)
+        if getattr(reservation, "idempotent", False):
+            native = getattr(reservation, "admission", None)
+            if native is not None:
+                # A native replay can identify an existing reservation, but
+                # cannot fund an additional send. Execution retries must obtain
+                # a fresh combined admission through the service.
+                raise local_rate_denial(
+                    native.provider,
+                    operation=native.operation,
+                    reasons=["attempt_requires_fresh_identity"],
+                )
+            charge_next = getattr(reservation, "charge_next_dispatch", None)
+            if callable(charge_next):
+                reservation = await charge_next()
+        if self.provider_started_at is None:
+            self.provider_started_at = time.perf_counter()
+        send = _DispatchSend(reservation)
+        # The runner observer calls begin immediately before the actual HTTP
+        # operation, so this send has started. The non-runner path marks the
+        # send explicitly after its pre-send deadline check instead.
+        if mark_started:
+            send.started = True
+            self._timing.begin_send()
+        self._sends.append(send)
+        return send
+
+    async def end(
+        self,
+        token: object,
+        *,
+        result: object | None = None,
+        error: BaseException | None = None,
+        retryable: bool = False,
+    ) -> None:
+        if not isinstance(token, _DispatchSend):
+            return
+        self._timing.end_send()
+        if error is not None or retryable:
+            token.outcome = "failure"
+            token.error = error or ProviderOperationError(
+                ProviderError(
+                    provider="upstream",
+                    code="http_error",
+                    message="retryable upstream response",
+                    retryable=True,
+                    status_code=getattr(result, "status_code", None),
+                )
+            )
+            if not token.started:
+                # The deadline/pre-send check refused before any provider
+                # operation: release the reservation and close its recovery
+                # record as failed, never as an uncertain upstream attempt.
+                await self._release_unsent(token)
+                return
+            # A received HTTP response proves that this send completed. Settle
+            # its own debit and release both durable and fair-queue
+            # concurrency before the runner attempts a retry; otherwise the
+            # retry queues behind the slot this send already finished holding.
+            # Transport failures have uncertain receipts and retain their hold.
+            if retryable and (
+                result is not None
+                or getattr(getattr(error, "error", None), "status_code", None) is not None
+            ):
+                complete = getattr(token.reservation, "complete_dispatch", None)
+                if getattr(token.reservation, "admission", None) is None and callable(complete):
+                    # Keep the strict reservation replayable for the runner's
+                    # same-identity retry, but mark the known completed send
+                    # dispatch-complete so durable concurrency is free, and
+                    # release the fair-queue slot it was holding.
+                    settle_pool = getattr(token.reservation, "settle_pool_failure", None)
+                    if callable(settle_pool):
+                        await settle_pool(token.error)
+                    await complete()
+                    token.finalized = True
+                    await self._resolve(token, "failed")
+                else:
+                    await self._failure(token, token.error)
+                    token.finalized = True
+                    await self._resolve(token, "failed")
+            elif (
+                error is not None
+                and getattr(getattr(error, "error", None), "status_code", None) is None
+            ):
+                token.outcome = "open"
+            return
+        token.outcome = "success"
+        token.response = result
+
+    async def finalize(
+        self,
+        *,
+        response: SearchResponse | FetchResponse | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        groups: dict[str, _DispatchSend] = {}
+        for send in self._sends:
+            groups[send.attempt_id] = send
+        for send in groups.values():
+            if send.finalized:
+                continue
+            if send.outcome == "open":
+                if not send.started:
+                    await self._release_unsent(send)
+                    continue
+                self._timing.finish_open_send()
+                await self._uncertain(send, error=error)
+                await self._resolve(send, "uncertain")
+            elif send.outcome == "success":
+                await self._success(send, response)
+                await self._resolve(send, "completed")
+            else:
+                await self._failure(send, send.error or error)
+                await self._resolve(send, "failed")
+
+    async def _release_unsent(self, send: _DispatchSend) -> None:
+        """Undo a reservation that provably never began a provider send."""
+
+        if send.finalized:
+            return
+        send.finalized = True
+        send.outcome = "released"
+        if self._release is not None:
+            with contextlib.suppress(Exception):
+                await self._release(send.reservation)
+        await self._resolve(send, "failed")
+
+    async def _resolve(self, send: _DispatchSend, outcome: str) -> None:
+        """Resolve the authority recovery record and free the fair-queue slot."""
+
+        if send.resolved:
+            return
+        send.resolved = True
+        try:
+            attempt_id = send.attempt_id
+            if attempt_id and self._resolve_dispatch is not None:
+                with contextlib.suppress(Exception):
+                    await self._resolve_dispatch(attempt_id, outcome)
+        finally:
+            finish = getattr(send.reservation, "finish", None)
+            if callable(finish):
+                finish()
+
+    async def _success(
+        self, send: _DispatchSend, response: SearchResponse | FetchResponse | None
+    ) -> None:
+        admission = getattr(send.reservation, "admission", None)
+        if admission is not None and self._limits is not None and response is not None:
+            await self._limits.record_success(admission, response, request=self._request)
+            settle_pool = getattr(send.reservation, "settle_pool_actual", None)
+            if callable(settle_pool):
+                await settle_pool(response)
+            return
+        if admission is not None and self._limits is not None:
+            await self._limits.record_uncertain(
+                admission, reason="missing_response", upstream_complete=True
+            )
+            return
+        if response is not None:
+            settle_pool = getattr(send.reservation, "settle_pool_actual", None)
+            if callable(settle_pool):
+                await settle_pool(response)
+        await _settle_reservation(send.reservation, "completed", self._settle)
+
+    async def _failure(self, send: _DispatchSend, error: BaseException | None) -> None:
+        admission = getattr(send.reservation, "admission", None)
+        if admission is not None and self._limits is not None:
+            await _finalize_native_failure(self._limits, admission, error, request=self._request)
+            settle_pool = getattr(send.reservation, "settle_pool_failure", None)
+            if callable(settle_pool):
+                await settle_pool(error)
+            return
+        settle_pool = getattr(send.reservation, "settle_pool_failure", None)
+        if callable(settle_pool):
+            await settle_pool(error)
+        await _settle_reservation(send.reservation, "failed", self._settle)
+
+    async def _uncertain(self, send: _DispatchSend, *, error: BaseException | None) -> None:
+        admission = getattr(send.reservation, "admission", None)
+        if admission is not None and self._limits is not None:
+            with contextlib.suppress(Exception):
+                await self._limits.record_uncertain(admission, reason="cancelled")
+            return
+        await _settle_reservation(send.reservation, "uncertain", self._settle)
+
+
+async def _settle_reservation(
+    reservation: Any,
+    outcome: str,
+    settle: Callable[[str], Awaitable[None]] | None,
+) -> None:
+    """Settle one reservation through its own hook when it provides one."""
+
+    own = getattr(reservation, "settle", None)
+    if callable(own):
+        await own(outcome)
+        return
+    if settle is not None:
+        await settle(outcome)
+
+
+async def _finalize_native_failure(
+    limits: "ProviderLimitsService",
+    admission: Any,
+    error: BaseException | None,
+    *,
+    request: SearchRequest | FetchRequest | None,
+) -> None:
+    """Record one dispatched native failure with the existing charge policy."""
+
+    if error is None:
+        await limits.record_failure(
+            admission,
+            ProviderError(
+                provider=admission.provider,
+                code="upstream_error",
+                message="upstream call failed",
+                retryable=False,
+            ),
+        )
+        return
+    provider_error = getattr(error, "error", None)
+    if not isinstance(provider_error, ProviderError):
+        await limits.record_failure(
+            admission,
+            ProviderError(
+                provider=admission.provider,
+                code=type(error).__name__,
+                message="local call failure",
+                retryable=False,
+            ),
+        )
+        return
+    details = provider_error.details if isinstance(provider_error.details, dict) else {}
+    await limits.record_failure(
+        admission,
+        provider_error,
+        charged_native=_charged_native(details),
+        charged_document=bool(details.get("charged_document")),
+    )
+
+
+async def _finalize_capacity_path(
+    *,
+    charger: _CapacityCharger | None,
+    admission: Any,
+    limits: "ProviderLimitsService | None",
+    cancelled: bool,
+    failure: BaseException | None,
+    response: SearchResponse | FetchResponse | None,
+    request: SearchRequest | FetchRequest | None,
+) -> None:
+    """Finalize the capacity obligations of one call exactly once."""
+
+    if charger is not None:
+        await asyncio.shield(charger.finalize(response=response, error=failure))
+        return
+    if admission is None or limits is None:
+        return
+    with contextlib.suppress(Exception):
+        if cancelled:
+            await asyncio.shield(limits.record_uncertain(admission, reason="cancelled"))
+        elif failure is not None:
+            if isinstance(failure, Exception):
+                await asyncio.shield(_finalize_failure(limits, admission, failure, request=request))
+        elif response is not None:
+            await asyncio.shield(limits.record_success(admission, response, request=request))
+
+
+async def _dispatch_provider_call[ResponseT](
+    *,
+    charger: _CapacityCharger | None,
+    runner: object | None,
+    adapter: ProviderAdapter,
+    call: Callable[[ProviderAdapter], Awaitable[ResponseT]],
+    pre_send: Callable[[], None] | None,
+) -> ResponseT:
+    """Run one adapter call with the correct per-send charging shape."""
+
+    if charger is not None and runner is not None:
+        if pre_send is not None:
+            pre_send()
+        observer_token = install_dispatch_observer(charger)
+        try:
+            return await call(adapter)
+        finally:
+            reset_dispatch_observer(observer_token)
+    if charger is not None:
+        send = await charger.begin(mark_started=False)
+        try:
+            if pre_send is not None:
+                pre_send()
+            charger.mark_started(send)
+            response = await call(adapter)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            await charger.end(send, error=exc, retryable=False)
+            raise
+        else:
+            await charger.end(send, result=response)
+            return response
+    if pre_send is not None:
+        pre_send()
+    return await call(adapter)
+
+
 async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     repository: SQLiteRepository | None,
     adapter: ProviderAdapter,
     call: Callable[[ProviderAdapter], Awaitable[ResponseT]],
     *,
     operation: UsageOperation,
+    attribution: ExecutionAttribution,
     request: SearchRequest | FetchRequest | None = None,
     limits: "ProviderLimitsService | None" = None,
+    binding: AttemptBinding | None = None,
+    reserve: Callable[[], Awaitable[Any]] | None = None,
+    settle: Callable[[str], Awaitable[None]] | None = None,
+    release: Callable[[Any], Awaitable[None]] | None = None,
+    context: "LimitCallContext | None" = None,
+    resolve_dispatch: Callable[[str, str], Awaitable[None]] | None = None,
+    timing: ProviderTiming | None = None,
+    pre_send: Callable[[], None] | None = None,
 ) -> ResponseT:
     """Await ``call(adapter)`` recording success and failure telemetry around it.
 
@@ -418,53 +931,238 @@ async def tracked_call[ResponseT: (SearchResponse, FetchResponse)](
     the unchanged route selection and before the vendor call. A local denial is
     raised before any vendor I/O, so it consumes no rate capacity and never
     counts as a provider health failure. A vendor 429 additionally records a
-    rate-state cooldown carrying the vendor Retry-After delay; a local
-    denial never records one.
+    credential-scoped rate-state cooldown carrying the vendor Retry-After
+    delay; a local denial never records one.
+
+    The optional ``reserve``/``settle``/``release`` triple owns the strict
+    pool+project reservation. Every actual upstream send is charged with a
+    fresh attempt identity, including retries inside the adapter's resilience
+    runner. A cancellation retains an uncertain send's debit; only a
+    provably non-dispatched reservation is released.
     """
 
-    started_at = time.perf_counter()
-    admission = await _admit_call(limits, adapter, operation, request)
+    provider_timing = timing or ProviderTiming()
+    credential_id = binding.credential_id if binding is not None else None
+    upstream_pool_id = (
+        context.upstream_pool_id
+        if context is not None and context.upstream_pool_id is not None
+        else (binding.pool_id if binding is not None else None)
+    )
+    admission: Any = None
+    charger: _CapacityCharger | None = None
+    if reserve is None:
+        admission = await _admit_call(limits, adapter, operation, request, context=context)
+        provider_timing.begin_send()
+    else:
+        charger = _CapacityCharger(
+            reserve=reserve,
+            settle=settle,
+            release=release,
+            limits=limits,
+            request=request,
+            resolve_dispatch=resolve_dispatch,
+            timing=provider_timing,
+        )
+    response: ResponseT | None = None
+    cancelled = False
+    runner = getattr(adapter, "dispatch_runner", None)
     try:
-        response = await call(adapter)
-    except LimitDeniedError:
-        raise
+        response = await _dispatch_provider_call(
+            charger=charger,
+            runner=runner,
+            adapter=adapter,
+            call=call,
+            pre_send=pre_send,
+        )
     except asyncio.CancelledError:
-        if limits is not None and admission is not None:
-            with contextlib.suppress(Exception):
-                await asyncio.shield(_release_cancelled_admission(limits, admission))
+        cancelled = True
+        await _finalize_capacity_path(
+            charger=charger,
+            admission=admission,
+            limits=limits,
+            cancelled=True,
+            failure=None,
+            response=None,
+            request=request,
+        )
         raise
-    except Exception as exc:
-        await _finalize_failure(limits, admission, exc, request=request)
-        await _record_failure_usage(
+    except BaseException as exc:
+        await _finalize_capacity_path(
+            charger=charger,
+            admission=admission,
+            limits=limits,
+            cancelled=False,
+            failure=exc,
+            response=None,
+            request=request,
+        )
+        if isinstance(exc, (ExecutionError, LimitDeniedError, LimitStoreUnavailable)):
+            # A local admission/store/queue failure is not provider health and
+            # writes no usage event, whether it happened before the first send
+            # or before a retry.
+            raise
+        if charger is None:
+            provider_timing.end_send()
+        await _record_failure_telemetry_for(
             repository,
-            provider=adapter.name,
-            operation=operation,
-            latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
+            adapter,
+            attribution,
+            operation,
+            provider_timing.latency_ms,
+            binding,
+            exc,
+            request=request,
+            limits=limits,
+            credential_id=credential_id,
+            upstream_pool_id=upstream_pool_id,
         )
-        await record_failure_telemetry(repository, provider=adapter.name)
-        await _record_vendor_cooldown(limits, adapter, exc)
-        status = getattr(getattr(exc, "error", None), "status_code", None)
-        await _record_adapter_quota(
-            repository, adapter, "quota_after_error", status, operation=operation
-        )
-        # A terminal vendor 402 must gate the next pinned call at the pool
-        # layer too: mirror the zero into the native Credits pool before the
-        # error propagates, so the funds precheck denies it without vendor I/O.
-        if _terminal_quota_402(exc) and limits is not None:
-            with contextlib.suppress(Exception):
-                await limits.record_terminal_402(adapter.name, _adapter_auth_mode(adapter))
         raise
-    if limits is not None and admission is not None:
-        await limits.record_success(admission, response, request=request)
+    await _finalize_capacity_path(
+        charger=charger,
+        admission=admission,
+        limits=limits,
+        cancelled=cancelled,
+        failure=None,
+        response=response,
+        request=request,
+    )
+    if response is None:  # pragma: no cover - a completed call always has one
+        raise LimitStoreUnavailable(adapter.name)
+    if charger is None:
+        provider_timing.end_send()
+    await _record_success_telemetry_for(
+        repository,
+        adapter,
+        attribution,
+        operation,
+        provider_timing.latency_ms,
+        binding,
+        response,
+        request=request,
+        limits=limits,
+        credential_id=credential_id,
+        upstream_pool_id=upstream_pool_id,
+    )
+    return response
+
+
+async def _record_success_telemetry_for(
+    repository: SQLiteRepository | None,
+    adapter: ProviderAdapter,
+    attribution: ExecutionAttribution,
+    operation: UsageOperation,
+    latency_ms: int,
+    binding: AttemptBinding | None,
+    response: SearchResponse | FetchResponse,
+    *,
+    request: SearchRequest | FetchRequest | None,
+    limits: "ProviderLimitsService | None",
+    credential_id: UUID | None,
+    upstream_pool_id: UUID | None,
+) -> None:
+    """Record success telemetry and local quota state for one completed call."""
+
     await record_response_telemetry(
         repository,
         response,
-        latency_ms=_measured_latency_ms(adapter.name, _elapsed_ms(started_at)),
+        attribution=attribution,
+        latency_ms=_measured_latency_ms(adapter.name, latency_ms),
+        binding=binding,
+        queue_wait_ms=consume_queue_wait(),
     )
     await _record_adapter_quota(
-        repository, adapter, "quota_after_success", response, operation=operation
+        repository,
+        adapter,
+        "quota_after_success",
+        response,
+        operation=operation,
+        credential_id=credential_id,
+        upstream_pool_id=upstream_pool_id,
     )
-    return response
+
+
+async def _record_failure_telemetry_for(
+    repository: SQLiteRepository | None,
+    adapter: ProviderAdapter,
+    attribution: ExecutionAttribution,
+    operation: UsageOperation,
+    latency_ms: int,
+    binding: AttemptBinding | None,
+    failure: BaseException,
+    *,
+    request: SearchRequest | FetchRequest | None,
+    limits: "ProviderLimitsService | None",
+    credential_id: UUID | None,
+    upstream_pool_id: UUID | None,
+) -> None:
+    """Record failure telemetry, health, cooldown, and terminal 402 state."""
+
+    exc = failure
+    if not isinstance(exc, Exception):
+        return
+    await _record_failure_usage(
+        repository,
+        attribution=attribution,
+        provider=adapter.name,
+        operation=operation,
+        latency_ms=_measured_latency_ms(adapter.name, latency_ms),
+        binding=binding,
+        queue_wait_ms=consume_queue_wait(),
+    )
+    await record_failure_telemetry(
+        repository,
+        provider=adapter.name,
+        credential_id=credential_id,
+    )
+    await _record_vendor_cooldown(
+        limits,
+        adapter,
+        exc,
+        credential_id=credential_id,
+        upstream_pool_id=upstream_pool_id,
+    )
+    status = getattr(getattr(exc, "error", None), "status_code", None)
+    await _record_adapter_quota(
+        repository,
+        adapter,
+        "quota_after_error",
+        status,
+        operation=operation,
+        credential_id=credential_id,
+        upstream_pool_id=upstream_pool_id,
+    )
+    if _terminal_quota_402(exc) and limits is not None:
+        with contextlib.suppress(Exception):
+            await limits.record_terminal_402(
+                adapter.name,
+                _adapter_auth_mode(adapter),
+                credential_id=credential_id,
+                upstream_pool_id=upstream_pool_id,
+            )
+
+
+async def _reserve_attempt(reserve: Callable[[], Awaitable[Any]] | None) -> Any:
+    """Reserve strict capacity for one attempt, or raise a typed failure.
+
+    A denial (window or concurrency shortage) propagates unchanged before any
+    vendor I/O; a store failure becomes :class:`LimitStoreUnavailable`, so a
+    failed capacity check rejects the execution instead of admitting blindly.
+    """
+
+    if reserve is None:
+        return None
+    try:
+        return await reserve()
+    except LimitStoreUnavailable:
+        raise
+    except ExecutionError:
+        # A typed local refusal (queue expiry, revoked authority, changed
+        # binding) keeps its own shape so transports can project it.
+        raise
+    except LimitDeniedError:
+        raise
+    except Exception as error:
+        raise LimitStoreUnavailable("pool cap reservation") from error
 
 
 def _adapter_auth_mode(adapter: ProviderAdapter) -> AuthMode:
@@ -479,8 +1177,14 @@ async def _admit_call(
     adapter: ProviderAdapter,
     operation: UsageOperation,
     request: SearchRequest | FetchRequest | None,
+    *,
+    context: "LimitCallContext | None" = None,
 ) -> Any:
-    """Reserve funds and rate capacity for one call, or raise a local denial."""
+    """Reserve funds and rate capacity for one call, or raise a local denial.
+
+    An execution service supplies ``context`` with its own attempt id and the
+    trusted attribution; the legacy path builds an unattributed context.
+    """
 
     if limits is None or operation is UsageOperation.COST_ESTIMATE:
         return None
@@ -489,16 +1193,26 @@ async def _admit_call(
     if not limits.supports(adapter.name, limit_operation, auth_mode):
         # A synthetic adapter without a catalog record stays ungated.
         return None
-    context = LimitCallContext(
-        provider=adapter.name,
-        operation=limit_operation,
-        auth_mode=auth_mode,
-        attempt_id=uuid4().hex,
-        request=request,
-        requested_at=datetime.now(UTC),
-    )
+    if context is not None:
+        if (
+            context.provider != adapter.name
+            or context.operation is not limit_operation
+            or context.auth_mode is not auth_mode
+        ):
+            # Abort on a mismatched preview context; legacy owns its context.
+            raise LimitStoreUnavailable(adapter.name)
+        attempt_context: LimitCallContext = context
+    else:
+        attempt_context = LimitCallContext(
+            provider=adapter.name,
+            operation=limit_operation,
+            auth_mode=auth_mode,
+            attempt_id=uuid4().hex,
+            request=request,
+            requested_at=datetime.now(UTC),
+        )
     try:
-        return await limits.admit(context)
+        return await limits.admit(attempt_context)
     except LimitDeniedError:
         raise
     except Exception as error:
@@ -561,35 +1275,6 @@ def _terminal_quota_402(exc: BaseException) -> bool:
 _terminal_tavily_402 = _terminal_quota_402
 
 
-async def _release_cancelled_admission(
-    limits: "ProviderLimitsService",
-    admission: Any,
-) -> None:
-    """Release one cancelled attempt's reservation with reason ``cancelled``.
-
-    A cancelled fanout sibling never reaches the ``except Exception``
-    finalizer (``CancelledError`` is a ``BaseException``), so its admission
-    would stay ``reserved`` until the 300-second attempt lease expires and
-    then keep counting in the Tavily funds recheck. This helper releases it
-    at once so no phantom reservation survives the cancel.
-
-    Conservative tradeoff: a cancel that lands after the vendor call already
-    completed may release a reservation the vendor charged. That understates
-    committed funds only; the next usage poll restores vendor truth. The
-    caller shields this release so a second cancel cannot interrupt it.
-    """
-
-    await limits.record_failure(
-        admission,
-        ProviderError(
-            provider=admission.provider,
-            code="cancelled",
-            message="provider call cancelled by fanout",
-            retryable=False,
-        ),
-    )
-
-
 def _charged_native(details: dict[str, Any]) -> Decimal | None:
     """Return a confirmed native charge reported by an adapter failure."""
 
@@ -618,6 +1303,9 @@ async def _record_vendor_cooldown(
     limits: "ProviderLimitsService | None",
     adapter: ProviderAdapter,
     error: Exception,
+    *,
+    credential_id: UUID | None = None,
+    upstream_pool_id: UUID | None = None,
 ) -> None:
     """Record a vendor 429 as rate-state cooldown; additive and never raising.
 
@@ -646,6 +1334,8 @@ async def _record_vendor_cooldown(
             auth_mode=_adapter_auth_mode(adapter),
             retry_after_seconds=retry_after,
             attempted_at=datetime.now(UTC),
+            credential_id=credential_id,
+            upstream_pool_id=upstream_pool_id,
         )
 
 
@@ -663,6 +1353,8 @@ async def refresh_quotas(
     force: bool = False,
     now: datetime | None = None,
     secret_store: AsyncSecretStore | None = None,
+    scopes: Mapping[int, ProviderObservationScope] | None = None,
+    limits: "ProviderLimitsService | None" = None,
 ) -> list[QuotaSnapshot]:
     """Poll quota-capable adapters once per bounded TTL and persist snapshots."""
 
@@ -674,32 +1366,36 @@ async def refresh_quotas(
         try:
             if not adapter.capabilities.quota:
                 continue
-            snapshot = await _poll_one_quota(repository, adapter, force, observed_at)
+            scope = scopes.get(id(adapter)) if scopes is not None else None
+            if (
+                scope is not None
+                and limits is not None
+                and (type(adapter).usage_snapshot is not ProviderAdapter.usage_snapshot)
+            ):
+                from freesearch.services.limits_sync import LimitSyncService
+
+                def scoped_adapters(adapter: ProviderAdapter = adapter) -> list[ProviderAdapter]:
+                    return [adapter]
+
+                await LimitSyncService(
+                    repository.limits,
+                    limits,
+                    scoped_adapters,
+                    scope=scope,
+                    quota_repository=repository,
+                ).sync_provider(adapter.name, observed_at)
+                snapshot = await repository.latest_quota(
+                    adapter.name, credential_id=scope.credential_id, pool_id=scope.upstream_pool_id
+                )
+            else:
+                snapshot = await _poll_one_quota(repository, adapter, force, observed_at, scope)
+
         except Exception:
             logger.warning("quota poll could not be completed")
             continue
         if snapshot is not None:
             snapshots.append(snapshot)
-    try:
-        oauth_snapshot = await _poll_parallel_oauth_balance(repository, observed_at, secret_store)
-    except Exception:
-        logger.warning("quota poll could not be completed")
-        oauth_snapshot = None
-    if oauth_snapshot is not None:
-        snapshots.append(oauth_snapshot)
     return snapshots
-
-
-async def _poll_parallel_oauth_balance(
-    repository: SQLiteRepository,
-    observed_at: datetime,
-    secret_store: AsyncSecretStore | None,
-) -> QuotaSnapshot | None:
-    """Poll the paired Parallel Account API balance without touching adapter quotas."""
-
-    from freesearch.services.parallel_oauth import poll_oauth_balance_snapshot
-
-    return await poll_oauth_balance_snapshot(repository, now=observed_at, secret_store=secret_store)
 
 
 async def _poll_one_quota(
@@ -707,8 +1403,12 @@ async def _poll_one_quota(
     adapter: ProviderAdapter,
     force: bool,
     observed_at: datetime,
+    scope: ProviderObservationScope | None = None,
 ) -> QuotaSnapshot | None:
-    cache_key = (id(repository), id(adapter))
+    scope_key = scope.model_dump_json() if scope is not None else ""
+    cache_key = (id(repository), id(adapter), scope_key)
+    credential_id = scope.credential_id if scope is not None else None
+    pool_id = scope.upstream_pool_id if scope is not None else None
     lock = _quota_poll_locks.setdefault(cache_key, asyncio.Lock())
     was_running = lock.locked()
     async with lock:
@@ -717,7 +1417,13 @@ async def _poll_one_quota(
             backoff = timedelta(seconds=_quota_failure_backoff_seconds())
             if observed_at - failure_at < backoff:
                 try:
-                    return await repository.latest_quota(adapter.name)
+                    return (
+                        await repository.latest_quota(adapter.name)
+                        if scope is None
+                        else await repository.latest_quota(
+                            adapter.name, credential_id=credential_id, pool_id=pool_id
+                        )
+                    )
                 except Exception:
                     return None
             _quota_failure_cache.pop(cache_key, None)
@@ -726,7 +1432,13 @@ async def _poll_one_quota(
         within_ttl = cached_at is not None and observed_at - cached_at < timedelta(seconds=ttl)
         if within_ttl and (not force or was_running):
             try:
-                return await repository.latest_quota(adapter.name)
+                return (
+                    await repository.latest_quota(adapter.name)
+                    if scope is None
+                    else await repository.latest_quota(
+                        adapter.name, credential_id=credential_id, pool_id=pool_id
+                    )
+                )
             except Exception:
                 return None
         try:
@@ -737,7 +1449,15 @@ async def _poll_one_quota(
         if snapshot is None:
             return None
         try:
-            await repository.record_quota(snapshot)
+            if scope is None:
+                await repository.record_quota(snapshot)
+            else:
+                await repository.record_quota(
+                    snapshot,
+                    credential_id=credential_id,
+                    pool_id=pool_id,
+                    credential_generation=scope.credential_generation,
+                )
         except Exception:
             _quota_failure_cache[cache_key] = observed_at
             return None
@@ -807,7 +1527,7 @@ async def _expire_soft_zero(
     Persistence failures raise; callers keep their stored snapshot.
     """
 
-    events = await repository.list_usage(provider=provider)
+    events = await repository.list_provider_usage(provider=provider)
     successful = [
         event
         for event in events
@@ -890,12 +1610,17 @@ async def _record_adapter_quota(
     argument: object,
     *,
     operation: UsageOperation | None = None,
+    credential_id: UUID | None = None,
+    upstream_pool_id: UUID | None = None,
 ) -> None:
-    """Persist local quota state exposed by an adapter without vendor polling."""
+    """Persist local quota state exposed by an adapter without vendor polling.
+
+    A quota snapshot written through a credential-scoped attempt is attributed
+    to that credential, so one credential's balance never becomes another
+    credential's routing state.
+    """
 
     if repository is None:
-        return
-    if adapter.name == "parallel" and await _parallel_oauth_owns_snapshot(repository):
         return
     method = getattr(adapter, method_name, None)
     if not callable(method):
@@ -908,20 +1633,11 @@ async def _record_adapter_quota(
             result = method(argument)
         snapshot = await result if inspect.isawaitable(result) else result
         if isinstance(snapshot, QuotaSnapshot):
-            await repository.record_quota(snapshot)
+            await repository.record_quota(
+                snapshot, credential_id=credential_id, pool_id=upstream_pool_id
+            )
     except Exception:
         logger.warning("local quota state could not be persisted")
-
-
-async def _parallel_oauth_owns_snapshot(repository: SQLiteRepository) -> bool:
-    """Return True while the AUTHORITATIVE OAuth balance owns the Parallel snapshot."""
-
-    try:
-        from freesearch.services.parallel_oauth import is_oauth_ready
-
-        return await is_oauth_ready(repository)
-    except Exception:
-        return False
 
 
 async def latency_p95_ms(
@@ -959,8 +1675,8 @@ async def collect_stats(
     if repository is None:
         return _empty_stats()
     try:
-        totals = await repository.usage_totals()
-        recent = await repository.recent_usage(limit=recent_limit)
+        totals = await repository.installation_usage_totals()
+        recent = await repository.recent_installation_usage(limit=recent_limit)
         providers = sorted(
             set(adapter_names)
             | {total.provider for total in totals}
@@ -978,7 +1694,66 @@ async def collect_stats(
         recent_usage=_contract_recent(recent),
         latest_quota=latest_quota,
         latest_health=_contract_health(latest_health),
-        crd_usage_totals=crd_totals,
+        spend_totals=[USDUsageTotal.model_validate(row) for row in crd_totals],
+    )
+
+
+def _clamped_recent_limit(limit: int) -> int:
+    return min(max(limit, 1), MAX_RECENT_LIMIT)
+
+
+async def _require_usage_read(
+    repository: SQLiteRepository, actor: UserPrincipal, project_id: UUID
+) -> None:
+    """Require live project ``usage.read``; unknown projects are not found."""
+
+    async def operation(session: AsyncSession) -> None:
+        await require_project_permission(
+            session,
+            ScopedAuthorizationService(repository),
+            actor,
+            project_id,
+            PermissionAction.USAGE_READ,
+        )
+
+    await run_control_read(repository, operation)
+
+
+async def _project_usage_rows(
+    repository: SQLiteRepository,
+    *,
+    project_id: UUID,
+    recent_limit: int,
+) -> tuple[list[UsageTotal | LegacyUsageTotal], list[UsageEvent]]:
+    try:
+        totals = await repository.project_usage_totals(project_id=project_id)
+        recent = await repository.recent_project_usage(
+            project_id=project_id, limit=_clamped_recent_limit(recent_limit)
+        )
+    except Exception as error:
+        logger.warning("project usage reads could not be collected")
+        raise ControlStorageUnavailable("project usage is unavailable") from error
+    return totals, recent
+
+
+async def collect_project_usage(
+    repository: SQLiteRepository,
+    actor: UserPrincipal,
+    project_id: UUID,
+    *,
+    recent_limit: int = DEFAULT_RECENT_LIMIT,
+) -> ProjectUsageResponse:
+    """Return only the authorized project's usage totals and recent ledger."""
+
+    await _require_usage_read(repository, actor, project_id)
+    totals, recent = await _project_usage_rows(
+        repository, project_id=project_id, recent_limit=recent_limit
+    )
+    return ProjectUsageResponse(
+        project_id=project_id,
+        totals=_contract_totals(totals),
+        recent_usage=_contract_recent(recent),
+        generated_at=datetime.now(UTC),
     )
 
 
@@ -1033,7 +1808,7 @@ async def _latest_quotas(
     """Return each provider's newest quota snapshot, keeping its provenance."""
     if totals is None:
         try:
-            totals = await repository.usage_totals()
+            totals = await repository.installation_usage_totals()
         except Exception:
             totals = []
     brave_total = _brave_request_success_total(totals)
@@ -1051,14 +1826,46 @@ async def _latest_quotas(
 async def _latest_health(
     repository: SQLiteRepository, providers: Sequence[str]
 ) -> list[ProviderHealth]:
-    """Return each provider's newest health observation."""
+    """Return one intentional aggregate health entry per provider.
 
-    observations: list[ProviderHealth] = []
-    for provider in providers:
-        observation = await repository.latest_health(provider)
-        if observation is not None:
-            observations.append(observation)
-    return observations
+    The aggregate combines the newest observation of every credential scope
+    with the newest provider-wide fact. The worst status wins (unavailable
+    over degraded over unknown over healthy), so a degraded credential is
+    never hidden while the aggregate still exposes no credential ids or
+    diagnostic messages. A failed aggregate read degrades to no entry.
+    """
+
+    loader = getattr(repository, "latest_health_scopes", None)
+    try:
+        if callable(loader):
+            observations = await loader(providers)
+        else:
+            observations = [
+                observation
+                for provider in providers
+                if (observation := await repository.latest_health(provider)) is not None
+            ]
+    except Exception:
+        return []
+    severity = {
+        HealthStatus.HEALTHY: 0,
+        HealthStatus.UNKNOWN: 1,
+        HealthStatus.DEGRADED: 2,
+        HealthStatus.UNAVAILABLE: 3,
+    }
+    aggregated: dict[str, ProviderHealth] = {}
+    for observation in observations:
+        current = aggregated.get(observation.provider)
+        if (
+            current is None
+            or severity[observation.status] > severity[current.status]
+            or (
+                severity[observation.status] == severity[current.status]
+                and observation.checked_at > current.checked_at
+            )
+        ):
+            aggregated[observation.provider] = observation
+    return [aggregated[provider] for provider in providers if provider in aggregated]
 
 
 def _contract_totals(

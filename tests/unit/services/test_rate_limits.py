@@ -4,6 +4,8 @@ Pure admit/progress paths use repository=None. Counting paths use a tiny
 in-memory fake double. No real SQLite, no vendor I/O, fixed clock.
 """
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -20,6 +22,7 @@ from freesearch.models.provider_limits import (
     RateWindowName,
 )
 from freesearch.services.rate_limits import RateLimitService
+from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
 
@@ -84,6 +87,7 @@ def _context(
     operation: LimitOperation = LimitOperation.SEARCH,
 ) -> LimitCallContext:
     return LimitCallContext(
+        **FIXTURE_ACTOR,
         provider=provider,
         operation=operation,
         auth_mode=AuthMode.KEYED,
@@ -98,6 +102,10 @@ class _FakeRateRepository:
     def __init__(self) -> None:
         self.observations: list[RateObservation] = []
         self.attempts: list[dict[str, object]] = []
+
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[None]:
+        yield None
 
     async def observe_rate(self, observation: RateObservation) -> None:
         self.observations = [
@@ -124,7 +132,10 @@ class _FakeRateRepository:
         window: RateWindowName,
         units: Decimal,
         attempted_at: datetime,
+        actor_type: object = None,
+        actor_id: object = None,
     ) -> None:
+        # Revision 0002: the real repository also persists the verified actor.
         for item in self.attempts:
             if item["attempt_id"] == attempt_id and item["bucket_id"] == bucket_id:
                 return
@@ -138,6 +149,8 @@ class _FakeRateRepository:
                 "window": window,
                 "units": units,
                 "attempted_at": attempted_at,
+                "actor_type": actor_type,
+                "actor_id": actor_id,
             }
         )
 
@@ -148,7 +161,9 @@ class _FakeRateRepository:
         window: RateWindowName,
         now: datetime,
         since: datetime | None = None,
+        session: object | None = None,
     ) -> Decimal:
+        del session
         start = since if since is not None else now - timedelta(seconds=_WINDOW_SECONDS[window])
         total = Decimal("0")
         for item in self.attempts:
@@ -160,7 +175,41 @@ class _FakeRateRepository:
                 total += units
         return total
 
-    async def list_observations(self, provider: str) -> list[RateObservation]:
+    async def count_catalog_attempts(
+        self,
+        provider: str,
+        bucket_id: str,
+        *,
+        window: RateWindowName,
+        now: datetime,
+        since: datetime | None = None,
+    ) -> Decimal:
+        start = since if since is not None else now - timedelta(seconds=_WINDOW_SECONDS[window])
+        attempts: dict[object, Decimal] = {}
+        for item in self.attempts:
+            instant = item["attempted_at"]
+            units = item["units"]
+            bucket = item["bucket_id"]
+            assert isinstance(instant, datetime)
+            assert isinstance(units, Decimal)
+            assert isinstance(bucket, str)
+            if (
+                item["provider"] == provider
+                and (
+                    bucket == bucket_id
+                    or bucket.startswith((f"{bucket_id}#cred:", f"{bucket_id}#pool:"))
+                )
+                and instant >= start
+            ):
+                attempts[item["attempt_id"]] = max(
+                    attempts.get(item["attempt_id"], Decimal("0")), units
+                )
+        return sum(attempts.values(), Decimal("0"))
+
+    async def list_observations(
+        self, provider: str, *, session: object | None = None
+    ) -> list[RateObservation]:
+        del session
         return [item for item in self.observations if item.provider == provider]
 
     async def list_rate_progress(self, provider: str, now: datetime) -> list[object]:
@@ -387,7 +436,13 @@ async def test_local_counts_extend_vendor_without_double_count() -> None:
     assert used == Decimal("1")
 
 
-async def test_concurrent_reservations_never_overspend() -> None:
+async def test_admission_decisions_consume_nothing_until_recorded() -> None:
+    """Sequential decision-versus-recording check (formerly a misleading
+    ``test_concurrent_reservations_never_overspend``; RT-09).
+
+    Nothing here runs concurrently. Real cross-connection cap atomicity lives in
+    ``tests/integration/services/test_provider_limits.py``'s race tests.
+    """
     fake = _FakeRateRepository()
     service = RateLimitService(fake, [_record()])  # type: ignore[arg-type]
     first = await service.admit(_context("c1"))
@@ -442,11 +497,7 @@ def _tavily_minute_record() -> ProviderLimitRecord:
         supported=True,
         transport_available=True,
         rate=RateBlock(
-            windows=[
-                _window(
-                    "tavily:keyed:search:requests", "100", RateWindowName.MINUTE
-                )
-            ],
+            windows=[_window("tavily:keyed:search:requests", "100", RateWindowName.MINUTE)],
             published=True,
         ),
         budget=None,

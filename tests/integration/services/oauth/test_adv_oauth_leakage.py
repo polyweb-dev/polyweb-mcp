@@ -1,161 +1,86 @@
-"""Token-leakage attacks: logs, error bodies, responses, DB rows, fixtures."""
+"""Original adversarial cases migrated to A4 credential OAuth.
 
-from __future__ import annotations
+Case names and parameter matrices retain their origin. Scoped metadata/grants
+replace singleton statuses and slots; GET is observational and explicit POST
+polls make at most one vendor attempt. Monitoring never polls OAuth implicitly.
+"""
 
 import logging
 import re
 from pathlib import Path
-from typing import Any
 
-import pytest
-from fastapi.testclient import TestClient
-
-from tests.integration.services.oauth.conftest import (
-    VAULT_KEYS,
-    admin_auth_headers,
-    build_app,
-    connect_parallel,
-    dashboard_parallel_quota,
-    poll_balance,
-    read_runtime_settings,
-    require_implemented,
-)
+from tests.fixtures.api_keys import database_dump
+from tests.fixtures.vault_oauth import vault_oauth_case as vault_oauth_case
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
     CLIENT_SECRET_VALUE,
+    REFRESH_TOKEN_VALUE,
     TOKEN_SENTINELS,
-    StubOAuthServer,
     collect_sqlite_texts,
     find_leaked_secrets,
 )
 
-SECRET_LIKE_PATTERNS = (
-    r"sk-[A-Za-z0-9]{8,}",
-    r"ghp_[A-Za-z0-9]{8,}",
-)
+
+async def test_no_token_material_in_logs_and_error_bodies(oauth_case, caplog):
+    """Origin test_adv_oauth_leakage.py::test_no_token_material_in_logs_and_error_bodies."""
+    case = oauth_case
+    bodies = []
+    with caplog.at_level(logging.DEBUG):
+        for outcome in ("access_denied", "expired_token", "invalid_grant"):
+            case.stub.poll_script = [outcome]
+            bodies.append(case.client.post(case.path + "/device", headers=case.headers))
+            bodies.append(case.client.post(case.path + "/poll", headers=case.headers))
+            bodies.append(case.client.delete(case.path, headers=case.headers))
+        await case.connect()
+        bodies.append(case.client.post(case.path + "/device", headers=case.headers))
+        case.stub.refresh_reject = "invalid_grant"
+        await case.refresh()
+        bodies.append(case.client.get("/dashboard", headers=case.headers))
+    for body in bodies:
+        assert not find_leaked_secrets(body.text)
+    assert not find_leaked_secrets(caplog.text)
+    await case.assert_no_leaks(*bodies)
 
 
-def _open(repository: Any, secret_store: Any) -> TestClient:
-    client = TestClient(build_app(repository, secret_store))
-    client.__enter__()
-    return client
+async def test_tokens_in_vault_not_in_db(oauth_case):
+    """Origin test_adv_oauth_leakage.py::test_tokens_in_vault_not_in_db."""
+    case = oauth_case
+    await case.connect()
+    assert await case.token() == ACCESS_TOKEN_VALUE
+    assert await case.token("refresh") == REFRESH_TOKEN_VALUE
+    assert await case.token("client") == CLIENT_SECRET_VALUE
+    assert await case.token("device") is None
+    await case.assert_no_leaks()
+    for text in collect_sqlite_texts(Path(case.repository._engine.url.database)):
+        assert not find_leaked_secrets(text)
+    assert not find_leaked_secrets(database_dump(case.repository))
 
 
-async def _drive_every_error_path(
-    client: TestClient,
-    server: StubOAuthServer,
-    repository: Any,
-    headers: dict[str, str],
-) -> list[str]:
-    bodies: list[str] = []
-    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).text)
-    server.poll_script = ["access_denied"]  # type: ignore[list-item]
-    bodies.append(client.get("/api/v1/providers/parallel/oauth/status", headers=headers).text)
-    bodies.append(client.delete("/api/v1/providers/parallel/oauth", headers=headers).text)
-    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).text)
-    server.poll_script = ["expired_token"]  # type: ignore[list-item]
-    bodies.append(client.get("/api/v1/providers/parallel/oauth/status", headers=headers).text)
-    bodies.append(client.delete("/api/v1/providers/parallel/oauth", headers=headers).text)
-    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).text)
-    server.refresh_reject = "invalid_grant"
-    server.poll_script = ["authorization_pending", "success"]
-    await connect_parallel(client, server, repository, headers=headers)
-    bodies.append(client.post("/api/v1/providers/parallel/oauth/device-code", headers=headers).text)
-    server.refresh_reject = "none"
-    bodies.append(client.get("/dashboard", headers=headers).text)
-    return bodies
+async def test_status_is_fingerprint_only(vault_oauth_case):
+    """Origin test_adv_oauth_leakage.py::test_status_is_fingerprint_only."""
+    case = vault_oauth_case
+    await case.connect()
+    probe = case.client.get(case.path, headers=case.headers)
+    assert probe.status_code == 200
+    assert not find_leaked_secrets(probe.text)
+    assert "access_token" not in probe.text.lower() and "refresh_token" not in probe.text.lower()
+    await case.assert_no_leaks(probe)
 
 
-async def test_no_token_material_in_logs_and_error_bodies(
-    repository: Any,
-    secret_store: Any,
-    stub_server: StubOAuthServer,
-    auth_secret: str,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    client = _open(repository, secret_store)
-    leak_hint = "leaked token material"
-    try:
-        # Use one Admin account for all OAuth and dashboard reads.
-        headers = await admin_auth_headers(client, repository)
-        with caplog.at_level(logging.DEBUG):
-            bodies = await _drive_every_error_path(client, stub_server, repository, headers)
-        for index, body in enumerate(bodies):
-            leaked = find_leaked_secrets(body)
-            assert not leaked, f"response body #{index} {leak_hint}: {leaked!r}"
-        leaked_logs = find_leaked_secrets(caplog.text)
-        assert not leaked_logs, f"log records {leak_hint}: {leaked_logs!r}"
-        for seen in stub_server.seen_requests:
-            leaked_url = find_leaked_secrets(str(seen.get("url", "")))
-            assert not leaked_url, f"credential in URL: {leaked_url!r}"
-    finally:
-        client.__exit__(None, None, None)
+async def test_quota_payload_carries_no_tokens(oauth_case):
+    """Origin test_adv_oauth_leakage.py::test_quota_payload_carries_no_tokens."""
+    case = oauth_case
+    await case.connect()
+    snapshot = await case.balance()
+    body = snapshot.model_dump_json()
+    assert not find_leaked_secrets(body)
+    response = case.client.get("/dashboard", headers=case.headers)
+    assert response.status_code == 200
+    assert not find_leaked_secrets(response.text)
+    await case.assert_no_leaks(response, body)
 
 
-async def test_tokens_in_vault_not_in_db(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for the OAuth flow.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        assert secret_store.values.get("parallel:oauth:access") == ACCESS_TOKEN_VALUE
-        assert secret_store.values.get("parallel:oauth:refresh") is not None
-        assert secret_store.values.get("parallel:oauth:client_secret") == CLIENT_SECRET_VALUE
-        assert set(VAULT_KEYS) - {"parallel:oauth:device"} <= set(secret_store.values)
-        assert secret_store.values.get("parallel:oauth:device") is None, (
-            "device secret must be wiped once paired"
-        )
-        db_path: Path = repository.adv_db_path
-        for text in collect_sqlite_texts(db_path):
-            leaked = find_leaked_secrets(text)
-            assert not leaked, f"DB row {leaked!r} in {text[:200]!r}"
-        for key, value in read_runtime_settings(db_path).items():
-            leaked = find_leaked_secrets(value)
-            assert not leaked, f"runtime_settings[{key!r}] leaks {leaked!r}"
-    finally:
-        client.__exit__(None, None, None)
-
-
-async def test_status_is_fingerprint_only(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for OAuth and status reads.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        probe = require_implemented(
-            client.get("/api/v1/providers/parallel/oauth/status", headers=headers),
-            "GET status",
-        )
-        assert probe.status_code == 200
-        leaked = find_leaked_secrets(probe.text)
-        assert not leaked, f"status leaks {leaked!r}"
-        lowered = probe.text.lower()
-        assert "access_token" not in lowered and "refresh_token" not in lowered
-    finally:
-        client.__exit__(None, None, None)
-
-
-async def test_quota_payload_carries_no_tokens(
-    repository: Any, secret_store: Any, stub_server: StubOAuthServer, auth_secret: str
-) -> None:
-    client = _open(repository, secret_store)
-    try:
-        # Use one Admin account for OAuth and dashboard reads.
-        headers = await admin_auth_headers(client, repository)
-        await connect_parallel(client, stub_server, repository, headers=headers)
-        await poll_balance(repository, stub_server, secret_store)
-        dashboard = client.get("/dashboard", headers=headers)
-        assert dashboard.status_code == 200
-        entry = dashboard_parallel_quota(client, headers)
-        assert entry is not None
-        leaked = find_leaked_secrets(dashboard.text)
-        assert not leaked, f"dashboard leaks {leaked!r}"
-    finally:
-        client.__exit__(None, None, None)
+SECRET_LIKE_PATTERNS = (r"sk-[A-Za-z0-9]{8,}", r"ghp_[A-Za-z0-9]{8,}")
 
 
 def test_checked_in_fixtures_hold_no_real_secrets() -> None:

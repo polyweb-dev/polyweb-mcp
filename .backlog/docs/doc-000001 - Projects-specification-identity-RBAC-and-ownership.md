@@ -3,7 +3,7 @@ id: doc-000001
 title: Projects specification - identity, RBAC and ownership
 type: specification
 created_date: '2026-10-24T15:49:00Z'
-updated_date: '2026-10-25T15:05:00Z'
+updated_date: '2026-10-26T09:51:00Z'
 tags:
   - projects-first
   - specification
@@ -28,13 +28,13 @@ The user confirmed these decisions:
 - Project administrators can add private provider credentials and use explicitly granted global credentials.
 - The product is in alpha. Prior accounts and history do not need preservation or conversion.
 - Provider credentials and global settings can also be entered again. No old-data migration or import is necessary.
-- Project tokens can have an expiration date or no expiration.
+- Project API keys can have an expiration date or no expiration.
 - Current implementation targets self-hosted use. Preserve future cloud compatibility without cloud-specific feature work now.
 - Use one human account type. Administrator and member privileges come from scoped role assignments, not account classifications.
 
 The requested feature also establishes these requirements:
 
-- Project tokens replace agent accounts.
+- Project API keys replace agent accounts.
 - A project can use several credential instances of the same provider.
 - Projects can reuse global credentials without duplicate secret storage.
 - Projects have separate available providers and enabled providers.
@@ -47,8 +47,8 @@ The requested feature also establishes these requirements:
 
 Use these defaults for estimation. Confirm them before the relevant implementation phase.
 
-1. **Token lifetime default:** Offer 90 days as the initial default and an explicit No expiration option.
-   Token expiry is optional, as the user confirmed.
+1. **API key lifetime default:** Offer 90 days as the initial default and an explicit No expiration option.
+   API key expiry is optional, as the user confirmed.
 2. **Project lifecycle:** Archive projects first. Defer permanent deletion and its retention policy to separate work.
 3. **Membership:** Start with administrator assignment of human accounts. Defer invitation email and external identity federation.
 4. **System access:** System administrators manage the platform. Project content access requires membership or an explicit, audited support-access operation.
@@ -67,7 +67,7 @@ CodeGraph supplied source and call paths. Groma reports an uncurated first scan,
 - `src/freesearch/services/users.py` implements human credentials, access JWTs, refresh tokens, and session families.
 - `src/freesearch/routers/auth.py` contains global role guards. Account-management stubs explicitly wait for project association.
 - `src/freesearch/infrastructure/auth_asgi.py` provides the Bearer middleware. `src/freesearch/mcp/auth.py` handles MCP authentication.
-- MCP currently permits absent credentials on its public execution transport. Project-token enforcement changes that contract.
+- MCP currently permits absent credentials on its public execution transport. Project API key enforcement changes that contract.
 
 ### Provider configuration and runtime
 
@@ -110,7 +110,7 @@ The board reuses these original tickets rather than duplicating their work:
 
 - `TASK-000004`: P15A, removal of agent accounts, anonymous execution, and legacy account types. `TASK-000038` contains the P15 strict cutover.
 - `TASK-000005`: P12, project provider, settings, and limits UX.
-- `TASK-000006`: P07, project tokens and authenticated machine execution.
+- `TASK-000006`: P07, project API keys and authenticated machine execution.
 
 Backlog documents `doc-000001` through `doc-000004` contain durable specification copies because this local plan directory is gitignored.
 Keep dependencies, assignment, implementation plans, and evidence current through the Backlog CLI.
@@ -135,13 +135,13 @@ Use a discriminated principal contract:
 
 ```text
 HumanPrincipal(user_id, session_id)
-ProjectTokenPrincipal(token_id, project_id, scopes)
+ProjectApiKeyPrincipal(api_key_id, project_id, scopes)
 ProjectContext(account_id, project_id, principal, effective_permissions, policy_revision)
 ```
 
 Keep human passwords and browser refresh sessions in the existing account service.
 Resolve project membership and current permissions from the database, not solely from old JWT claims.
-Resolve token status and scope on every new execution request.
+Resolve API key status and scope on every new execution request.
 
 Project context must be immutable for one operation. Pass it explicitly through services and repositories.
 A request-local context variable can assist trace attributes, but it must not provide the sole authorization check.
@@ -158,7 +158,7 @@ Evaluate `authorize(principal, action, scope, resource)` through that service in
 Project settings can configure permitted role assignments and policy within system constraints. Avoid separate per-user permission switches scattered across features.
 
 Start with built-in project roles `project_admin` and `project_member`.
-Represent extra privileges as assignments of bounded capability roles, such as `routing_editor`, `provider_editor`, and `token_manager`.
+Represent extra privileges as assignments of bounded capability roles, such as `routing_editor`, `provider_editor`, and `api_key_manager`.
 Use `system_admin` as an explicit assignment at installation scope. It is a role on an ordinary human account, not another account type.
 Keep the initial permission catalog and built-in role definitions in code. Defer arbitrary custom roles, a general policy language, and deny-rule engines.
 
@@ -167,7 +167,7 @@ Each project has its own memberships and assignments. Extra project roles add pe
 System policy constrains project RBAC configuration, so a project cannot redefine a role to grant system actions.
 
 Project members can read sanitized settings, enabled-provider metadata, permitted usage, and project activity. They can execute search and fetch.
-Project administrators can manage membership, project settings, tokens, and private credentials within system policy.
+Project administrators can manage membership, project settings, API keys, and private credentials within system policy.
 System administrators alone manage shared credential grants, pool capacity, allocation ceilings, and system roles.
 They also provision human accounts. Project administrators add existing humans without global account-directory or password-reset authority.
 
@@ -175,7 +175,7 @@ Extra roles never grant system authority. A user cannot grant a permission they 
 Membership removal removes all extra role assignments for that project. Project roles never affect global human account status.
 The system administrator role does not implicitly create project memberships or bypass project content access policy.
 
-Project API tokens remain separate machine principals. Their stored scopes pass through the same authorization service and resource policy.
+Project API keys remain separate machine principals. Their stored scopes pass through the same authorization service and resource policy.
 
 Proposed permission names include:
 
@@ -183,7 +183,7 @@ Proposed permission names include:
 project.read                 members.read
 settings.read                settings.write
 providers.read               providers.configure
-credentials.manage_private   tokens.manage
+credentials.manage_private   api_keys.manage
 routing.write                traces.read
 usage.read                   search.execute
 fetch.execute                members.manage
@@ -287,7 +287,7 @@ Copy selected routing preferences, nonsecret overrides, and permitted binding re
 For inherited values, offer explicit overrides-only and effective-snapshot modes. Default to overrides-only.
 An effective snapshot pins values and stops future inheritance for those fields.
 
-Never copy tokens, members, roles, raw secrets, usage, trace history, quota balances, or accumulated limiter state.
+Never copy API keys, members, roles, raw secrets, usage, trace history, quota balances, or accumulated limiter state.
 Do not copy a source project's private credential to the target.
 Copy a global credential reference only if the target already has a valid grant.
 
@@ -311,3 +311,4 @@ Future hosting can add authentication and storage adapters without replacing the
 Do not add cloud signup, organization administration, WorkOS callbacks, webhooks, SSO, billing, or distributed infrastructure to these phases.
 Future cloud integration can require schema additions and adapters. The goal is to avoid changes across core project authorization and execution logic.
 The separate `projects-cloud-auth-and-rate-review.md` contains research, deferred considerations, and data-structure comparisons.
+

@@ -3,6 +3,8 @@ Feature: Tavily Provider Adapter Integration
   I want to interact with the Tavily search provider
   So that I can perform live web searches, fetch web pages, and monitor my credit quota
 
+  # @live scenarios run only when selected explicitly: uv run behave --tags=@live (default_tags excludes @live).
+
   Background:
     Given a configured and authenticated Tavily adapter
 
