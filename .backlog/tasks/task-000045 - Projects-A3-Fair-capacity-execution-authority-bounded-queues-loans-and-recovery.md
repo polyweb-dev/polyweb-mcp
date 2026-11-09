@@ -3,11 +3,11 @@ id: TASK-000045
 title: >-
   Projects A3 - Fair capacity: execution authority, bounded queues, loans and
   recovery
-status: In Progress
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-10-26T09:47:00Z'
-updated_date: '2026-10-30T16:15:00Z'
+updated_date: '2026-11-09T12:32:00Z'
 labels:
   - projects-first
   - step-2-api
@@ -20,7 +20,7 @@ documentation:
   - doc-000002
 priority: high
 type: feature
-ordinal: 26000
+ordinal: 44000
 ---
 
 ## Description

@@ -1,11 +1,11 @@
 ---
 id: TASK-000039
 title: Projects PF - Routing-latency acceptance
-status: In Progress
+status: Done
 assignee:
   - '@devin'
 created_date: '2026-10-26T09:47:00Z'
-updated_date: '2026-10-26T15:58:00Z'
+updated_date: '2026-11-09T12:32:00Z'
 labels:
   - projects-first
   - step-2-api
@@ -18,7 +18,7 @@ documentation:
   - doc-000004
 priority: high
 type: feature
-ordinal: 23000
+ordinal: 42000
 ---
 
 ## Description

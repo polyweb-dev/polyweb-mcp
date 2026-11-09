@@ -1,11 +1,11 @@
 ---
 id: TASK-000048
 title: Projects U3 - Providers, settings and limits UI
-status: In Progress
+status: Done
 assignee:
   - '@devin'
 created_date: '2026-10-26T09:47:00Z'
-updated_date: '2026-11-03T15:42:00Z'
+updated_date: '2026-11-09T12:32:00Z'
 labels:
   - projects-first
   - step-3-ui
@@ -20,7 +20,7 @@ documentation:
   - doc-000002
 priority: high
 type: feature
-ordinal: 32000
+ordinal: 47000
 ---
 
 ## Description

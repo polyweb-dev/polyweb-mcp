@@ -1,11 +1,11 @@
 ---
 id: TASK-000047
 title: Projects U2 - Activity, usage and playground UI
-status: In Progress
+status: Done
 assignee:
   - '@devin'
 created_date: '2026-10-26T09:47:00Z'
-updated_date: '2026-11-01T12:32:00Z'
+updated_date: '2026-11-09T12:32:00Z'
 labels:
   - projects-first
   - step-3-ui
@@ -20,7 +20,7 @@ documentation:
   - doc-000008
 priority: high
 type: feature
-ordinal: 31000
+ordinal: 46000
 ---
 
 ## Description
