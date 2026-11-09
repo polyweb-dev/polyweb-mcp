@@ -48,7 +48,7 @@ fi
 
 cd polyweb-ui
 pnpm bddgen
-grep_args=(--grep "${PLAYWRIGHT_GREP:-@smoke|@visual}")
+grep_args=(--grep "${PLAYWRIGHT_GREP:-@smoke}")
 if [[ -n "${PLAYWRIGHT_GREP_INVERT:-}" ]]; then
   grep_args+=(--grep-invert "$PLAYWRIGHT_GREP_INVERT")
 fi

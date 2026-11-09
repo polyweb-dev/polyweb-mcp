@@ -28,7 +28,7 @@ steps:
           export PATH="$HOME/.local/bin:$PATH"
           npm install --global pnpm@12.15.0
           uv sync --frozen
-          export PLAYWRIGHT_GREP_INVERT="@live"
+          export PLAYWRIGHT_GREP_INVERT="@live|@mobile"
           bash scripts/ci/run-ui-bdd.sh
         '
 

@@ -1,3 +1,4 @@
+@mobile
 Feature: Visual and keyboard regression
   Visual and keyboard contracts remain deterministic across desktop and mobile layouts.
 

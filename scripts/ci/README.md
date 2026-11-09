@@ -73,8 +73,8 @@ uv run --no-sync mypy --follow-imports=silent scripts/ci/upload_gitea.py
 ```
 
 The UI jobs use Node 24 for static checks and unit tests, and the official
-Playwright image for browser tests. The BDD job runs critical `@smoke` and
-`@visual` scenarios. It does not run `@live` scenarios.
+Playwright image for browser tests. The BDD job runs critical desktop
+`@smoke` scenarios. It does not run `@live` or `@mobile` scenarios.
 
 References: [Gitea Generic Package Registry](https://docs.gitea.com/usage/packages/generic/),
 [Woodpecker workflow conditions](https://woodpecker-ci.org/docs/usage/workflow-syntax),

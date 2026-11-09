@@ -84,7 +84,7 @@ Then(
 Then("the settings page should expose no secret input", async ({ page }) => {
   // Provider secrets moved to credential instances (U3): the global page
   // never renders a write-only secret input.
-  await expect(page.getByRole("tab").first()).toBeVisible()
+  await expect(page.getByRole("table").first()).toBeVisible()
   await expect(page.locator('input[type="password"]')).toHaveCount(0)
 })
 

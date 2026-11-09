@@ -30,7 +30,8 @@ When("I follow the {string} sidebar link", async ({ page }, label: string) => {
 })
 
 async function followSidebarLink(page: import("@playwright/test").Page, label: string) {
-  let link = page.getByRole("link", { name: label, exact: true })
+  const primaryNavigation = page.getByRole("navigation", { name: "Primary", exact: true })
+  let link = primaryNavigation.getByRole("link", { name: label, exact: true })
   const openNavigation = page.getByRole("button", { name: "Open navigation", exact: true })
   // Permission-gated links appear once system access has loaded (U1), so wait
   // for the desktop link or the mobile drawer trigger before choosing a path.
