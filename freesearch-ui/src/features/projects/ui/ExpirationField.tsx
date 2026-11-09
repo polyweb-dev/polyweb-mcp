@@ -1,5 +1,5 @@
 import { SegmentedControl } from "@/shared/ui/SegmentedControl"
-import { TextField } from "@/shared/ui/TextField"
+import { DateField } from "@/shared/ui/DateField"
 import { todayInputValue, type ExpiryChoice } from "../model/expiryChoice"
 
 const NEVER_LABEL = "No expiration"
@@ -54,10 +54,9 @@ export function ExpirationField({
         onChange={(label) => onChoiceChange(choices.find((value) => labels[value] === label) ?? "default")}
       />
       {choice === "custom" ? (
-        <TextField
+        <DateField
           id={`${idPrefix}-expiration-date`}
           label="Expiration date"
-          type="text"
           placeholder={todayInputValue()}
           value={customDate}
           onChange={onCustomDateChange}

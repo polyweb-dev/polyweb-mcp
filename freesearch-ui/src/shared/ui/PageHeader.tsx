@@ -29,7 +29,7 @@ export function PageHeader({ title, description, meta, actions }: PageHeaderProp
           </p>
         )}
       </div>
-      {actions !== undefined && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      {actions !== undefined && <div className="flex shrink-0 items-center gap-2 [&_[data-slot=button]]:h-7">{actions}</div>}
     </div>
   )
 }

@@ -46,8 +46,10 @@ describe("toPlaygroundResultView", () => {
     const view = toPlaygroundResultView(playgroundResult({
       snippet: "| Description | **English:** astronomy |\n| :--- | ---: |\n| Notes | A \\| B |",
     }))
-    expect(view.snippet).toBe("Description English: astronomy\n\nNotes A | B")
+    expect(view.snippet).toBe("English: astronomy\n\nNotes A | B")
     expect(toPlaygroundResultView(playgroundResult({ snippet: "Use cat | head" })).snippet).toBe("Use cat | head")
+    expect(toPlaygroundResultView(playgroundResult({ snippet: "Description English: astronomy" })).snippet).toBe("English: astronomy")
+    expect(toPlaygroundResultView(playgroundResult({ snippet: "Description of astronomy" })).snippet).toBe("Description of astronomy")
   })
 
   it("omits the published date when the execution recorded none", () => {
@@ -65,7 +67,7 @@ describe("toPlaygroundResultView", () => {
       { id: "tavily", name: "Tavily" },
       { id: "exa", name: "Exa" },
     ])
-    expect(view.attributionLabel).toBe("Attributed")
+    expect(view.attributionLabel).toBe("Provider")
   })
 
   it("keeps the mapped provider for a single-source hit", () => {

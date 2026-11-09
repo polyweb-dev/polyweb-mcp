@@ -420,8 +420,8 @@ describe("ProviderLimitsCards", () => {
     expect(screen.queryByRole("button", { name: "Refresh limits for Exa" })).toBeNull()
     await user.click(screen.getByRole("button", { name: "Actions for Exa" }))
     expect(await screen.findByRole("button", { name: "Set balance" })).not.toBeNull()
-    expect(screen.getByRole("button", { name: "Budget limit" })).not.toBeNull()
-    expect(screen.getByRole("button", { name: "Balance history" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Set budget limit" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "View balance history" })).not.toBeNull()
     await user.keyboard("{Escape}")
 
     await user.click(screen.getByTestId("credit-info-exa"))
@@ -449,7 +449,7 @@ describe("ProviderLimitsCards", () => {
 
     await user.click(screen.getByTestId("manual-quota-cancel"))
     await user.click(screen.getByRole("button", { name: "Actions for Exa" }))
-    await user.click(await screen.findByRole("button", { name: "Budget limit" }))
+    await user.click(await screen.findByRole("button", { name: "Set budget limit" }))
     expect(screen.getByLabelText("Search budget (USD)")).not.toBeNull()
     expect(screen.getByLabelText("Fetch budget (USD)")).not.toBeNull()
   })
@@ -628,8 +628,8 @@ describe("ProviderLimitsCards rate-tier slot (FIX)", () => {
 
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Actions for Tavily" }))
-    await user.click(await screen.findByRole("button", { name: "Balance history" }))
-    expect(await screen.findByRole("dialog", { name: "Balance history for Tavily" })).not.toBeNull()
+    await user.click(await screen.findByRole("button", { name: "View balance history" }))
+    expect(await screen.findByRole("dialog", { name: "Tavily balance history" })).not.toBeNull()
     expect(stub.requestsTo(/limits\/history/).some(({ url }) => url.includes("auth_mode=keyless"))).toBe(true)
     vi.unstubAllGlobals()
   })
@@ -737,7 +737,7 @@ describe("Quotas review r4b", () => {
     const first = (await screen.findByText("First key")).closest("tr") as HTMLElement
     const second = screen.getByText("Second key").closest("tr") as HTMLElement
     expect(within(first).getByText("4,500 credits left")).toBeInTheDocument()
-    expect(within(second).getByText("Not refreshed yet")).toBeInTheDocument()
+    expect(within(second).queryByText("Not refreshed yet")).toBeNull()
     expect(within(second).queryByText(/\$4\.50/)).toBeNull()
     expect(within(first).getByRole("button", { name: "Refresh Brave balances" })).toBeInTheDocument()
     vi.unstubAllGlobals()
@@ -787,7 +787,7 @@ describe("Quotas review r4b", () => {
     expect(screen.queryByText("$0.005")).toBeNull()
     await userEvent.keyboard("{Escape}")
     expect(screen.queryByRole("button", { name: "Actions for Keenable" })).toBeNull()
-    expect(screen.queryByRole("menuitem", { name: "Budget limit" })).toBeNull()
+    expect(screen.queryByRole("menuitem", { name: "Set budget limit" })).toBeNull()
     expect(screen.getByText("Free")).toBeInTheDocument()
   })
   it("puts unreported providers in a single table with three columns", () => {
@@ -821,10 +821,11 @@ it("keeps disconnected OAuth controls on their key row and fixes the balance dia
   expect(within(oauth).queryByRole("button", { name: "Actions for Parallel" })).toBeNull()
   await userEvent.click(within(first).getByRole("button", { name: "Actions for Parallel" }))
   await userEvent.click(await screen.findByRole("button", { name: "Set balance" }))
-  const dialog = await screen.findByRole("dialog", { name: "Balance for Parallel" })
+  const dialog = await screen.findByRole("dialog", { name: "Parallel balance" })
   expect(within(dialog).queryByRole("combobox", { name: "Provider" })).toBeNull()
   expect(within(dialog).getAllByText("$")).toHaveLength(2)
-  expect(within(dialog).getAllByText("Enter a date, for example Nov 1, 2026")).toHaveLength(1)
+  expect(within(dialog).getByRole("button", { name: "Choose billing start" })).toBeInTheDocument()
+  expect(within(dialog).getByRole("button", { name: "Choose billing end" })).toBeInTheDocument()
   expect(within(dialog).getByRole("button", { name: "Save balance" })).toBeEnabled()
   vi.unstubAllGlobals()
 })

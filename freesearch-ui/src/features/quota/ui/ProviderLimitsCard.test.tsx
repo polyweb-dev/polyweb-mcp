@@ -378,7 +378,7 @@ describe("ProviderLimitsCard Brave", () => {
     renderBraveCard()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Actions for Brave" }))
-    await user.click(await screen.findByRole("button", { name: "Budget limit" }))
+    await user.click(await screen.findByRole("button", { name: "Set budget limit" }))
     expect(await screen.findByText("Search budget (USD)")).not.toBeNull()
     expect(screen.queryByLabelText(/Fetch budget/i)).toBeNull()
     expect(screen.queryByText(/n\/a for this provider/)).toBeNull()
@@ -390,8 +390,8 @@ describe("ProviderLimitsCard Brave", () => {
     renderBraveCard()
     const user = userEvent.setup()
     await user.click(screen.getByRole("button", { name: "Actions for Brave" }))
-    await user.click(await screen.findByRole("button", { name: "Balance history" }))
-    expect(await screen.findByRole("dialog", { name: "Balance history for Brave" })).not.toBeNull()
+    await user.click(await screen.findByRole("button", { name: "View balance history" }))
+    expect(await screen.findByRole("dialog", { name: "Brave balance history" })).not.toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -457,8 +457,8 @@ describe("ProviderLimitsCard Brave", () => {
     const user = userEvent.setup()
     await user.click(menu)
     expect(await screen.findByRole("button", { name: "Set balance" })).not.toBeNull()
-    expect(screen.getByRole("button", { name: "Budget limit" })).not.toBeNull()
-    expect(screen.getByRole("button", { name: "Balance history" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Set budget limit" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "View balance history" })).not.toBeNull()
     expect(heading.parentElement?.contains(info)).toBe(true)
     const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
@@ -1103,8 +1103,8 @@ describe("ProviderLimitsCard Keenable", () => {
     expect(screen.getByText("Free", { exact: true })).not.toBeNull()
     expect(screen.queryByText("Free - unmetered")).toBeNull()
     expect(screen.queryByRole("progressbar", { name: "Keenable balance remaining" })).toBeNull()
-    expect(screen.getByText("Search and fetch")).not.toBeNull()
-    expect(screen.getByText("990 of 1,000 left this hour")).not.toBeNull()
+    expect(screen.getByText("Search, Fetch")).not.toBeNull()
+    expect(screen.getByText("990 of 1,000 requests left this hour")).not.toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -1133,8 +1133,8 @@ describe("ProviderLimitsCard Keenable", () => {
     )
     // One shared row covers both operations: the duplicate bucket and window
     // collapses to the first entry, and decimal counts floor to whole calls.
-    expect(screen.getByText("Search and fetch")).not.toBeNull()
-    expect(screen.getByText("990 of 1,000 left this hour")).not.toBeNull()
+    expect(screen.getByText("Search, Fetch")).not.toBeNull()
+    expect(screen.getByText("990 of 1,000 requests left this hour")).not.toBeNull()
     expect(screen.queryByText("990.00000000")).toBeNull()
     const bar = screen.getByRole("progressbar", {
       name: "Keenable search and fetch limits remaining",
@@ -1194,7 +1194,7 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("Search and fetch")).not.toBeNull()
+    expect(screen.getByText("Search, Fetch")).not.toBeNull()
     expect(screen.queryByText("authoritative")).toBeNull()
     vi.unstubAllGlobals()
   })
@@ -1211,8 +1211,8 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("Search and fetch")).not.toBeNull()
-    expect(screen.getByText("500 of 1,000 left this hour")).not.toBeNull()
+    expect(screen.getByText("Search, Fetch")).not.toBeNull()
+    expect(screen.getByText("500 of 1,000 requests left this hour")).not.toBeNull()
     expect(screen.queryByText("authoritative")).toBeNull()
     vi.unstubAllGlobals()
   })
@@ -2185,7 +2185,7 @@ describe("ProviderLimitsCard You.com", () => {
     expect(
       screen.getByRole("progressbar", { name: "You.com fetch daily URLs remaining" }).getAttribute("aria-valuenow"),
     ).toBe("90")
-    expect(screen.queryByText("Search and fetch")).toBeNull()
+    expect(screen.queryByText("Search, Fetch")).toBeNull()
     // Keyed rail keeps Refresh Limits visible.
     expect(screen.queryByRole("button", { name: "Refresh limits for You.com" })).not.toBeNull()
     // Distinct per-operation call costs in the details popover, with no Free strike.

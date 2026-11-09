@@ -204,7 +204,7 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
       isOpen={open}
       onClose={onClose}
       maxWidth="md"
-      title={<ProviderDialogTitle providerId={target.id} providerName={target.name} action="Balance" />}
+      title={<ProviderDialogTitle providerId={target.id} title={`${target.name} balance`} />}
       subtitle={BALANCE_ENTRY_NOTE}
     >
       <ManualEntryForm

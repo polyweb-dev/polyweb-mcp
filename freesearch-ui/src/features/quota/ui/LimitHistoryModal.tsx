@@ -1,7 +1,6 @@
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
 import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
-import { HISTORY_ACTION } from "../model/quotaLabels"
 import { LimitHistory, type LimitHistoryProps } from "./LimitHistory"
 
 export type LimitHistoryModalProps = LimitHistoryProps & {
@@ -19,7 +18,7 @@ export function LimitHistoryModal(props: LimitHistoryModalProps): ReactNode {
     <Modal
       isOpen={open}
       onClose={onClose}
-      title={<ProviderDialogTitle providerId={providerId} providerName={providerName} action={HISTORY_ACTION} />}
+      title={<ProviderDialogTitle providerId={providerId} title={`${providerName} balance history`} />}
       subtitle={SUBTITLE}
       maxWidth={props.events.length === 0 ? "md" : "2xl"}
     >

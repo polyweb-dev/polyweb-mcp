@@ -344,7 +344,7 @@ describe("P1F-2: registry controls preserved in the merged table", () => {
     expect(cellFor("Keenable", "Cost per call")).toHaveTextContent(/^Free$/)
     expect(cellFor("Firecrawl", "Cost per call")).toHaveTextContent("Search: $0.0076")
     expect(cellFor("Firecrawl", "Cost per call")).toHaveTextContent("Fetch: $0.0038")
-    expect(cellFor("Brave Search", "Cost per call")).toHaveTextContent("Fetch: Not supported")
+    expect(cellFor("Brave Search", "Cost per call")).not.toHaveTextContent("Fetch:")
     expect(cellFor("Tavily", "Cost per call")).toHaveTextContent("Search: —")
     expect(within(mergedTable()).queryByRole("columnheader", { name: "Priority" })).not.toBeInTheDocument()
     expect(within(mergedTable()).queryByRole("button", { name: /priority (up|down)/i })).not.toBeInTheDocument()

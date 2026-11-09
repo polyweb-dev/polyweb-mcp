@@ -101,7 +101,7 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
   const title = TITLES[mode]
   const action = ACTIONS[mode]
   return (
-    <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(provider).id} providerName={providerTypeName(provider)} action={title} />} maxWidth="lg">
+    <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(provider).id} title={title} />} maxWidth="lg">
       <form noValidate onSubmit={(event) => void save(event)} className="space-y-4">
         {mode === "rotate" && <p>Enter the new API key. Each pool that uses this key switches to it at once</p>}
         {mode === "add" && (

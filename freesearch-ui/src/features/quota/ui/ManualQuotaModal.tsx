@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
 import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
-import { SPEND_CAP, SPEND_CAP_NOTE } from "../model/quotaLabels"
+import { SPEND_CAP_NOTE } from "../model/quotaLabels"
 import { ManualEntryModal, type ManualEntryVariant } from "./ManualEntryModal"
 
 export type { ManualQuotaDefaults } from "../model/useQuotaForm"
@@ -38,7 +38,7 @@ export function ManualQuotaModal(props: ManualQuotaModalProps): ReactNode {
         isOpen={props.open}
         onClose={props.onClose}
         maxWidth="md"
-        title={<ProviderDialogTitle providerId={props.providerId} providerName={props.providerName} action={SPEND_CAP} />}
+        title={<ProviderDialogTitle providerId={props.providerId} title={`${props.providerName} budget`} />}
         subtitle={SPEND_CAP_NOTE}
       >
         {props.children}

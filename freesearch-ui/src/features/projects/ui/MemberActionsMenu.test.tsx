@@ -78,7 +78,7 @@ describe("MemberActionsMenu", () => {
   it("does not offer a role change or suspension to the caller", () => {
     renderMenu()
     expect(screen.queryByRole("button", { name: "Make developer" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Suspend" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Suspend member" })).toBeNull()
   })
 
   it("locks demotion and removal for the last admin", async () => {
@@ -95,7 +95,7 @@ describe("MemberActionsMenu", () => {
     const onTransfer = vi.fn()
     renderMenu({ isSelf: false, ownerId: "self", callerIsProviderOwner: true, onTransfer })
     expect(screen.getByRole("button", { name: "Make developer" })).toBeDisabled()
-    expect(screen.getByRole("button", { name: "Suspend" })).toHaveAttribute("title", "Transfer provider ownership first.")
+    expect(screen.getByRole("button", { name: "Suspend member" })).toHaveAttribute("title", "Transfer provider ownership first.")
     expect(screen.getByRole("button", { name: "Remove from project" })).toBeDisabled()
     await userEvent.click(screen.getByRole("button", { name: "Transfer provider ownership" }))
     expect(onTransfer).toHaveBeenCalledExactlyOnceWith(MEMBER)

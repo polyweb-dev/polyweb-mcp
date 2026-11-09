@@ -1,5 +1,5 @@
-import { usageUnitsText } from "@/domains/usage"
 import type { SearchResponse } from "@/domains/execution"
+import { providerCallCost } from "@/domains/providers"
 
 /** One telemetry item of the results bar: a label and its value with a unit. */
 interface UsageTelemetry {
@@ -8,21 +8,13 @@ interface UsageTelemetry {
 }
 
 /**
- * What one search used. With a recorded unit kind the value carries its unit
- * ("0.007 USD", "3 requests", "Free"); without one, Tavily's native usage
- * reads as Credits and every other provider keeps the generic Units label.
+ * Show only recorded dollar costs; native units cannot be converted to USD.
  */
 export function usageTelemetry(search: SearchResponse): UsageTelemetry {
   const unitKind = search.costUnitKind
-  if (unitKind === "FREE") return { label: "Usage", value: "Free" }
-  if (unitKind !== undefined && unitKind !== null) {
-    return {
-      label: "Usage",
-      value: usageUnitsText(search.costEstimateCredits, unitKind, search.costDisplayUnit ?? null),
-    }
+  if (unitKind === "USD" && search.costEstimateCredits === 0) {
+    return { label: "Cost", value: "$0.0000" }
   }
-  return {
-    label: search.selectedProviderId === "tavily" ? "Credits" : "Units",
-    value: String(search.costEstimateCredits),
-  }
+  const cost = unitKind === "FREE" ? 0 : unitKind === "USD" ? search.costEstimateCredits : null
+  return { label: "Cost", value: providerCallCost({ callCostUsd: { search: cost } }, "search") }
 }

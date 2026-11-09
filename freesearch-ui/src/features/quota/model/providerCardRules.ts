@@ -33,7 +33,7 @@ const DEFAULT_RULE: ProviderCardRule = {
 const RULES: Readonly<Record<string, Partial<ProviderCardRule>>> = {
   keenable: {
     sharedRateBars: true,
-    sharedRateTitle: "Search and fetch",
+    sharedRateTitle: "Search, Fetch",
     wholeRequests: true,
     keylessHasNoUsage: true,
   },

@@ -14,7 +14,7 @@ export function ProvidersWithoutCapacity({ providers, isOwner, onAdd }: {
     <div className="fs-panel overflow-x-auto">
       <table aria-label="Without capacity" className="fs-table">
         <tbody>
-          {[...providers].sort((a, b) => a.name.localeCompare(b.name)).map((provider) => <tr key={provider.providerType} className="h-[60px]">
+          {[...providers].sort((a, b) => a.name.localeCompare(b.name)).map((provider) => <tr key={provider.providerType} className="h-[46px]">
             <td><ProviderBadge providerId={providerIdentity(provider.providerType).id} name={provider.name} logoClassName="size-4" /></td>
             <td className="text-right">{isOwner
               ? <Button variant="outline" size="sm" aria-label={`Add capacity for ${provider.name}`} onClick={() => onAdd(provider.providerType)}>Add capacity</Button>

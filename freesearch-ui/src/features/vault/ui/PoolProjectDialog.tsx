@@ -41,7 +41,7 @@ export function PoolProjectDialog({ mode, item, pool, projects, onClose, onSaved
       setPending(false)
     }
   }
-  return <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(item.provider_type).id} providerName={providerTypeName(item.provider_type)} action={mode === "copy" ? "Copy pool" : "Assign pool"} />} maxWidth="md">
+  return <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(item.provider_type).id} title={mode === "copy" ? "Copy pool" : "Assign pool"} />} maxWidth="md">
     <div className="space-y-4">
       <Field id="pool-target" label={mode === "copy" ? "Copy to project" : "Project"} hint="Only projects where you are the provider owner">
         <Select id="pool-target" value={projectId} onValueChange={(value) => { setProjectId(value); setLabel("") }}

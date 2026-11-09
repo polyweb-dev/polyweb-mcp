@@ -73,7 +73,7 @@ export function ProviderRateBars({
           ? providerName + " " + bar.operation + " " + WINDOW_TEXT[windowKey] + " " + unitText + " remaining"
           : providerName + " search and fetch limits remaining"
         const labelText = sharedTitle ?? (bar.operation === "search" ? "Search" : "Fetch")
-        const countText = bar.percentRemaining === null ? "Limit not reported" : text + (sharedTitle ? "" : " " + unitText) + " left " + WINDOW_NOUN[windowKey]
+        const countText = bar.percentRemaining === null ? "Limit not reported" : text + " " + unitText + " left " + WINDOW_NOUN[windowKey]
         return (
           <div key={bar.bucketId + "-" + bar.window + "-" + bar.operation} className="space-y-1">
             <div className="tnum text-[12px] text-[var(--text)]">

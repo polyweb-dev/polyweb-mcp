@@ -148,7 +148,7 @@ export function ProviderInfoPopover({
             >
               Quota details
             </PopoverTitle>
-            {info.creditNote !== null && (
+            {info.creditNote !== null && info.creditNote.toLowerCase() !== "free" && (
               <span className={TITLE + " min-w-0 text-right"} style={{ color: "var(--muted)" }}>
                 {info.creditNote}
               </span>

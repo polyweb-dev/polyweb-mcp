@@ -48,7 +48,6 @@ from freesearch.services.provider_bindings import provider_capability
 from freesearch.services.users import AuthService
 
 DEV_DATABASE = "freesearch.dev.db"
-PROVIDER_NAMES = {"brave": "Brave Search", "exa": "Exa", "you": "You.com"}
 # Deliberately public fixture password, for this disposable local database only.
 DEV_PASSWORD = "FreeSearchDev123!"
 USER_EMAILS = (
@@ -165,7 +164,6 @@ async def seed_providers(
     store = EncryptedDbSecretStore(repository, load_secret_codec(settings))
     project, _ = projects[0]
     for provider, secret in keys.items():
-        display_name = PROVIDER_NAMES.get(provider.value, provider.value.capitalize())
         operations = provider_capability(provider.value)
         async with repository.session() as session:
             credential = await CredentialRepository(session).insert_credential(
@@ -190,7 +188,7 @@ async def seed_providers(
                 created_by=users[0].id,
                 values=KeyPoolValues.model_validate(
                     {
-                        "label": f"Alpha - {display_name}",
+                        "label": project.name,
                         "rate_limit": 60,
                         "budget_limit": 20_000_000,
                         "operations": operations,

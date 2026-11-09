@@ -2,6 +2,7 @@ import { ChevronRight } from "lucide-react"
 import { providerIdentity, providerTypeName } from "@/domains/providers"
 import type { KeyPool, VaultProject } from "@/domains/vault"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
+import { OAuthStatusTag } from "@/shared/ui/OAuthStatusTag"
 import { RowActionsMenu } from "@/shared/ui/RowActionsMenu"
 import { Tag } from "@/shared/ui/Tag"
 import { VaultPoolsTable } from "./VaultPoolsTable"
@@ -21,7 +22,7 @@ export function KeyRows({ row, open, projects, actions, onToggle, onPool }: {
   return <>
     <tr>
       <td><div className="flex items-center gap-2"><button type="button" aria-label={`Pools of ${item.label}`} aria-expanded={open} onClick={onToggle}><ChevronRight className={`size-4 ${open ? "rotate-90" : ""}`} /></button><ProviderBadge providerId={providerIdentity(item.provider_type).id} name={providerTypeName(item.provider_type)} /></div></td>
-      <td>{item.label} {item.auth_mode === "oauth" && <><Tag>OAuth</Tag> <Tag tone={row.oauth === "connected" ? "success" : "warning"}>{row.oauth ? row.oauth.replace(/_/g, " ").replace(/^./, (letter) => letter.toUpperCase()) : "Status unavailable"}</Tag></>} {item.status !== "active" && <Tag tone="warning">Needs attention</Tag>}</td>
+      <td>{item.label} {item.auth_mode === "oauth" && <><Tag>OAuth</Tag> <OAuthStatusTag status={row.oauth} /></>} {item.status !== "active" && <Tag tone="warning">Needs attention</Tag>}</td>
       <td>{row.pools.length} {row.pools.length === 1 ? "pool" : "pools"}</td>
       <td>{projectNames.length ? projectNames.join(", ") : <span className="text-[var(--muted)]">—</span>}</td>
       <td className="w-16 !text-right"><RowActionsMenu label={`Actions for ${item.label}`} actions={actions} /></td>

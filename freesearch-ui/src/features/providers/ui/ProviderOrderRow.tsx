@@ -74,7 +74,7 @@ export function ProviderOrderRow(props: ProviderOrderRowProps) {
   const enabled = operationEnabled(props)
   return (
     <tr data-provider={item.provider} onDragOver={props.ranked ? props.onDragOver : undefined} onDrop={props.ranked ? props.onDrop : undefined}
-      className={`h-[60px] ${dragging ? "relative bg-[var(--raised)] shadow-lg" : target ? "shadow-[inset_0_2px_0_var(--signal)]" : ""}`}>
+      className={`h-[46px] ${dragging ? "relative bg-[var(--raised)] shadow-lg" : target ? "shadow-[inset_0_2px_0_var(--signal)]" : ""}`}>
       <td>{props.ranked ? <ReorderHandle label={item.name} rank={index + 1} count={count} canEdit={canConfigure}
         pending={pending} onMove={props.onMove} onDragStart={props.onDragStart} onDragEnd={props.onDragEnd} />
         : <span aria-label="Not in dispatch order" className="text-[var(--muted)]">—</span>}</td>

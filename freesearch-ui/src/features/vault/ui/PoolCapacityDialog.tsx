@@ -16,6 +16,7 @@ import { Select } from "@/shared/ui/select"
 import { TextField } from "@/shared/ui/TextField"
 import { Switch } from "@/shared/ui/Switch"
 import { useFreeProvider } from "../model/useFreeProvider"
+import { poolDialogTitle } from "../model/poolDialogTitle"
 import { PoolBudgetFields } from "./PoolBudgetFields"
 
 const operations: readonly PoolOperation[] = ["search", "fetch"]
@@ -64,9 +65,13 @@ function eligibleProjects(projects: readonly VaultProject[], provider: string, f
   return fixedProject ? [fixedProject] : projects.filter((project) => project.available_providers.includes(provider))
 }
 
-function dialogAction(pool: KeyPool | undefined, project?: VaultProject) {
-  if (pool) return `Edit pool ${pool.label}`
-  return project ? `Add capacity to ${project.name}` : "Create pool"
+function poolProject(pool: KeyPool | undefined, projects: readonly VaultProject[], fixedProject?: VaultProject) {
+  const name = fixedProject?.name ?? projects.find((entry) => entry.id === pool?.project_id)?.name ?? "—"
+  return (pool || fixedProject) && <div><p className="fs-label">Project</p><p>{name}</p></div>
+}
+
+function titleMode(pool: KeyPool | undefined, fixedProject?: VaultProject) {
+  return pool ? "edit" : fixedProject ? "capacity" : "create"
 }
 
 function renderConfirmation({ confirm, item, projects, pool, selected, pending, close, save }: {
@@ -197,13 +202,14 @@ export function PoolCapacityDialog({ item, pool, projects, project: fixedProject
 
   return (
     <>
-      <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(item.provider_type).id} providerName={providerTypeName(item.provider_type)} action={dialogAction(pool, fixedProject)} />} maxWidth="lg">
+      <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(item.provider_type).id} title={poolDialogTitle(titleMode(pool, fixedProject), providerTypeName(item.provider_type))} />} maxWidth="lg">
         <form onSubmit={submit} className="space-y-4">
-          {!pool && fixedProject && <div><p className="fs-label">Project</p><p>{fixedProject.name}</p></div>}
+          {poolProject(pool, projects, fixedProject)}
           {!pool && !fixedProject && <Field id="pool-project" label="Project" hint="Only projects where you are the provider owner">
             <Select id="pool-project" value={projectId} onValueChange={(value) => { setProjectId(value); setLabel("") }}
               options={eligible.map((entry) => ({ value: entry.id, label: entry.name }))} placeholder="No available projects" />
           </Field>}
+          <div><p className="fs-label">Key</p><p>{item.label}</p></div>
           {!pool && eligible.length === 0 && <p>You are not the provider owner of a project without this provider</p>}
           <TextField id="pool-label" label="Pool name" type="text" value={name} onChange={setLabel} />
           {renderOperations(item, selected, setSelected)}

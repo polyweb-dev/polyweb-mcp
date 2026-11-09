@@ -3,6 +3,7 @@ import { useMemo, useState } from "react"
 import type { ReactNode } from "react"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { Tag } from "@/shared/ui/Tag"
+import { OAuthStatusTag } from "@/shared/ui/OAuthStatusTag"
 import { formatDateTime, formatRelativeTime } from "@/shared/lib/formatTime"
 import type { KeyBalance } from "../model/keyBalances"
 import { nativeLeftText } from "../model/numberText"
@@ -39,11 +40,11 @@ export interface ProviderUsageRowProps {
   renderOAuthActions?: (args: OAuthSlotArgs) => ReactNode
 }
 
-function keyBalanceText(key: KeyBalance | null, fallback: string | null, refreshable: boolean): string {
+function keyBalanceText(key: KeyBalance | null, fallback: string | null): string {
   const amount = key?.balance?.remaining == null ? null : nativeLeftText(key.balance.remaining, key.balance.unit)
   if (amount !== null) return amount
   if (fallback !== null) return fallback
-  return key && refreshable && !key.balance?.observedAt ? "Not refreshed yet" : "—"
+  return "—"
 }
 
 function keyRefreshTime(key: KeyBalance | null, now: number): ReactNode {
@@ -60,16 +61,16 @@ interface TableRowsInput {
   refresh: ReactNode
   identity: ReactNode
   actions: ReactNode
+  menu: ReactNode
   oauthActions: ReactNode
   fallback: string | null
-  refreshable: boolean
   now: number
 }
 
 function keyOAuthActions(key: KeyBalance | null, actions: ReactNode, status: ReactNode): ReactNode {
   if (key === null) return status == null ? actions : null
   if (key.authMode !== "oauth" || key.oauthConnected !== false) return null
-  return <><Tag tone="neutral">Disconnected</Tag>{actions}</>
+  return <><OAuthStatusTag status="disconnected" />{actions}</>
 }
 
 function keyTableRows(input: TableRowsInput): ReactNode {
@@ -79,13 +80,16 @@ function keyTableRows(input: TableRowsInput): ReactNode {
       {index === 0 && <td rowSpan={rows.length} className="fs-cell-strong align-middle">{input.identity}</td>}
       <td className="align-middle">{key?.label ?? input.keyStatus ?? "—"}</td>
       <td className="align-middle">
-        {keyBalanceText(key, input.keys.length <= 1 ? input.fallback : null, input.refreshable)}
+        {keyBalanceText(key, input.keys.length <= 1 ? input.fallback : null)}
       </td>
       <td className="align-middle text-[var(--muted)]">{keyRefreshTime(key, input.now)}</td>
       <td className="fs-cell-actions min-w-80 align-middle">
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {index === 0 && <>{input.refresh}{input.actions}{input.keys.length > 0 && input.keyStatus}</>}
-          {keyOAuthActions(key, input.oauthActions, input.keyStatus)}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {index === 0 && <>{input.refresh}{input.actions}{input.keys.length > 0 && input.keyStatus}</>}
+            {keyOAuthActions(key, input.oauthActions, input.keyStatus)}
+          </div>
+          <div className="w-7">{index === 0 && input.menu}</div>
         </div>
       </td>
     </tr>
@@ -136,19 +140,17 @@ export function ProviderUsageRow(props: ProviderUsageRowProps): ReactNode {
       {...(view.nativeDisplay === null ? {} : { nativeDisplay: view.nativeDisplay })} />
     {free && <Tag tone="neutral">Free</Tag>}
   </div>{modals}</>
-  const actions = <>
-    <ProviderCardActions providerName={providerName} syncing={controller.syncing}
+  const actions = <ProviderCardActions providerName={providerName} syncing={controller.syncing}
       updatedAt={controller.updatedAt} onSync={() => void controller.syncNow()}
       refreshSkipped={hideRowRefresh(view, controller, props.keyBalances != null)}
       syncNote={note === status ? null : note} />
-    <ProviderCardMenu providerName={providerName} manualEligible={manualEligible && !free}
+  const menu = <ProviderCardMenu providerName={providerName} manualEligible={manualEligible && !free} alwaysMenu
       budgetAllowed={!free} historyAllowed={!(free && view.auth.rate_progress.some((entry) => entry.source === "local_attempts"))}
       onOpenModal={setModal} />
-  </>
   const renderTable = (keys: KeyBalance[], keyStatus: ReactNode, refresh: ReactNode) => {
     if (view.keyless && keys.length === 0 && keyStatus == null) return null
     const fallback = view.keyless || (keys.length === 0 && props.keyBalances != null) ? null : status
-    return keyTableRows({ keys, keyStatus, refresh, identity, actions, oauthActions, fallback, refreshable: view.refreshable, now })
+    return keyTableRows({ keys, keyStatus, refresh, identity, actions, menu, oauthActions, fallback, now })
   }
   return props.keyBalances == null ? renderTable([], null, null) : (
     <KeyBalancesLayoutScope.Provider value={{ compact: true, actionsTarget: null, renderTable }}>

@@ -98,7 +98,7 @@ async function chooseRowAction(
   action: "Rotate" | "Revoke"
 ) {
   await user.click(await screen.findByRole("button", { name: `Actions for ${keyLabel}` }))
-  await user.click(screen.getByRole("button", { name: action }))
+  await user.click(screen.getByRole("button", { name: `${action} key` }))
 }
 
 beforeEach(() => {
@@ -371,7 +371,7 @@ describe("ProjectApiKeysPage archived project", () => {
 
     const trigger = await screen.findByRole("button", { name: "Actions for CI runner" })
     await user.click(trigger)
-    expect(screen.queryByRole("button", { name: "Rotate" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Revoke" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Rotate key" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Revoke key" })).toBeInTheDocument()
   })
 })

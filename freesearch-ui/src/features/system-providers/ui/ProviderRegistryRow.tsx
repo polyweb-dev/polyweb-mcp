@@ -100,8 +100,8 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
     <TableCell className={CELL}>
       <div className="tabular-nums text-[12px] text-[var(--muted)]">
         {callCost(provider, "search") === "Free" && callCost(provider, "fetch") === "Free" ? <div>Free</div> : <>
-          <div>Search: {callCost(provider, "search")}</div>
-          <div>Fetch: {callCost(provider, "fetch")}</div>
+          {(provider.supportMask & SEARCH_BIT) !== 0 && <div>Search: {callCost(provider, "search")}</div>}
+          {(provider.supportMask & FETCH_BIT) !== 0 && <div>Fetch: {callCost(provider, "fetch")}</div>}
           {provider.capabilities.includes("keyless_tier") && <div>Free without a key</div>}
         </>}
       </div>

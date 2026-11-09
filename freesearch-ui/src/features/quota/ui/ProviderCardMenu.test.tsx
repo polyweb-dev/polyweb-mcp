@@ -20,14 +20,14 @@ describe("ProviderCardMenu", () => {
       .getAllByRole("button")
       .map((button) => button.textContent)
       .filter((label) => label !== "")
-    expect(labels).toEqual(["Set balance", "Budget limit", "Balance history"])
+    expect(labels).toEqual(["Set balance", "Set budget limit", "View balance history"])
   })
 
   it("leaves Set balance out when the provider is not eligible", async () => {
     await openMenu(false)
-    expect(await screen.findByRole("button", { name: "Budget limit" })).not.toBeNull()
+    expect(await screen.findByRole("button", { name: "Set budget limit" })).not.toBeNull()
     expect(screen.queryByRole("button", { name: "Set balance" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Balance history" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "View balance history" })).not.toBeNull()
   })
 
   it("opens the matching dialog for each item", async () => {
@@ -35,10 +35,10 @@ describe("ProviderCardMenu", () => {
     await user.click(await screen.findByRole("button", { name: "Set balance" }))
     expect(onOpenModal).toHaveBeenLastCalledWith("manual")
     await user.click(screen.getByRole("button", { name: "Actions for Brave" }))
-    await user.click(await screen.findByRole("button", { name: "Budget limit" }))
+    await user.click(await screen.findByRole("button", { name: "Set budget limit" }))
     expect(onOpenModal).toHaveBeenLastCalledWith("grant")
     await user.click(screen.getByRole("button", { name: "Actions for Brave" }))
-    await user.click(await screen.findByRole("button", { name: "Balance history" }))
+    await user.click(await screen.findByRole("button", { name: "View balance history" }))
     expect(onOpenModal).toHaveBeenLastCalledWith("history")
   })
 
@@ -46,11 +46,18 @@ describe("ProviderCardMenu", () => {
     const onOpenModal = vi.fn()
     render(<ProviderCardMenu providerName="Keenable" manualEligible={false} budgetAllowed={false} onOpenModal={onOpenModal} />)
     expect(screen.queryByRole("button", { name: "Actions for Keenable" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Balance history" })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole("button", { name: "Balance history" }))
+    expect(screen.getByRole("button", { name: "View balance history" })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "View balance history" }))
     expect(onOpenModal).toHaveBeenCalledWith("history")
-    expect(screen.queryByRole("button", { name: "Budget limit" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Set budget limit" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Set balance" })).toBeNull()
+  })
+
+  it("keeps a single action in the menu when the row reserves a menu slot", async () => {
+    render(<ProviderCardMenu providerName="Keenable" manualEligible={false} budgetAllowed={false}
+      alwaysMenu onOpenModal={vi.fn()} />)
+    await userEvent.click(screen.getByRole("button", { name: "Actions for Keenable" }))
+    expect(screen.getByRole("button", { name: "View balance history" })).toBeInTheDocument()
   })
 
   it("omits history for a locally counted free provider", () => {

@@ -66,18 +66,18 @@ describe("ApiKeysTable", () => {
     const { unmount } = render(<ApiKeysTable keys={keys} controller={controllerStub()} archived={false} />)
 
     await user.click(screen.getByRole("button", { name: "Actions for Old" }))
-    expect(screen.queryByRole("button", { name: "Rotate" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Revoke" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Rotate key" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Revoke key" })).toBeInTheDocument()
     await user.keyboard("{Escape}")
 
     await user.click(screen.getByRole("button", { name: "Actions for New" }))
-    expect(screen.getByRole("button", { name: "Rotate" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Rotate key" })).toBeInTheDocument()
     await user.keyboard("{Escape}")
     unmount()
 
     render(<ApiKeysTable keys={keys} controller={controllerStub()} archived />)
     await user.click(screen.getByRole("button", { name: "Actions for New" }))
-    expect(screen.queryByRole("button", { name: "Rotate" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Revoke" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Rotate key" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Revoke key" })).toBeInTheDocument()
   })
 })

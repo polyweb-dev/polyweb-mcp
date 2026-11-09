@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { mapTraceDetail } from "@/domains/activity/model/mappers"
@@ -250,7 +250,7 @@ describe("TraceInspectionWorkspace", () => {
     expect(screen.queryByText(/fusion/i)).not.toBeInTheDocument()
   })
 
-  it("shows the complete recorded fetch document in its full-height pane", async () => {
+  it("shows the complete recorded fetch document in its full-height pane", () => {
     const content = "Stored document body. ".repeat(40)
     const detail = mapTraceDetail(errorTraceDetailFixture({
       output: {
@@ -273,10 +273,8 @@ describe("TraceInspectionWorkspace", () => {
 
     const article = screen.getByRole("article")
     expect(article).toHaveTextContent(content.trim())
-    await userEvent.click(within(article).getByRole("button", { name: "Raw" }))
     expect(article.querySelector("pre")?.textContent).toBe(content)
     expect(within(article).getByText(`${content.length.toLocaleString("en-US")} characters`)).toBeInTheDocument()
     expect(within(article).queryByRole("button", { name: /show full content/i })).not.toBeInTheDocument()
-    expect(vi.fn()).not.toHaveBeenCalled()
   })
 })

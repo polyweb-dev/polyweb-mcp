@@ -67,7 +67,7 @@ export function AddCapacityDialog({ item, provider, pool, projects, project, onC
       setPending(false)
     }
   }
-  return <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(provider).id} providerName={providerTypeName(provider)} action="Add key" />} maxWidth="lg">
+  return <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(provider).id} title={`Add ${providerTypeName(provider)} key`} />} maxWidth="lg">
     <form onSubmit={(event) => void addKey(event)} className="space-y-4">
       <p>{keyStepCopy(provider, projects)}</p>
       <KeyFormFields idPrefix="capacity-key" label={label} setLabel={setLabel} secret={secret} setSecret={setSecret}

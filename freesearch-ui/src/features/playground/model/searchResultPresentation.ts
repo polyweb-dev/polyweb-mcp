@@ -10,12 +10,14 @@ function plainSnippet(snippet: string): string {
     .replace(/^[ \t]*\|?[ \t:|-]*---[ \t:|-]*\|?[ \t]*$/gm, "")
     .replace(/^[ \t]*\|.*$/gm, (row) => row
       .replace(/^[ \t]*\|[ \t]*|[ \t]*\|[ \t]*$/g, "")
+      .replace(/^Description[ \t]*\|[ \t]*/i, "")
       .replace(/(?<!\\)[ \t]*\|[ \t]*/g, " "))
     .replace(/\\\|/g, "|")
     .replace(/!?\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|>\s*)/gm, "")
     .replace(/(\*\*|__|~~|`)(.*?)\1/g, "$2")
     .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1$2")
+    .replace(/^\s*Description\s+(?=English\s*:)/i, "")
 }
 
 /**
@@ -50,7 +52,7 @@ export function toPlaygroundResultView(result: SearchResult, showAttribution = t
     url: result.url,
     snippet: plainSnippet(result.snippet),
     providers: showAttribution ? contributorsOf(result) : [],
-    attributionLabel: "Attributed",
+    attributionLabel: "Provider",
     score: { label: "Score", value: result.relevanceScore, format: "percent" },
     ...(result.publishedDate !== undefined ? {
       publishedDate: formatDate(/^\d{4}-\d{2}-\d{2}$/.test(result.publishedDate) ? `${result.publishedDate}T00:00:00` : result.publishedDate),

@@ -6,7 +6,7 @@ export function orderStrategyOptions(_operation: OrderOperation, order: Operatio
     { value: "free_first", label: "Free first" },
     { value: "lowest_cost", label: "Lowest cost" },
     {
-      value: "custom", label: "Custom order", disabled: !order.hasSavedCustom && order.strategy !== "custom",
+      value: "custom", label: "Custom", disabled: !order.hasSavedCustom && order.strategy !== "custom",
     },
   ]
 }

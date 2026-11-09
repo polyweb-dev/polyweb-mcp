@@ -94,7 +94,7 @@ export function MemberActionsMenu({
   const suspend = () =>
     onConfirm({
       title: `Suspend ${member.email}`,
-      body: `${member.email} loses access to ${projectName} until reactivated.`,
+      body: `${member.email} loses access to ${projectName} until reactivated`,
       confirm: "Suspend",
       run: () => void controller.setStatus(member, "suspended"),
     })
@@ -102,7 +102,7 @@ export function MemberActionsMenu({
   const removeMember = () =>
     onConfirm({
       title: `Remove ${member.email}`,
-      body: `${member.email} loses all access to ${projectName}.`,
+      body: `${member.email} loses all access to ${projectName}`,
       confirm: "Remove from project",
       run: () => void controller.remove(member),
     })
@@ -127,8 +127,8 @@ export function MemberActionsMenu({
           <>
             {canAssign && <div aria-hidden="true" className={MENU_SEPARATOR_CLASS} />}
             {member.status === "active"
-              ? !isSelf && <button type="button" className={MENU_ITEM_DANGER_CLASS} disabled={Boolean(reason)} title={reason} onClick={suspend}>Suspend</button>
-              : menuButton("reactivate", "Reactivate", directly(() => controller.setStatus(member, "active")))}
+              ? !isSelf && <button type="button" className={MENU_ITEM_DANGER_CLASS} disabled={Boolean(reason)} title={reason} onClick={suspend}>Suspend member</button>
+              : menuButton("reactivate", "Reactivate member", directly(() => controller.setStatus(member, "active")))}
             <button type="button" className={MENU_ITEM_DANGER_CLASS} disabled={Boolean(reason)} title={reason} onClick={removeMember}>Remove from project</button>
           </>
         )}

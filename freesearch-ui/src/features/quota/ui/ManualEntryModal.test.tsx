@@ -36,6 +36,16 @@ function fillValidBrave() {
 }
 
 describe("ManualQuotaModal", () => {
+  it("selects billing dates from the calendar inside the dialog", async () => {
+    const user = userEvent.setup()
+    render(<ManualQuotaModal {...braveProps}
+      defaults={{ billingStart: "2026-09-01", billingEnd: "2026-09-30", allowance: "5", used: "1" }} />)
+    await user.click(screen.getByRole("button", { name: "Choose billing start" }))
+    await user.click(screen.getByRole("button", { name: "September 2026 2" }))
+    expect(screen.getByLabelText("Billing start")).toHaveValue("2026-09-02")
+    expect(screen.getByRole("dialog", { name: "Brave Search balance" })).toBeInTheDocument()
+  })
+
   it("uses USD balance labels for Brave", () => {
     render(<ManualQuotaModal {...braveProps} />)
     expect(screen.getByText("Allowance (USD)")).toBeInTheDocument()

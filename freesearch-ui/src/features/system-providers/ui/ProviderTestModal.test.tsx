@@ -12,7 +12,7 @@ const props = { provider, now, testing: false, onTest: vi.fn(), onClose: vi.fn()
 describe("ProviderTestModal", () => {
   it("names the provider with its logo and keeps an absent probe separate from call health", () => {
     render(<ProviderTestModal {...props} />)
-    const dialog = screen.getByRole("dialog", { name: "Test for Brave Search" })
+    const dialog = screen.getByRole("dialog", { name: "Test Brave Search" })
     expect(within(dialog).getByTestId("provider-logo-brave")).toBeInTheDocument()
     expect(within(dialog).getByText("Last test")).toBeInTheDocument()
     expect(within(dialog).getByText("—")).toBeInTheDocument()

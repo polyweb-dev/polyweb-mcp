@@ -41,11 +41,11 @@ describe("ApiKeyRowActions", () => {
     expect(trigger).toHaveAttribute("aria-label", "Actions for CI runner")
 
     await user.click(trigger)
-    await user.click(screen.getByRole("button", { name: "Rotate" }))
+    await user.click(screen.getByRole("button", { name: "Rotate key" }))
     expect(controller.openRotate).toHaveBeenCalledWith(key)
 
     await user.click(actionsTrigger("CI runner"))
-    await user.click(screen.getByRole("button", { name: "Revoke" }))
+    await user.click(screen.getByRole("button", { name: "Revoke key" }))
     expect(controller.requestRevoke).toHaveBeenCalledWith("k1")
     expect(controller.revoke).not.toHaveBeenCalled()
   })
@@ -60,8 +60,8 @@ describe("ApiKeyRowActions", () => {
       />
     )
     await user.click(actionsTrigger("CI runner"))
-    expect(screen.queryByRole("button", { name: "Rotate" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Revoke" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Rotate key" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Revoke key" })).toBeInTheDocument()
   })
 
   it("asks for confirmation in the shared dialog before revoking", async () => {
@@ -104,8 +104,8 @@ describe("ApiKeyRowActions", () => {
     expect(trigger).toBeDisabled()
     // A disabled trigger opens no menu, so no row action is reachable.
     await user.click(trigger)
-    expect(screen.queryByRole("button", { name: "Rotate" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Rotate key" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Revoke key" })).toBeNull()
     expect(trigger).toBeDisabled()
   })
 })

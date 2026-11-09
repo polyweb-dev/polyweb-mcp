@@ -22,9 +22,9 @@ export function ApiKeyRowActions({ apiKey, canRotate, controller }: ApiKeyRowAct
 
   const actions: RowAction[] = [
     ...(canRotate
-      ? [{ key: "rotate", label: "Rotate", onSelect: () => controller.openRotate(apiKey) }]
+      ? [{ key: "rotate", label: "Rotate key", onSelect: () => controller.openRotate(apiKey) }]
       : []),
-    { key: "revoke", label: "Revoke", danger: true, onSelect: () => controller.requestRevoke(apiKey.id) },
+    { key: "revoke", label: "Revoke key", danger: true, onSelect: () => controller.requestRevoke(apiKey.id) },
   ]
   return (
     <>

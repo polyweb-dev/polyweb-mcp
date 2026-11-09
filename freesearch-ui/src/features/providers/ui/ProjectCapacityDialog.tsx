@@ -5,6 +5,7 @@ import { getKeyPool, listVaultKeys } from "@/domains/vault"
 import type { KeyPool, VaultKey } from "@/domains/vault"
 import type { ProjectPool } from "@/domains/projects"
 import { AddCapacityDialog } from "@/features/vault/ui/AddCapacityDialog"
+import { poolDialogTitle } from "@/features/vault/model/poolDialogTitle"
 import { ApiError } from "@/shared/api/http"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
 import type { ScopedResource } from "@/shared/lib/useScopedResource"
@@ -80,7 +81,7 @@ function renderChooser({ props, vault, provider, setProvider, keys, item, setSel
 }) {
   const { pool, providers, onClose } = props
   const identity = providerIdentity(pool ? pool.provider_type : provider)
-  return <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={identity.id} providerName={identity.name} action={pool ? "Edit pool" : `Add capacity to ${props.projectName}`} />} maxWidth="lg">
+  return <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={identity.id} title={poolDialogTitle(pool ? "edit" : "capacity", identity.name)} />} maxWidth="lg">
     {vault.status === "loading" && <p role="status">Loading keys...</p>}
     {vault.status === "error" && <p role="alert">{vault.error instanceof ApiError && vault.error.status === 404
       ? "Keys and pools are not available yet" : "Cannot load Keys and pools"}</p>}

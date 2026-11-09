@@ -1,5 +1,5 @@
 export { getProjectDashboard, getProjectUsage } from "./api/usageApi"
-export { usageOperationLabel, usageUnitsText } from "./model/usageFormat"
+export { usageOperationLabel } from "./model/usageFormat"
 export type {
   ProjectUsage,
   ProjectUsageEntry,

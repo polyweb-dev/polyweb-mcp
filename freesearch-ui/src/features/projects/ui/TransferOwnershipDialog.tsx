@@ -74,9 +74,9 @@ export function TransferOwnershipDialog({ projectId, projectName, members, owner
             <Select id="new-provider-owner" value={selected} onValueChange={setSelected}
               options={admins.map((admin) => ({ value: admin.user_id, label: admin.email }))} />
           </Field>
-          <p>{recipient?.email} becomes the provider owner of {projectName}</p>
+          <p>{recipient?.email} becomes the provider owner of <strong>{projectName}</strong></p>
           {affectedPools(pools, projectName)}
-          <p>Paid providers stop until {recipient?.email} adds capacity</p>
+          <p>These providers stop until {recipient?.email} adds capacity</p>
         </div>
       )}
       {error && <p role="alert" className="mt-4">{error}</p>}

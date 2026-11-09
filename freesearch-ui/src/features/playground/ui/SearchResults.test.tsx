@@ -3,12 +3,6 @@ import { render, screen, within } from "@testing-library/react"
 import { SearchResults } from "./SearchResults"
 import type { SearchResponse } from "@/domains/execution"
 
-/**
- * Search result unit labels: a response that names its unit kind shows the
- * unit with the amount; otherwise Tavily native usage reads as `Credits` while
- * every other provider keeps `Units`.
- */
-
 function controller() {
   return {
     selectedResultForPreview: null,
@@ -59,28 +53,29 @@ describe("SearchResults usage label", () => {
     expect(within(screen.getByRole("button", { name: /^Result one/ })).getByText("Tavily")).toBeInTheDocument()
     expect(within(screen.getByRole("button", { name: /^Result two/ })).getByText("Brave Search")).toBeInTheDocument()
   })
-  it("labels Tavily native usage as Credits", () => {
+  it("shows an unknown cost when no unit kind is recorded", () => {
     render(<SearchResults controller={controller() as never} result={result("tavily")} />)
-    expect(screen.getByText("Credits")).not.toBeNull()
+    expect(screen.getByText("Cost")).toBeInTheDocument()
+    expect(screen.getByText("—")).toBeInTheDocument()
+    expect(screen.queryByText("Credits")).toBeNull()
     expect(screen.queryByText("Units")).toBeNull()
-    expect(screen.getByText("7")).not.toBeNull()
   })
 
-  it("labels other providers as Units", () => {
-    render(<SearchResults controller={controller() as never} result={result("brave")} />)
-    expect(screen.getByText("Units")).not.toBeNull()
+  it("does not present native provider credits as dollars", () => {
+    render(<SearchResults controller={controller() as never} result={{ ...result("tavily"), costUnitKind: "CREDIT" }} />)
+    expect(screen.getByText("—")).toBeInTheDocument()
     expect(screen.queryByText("Credits")).toBeNull()
   })
 
-  it("shows the unit with the amount when the response names its unit kind", () => {
+  it("formats a recorded dollar cost per call", () => {
     render(
       <SearchResults
         controller={controller() as never}
         result={{ ...result("exa"), costEstimateCredits: 0.007, costUnitKind: "USD" }}
       />
     )
-    expect(screen.getByText("Usage")).not.toBeNull()
-    expect(screen.getByText("0.007 USD")).not.toBeNull()
+    expect(screen.getByText("Cost")).toBeInTheDocument()
+    expect(screen.getByText("$0.0070")).toBeInTheDocument()
     expect(screen.queryByText("Units")).toBeNull()
   })
 
@@ -92,6 +87,11 @@ describe("SearchResults usage label", () => {
       />
     )
     expect(screen.getByText("Free")).not.toBeNull()
+  })
+
+  it("keeps a recorded zero dollar charge distinct from a free provider", () => {
+    render(<SearchResults controller={controller() as never} result={{ ...result("exa"), costEstimateCredits: 0, costUnitKind: "USD" }} />)
+    expect(screen.getByText("$0.0000")).toBeInTheDocument()
   })
 
   it("uses shared buttons for the raw JSON toggle and no list-level selection hint", () => {

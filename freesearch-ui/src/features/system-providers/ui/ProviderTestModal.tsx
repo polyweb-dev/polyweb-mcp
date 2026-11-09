@@ -26,7 +26,7 @@ export const ProviderTestModal: React.FC<{
   <Modal
     isOpen={provider !== null}
     onClose={onClose}
-    title={provider ? <ProviderDialogTitle providerId={provider.id} providerName={provider.name} action="Test" /> : "Test provider"}
+    title={provider ? <ProviderDialogTitle providerId={provider.id} title={`Test ${provider.name}`} /> : "Test provider"}
     maxWidth="lg"
   >
     {provider && (

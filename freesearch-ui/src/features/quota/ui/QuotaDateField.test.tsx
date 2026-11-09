@@ -3,13 +3,13 @@ import { describe, expect, it, vi } from "vitest"
 import { QuotaDateField } from "./QuotaDateField"
 
 describe("QuotaDateField", () => {
-  it("shows an existing date and converts a typed date to ISO", () => {
+  it("shows an existing date and passes a typed ISO date to the form", () => {
     const onChange = vi.fn()
     render(<QuotaDateField id="start" label="Billing start" value="2026-11-01" error={undefined} disabled={false} onChange={onChange} />)
     const field = screen.getByLabelText("Billing start")
-    expect(field).toHaveValue("Nov 1, 2026")
+    expect(field).toHaveValue("2026-11-01")
     expect(field).toHaveAttribute("type", "text")
-    fireEvent.change(field, { target: { value: "Dec 12, 2026" } })
+    fireEvent.change(field, { target: { value: "2026-12-12" } })
     expect(onChange).toHaveBeenLastCalledWith("2026-12-12")
   })
 

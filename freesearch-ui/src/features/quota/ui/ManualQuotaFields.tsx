@@ -96,7 +96,7 @@ export function ManualQuotaFields({
     <div className="grid grid-cols-1 gap-3">
       {providerField}
       {modeField(providerId, mode, pending, onModeChange)}
-      <div role="group" aria-label="Billing dates" aria-describedby={"manual-quota-dates-hint-" + providerId} className="space-y-1">
+      <div role="group" aria-label="Billing dates" className="space-y-1">
         <div className="grid grid-cols-2 gap-3">
           <QuotaDateField
             id={"manual-quota-start-" + providerId}
@@ -115,7 +115,6 @@ export function ManualQuotaFields({
             onChange={(value) => onChange("billingEnd", value)}
           />
         </div>
-        <p id={"manual-quota-dates-hint-" + providerId} className="fs-hint">Enter a date, for example Nov 1, 2026</p>
       </div>
       <NumericField
         id={"manual-quota-allowance-" + providerId}
