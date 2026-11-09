@@ -1,21 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
   credentialProviderTypes,
-  oauthStatusText,
   providerTypeName,
-
   supportedOperationsOf,
   supportsOAuth,
-} from "./credentials"
+} from "./providerView"
 
-describe("credential model helpers", () => {
-  it("names the OAuth statuses", () => {
-    expect(oauthStatusText("pending")).toBe("Waiting for approval…")
-    expect(oauthStatusText("connected")).toBe("Connected")
-    expect(oauthStatusText("refresh_failed")).toBe("Connection needs attention")
-    expect(oauthStatusText("disconnected")).toBe("Not connected")
-  })
-
+describe("provider catalog helpers", () => {
   it("derives supported operations from the catalog", () => {
     expect(supportedOperationsOf("brave")).toEqual(["search"])
     expect(supportedOperationsOf("tavily")).toEqual(["search", "fetch"])

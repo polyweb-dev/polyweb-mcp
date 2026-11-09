@@ -15,7 +15,7 @@ export const BALANCE_ENTRY_ACTION = "Set balance"
 /** The credit control that sets the local spend ceiling. */
 export const SPEND_CAP = "Budget limit"
 /** One sentence that states what the budget limit control does. */
-export const SPEND_CAP_NOTE = "Stop routing to this provider after this budget is used in the period"
+export const SPEND_CAP_NOTE = "Stops this provider when the budget is used"
 /** The card menu item that opens the balance history dialog. */
 export const HISTORY_ACTION = "Balance history"
 /** One visible sentence that states the difference between the two controls. */

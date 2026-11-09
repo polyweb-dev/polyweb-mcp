@@ -31,6 +31,7 @@ interface UsageTotalsView {
 }
 
 const COLUMN_ORDER: readonly UsageAmountColumn[] = ["usd", "requests", "credits", "other"]
+const OPERATION_ORDER: Readonly<Record<string, number>> = { search: 0, fetch: 1 }
 
 function emptyAmounts(): UsageAmounts {
   return { calls: 0, usd: null, requests: null, credits: null, other: null, free: false, unreportedCost: false }
@@ -92,7 +93,7 @@ export function usageTotalsView(totals: readonly ProjectUsageTotal[], order?: Pr
     byKey.set(key, row)
   }
   return {
-    rows: [...byKey.values()],
+    rows: [...byKey.values()].sort((a, b) => (OPERATION_ORDER[a.operation] ?? 2) - (OPERATION_ORDER[b.operation] ?? 2)),
     total,
     columns: COLUMN_ORDER.filter((column) =>
       usesColumn(total, column) &&

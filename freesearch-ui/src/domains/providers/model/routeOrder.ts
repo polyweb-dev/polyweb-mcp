@@ -3,7 +3,7 @@
  * priority order the router tries them. The project overview and the
  * providers page both read routes through this one derivation.
  */
-import type { AvailableCredential, ProviderBinding, ProviderTypeView } from "./credentials"
+import type { AvailableCredential, ProviderBinding, ProviderTypeView } from "./providerView"
 import type { ProviderOperation } from "./projectProviders"
 
 /** One binding with the provider and credential facts its row shows. */
@@ -44,4 +44,3 @@ export function hasEffectiveRoute(
     )
   )
 }
-

@@ -151,6 +151,15 @@ function recordedTitle(auth: ProviderAuthLimits): string | undefined {
   return at ? formatDateTime(at) : undefined
 }
 
+function footerActions(view: ProviderCardView, controller: ProviderLimitsController,
+  { providerName, oauthNode }: { providerName: string; oauthNode: ReactNode }): ReactNode {
+  if (!view.refreshable && oauthNode === null) return null
+  return <ProviderCardActions providerName={providerName} syncing={controller.syncing}
+    updatedAt={controller.updatedAt} onSync={() => void controller.syncNow()} refreshSkipped
+    syncNote={view.refreshable ? refreshNote(controller, view.reports) : null}
+    {...(oauthNode !== null ? { oauthActions: oauthNode } : {})} />
+}
+
 /**
  * One provider usage card.
  *
@@ -218,17 +227,7 @@ export function ProviderLimitsCard(props: ProviderLimitsCardProps): ReactNode {
         emptyText={view.reports ? null : emptyUsageText(controller.needsCredential, view.keyless)}
         {...fundsProps(view)}
         rateBars={rateBarsNode(view, providerName)}
-        actions={
-          <ProviderCardActions
-            providerName={providerName}
-            syncing={controller.syncing}
-            updatedAt={controller.updatedAt}
-            onSync={() => void controller.syncNow()}
-            refreshSkipped
-            syncNote={view.refreshable ? refreshNote(controller, view.reports) : null}
-            {...(oauthNode !== null ? { oauthActions: oauthNode } : {})}
-          />
-        }
+        actions={footerActions(view, controller, { providerName, oauthNode })}
       />
       {tierSlot}
       {!view.keyless && <KeyBalancesLayoutScope.Provider value={{ compact: false, actionsTarget }}>

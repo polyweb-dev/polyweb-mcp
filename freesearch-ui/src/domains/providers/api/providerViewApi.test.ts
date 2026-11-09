@@ -8,14 +8,14 @@ import {
 describe("providerViewApi", () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it("decodes providers and this project's allocations", () => {
+  it("decodes providers without retaining legacy allocations", () => {
     const view = decodeProjectProviderView({
       project_id: "proj",
       providers: [{ provider_type: "tavily", capability: ["search"] }, { nope: true }],
       allocations: [{ project_id: "proj", pool_id: "pool", operation_scope: "search", base_rate: 1, rate_window_seconds: 1 }],
     })
     expect(view.providers).toHaveLength(1)
-    expect(view.allocations).toHaveLength(1)
+    expect(view).not.toHaveProperty("allocations")
   })
 
   it("rejects a payload without providers", () => {

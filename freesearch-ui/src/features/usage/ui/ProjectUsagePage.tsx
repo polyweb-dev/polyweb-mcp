@@ -1,10 +1,10 @@
 import { useCallback } from "react"
-import { Link } from "react-router"
 import { hasPermission, PROJECT_PERMISSIONS, useProjectScope, useProjects } from "@/domains/projects"
 import { getProjectOrder } from "@/domains/routing"
 import { errorMessage } from "@/shared/api/http"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
-import { Button, buttonVariants } from "@/shared/ui/button"
+import { Button } from "@/shared/ui/button"
+import { LinkButton } from "@/shared/ui/LinkButton"
 import { PageHeader } from "@/shared/ui/PageHeader"
 import { Section } from "@/shared/ui/Section"
 import { useProjectUsage } from "../model/useProjectUsage"
@@ -29,12 +29,11 @@ export function ProjectUsagePage() {
         title="Usage"
         description="What this project's calls used, per provider"
         actions={
-          <Link
+          <LinkButton
             to={`/p/${projectId}/activity`}
-            className={buttonVariants({ variant: "outline", size: "sm" })}
           >
             See every call in Activity
-          </Link>
+          </LinkButton>
         }
       />
 

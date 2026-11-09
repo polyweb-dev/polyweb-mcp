@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, within } from "@testing-library/react"
 import type { UsdUsageTotal } from "@/domains/dashboard"
 import { UsageTotals } from "./UsageTotals"
+import { installFetchStub, ok } from "@/test/fetchMock"
+
+beforeEach(() => { installFetchStub(() => ok([])) })
+afterEach(() => vi.unstubAllGlobals())
 
 /** One merged usage table: one row per provider, USD cost, and one p95. */
 
@@ -24,7 +28,7 @@ describe("UsageTotals", () => {
       "Provider",
       "Searches",
       "URLs fetched",
-      "Known cost",
+      "Cost",
       "p95",
     ])
     const rows = table.querySelectorAll("tbody tr")
@@ -42,6 +46,26 @@ describe("UsageTotals", () => {
     render(<UsageTotals usdUsageTotals={[]} providers={PROVIDERS as never} />)
     expect(screen.getByText("No usage recorded yet")).not.toBeNull()
     expect(screen.queryByRole("table")).toBeNull()
+  })
+
+  it("distinguishes free providers from paid providers with zero spend", () => {
+    render(<UsageTotals providers={[
+      { id: "keenable", name: "Keenable", callCostUsd: { search: "0", fetch: "0" } },
+      { id: "brave", name: "Brave Search", callCostUsd: { search: "0.005" } },
+    ] as never} usdUsageTotals={["keenable", "brave"].map((provider) => ({
+      provider, operation: "search", spend_usd: "0", attempt_count: 1, volume_count: 1,
+    }))} />)
+    expect(within(screen.getByRole("row", { name: /Keenable/ })).getByText("Free")).toBeInTheDocument()
+    expect(within(screen.getByRole("row", { name: /Brave Search/ })).getByText("$0.00")).toBeInTheDocument()
+  })
+
+  it("uses the price catalog when the provider snapshot has no pricing", async () => {
+    installFetchStub(() => ok([{ provider_id: "keenable", free: true, keyless: true,
+      call_cost_usd: { search: "0", fetch: "0" }, keyless_call_cost_usd: { search: "0", fetch: "0" } }]))
+    render(<UsageTotals providers={[{ id: "keenable", name: "Keenable" }] as never}
+      usdUsageTotals={[{ provider: "keenable", operation: "search", spend_usd: "0", attempt_count: 1, volume_count: 1 }]} />)
+    expect(await screen.findByText("Free")).toBeInTheDocument()
+    expect(screen.queryByText("$0.00")).toBeNull()
   })
 
   it("shows USD cost without a price profile", () => {

@@ -1,5 +1,6 @@
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { Button } from "@/shared/ui/button"
+import { NumericField } from "@/shared/ui/NumericField"
 import type { PlaygroundController } from "../model/usePlaygroundController"
 
 const quickQueries = [
@@ -68,19 +69,17 @@ export function SearchOptions({ controller }: { controller: PlaygroundController
           />
         </div>
 
-        <label className="flex items-center gap-2">
+        <div className="flex items-center gap-2 [&>div]:w-16 [&_label]:sr-only">
           <span>Results</span>
-          <input
-            type="number"
-            aria-label="Number of results"
-            min="1"
-            max="100"
-            step="1"
-            value={resultCount}
-            onChange={(e) => setResultCount(Number(e.target.value))}
-            className="w-16 rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2.5 py-1 text-[13px] text-[var(--text)] outline-none tnum"
+          <NumericField
+            id="playground-result-count"
+            label="Number of results"
+            min={1}
+            step={1}
+            value={String(resultCount)}
+            onChange={(value) => setResultCount(Math.min(100, Math.max(1, Math.trunc(Number(value)))))}
           />
-        </label>
+        </div>
       </div>
     </>
   )

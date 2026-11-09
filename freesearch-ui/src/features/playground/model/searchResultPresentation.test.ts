@@ -42,6 +42,14 @@ describe("toPlaygroundResultView", () => {
     expect(view.snippet).toBe("Title\nEnglish: a result")
   })
 
+  it("removes table delimiters from excerpts and keeps escaped literal pipes", () => {
+    const view = toPlaygroundResultView(playgroundResult({
+      snippet: "| Description | **English:** astronomy |\n| :--- | ---: |\n| Notes | A \\| B |",
+    }))
+    expect(view.snippet).toBe("Description English: astronomy\n\nNotes A | B")
+    expect(toPlaygroundResultView(playgroundResult({ snippet: "Use cat | head" })).snippet).toBe("Use cat | head")
+  })
+
   it("omits the published date when the execution recorded none", () => {
     const view = toPlaygroundResultView(playgroundResult())
 

@@ -15,6 +15,15 @@ function total(overrides: Partial<ProjectUsageTotal>): ProjectUsageTotal {
 }
 
 describe("usageTotalsView", () => {
+  it("puts Search before Fetch while preserving provider order within each operation", () => {
+    const view = usageTotalsView([
+      total({ provider: "keenable", operation: "fetch", eventCount: 2 }),
+      total({ provider: "exa", operation: "search", eventCount: 3 }),
+      total({ provider: "keenable", operation: "search", eventCount: 1 }),
+    ])
+    expect(view.rows.map((row) => row.key)).toEqual(["exa:search", "keenable:search", "keenable:fetch"])
+    expect(view.total.calls).toBe(6)
+  })
   it("uses operation-specific zero prices but keeps unknown and mixed costs distinct", () => {
     const order: ProjectOrder = {
       revision: 1,
@@ -34,7 +43,7 @@ describe("usageTotalsView", () => {
       total({ provider: "tavily", eventCount: 1, unitKind: "REQUEST" }),
     ], order)
     expect(view.rows.map((row) => usageAmountText(row, "usd"))).toEqual([
-      "Free", "Not reported", "Free", "Not reported",
+      "Free", "Free", "Not reported", "Not reported",
     ])
     expect(usageAmountText(view.total, "usd")).toBe("Not reported")
   })

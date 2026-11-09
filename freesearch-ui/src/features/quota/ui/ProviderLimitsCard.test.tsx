@@ -452,9 +452,8 @@ describe("ProviderLimitsCard Brave", () => {
     const creditRow = screen.getByText("$4.5").closest("span")?.parentElement?.parentElement
     expect(creditRow?.className).toContain("justify-between")
     const children = Array.from(creditRow?.children ?? [])
-    expect(children.length).toBe(2)
-    expect(children[0]?.textContent).toBe("")
-    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
+    expect(children.length).toBe(1)
+    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
     const user = userEvent.setup()
     await user.click(menu)
     expect(await screen.findByRole("button", { name: "Set balance" })).not.toBeNull()
@@ -1101,7 +1100,7 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("Free tier", { exact: true })).not.toBeNull()
+    expect(screen.getByText("Free", { exact: true })).not.toBeNull()
     expect(screen.queryByText("Free - unmetered")).toBeNull()
     expect(screen.queryByRole("progressbar", { name: "Keenable balance remaining" })).toBeNull()
     expect(screen.getByText("Search and fetch")).not.toBeNull()
@@ -1158,7 +1157,7 @@ describe("ProviderLimitsCard Keenable", () => {
         manualEligible
       />,
     )
-    expect(screen.getByText("Free tier", { exact: true })).not.toBeNull()
+    expect(screen.getByText("Free", { exact: true })).not.toBeNull()
     expect(screen.queryByText("Free - unmetered")).toBeNull()
     expect(
       screen.queryByRole("progressbar", { name: "Keenable balance remaining" }),

@@ -3,7 +3,8 @@ import { transferProviderOwner } from "@/domains/projects"
 import type { ProviderOwner } from "@/domains/projects"
 import { ApiError } from "@/shared/api/http"
 import type { ScopedResource } from "@/shared/lib/useScopedResource"
-import { Button, buttonVariants } from "@/shared/ui/button"
+import { Button } from "@/shared/ui/button"
+import { LinkButton } from "@/shared/ui/LinkButton"
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog"
 
 interface Props {
@@ -29,7 +30,7 @@ function renderOwnerDetails({ current, projectId, accountId, isAdmin, canConfigu
     {isAdmin && <Button size="form" onClick={claim}>Become provider owner</Button>}</>
   return <>
     <p role="note">Provider owner: {current.email}{isOwner && " (you)"}
-      {isAdmin && <a className={`${buttonVariants({ variant: "outline", size: "sm" })} ml-2`} href={`/p/${encodeURIComponent(projectId)}/members`}>Transfer ownership</a>}
+      {isAdmin && <LinkButton className="ml-2" to={`/p/${encodeURIComponent(projectId)}/members`}>Transfer ownership</LinkButton>}
       {!isOwner && !isAdmin && !canConfigure && <span className="ml-2 text-[var(--muted)]">Ask a project admin to change this</span>}
     </p>
     {!isOwner && isAdmin && <p>Only the provider owner can add or remove capacity. Ask {current.email}</p>}

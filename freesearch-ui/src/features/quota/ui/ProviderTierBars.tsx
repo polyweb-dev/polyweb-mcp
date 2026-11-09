@@ -133,7 +133,7 @@ export function ProviderTierBars({
             className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
           >
             <dt className="text-[var(--muted)]">
-              {bar.tier === "free" ? "Free tier" : "Paid tier"}
+              {bar.tier === "free" ? "Free" : "Paid"}
             </dt>
             <dd className="tnum text-right text-[var(--text)]">{amount}</dd>
             {notes.length > 0 && (

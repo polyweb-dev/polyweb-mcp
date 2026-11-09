@@ -208,15 +208,17 @@ function nativeSummary(input: ProviderCreditSummaryProps & { credits: TavilyCred
       </div>
       {bodyNotes}
       {nativeFootnotes(credits)}
-      <div className={CREDIT_ROW}>
-        {actions}
-        <span className={CREDIT_VALUE}>
-          {nativeCreditValue(credits)}
-          {info}
-        </span>
-      </div>
+      {summaryFooter(actions, nativeCreditValue(credits), info)}
     </div>
   )
+}
+
+function summaryFooter(actions: ReactNode, value: ReactNode, info: ReactNode): ReactNode {
+  if (actions == null && value == null && info == null) return null
+  return <div className={CREDIT_ROW}>
+    {actions}
+    {(value != null || info != null) && <span className={CREDIT_VALUE}>{value}{info}</span>}
+  </div>
 }
 
 /** A usable fallback balance: a finite non-empty decimal string. */
@@ -280,13 +282,7 @@ export function ProviderCreditSummary(props: ProviderCreditSummaryProps): ReactN
       </div>
       {props.amountNote != null && <Footnote>{props.amountNote}</Footnote>}
       {bodyNotes}
-      <div className={CREDIT_ROW}>
-        {actions}
-        <span className={CREDIT_VALUE}>
-          {fallback !== null ? fallbackValue(fallback) : creditValue(model, usdLeft, props.amountText ?? null, props.nativePool ?? null)}
-          {info}
-        </span>
-      </div>
+      {summaryFooter(actions, fallback !== null ? fallbackValue(fallback) : creditValue(model, usdLeft, props.amountText ?? null, props.nativePool ?? null), info)}
     </div>
   )
 }

@@ -11,7 +11,7 @@ import { Field } from "@/shared/ui/Field"
 import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
 import { NumericField } from "@/shared/ui/NumericField"
-import { ProviderLogo } from "@/shared/ui/ProviderLogo"
+import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
 import { Select } from "@/shared/ui/select"
 import { TextField } from "@/shared/ui/TextField"
 import { Switch } from "@/shared/ui/Switch"
@@ -56,8 +56,17 @@ function initialPoolSelection(item: VaultKey, pool: KeyPool | undefined, eligibl
   }
 }
 
-function poolName(label: string, project: VaultProject | undefined, item: VaultKey): string {
-  return label || (project ? `${project.name} - ${providerTypeName(item.provider_type)}` : "")
+function poolName(label: string, project: VaultProject | undefined): string {
+  return label || project?.name || ""
+}
+
+function eligibleProjects(projects: readonly VaultProject[], provider: string, fixedProject?: VaultProject) {
+  return fixedProject ? [fixedProject] : projects.filter((project) => project.available_providers.includes(provider))
+}
+
+function dialogAction(pool: KeyPool | undefined, project?: VaultProject) {
+  if (pool) return `Edit pool ${pool.label}`
+  return project ? `Add capacity to ${project.name}` : "Create pool"
 }
 
 function renderConfirmation({ confirm, item, projects, pool, selected, pending, close, save }: {
@@ -72,8 +81,8 @@ function renderConfirmation({ confirm, item, projects, pool, selected, pending, 
 }) {
   if (!confirm) return null
   const remaining = selected.find((operation) => pool?.operations.includes(operation))
-  const stays = remaining ? ` ${operationName(remaining)} stays on.` : ""
-  return <ConfirmDialog open title={`Remove ${operationName(confirm)} from ${pool?.label ?? "this pool"}`} message={`${providerTypeName(item.provider_type)} leaves the ${operationName(confirm)} order of ${projects.find((entry) => entry.id === pool?.project_id)?.name ?? "this project"}.${stays}`} confirmLabel={`Remove ${operationName(confirm)}`} pending={pending} onClose={close} onConfirm={save} />
+  const stays = remaining ? `. ${operationName(remaining)} stays on` : ""
+  return <ConfirmDialog open title={`Stop ${operationName(confirm)} in pool ${pool?.label ?? "—"}`} message={`${providerTypeName(item.provider_type)} leaves the ${operationName(confirm)} order of ${projects.find((entry) => entry.id === pool?.project_id)?.name ?? "this project"}${stays}`} confirmLabel={`Stop ${operationName(confirm)}`} pending={pending} onClose={close} onConfirm={save} />
 }
 
 function renderActions({ pool, pending, selected, projectId, onClose }: {
@@ -113,15 +122,16 @@ function renderOperationRates({ separate, setSeparate, selected, searchRate, set
   </div>
 }
 
-export function PoolCapacityDialog({ item, pool, projects, onClose, onSaved }: {
+export function PoolCapacityDialog({ item, pool, projects, project: fixedProject, onClose, onSaved }: {
   item: VaultKey
   pool?: KeyPool
   projects: readonly VaultProject[]
+  project?: VaultProject
   onClose: () => void
   onSaved: () => void
 }) {
   const free = useFreeProvider(item.provider_type)
-  const eligible = projects.filter((project) => project.available_providers.includes(item.provider_type))
+  const eligible = eligibleProjects(projects, item.provider_type, fixedProject)
   const initialRate = initialPoolRate(item, pool)
   const initialOperations = initialOperationRates(pool)
   const initialBudget = initialPoolBudget(pool)
@@ -142,7 +152,7 @@ export function PoolCapacityDialog({ item, pool, projects, onClose, onSaved }: {
   const [error, setError] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<PoolOperation | null>(null)
   const project = eligible.find((entry) => entry.id === projectId)
-  const name = poolName(label, project, item)
+  const name = poolName(label, project)
 
   function input(): KeyPoolInput {
     const limits: Partial<Record<PoolOperation, number>> = {}
@@ -164,9 +174,9 @@ export function PoolCapacityDialog({ item, pool, projects, onClose, onSaved }: {
       else await createKeyPool(item.id, input())
       onSaved()
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && /duplicate|already/i.test(err.detail)) setError("This project already has a pool for this provider.")
-      else if (err instanceof ApiError && err.status === 409) setError("The pool did not save. The pool limits are more than the key limit.")
-      else setError("The pool did not save. Try again.")
+      if (err instanceof ApiError && err.status === 409 && /duplicate|already/i.test(err.detail)) setError("This project already has a pool for this provider")
+      else if (err instanceof ApiError && err.status === 409) setError("The pool did not save. The pool limits are more than the key limit")
+      else setError("The pool did not save. Try again")
     } finally {
       setPending(false)
       setConfirm(null)
@@ -177,7 +187,7 @@ export function PoolCapacityDialog({ item, pool, projects, onClose, onSaved }: {
     event.preventDefault()
     const rates = [rate, ...(separate ? selected.map((op) => op === "search" ? searchRate : fetchRate) : [])]
     if (!name.trim() || invalidBudget(hasBudget, budget) || (separate && selected.some((op) => !(op === "search" ? searchRate : fetchRate))) || rates.some((value) => value !== "" && (!Number.isInteger(Number(value)) || Number(value) <= 0))) {
-      setError("Enter a pool name and valid limits.")
+      setError("Enter a pool name and valid limits")
       return
     }
     const removed = pool?.project_id ? pool.operations.filter((op) => !selected.includes(op)) : []
@@ -187,9 +197,10 @@ export function PoolCapacityDialog({ item, pool, projects, onClose, onSaved }: {
 
   return (
     <>
-      <Modal isOpen onClose={onClose} title={<><ProviderLogo providerId={providerIdentity(item.provider_type).id} name={providerTypeName(item.provider_type)} />{pool ? `Edit ${pool.label}` : `Create pool from ${item.label}`}</>} maxWidth="lg">
+      <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(item.provider_type).id} providerName={providerTypeName(item.provider_type)} action={dialogAction(pool, fixedProject)} />} maxWidth="lg">
         <form onSubmit={submit} className="space-y-4">
-          {!pool && <Field id="pool-project" label="Project" hint="Only projects where you are the provider owner">
+          {!pool && fixedProject && <div><p className="fs-label">Project</p><p>{fixedProject.name}</p></div>}
+          {!pool && !fixedProject && <Field id="pool-project" label="Project" hint="Only projects where you are the provider owner">
             <Select id="pool-project" value={projectId} onValueChange={(value) => { setProjectId(value); setLabel("") }}
               options={eligible.map((entry) => ({ value: entry.id, label: entry.name }))} placeholder="No available projects" />
           </Field>}

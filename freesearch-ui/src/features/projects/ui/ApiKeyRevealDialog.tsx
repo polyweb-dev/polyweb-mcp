@@ -33,7 +33,7 @@ export function ApiKeyRevealDialog({ rawKey, onDone }: ApiKeyRevealDialogProps) 
         <>
           <p className="mb-4 text-[13px] text-[var(--muted)]">
             <span className="font-medium text-[var(--status-warning)]">This key is shown only once.</span>{" "}
-            Store it in a secret manager before you close this dialog.
+            Store it in a secret manager before you close this dialog
           </p>
           <Field id="api-key-reveal" label="API key">
             <div className="flex items-center gap-2">
@@ -57,7 +57,7 @@ export function ApiKeyRevealDialog({ rawKey, onDone }: ApiKeyRevealDialogProps) 
             start={
               copied ? (
                 <span role="status" className="text-[12px]">
-                  Copied to the clipboard.
+                  Copied to the clipboard
                 </span>
               ) : undefined
             }

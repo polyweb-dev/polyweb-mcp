@@ -339,7 +339,7 @@ describe("RF4: visible unavailable/confidence semantics in Settings modal + Usag
     await waitForUsage()
     // Await the data-dependent table, not the static "Usage totals" shell.
     const usage = await screen.findByRole("table", { name: "Usage totals" }, { timeout: 10_000 })
-    expect(within(usage).getByText("Known cost")).toBeInTheDocument()
+    expect(within(usage).getByText("Cost")).toBeInTheDocument()
     expect(within(usage).getByText("p95")).toBeInTheDocument()
     expect(usage.textContent).not.toContain("∞")
     const braveRow = within(usage).getByRole("row", { name: /Brave Search/ })

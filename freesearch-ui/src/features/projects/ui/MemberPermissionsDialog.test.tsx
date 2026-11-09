@@ -27,7 +27,7 @@ it("shows a calm message when the endpoint does not exist", async () => {
   const user = userEvent.setup()
   await user.click(screen.getByRole("switch", { name: "Fetch pages" }))
   await user.click(screen.getByRole("button", { name: "Save permissions" }))
-  expect(await screen.findByRole("alert")).toHaveTextContent("This action is not available yet.")
+  expect(await screen.findByRole("alert")).toHaveTextContent("This action is not available yet")
   expect(screen.getByTestId("permissions-scroll")).not.toContainElement(screen.getByRole("alert"))
 })
 
@@ -39,15 +39,13 @@ it("keeps all admin permission switches on and disabled", () => {
   }
 })
 
-it("keeps actions outside the scrollable permission list", () => {
+it("keeps the permission count with the actions outside the permission list", () => {
   render(<MemberPermissionsDialog projectId="p1" member={member} onClose={vi.fn()} onSaved={vi.fn()} />)
   const body = screen.getByTestId("permissions-scroll")
-  expect(body).toHaveClass("overflow-y-auto", "min-h-0", "flex-1")
   expect(body).toHaveTextContent("Change the trace policy")
   expect(body).not.toContainElement(screen.getByRole("button", { name: "Save permissions" }))
-  expect(body.parentElement).toHaveClass("overflow-hidden")
-  expect(screen.getByRole("button", { name: "Cancel" }).parentElement?.parentElement).toHaveClass("shrink-0")
-  expect(screen.getByRole("button", { name: "Cancel" }).parentElement?.parentElement).toHaveClass("border-t")
+  const footer = screen.getByRole("button", { name: "Cancel" }).parentElement?.parentElement
+  expect(footer).toContainElement(screen.getByRole("status"))
 })
 
 it("counts the same enabled switches as the table, including Base access", async () => {

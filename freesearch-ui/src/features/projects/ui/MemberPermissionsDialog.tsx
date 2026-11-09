@@ -36,30 +36,30 @@ export function MemberPermissionsDialog({ projectId, member, onClose, onSaved }:
       onClose()
     } catch (failure) {
       setError(failure instanceof ApiError && failure.status === 404
-        ? "This action is not available yet." : "The permissions did not save. Try again.")
+        ? "This action is not available yet" : "The permissions did not save. Try again")
     } finally {
       setPending(false)
     }
   }
   return (
-    <Modal isOpen onClose={onClose} title={`Permissions for ${member.email}`} subtitle="Turn on only what this person needs" maxWidth="4xl" scrollBody>
-      <div data-testid="permissions-scroll" className="min-h-0 flex-1 space-y-2 overflow-y-auto [--control-on:color-mix(in_srgb,var(--text-strong)_55%,var(--elevated))]">
+    <Modal isOpen onClose={onClose} title={`Permissions for ${member.email}`} subtitle="Turn on only what this person needs" maxWidth="4xl">
+      <div data-testid="permissions-scroll" className="space-y-2 [--control-on:color-mix(in_srgb,var(--text-strong)_55%,var(--elevated))]">
         <div className="flex items-center gap-3">
           <span>Preset</span>
           <SegmentedControl ariaLabel="Preset" options={Object.keys(PERMISSION_PRESETS)} value={preset} disabled={admin || pending}
             onChange={(value) => setBits(PERMISSION_PRESETS[value as keyof typeof PERMISSION_PRESETS])} />
           {!preset && <span className="text-[var(--muted)]">Custom permissions</span>}
         </div>
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0"><span>{BASE_ACCESS.label}</span>{" "}<span className="text-[var(--muted)]">{BASE_ACCESS.description}</span></div>
+        <div className="grid min-h-8 grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-4 border-t border-[var(--border-subtle)] py-1">
+          <span>{BASE_ACCESS.label}</span><span className="text-[var(--muted)]">{BASE_ACCESS.description}</span>
           <Switch ariaLabel={BASE_ACCESS.label} checked disabled onChange={() => {}} />
         </div>
         {PERMISSION_GROUPS.map((group) => (
           <section key={group.name} aria-label={group.name}>
             <h3 className="mb-1 text-[12px] text-[var(--muted)]">{group.name}</h3>
             {group.items.map((item) => (
-              <div key={item.bit} className="flex min-h-8 items-center justify-between gap-4 border-t border-[var(--border-subtle)] py-1">
-                <div className="min-w-0"><span>{item.label}</span>{" "}<span className="text-[var(--muted)]">{item.description}</span></div>
+              <div key={item.bit} className="grid min-h-8 grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-4 border-t border-[var(--border-subtle)] py-1">
+                <span>{item.label}</span><span className="text-[var(--muted)]">{item.description}</span>
                 <Switch ariaLabel={item.label} checked={(bits & item.bit) !== 0} disabled={admin || pending}
                   onChange={(checked) => setBits(checked ? bits | item.bit : bits & ~item.bit)} />
               </div>
@@ -69,8 +69,8 @@ export function MemberPermissionsDialog({ projectId, member, onClose, onSaved }:
         <p className="text-[var(--muted)]">Project admins also manage members and provider capacity. They can archive the project</p>
       </div>
       {error && <p role="alert" className="shrink-0 pt-3 text-[var(--status-danger)]">{error}</p>}
-      <p role="status" className="shrink-0 border-t border-[var(--border-subtle)] pt-3 text-[var(--muted)]">{pending ? "Saving permissions…" : memberPermissionSummary(bits)}</p>
-      <FormActions className="shrink-0 border-t border-[var(--border-subtle)] pt-4">
+      <FormActions className="border-t border-[var(--border-subtle)] pt-4"
+        start={<p role="status">{pending ? "Saving permissions…" : memberPermissionSummary(bits)}</p>}>
         <Button variant="outline" size="form" onClick={onClose}>Cancel</Button>
         {!admin && <Button size="form" aria-busy={pending} onClick={() => void save()}>Save permissions</Button>}
       </FormActions>

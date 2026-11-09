@@ -47,7 +47,7 @@ export function TransferOwnershipDialog({ projectId, projectName, members, owner
     const abort = new AbortController()
     void listProjectPools(projectId, abort.signal).then(setPools).catch((failure: unknown) => {
       if (!abort.signal.aborted) setError(failure instanceof ApiError && failure.status === 404
-        ? "This action is not available yet." : "The pools did not load. Try again.")
+        ? "This action is not available yet" : "The pools did not load. Try again")
     })
     return () => abort.abort()
   }, [projectId])
@@ -59,9 +59,9 @@ export function TransferOwnershipDialog({ projectId, projectName, members, owner
       onSaved()
       onClose()
     } catch (failure) {
-      setError(failure instanceof ApiError && failure.status === 404 ? "This action is not available yet."
-        : failure instanceof ApiError && failure.status === 409 ? "The provider owner changed. Reload and try again."
-          : "The new provider owner must be an active project admin.")
+      setError(failure instanceof ApiError && failure.status === 404 ? "This action is not available yet"
+        : failure instanceof ApiError && failure.status === 409 ? "The provider owner changed. Reload and try again"
+          : "The new provider owner must be an active project admin")
     } finally {
       setPending(false)
     }

@@ -1,7 +1,7 @@
-import { cn } from "cn"
 import { ExternalLink, FileText } from "lucide-react"
 import type { SearchResult } from "@/domains/execution"
-import { Button, buttonVariants } from "@/shared/ui/button"
+import { Button } from "@/shared/ui/button"
+import { LinkButton } from "@/shared/ui/LinkButton"
 import { SearchResultCard } from "@/shared/ui/SearchResultCard"
 import { toPlaygroundResultView } from "../model/searchResultPresentation"
 
@@ -12,6 +12,7 @@ export interface ResultCardProps {
   isFetching: boolean
   /** The caller holds `fetch.execute` in the project; without it the fetch action is disabled. */
   canFetch: boolean
+  showAttribution?: boolean
   onSelect: (result: SearchResult) => void
   onFetch: (result: SearchResult) => void
 }
@@ -27,12 +28,13 @@ export function ResultCard({
   isSearching,
   isFetching,
   canFetch,
+  showAttribution = true,
   onSelect,
   onFetch,
 }: ResultCardProps) {
   return (
     <SearchResultCard
-      result={toPlaygroundResultView(result)}
+      result={toPlaygroundResultView(result, showAttribution)}
       selected={selected}
       onSelect={() => onSelect(result)}
       actions={
@@ -54,16 +56,15 @@ export function ResultCard({
             <FileText aria-hidden="true" className="size-3.5" />
           </Button>
 
-          <a
-            href={result.url}
+          <LinkButton
+            to={result.url}
             target="_blank"
             rel="noreferrer"
             aria-label={"Open " + result.title}
-            className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-[var(--muted)]")}
             title="Open external link"
           >
             <ExternalLink aria-hidden="true" className="size-3.5" />
-          </a>
+          </LinkButton>
         </>
       }
     />

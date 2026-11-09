@@ -2,11 +2,12 @@ import React from "react"
 import { Modal } from "@/shared/ui/Modal"
 import { Button } from "@/shared/ui/button"
 import { FormActions } from "@/shared/ui/FormActions"
-import { ProviderLogo } from "@/shared/ui/ProviderLogo"
-import { formatDateTime } from "@/shared/lib/formatTime"
+import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
+import { HealthStatus } from "@/shared/ui/HealthStatus"
+import { formatLatency } from "@/shared/lib/formatTime"
 import type { ProviderConfig } from "@/domains/providers"
 import { ModalDetail } from "./ProviderTestModalDetail"
-import { capabilityList, lastResultText, stripProtocol } from "./providerDisplay"
+import { capabilityList, stripProtocol } from "./providerDisplay"
 import type { TimedTestResult } from "./providerDisplay"
 
 /**
@@ -25,7 +26,7 @@ export const ProviderTestModal: React.FC<{
   <Modal
     isOpen={provider !== null}
     onClose={onClose}
-    title={provider ? <><ProviderLogo providerId={provider.id} name={provider.name} />Test {provider.name}</> : "Test provider"}
+    title={provider ? <ProviderDialogTitle providerId={provider.id} providerName={provider.name} action="Test" /> : "Test provider"}
     maxWidth="lg"
   >
     {provider && (
@@ -34,8 +35,9 @@ export const ProviderTestModal: React.FC<{
           <ModalDetail label="Endpoint" value={stripProtocol(provider.baseUrl)} mono />
           <ModalDetail label="Capabilities" value={capabilityList(provider.capabilities)} />
           <dt className="text-[var(--muted)]">Last test</dt>
-          <dd className="text-[var(--text-strong)]" title={lastResult ? formatDateTime(new Date(lastResult.checkedAt).toISOString()) : undefined}>
-            {lastResultText(lastResult, now)}
+          <dd className="space-y-1 text-[var(--text-strong)]">
+            <HealthStatus health={null} result={lastResult} testing={testing} now={now} />
+            {lastResult && <div className="text-[12px] text-[var(--muted)]">{lastResult.success ? formatLatency(lastResult.latencyMs) : lastResult.message}</div>}
           </dd>
         </dl>
         <FormActions>

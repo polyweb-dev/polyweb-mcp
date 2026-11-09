@@ -6,7 +6,7 @@ import type { KeyPool, VaultKey, VaultProject } from "@/domains/vault"
 import { Button } from "@/shared/ui/button"
 import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
-import { ProviderBadge } from "@/shared/ui/ProviderBadge"
+import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
 import { KeyFormFields } from "./KeyFormFields"
 import { keySaveError } from "./keySaveError"
 import { PoolCapacityDialog } from "./PoolCapacityDialog"
@@ -17,11 +17,12 @@ function keyStepCopy(provider: string, projects: readonly VaultProject[]): strin
   return `You have no ${providerTypeName(provider)} key yet. Add one, then create the pool${target}`
 }
 
-export function AddCapacityDialog({ item, provider, pool, projects, onClose, onSaved }: {
+export function AddCapacityDialog({ item, provider, pool, projects, project, onClose, onSaved }: {
   item?: VaultKey
   provider?: string
   pool?: KeyPool
   projects: readonly VaultProject[]
+  project?: VaultProject
   onClose: () => void
   onSaved: () => void
 }) {
@@ -37,7 +38,7 @@ export function AddCapacityDialog({ item, provider, pool, projects, onClose, onS
     setKey(oauthKey)
     setConnecting(false)
   }, [oauthKey])
-  if (key) return <PoolCapacityDialog item={key} pool={pool} projects={projects} onClose={onClose} onSaved={onSaved} />
+  if (key) return <PoolCapacityDialog item={key} pool={pool} projects={projects} project={project} onClose={onClose} onSaved={onSaved} />
   if (!provider) return null
   if (connecting && oauthKey) return <VaultOAuthDialog keyId={oauthKey.id} onClose={() => setConnecting(false)} onConnected={connected} />
   const oauth = supportsOAuth(provider)
@@ -66,9 +67,8 @@ export function AddCapacityDialog({ item, provider, pool, projects, onClose, onS
       setPending(false)
     }
   }
-  return <Modal isOpen onClose={onClose} title="Add key" maxWidth="lg">
+  return <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(provider).id} providerName={providerTypeName(provider)} action="Add key" />} maxWidth="lg">
     <form onSubmit={(event) => void addKey(event)} className="space-y-4">
-      <ProviderBadge providerId={providerIdentity(provider).id} name={providerTypeName(provider)} />
       <p>{keyStepCopy(provider, projects)}</p>
       <KeyFormFields idPrefix="capacity-key" label={label} setLabel={setLabel} secret={secret} setSecret={setSecret}
         submitted={submitted} showSecret={!oauth} />

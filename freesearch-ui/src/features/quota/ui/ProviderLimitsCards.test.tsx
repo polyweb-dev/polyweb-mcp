@@ -363,9 +363,8 @@ describe("ProviderLimitsCards", () => {
     expect(screen.getByRole("button", { name: "Actions for Brave" })).not.toBeNull()
     const creditRow = screen.getByText("$4.5").closest("span")?.parentElement?.parentElement
     const children = Array.from(creditRow?.children ?? [])
-    expect(children.length).toBe(2)
-    expect(children[0]?.textContent).toBe("")
-    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
+    expect(children.length).toBe(1)
+    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
     const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
   })
@@ -789,14 +788,43 @@ describe("Quotas review r4b", () => {
     await userEvent.keyboard("{Escape}")
     expect(screen.queryByRole("button", { name: "Actions for Keenable" })).toBeNull()
     expect(screen.queryByRole("menuitem", { name: "Budget limit" })).toBeNull()
-    expect(screen.getByText("Free tier")).toBeInTheDocument()
+    expect(screen.getByText("Free")).toBeInTheDocument()
   })
   it("puts unreported providers in a single table with three columns", () => {
     const empty = { ...braveEntry(), auths: braveEntry().auths.map((auth) => ({ ...auth, aggregate_pool: null, usd_views: [], rate_progress: [] })) }
     render(<ProviderLimitsCards providers={[{ id: "brave", name: "Brave Search" }] as never} providerLimits={[empty] as never}
       usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()} manualEligible={new Set()} />)
     const table = screen.getByRole("table", { name: "Key balances" })
-    expect(Array.from(table.querySelectorAll("th")).map((cell) => cell.textContent)).toEqual(["Provider", "Key", "Balance", "Last refresh", "Actions"])
+    expect(Array.from(table.querySelectorAll("th")).map((cell) => cell.textContent)).toEqual(["Provider", "Key", "Balance", "Last refresh", "Provider controls"])
     expect(screen.queryByText("Not reported")).toBeNull()
   })
+})
+
+it("keeps disconnected OAuth controls on their key row and fixes the balance dialog provider", async () => {
+  installFetchStub((request) => request.url.includes("/limits/keys") ? ok([
+    { key_id: "api", label: "dev-parallel", owner_email: "owner@example.com", auth_mode: "api_key", oauth_connected: null, balance: null },
+    { key_id: "oauth", label: "Capture OAuth", owner_email: "owner@example.com", auth_mode: "oauth", oauth_connected: false, balance: null },
+  ]) : ok([]))
+  const entry = { ...braveEntry(), provider: "parallel" }
+  render(<ProviderLimitsCards providers={[{ id: "parallel", name: "Parallel" }] as never}
+    providerLimits={[entry] as never} usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()}
+    manualEligible={new Set(["parallel"])}
+    renderOAuthActions={() => <a href="/account/keys">Connect in Keys and pools</a>}
+    renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
+      accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
+  const first = (await screen.findByText("dev-parallel")).closest("tr") as HTMLElement
+  const oauth = screen.getByText("Capture OAuth").closest("tr") as HTMLElement
+  expect(within(first).queryByText("Disconnected")).toBeNull()
+  expect(within(first).queryByRole("link")).toBeNull()
+  expect(within(oauth).getByText("Disconnected")).toBeInTheDocument()
+  expect(within(oauth).getByRole("link", { name: "Connect in Keys and pools" })).toHaveAttribute("href", "/account/keys")
+  expect(within(oauth).queryByRole("button", { name: "Actions for Parallel" })).toBeNull()
+  await userEvent.click(within(first).getByRole("button", { name: "Actions for Parallel" }))
+  await userEvent.click(await screen.findByRole("button", { name: "Set balance" }))
+  const dialog = await screen.findByRole("dialog", { name: "Balance for Parallel" })
+  expect(within(dialog).queryByRole("combobox", { name: "Provider" })).toBeNull()
+  expect(within(dialog).getAllByText("$")).toHaveLength(2)
+  expect(within(dialog).getAllByText("Enter a date, for example Nov 1, 2026")).toHaveLength(1)
+  expect(within(dialog).getByRole("button", { name: "Save balance" })).toBeEnabled()
+  vi.unstubAllGlobals()
 })

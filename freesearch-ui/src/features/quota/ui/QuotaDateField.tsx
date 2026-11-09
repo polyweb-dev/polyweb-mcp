@@ -32,7 +32,6 @@ export function QuotaDateField({ id, label, value, error, disabled, onChange }: 
       label={label}
       type="text"
       value={text}
-      hint="Enter a date, for example Nov 1, 2026"
       error={error ?? null}
       disabled={disabled}
       onChange={(next) => {

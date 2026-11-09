@@ -30,7 +30,7 @@ describe("quotaLabels controls", () => {
   })
 
   it("keeps the spend cap note exact", () => {
-    expect(SPEND_CAP_NOTE).toBe("Stop routing to this provider after this budget is used in the period")
+    expect(SPEND_CAP_NOTE).toBe("Stops this provider when the budget is used")
   })
 
   it("states both controls in the split note", () => {

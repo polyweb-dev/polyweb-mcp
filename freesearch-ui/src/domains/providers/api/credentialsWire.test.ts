@@ -2,9 +2,6 @@ import { describe, expect, it } from "vitest"
 import {
   decodeAvailableCredential,
   decodeBinding,
-  decodeOAuthDevice,
-  decodeOAuthStatus,
-  decodeProjectCredential,
   decodeProviderTypeView,
 } from "./credentialsWire"
 
@@ -26,39 +23,6 @@ const SECRET_LOOKING = {
 function serialized(value: unknown): string {
   return JSON.stringify(value)
 }
-
-describe("decodeProjectCredential", () => {
-  it("keeps can_manage and generation and nothing secret", () => {
-    const decoded = decodeProjectCredential({
-      id: "p1",
-      provider_type: "parallel",
-      owner_scope: "project",
-      label: "Team Parallel",
-      auth_mode: "oauth",
-      status: "active",
-      permitted_operations: ["fetch", "search", "crawl"],
-      can_manage: true,
-      generation: null,
-      ...SECRET_LOOKING,
-    })
-    expect(decoded).toEqual({
-      id: "p1",
-      providerType: "parallel",
-      owner: "project",
-      label: "Team Parallel",
-      authMode: "oauth",
-      status: "active",
-      permittedOperations: ["search", "fetch"],
-      canManage: true,
-      generation: null,
-    })
-    for (const value of Object.values(SECRET_LOOKING)) expect(serialized(decoded)).not.toContain(value)
-  })
-
-  it("rejects an unknown owner scope", () => {
-    expect(decodeProjectCredential({ id: "p1", provider_type: "x", owner_scope: "other" })).toBeNull()
-  })
-})
 
 describe("decodeProviderTypeView", () => {
   it("derives keyless access from catalog prices rather than a separate flag", () => {
@@ -99,13 +63,10 @@ describe("decodeProviderTypeView", () => {
     expect(decoded?.name).toBe("Tavily")
     expect(decoded?.killSwitch).toBe(true)
     expect(decoded?.credentials).toHaveLength(1)
-    expect(decoded?.credentials[0]?.pools).toEqual([{ operation: "search", poolId: "pool-1", label: "Tavily account" }])
+    expect(decoded?.credentials[0]).toEqual({ id: "c1", label: "Shared", authMode: "api_key" })
     expect(decoded?.bindings[0]).toEqual({
-      id: "b1",
       credentialId: "c1",
-      routeLabel: "primary",
       priority: 10,
-      enabledOperations: ["search"],
       effectiveOperations: [],
     })
     for (const value of Object.values(SECRET_LOOKING)) expect(serialized(decoded)).not.toContain(value)
@@ -122,9 +83,6 @@ describe("decodeAvailableCredential and decodeBinding", () => {
     expect(decodeAvailableCredential({ id: "c", owner_scope: "project" })).toMatchObject({
       label: "c",
       authMode: "api_key",
-      health: null,
-      healthCheckedAt: null,
-      pools: [],
     })
     expect(decodeBinding({ id: "b", credential_id: "c", enabled_operations: ["fetch"] })).toMatchObject({
       effectiveOperations: ["fetch"],
@@ -132,46 +90,4 @@ describe("decodeAvailableCredential and decodeBinding", () => {
     })
   })
 
-  it("decodes the time of the real call without leaking unrelated fields", () => {
-    const checkedAt = "2026-11-08T09:50:48Z"
-    expect(decodeAvailableCredential({ id: "c", owner_scope: "system", health_status: "healthy", health_checked_at: checkedAt, ...SECRET_LOOKING })).toMatchObject({
-      health: "healthy",
-      healthCheckedAt: checkedAt,
-    })
-  })
-})
-
-describe("decodeOAuthDevice", () => {
-  it("keeps the user code, link and timings only", () => {
-    const decoded = decodeOAuthDevice({
-      user_code: "WDJB-MJHT",
-      verification_uri: "https://auth.example.test/device",
-      interval: 7,
-      expires_in: 900,
-      device_code: "fake-device-code",
-      client_secret: "fake-client-secret",
-    })
-    expect(decoded).toEqual({
-      userCode: "WDJB-MJHT",
-      verificationUri: "https://auth.example.test/device",
-      intervalSeconds: 7,
-      expiresInSeconds: 900,
-    })
-    expect(serialized(decoded)).not.toContain("fake-device-code")
-  })
-
-  it("rejects a non-http verification link", () => {
-    expect(decodeOAuthDevice({ user_code: "A", verification_uri: "javascript:alert(1)", interval: 5, expires_in: 60 })).toBeNull()
-  })
-})
-
-describe("decodeOAuthStatus", () => {
-  it("keeps the status and a pending interval, never token material", () => {
-    expect(decodeOAuthStatus({ credential_id: "c", status: "pending", interval: 9, access_token: "t" })).toEqual({
-      status: "pending",
-      intervalSeconds: 9,
-    })
-    expect(decodeOAuthStatus({ status: "connected", interval: null })).toEqual({ status: "connected", intervalSeconds: null })
-    expect(decodeOAuthStatus({ status: "weird" })).toBeNull()
-  })
 })

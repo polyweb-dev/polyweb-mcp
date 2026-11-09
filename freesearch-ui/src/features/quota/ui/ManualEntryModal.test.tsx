@@ -114,8 +114,8 @@ describe("ManualQuotaModal", () => {
       target: { value: "lots" },
     })
     await user.click(screen.getByTestId("manual-quota-save"))
-    expect(await screen.findByTestId("manual-quota-allowance-error")).toBeInTheDocument()
-    expect(await screen.findByTestId("manual-quota-usage-error")).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByTestId("manual-quota-usage")).toHaveAttribute("aria-invalid", "true")
     expect(onSave).not.toHaveBeenCalled()
   })
 
@@ -157,7 +157,7 @@ describe("ManualQuotaModal", () => {
       "body.allowance: must be positive"
     )
     expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByTestId("manual-quota-save")).toHaveTextContent("Save provider balance")
+    expect(screen.getByTestId("manual-quota-save")).toHaveTextContent("Save balance")
   })
 
   it("offers Clear entry when editing and deletes without saving", async () => {

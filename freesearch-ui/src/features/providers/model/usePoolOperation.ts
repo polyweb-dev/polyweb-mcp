@@ -17,14 +17,14 @@ export function usePoolOperation(reload: () => void) {
       setChange(null)
       reload()
     } catch {
-      setError("The pool did not update. Try again.")
+      setError("The pool did not update. Try again")
     } finally {
       setPending(false)
     }
   }
   const toggle = (pool: ProjectPool, operation: PoolOperation, enabled: boolean) => {
     setError(null)
-    if (!enabled && pool.operations.length <= 1) setError("A pool must allow at least one operation.")
+    if (!enabled && pool.operations.length <= 1) setError("A pool must allow at least one operation")
     else if (!enabled) setChange({ pool, operation })
     else void save(pool, operation, true)
   }

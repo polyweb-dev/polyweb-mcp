@@ -69,7 +69,11 @@ describe("ProjectSettingsPage view", () => {
     await user.click(screen.getByRole("combobox", { name: "Payload detail" }))
     expect(screen.getByRole("option", { name: "Full requests" })).toBeInTheDocument()
     await user.keyboard("{Escape}")
-    expect(screen.getByRole("spinbutton", { name: "Days" })).toHaveAttribute("max", "90")
+    const days = screen.getByRole("spinbutton", { name: "Days" })
+    await user.clear(days)
+    await user.type(days, "91")
+    expect(days).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByText("Enter a whole number from 1 to 90")).toBeInTheDocument()
   })
 
   it("shows secret removal help without sampling or redaction controls", async () => {

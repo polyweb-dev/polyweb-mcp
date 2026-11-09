@@ -3,10 +3,10 @@ import { applySettingsCopy, getProjectSettings, previewSettingsCopy } from "@/do
 import type { CopyBinding, CopyMode, CopyPlan, CopyResult } from "@/domains/settings"
 import { isConflict, isForbidden } from "@/shared/api/conflict"
 
-export const COPY_CONFLICT = "Settings changed since the preview. Preview again."
-export const COPY_PREVIEW_FAILED = "The preview could not be loaded."
-export const COPY_APPLY_FAILED = "The settings could not be copied."
-export const COPY_FORBIDDEN = "You do not have permission to copy these settings."
+export const COPY_CONFLICT = "Settings changed since the preview. Preview again"
+export const COPY_PREVIEW_FAILED = "The preview could not be loaded"
+export const COPY_APPLY_FAILED = "The settings could not be copied"
+export const COPY_FORBIDDEN = "You do not have permission to copy these settings"
 
 /** "Copied 1 setting." / "Copied 3 settings." */
 export function copiedNotice(count: number): string {

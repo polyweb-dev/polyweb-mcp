@@ -12,6 +12,7 @@ import { Button } from "@/shared/ui/button"
 import { Field } from "@/shared/ui/Field"
 import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
+import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { Select } from "@/shared/ui/select"
 
@@ -78,7 +79,8 @@ function renderChooser({ props, vault, provider, setProvider, keys, item, setSel
   setSelected: (value: boolean) => void
 }) {
   const { pool, providers, onClose } = props
-  return <Modal isOpen onClose={onClose} title={pool ? "Edit pool" : `Add capacity to ${props.projectName}`} maxWidth="lg">
+  const identity = providerIdentity(pool ? pool.provider_type : provider)
+  return <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={identity.id} providerName={identity.name} action={pool ? "Edit pool" : `Add capacity to ${props.projectName}`} />} maxWidth="lg">
     {vault.status === "loading" && <p role="status">Loading keys...</p>}
     {vault.status === "error" && <p role="alert">{vault.error instanceof ApiError && vault.error.status === 404
       ? "Keys and pools are not available yet" : "Cannot load Keys and pools"}</p>}
@@ -119,11 +121,13 @@ export function ProjectCapacityDialog(props: Props) {
   const showPoolDialog = shouldOpenPoolDialog(item, props, keys, selected)
   if (vault.status === "ready" && shouldAddKey(props, keys, provider, selected)) {
     return <AddCapacityDialog provider={provider}
+      project={{ id: projectId, name: projectName, available_providers: [provider] }}
       projects={[{ id: projectId, name: projectName, available_providers: [provider] }]}
       onClose={onClose} onSaved={onSaved} />
   }
   if (showPoolDialog && item && vault.status === "ready") {
     return <AddCapacityDialog item={item} pool={vault.data.pool}
+      project={{ id: projectId, name: projectName, available_providers: [item.provider_type] }}
       projects={[{ id: projectId, name: projectName, available_providers: [item.provider_type] }]}
       onClose={onClose} onSaved={onSaved} />
   }

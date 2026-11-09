@@ -222,8 +222,8 @@ describe("ManualQuotaModal provider target", () => {
     expect(screen.queryByRole("option", { name: "Brave" })).toBeNull()
     expect(screen.queryByRole("option", { name: "Exa" })).toBeNull()
     expect(within(trigger as HTMLElement).getByTestId("provider-logo-brave")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("5.00")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(5.00)
     await user.click(trigger)
     expect(trigger.getAttribute("aria-expanded")).toBe("true")
     const popup = await screen.findByRole("listbox")
@@ -235,8 +235,8 @@ describe("ManualQuotaModal provider target", () => {
     await user.click(screen.getByRole("option", { name: "Exa" }))
     expect(screen.queryByRole("listbox")).toBeNull()
     expect(within(screen.getByRole("heading", { name: "Balance for Exa" })).getByTestId("provider-logo-exa")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("10.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("9.00")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(10.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(9.00)
   })
 
   it("holds the logo inside the trigger with no separate badge beside the combo", () => {
@@ -293,14 +293,14 @@ describe("ManualQuotaModal provider target", () => {
     await user.keyboard("{Escape}")
     expect(trigger.getAttribute("aria-expanded")).toBe("false")
     expect(screen.queryByRole("listbox")).toBeNull()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
     trigger.focus()
     await user.keyboard("{Enter}")
     await user.keyboard("{ArrowDown}")
     await user.keyboard("{Enter}")
     expect(within(screen.getByRole("heading", { name: "Balance for Exa" })).getByTestId("provider-logo-exa")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("10.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("9.00")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(10.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(9.00)
   })
 
   it("closes the open list on a click outside the combo", async () => {
@@ -345,8 +345,8 @@ describe("ManualQuotaModal balance prefill", () => {
         onSave={() => Promise.resolve({})}
       />,
     )
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("5.00")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(5.00)
     expect(screen.queryByTestId("manual-quota-prefill")).toBeNull()
     expect(screen.getByTestId("manual-quota-preview")).toHaveTextContent("100.0% remaining")
   })
@@ -366,8 +366,8 @@ describe("ManualQuotaModal balance prefill", () => {
         onSave={() => Promise.resolve({})}
       />,
     )
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("4.12")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(4.12)
     expect(screen.queryByTestId("manual-quota-prefill")).toBeNull()
   })
 })
@@ -403,8 +403,8 @@ describe("ManualQuotaModal target units", () => {
     await user.click(screen.getByRole("option", { name: "Exa" }))
     expect(screen.getByText("Allowance (USD)")).toBeInTheDocument()
     expect(screen.getByText("Balance remaining (USD)")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(null)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(null)
 
     fireEvent.change(screen.getByLabelText("Billing start"), {
       target: { value: "2026-10-01" },
@@ -458,8 +458,8 @@ describe("ManualQuotaModal target units", () => {
     await user.click(screen.getByRole("option", { name: "Tinyfish" }))
     expect(screen.getByText("Allowance (requests)")).toBeInTheDocument()
     expect(screen.getByText("Balance remaining (requests)")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(null)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(null)
   })
 
   it("uses Exa USD balance fields when no balance or catalog unit metadata is available", () => {

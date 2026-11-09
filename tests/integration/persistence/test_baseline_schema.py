@@ -72,6 +72,9 @@ _SPEC_COLUMNS: dict[str, frozenset[str]] = {
         "usage_url",
         "version",
     ),
+    "provider_budgets": _columns(
+        "provider", "auth_mode", "period", "search_crd_text", "fetch_crd_text", "version"
+    ),
     "provider_crd_grants": _columns(
         "provider",
         "operation",
@@ -399,6 +402,7 @@ _SPEC_COLUMNS: dict[str, frozenset[str]] = {
         "pool_id",
         "reserved_crd_text",
         "reserved_native_text",
+        "grant_window_start",
         "state",
         "created_at",
         "expires_at",

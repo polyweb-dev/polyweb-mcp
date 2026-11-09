@@ -55,7 +55,7 @@ export function ManualQuotaActions({
           Cancel
         </Button>
         <Button type="submit" size="form" data-testid="manual-quota-save" disabled={pending}>
-          {saving ? "Saving…" : "Save " + BALANCE_ENTRY.toLowerCase()}
+          {saving ? "Saving…" : "Save balance"}
         </Button>
       </FormActions>
       <ConfirmDialog

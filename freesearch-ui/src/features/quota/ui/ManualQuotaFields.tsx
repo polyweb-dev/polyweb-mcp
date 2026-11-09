@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { Select, type SelectOption } from "@/shared/ui/select"
+import { NumericField } from "@/shared/ui/NumericField"
 import { formatPercent1dp } from "../model/manualQuotaMath"
 import type { ManualAmountMode, ManualQuotaFieldErrors, ManualQuotaFields } from "../model/manualQuotaMath"
 import {
@@ -11,7 +12,6 @@ import {
 import { ManualQuotaField } from "./ManualQuotaField"
 import { QuotaDateField } from "./QuotaDateField"
 
-const INPUT_CLASS = "fs-input tnum"
 const BALANCE_MODE_LABEL: Record<CreditMode, string> = {
   free: "Free balance",
   paid: "Paid balance",
@@ -96,41 +96,40 @@ export function ManualQuotaFields({
     <div className="grid grid-cols-1 gap-3">
       {providerField}
       {modeField(providerId, mode, pending, onModeChange)}
-      <QuotaDateField
-        id={"manual-quota-start-" + providerId}
-        label="Billing start"
-        value={fields.billingStart}
-        error={fieldErrors.billingStart}
-        disabled={pending}
-        onChange={(value) => onChange("billingStart", value)}
-      />
-      <QuotaDateField
-        id={"manual-quota-end-" + providerId}
-        label="Billing end"
-        value={fields.billingEnd}
-        error={fieldErrors.billingEnd}
-        disabled={pending}
-        onChange={(value) => onChange("billingEnd", value)}
-      />
-      <ManualQuotaField
+      <div role="group" aria-label="Billing dates" aria-describedby={"manual-quota-dates-hint-" + providerId} className="space-y-1">
+        <div className="grid grid-cols-2 gap-3">
+          <QuotaDateField
+            id={"manual-quota-start-" + providerId}
+            label="Billing start"
+            value={fields.billingStart}
+            error={fieldErrors.billingStart}
+            disabled={pending}
+            onChange={(value) => onChange("billingStart", value)}
+          />
+          <QuotaDateField
+            id={"manual-quota-end-" + providerId}
+            label="Billing end"
+            value={fields.billingEnd}
+            error={fieldErrors.billingEnd}
+            disabled={pending}
+            onChange={(value) => onChange("billingEnd", value)}
+          />
+        </div>
+        <p id={"manual-quota-dates-hint-" + providerId} className="fs-hint">Enter a date, for example Nov 1, 2026</p>
+      </div>
+      <NumericField
         id={"manual-quota-allowance-" + providerId}
         testId="manual-quota-allowance"
         label={"Allowance (" + unit + ")"}
         error={fieldErrors.allowance}
         disabled={pending}
-        render={(inputProps) => (
-          <input
-            type="text"
-            inputMode="decimal"
-            autoComplete="off"
-            value={fields.allowance}
-            onChange={(event) => onChange("allowance", event.target.value)}
-            {...inputProps}
-            className={INPUT_CLASS}
-          />
-        )}
+        value={fields.allowance}
+        min="0"
+        step="any"
+        {...(unit === "USD" ? { prefix: "$" } : {})}
+        onChange={(value) => onChange("allowance", value)}
       />
-      <ManualQuotaField
+      <NumericField
         id={"manual-quota-usage-" + providerId}
         testId="manual-quota-usage"
         label={
@@ -139,19 +138,13 @@ export function ManualQuotaFields({
             : "Current usage (" + unit + ")"
         }
         error={fieldErrors.used}
-        meta={preview === null ? null : <span data-testid="manual-quota-preview" aria-live="polite" className="tnum text-[12px] text-[var(--muted)]">{formatPercent1dp(preview)}% remaining</span>}
+        hint={preview === null ? null : <span data-testid="manual-quota-preview" aria-live="polite" className="tnum">{formatPercent1dp(preview)}% remaining</span>}
         disabled={pending}
-        render={(inputProps) => (
-          <input
-            type="text"
-            inputMode="decimal"
-            autoComplete="off"
-            value={fields.used}
-            onChange={(event) => onChange("used", event.target.value)}
-            {...inputProps}
-            className={INPUT_CLASS}
-          />
-        )}
+        value={fields.used}
+        min="0"
+        step="any"
+        {...(unit === "USD" ? { prefix: "$" } : {})}
+        onChange={(value) => onChange("used", value)}
       />
     </div>
   )

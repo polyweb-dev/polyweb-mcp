@@ -1,7 +1,7 @@
 import React from "react"
 import { RefreshCw } from "lucide-react"
 import { Button } from "@/shared/ui/button"
-import { ProviderLogo } from "@/shared/ui/ProviderLogo"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { Tag } from "@/shared/ui/Tag"
 import {
   TableCell,
@@ -10,7 +10,7 @@ import {
 import { FETCH_BIT, SEARCH_BIT, providerCallCost, type ProviderConfig } from "@/domains/providers"
 import { stripProtocol } from "./providerDisplay"
 import type { TimedTestResult } from "./providerDisplay"
-import { ProviderHealthStatus } from "./ProviderHealthStatus"
+import { HealthStatus } from "@/shared/ui/HealthStatus"
 import { ProviderRegistryControls } from "./ProviderRegistryControls"
 
 interface ProviderRegistryRowProps {
@@ -43,8 +43,7 @@ function renderIdentityCell(provider: ProviderConfig) {
   return (
     <TableCell className={CELL}>
       <div className="flex items-center gap-2">
-        <ProviderLogo providerId={provider.id} name={provider.name} />
-        <span className="font-medium text-[var(--text-strong)]">{provider.name}</span>
+        <ProviderBadge providerId={provider.id} name={provider.name} />
         {provider.isCustom && <Tag tone="accent">Custom</Tag>}
         {provider.capabilities.includes("keyless_tier") && <Tag>No key needed</Tag>}
       </div>
@@ -58,7 +57,7 @@ function renderHealthCell({ provider, canEdit, testing, lastResult, now, onOpenT
   return (
     <TableCell className={CELL}>
       <div className="flex items-center gap-2">
-        <ProviderHealthStatus result={lastResult} testing={testing} now={now} health={provider.healthStatus} checkedAt={provider.healthCheckedAt ?? null} />
+        <HealthStatus result={lastResult} testing={testing} now={now} health={provider.healthStatus} checkedAt={provider.healthCheckedAt ?? null} />
         {canEdit && (
           <Button
             variant="ghost"

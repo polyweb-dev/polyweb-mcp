@@ -63,6 +63,7 @@ function manualModal(input: ProviderCardModalsProps): ReactNode {
   return (
     <ManualQuotaModal
       open
+      providerFixed
       providerId={providerId}
       providerName={providerName}
       unitKind={unit.unitKind}
@@ -110,6 +111,7 @@ function historyModal(input: ProviderCardModalsProps): ReactNode {
   return (
     <LimitHistoryModal
       open
+      providerId={input.providerId}
       providerName={input.providerName}
       events={controller.history}
       loading={controller.historyLoading}

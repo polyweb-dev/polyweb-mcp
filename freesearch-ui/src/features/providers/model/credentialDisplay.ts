@@ -13,9 +13,3 @@ export function isKeylessCredential(providerType: string, credential: Pick<Avail
   const keylessTier = catalogEntryForId(providerType)?.capabilities.includes("keyless_tier") === true
   return keylessTier && credential.authMode !== "oauth" && /keyless/i.test(credential.label)
 }
-
-/** Sentence case of a backend word such as `active` or `rate_limited`. */
-export function readableWord(value: string): string {
-  const spaced = value.replaceAll("_", " ")
-  return spaced.length === 0 ? spaced : spaced[0].toUpperCase() + spaced.slice(1)
-}

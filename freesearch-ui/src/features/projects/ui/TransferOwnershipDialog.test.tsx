@@ -43,6 +43,6 @@ it("does not offer transfer when no other active admin exists", async () => {
 it("disables transfer when the pool endpoint is not available", async () => {
   installFetchStub(() => err(404, null))
   render(<TransferOwnershipDialog projectId="p1" projectName="Project" members={admins} ownerId="old" onClose={vi.fn()} onSaved={vi.fn()} />)
-  expect(await screen.findByRole("alert")).toHaveTextContent("This action is not available yet.")
+  expect(await screen.findByRole("alert")).toHaveTextContent("This action is not available yet")
   expect(screen.getByRole("button", { name: "Transfer ownership" })).toBeDisabled()
 })

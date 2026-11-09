@@ -8,7 +8,7 @@ const info: ProviderInfo = { facts: [{ label: "Search cost (USD)", value: "$0.00
 
 describe("quota catalog prices", () => {
   it("replaces stale Keenable rail prices with the catalog prices", () => {
-    expect(catalogQuotaInfo(info, provider, "keyless")).toMatchObject({ creditNote: "Free tier", facts: [
+    expect(catalogQuotaInfo(info, provider, "keyless")).toMatchObject({ creditNote: "Free", facts: [
       { label: "Search cost", value: "Free" }, { label: "Fetch cost", value: "Free" },
     ] })
   })

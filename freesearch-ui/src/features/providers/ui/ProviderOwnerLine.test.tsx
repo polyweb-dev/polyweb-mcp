@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { MemoryRouter } from "react-router"
 import type { ProviderOwner } from "@/domains/projects"
 import type { ScopedResource } from "@/shared/lib/useScopedResource"
 import { ProviderOwnerLine } from "./ProviderOwnerLine"
@@ -35,7 +36,7 @@ describe("ProviderOwnerLine", () => {
   })
 
   it("offers project admins a transfer action", () => {
-    render(<ProviderOwnerLine owner={owner({ user_id: "me", email: "me@example.com" })} projectId="p1" accountId="me" isAdmin canConfigure onClaimed={vi.fn()} />)
+    render(<MemoryRouter><ProviderOwnerLine owner={owner({ user_id: "me", email: "me@example.com" })} projectId="p1" accountId="me" isAdmin canConfigure onClaimed={vi.fn()} /></MemoryRouter>)
     expect(screen.getByRole("link", { name: "Transfer ownership" })).toHaveAttribute("href", "/p/p1/members")
   })
 })

@@ -21,7 +21,6 @@ export interface ProviderInfoPopoverProps {
    * closed popover shows no vendor USD outside it.
    */
   nativeDisplay?: TavilyDisplayAdapter
-  inlineLabel?: boolean
 }
 
 const ROW = "grid w-full grid-cols-[fit-content(45%)_minmax(0,1fr)] items-baseline gap-x-3 border-b border-[var(--border-subtle)] py-2 last:border-0"
@@ -119,16 +118,14 @@ export function ProviderInfoPopover({
   info,
   auth,
   nativeDisplay,
-  inlineLabel = false,
 }: ProviderInfoPopoverProps): ReactNode {
   const [open, setOpen] = useState(false)
-  if (info.facts.length === 0 && info.usageUrl === null) return inlineLabel ? providerName : null
+  if (info.facts.length === 0 && info.usageUrl === null) return null
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
-          inlineLabel ? <Button type="button" variant="link" size="sm" className="h-auto p-0 text-[var(--text-strong)]"
-            aria-label={"Credit details for " + providerName} /> : <Button
+          <Button
             type="button"
             variant="ghost"
             size="icon-sm"
@@ -138,7 +135,7 @@ export function ProviderInfoPopover({
           />
         }
       >
-        {inlineLabel ? providerName : <Info aria-hidden="true" className={ICON} />}
+        <Info aria-hidden="true" className={ICON} />
       </PopoverTrigger>
       {open && (
         <PopoverContent

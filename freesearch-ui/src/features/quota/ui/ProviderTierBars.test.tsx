@@ -45,8 +45,8 @@ describe("ProviderTierBars", () => {
         tierSplitKnown
       />,
     )
-    expect(screen.getByText("Free tier")).not.toBeNull()
-    expect(screen.getByText("Paid tier")).not.toBeNull()
+    expect(screen.getByText("Free")).not.toBeNull()
+    expect(screen.getByText("Paid")).not.toBeNull()
     expect(screen.getByText("Resets on the first of the month")).not.toBeNull()
     expect(screen.getByText("Resets on the vendor period")).not.toBeNull()
   })
@@ -155,11 +155,11 @@ describe("ProviderTierBars", () => {
         tierSplitKnown
       />,
     )
-    const freeHeading = screen.getByText("Free tier")
+    const freeHeading = screen.getByText("Free")
     const barGroup = freeHeading.closest("div")?.parentElement
     expect(barGroup).not.toBe(null)
     expect(within(barGroup as HTMLElement).getByText("$0.005 of $0.01")).not.toBeNull()
-    expect(screen.queryByText("Paid tier")).toBe(null)
+    expect(screen.queryByText("Paid")).toBe(null)
   })
 })
 

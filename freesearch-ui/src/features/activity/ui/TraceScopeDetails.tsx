@@ -18,7 +18,7 @@ function field(label: string, value: ReactNode) {
 /** Trace-wide fields and output live beside the selected span, but stay folded. */
 export function TraceScopeDetails({ trace }: { trace: TraceDetail }) {
   return (
-    <div className="min-w-0 space-y-2 border-t border-[var(--border-subtle)] pt-3">
+    <div className="min-w-0 space-y-3">
       <AdvancedSection label="Trace metadata">
         <dl className="mt-2 grid min-w-0 grid-cols-2 gap-x-3 gap-y-2">
           {field("Trace ID", trace.traceId)}

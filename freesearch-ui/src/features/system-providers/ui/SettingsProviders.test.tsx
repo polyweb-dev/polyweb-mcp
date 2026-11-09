@@ -87,7 +87,7 @@ const settingsFeatureSource = [
   settingsModalSource,
   readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "../../../shared/ui/HealthStatus.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "../../../shared/ui/ReorderHandle.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
@@ -408,7 +408,7 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     await waitForProviders()
     expect(headerNames()).toContain("Health")
     for (const name of SEED_PROVIDER_NAMES) {
-      expect(cellFor(name, "Health").textContent?.trim()).toBe("—")
+      expect(within(cellFor(name, "Health")).getByText("Health not known")).toBeInTheDocument()
     }
     expect(screen.queryByText("Not tested")).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+\/\d+ healthy/)).not.toBeInTheDocument()
@@ -439,7 +439,7 @@ describe("P1F-3: endpoint/health ride in the merged row", () => {
     expect(dialog.textContent).toContain("Endpoint")
     expect(dialog.textContent).toContain("Capabilities")
     expect(dialog.textContent).toContain("Last test")
-    expect(dialog.textContent).not.toContain("Health")
+    expect(within(dialog).queryByText("Health", { exact: true })).not.toBeInTheDocument()
     expect(dialog.textContent).not.toContain("p95")
     expect(dialog.textContent).not.toContain("Quota")
   })
@@ -517,7 +517,7 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
     expect(stub.requestsTo("/api/v1/providers/brave/test")).toHaveLength(0)
     expect(dialog.textContent).toContain("Brave Search")
     expect(dialog.textContent).toContain("api.search.brave.com")
-    expect(dialog.textContent).not.toContain("Health")
+    expect(within(dialog).queryByText("Health", { exact: true })).not.toBeInTheDocument()
     expect(dialog.textContent).not.toContain("p95")
     expect(dialog.textContent).not.toContain("Quota")
     expect(dialog.textContent).not.toContain("∞")
@@ -562,11 +562,12 @@ describe("P1F-4: icon opens the ProviderTestModal (never fetches on open)", () =
     })
     // Last result lands in the modal (status + latency of the probe)...
     await waitFor(() => {
-      expect(screen.getByRole("dialog").textContent).toMatch(/Healthy · 142 ms/)
+      expect(within(screen.getByRole("dialog")).getByText("Healthy · just now")).toBeInTheDocument()
+      expect(within(screen.getByRole("dialog")).getByText("142 ms")).toBeInTheDocument()
     })
     // ...and in the row's Health cell.
     expect(cellFor("Brave Search", "Health").textContent).toContain("Healthy · just now")
-    expect(cellFor("Tavily", "Health").textContent?.trim()).toBe("—")
+    expect(within(cellFor("Tavily", "Health")).getByText("Health not known")).toBeInTheDocument()
   })
 
   it("Escape closes the test modal", async () => {
@@ -837,7 +838,7 @@ const settingsFeatureSource = [
   readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderTestModal.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderTestModalDetail.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "../../../shared/ui/HealthStatus.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "../../../shared/ui/ReorderHandle.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
@@ -1383,7 +1384,8 @@ describe("S-P1-5: all SettingsProviders contracts preserved in the table", () =>
       })
     )
     await waitFor(() => {
-      expect(screen.getByRole("dialog").textContent).toMatch(/Healthy · 142 ms/)
+      expect(within(screen.getByRole("dialog")).getByText("Healthy · just now")).toBeInTheDocument()
+      expect(within(screen.getByRole("dialog")).getByText("142 ms")).toBeInTheDocument()
     })
     const tests = stub.requestsTo("/api/v1/providers/brave/test")
     expect(tests).toHaveLength(1)
@@ -1546,7 +1548,7 @@ const settingsFeatureSource = [
   settingsModalSource,
   settingsPrioritySource,
   readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "../../../shared/ui/HealthStatus.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")
@@ -1787,7 +1789,8 @@ describe("S-P3-2: modal Test interaction states (Test/Testing... + POST)", () =>
     )
     // Last result lands in the modal (status + latency of the probe).
     await waitFor(() => {
-      expect(screen.getByRole("dialog").textContent).toMatch(/Healthy · 142 ms/)
+      expect(within(screen.getByRole("dialog")).getByText("Healthy · just now")).toBeInTheDocument()
+      expect(within(screen.getByRole("dialog")).getByText("142 ms")).toBeInTheDocument()
     })
   })
 
@@ -1981,7 +1984,7 @@ const settingsFeatureSource = [
   settingsModalSource,
   readFileSync(path.resolve(testDir, "./ProviderRegistryRow.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderRegistryHeader.tsx"), "utf8"),
-  readFileSync(path.resolve(testDir, "./ProviderHealthStatus.tsx"), "utf8"),
+  readFileSync(path.resolve(testDir, "../../../shared/ui/HealthStatus.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./ProviderOperationControl.tsx"), "utf8"),
   readFileSync(path.resolve(testDir, "./providerDisplay.ts"), "utf8"),
 ].join("\n")

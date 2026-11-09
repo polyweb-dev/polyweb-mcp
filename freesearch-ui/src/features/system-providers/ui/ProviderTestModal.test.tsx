@@ -12,7 +12,7 @@ const props = { provider, now, testing: false, onTest: vi.fn(), onClose: vi.fn()
 describe("ProviderTestModal", () => {
   it("names the provider with its logo and keeps an absent probe separate from call health", () => {
     render(<ProviderTestModal {...props} />)
-    const dialog = screen.getByRole("dialog", { name: "Test Brave Search" })
+    const dialog = screen.getByRole("dialog", { name: "Test for Brave Search" })
     expect(within(dialog).getByTestId("provider-logo-brave")).toBeInTheDocument()
     expect(within(dialog).getByText("Last test")).toBeInTheDocument()
     expect(within(dialog).getByText("—")).toBeInTheDocument()
@@ -22,6 +22,8 @@ describe("ProviderTestModal", () => {
   it("shows a relative probe time with the exact timestamp on hover", () => {
     const checkedAt = now - 300_000
     render(<ProviderTestModal {...props} lastResult={{ checkedAt, success: true, latencyMs: 1531, message: "" }} />)
-    expect(screen.getByText("Healthy · 1,531 ms · 5 min ago")).toHaveAttribute("title", formatDateTime(new Date(checkedAt).toISOString()))
+    expect(screen.getByText("Healthy · 5 min ago")).toBeInTheDocument()
+    expect(screen.getByText("1,531 ms")).toBeInTheDocument()
+    expect(screen.getByTitle(`Last test: ${formatDateTime(new Date(checkedAt).toISOString())} · 1,531 ms`)).toBeInTheDocument()
   })
 })

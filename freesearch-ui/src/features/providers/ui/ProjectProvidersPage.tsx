@@ -58,8 +58,8 @@ function operationConfirmation(operation: ReturnType<typeof usePoolOperation>, p
   const change = operation.change
   const label = change?.operation === "search" ? "Search" : "Fetch"
   const remaining = change?.operation === "search" ? "Fetch" : "Search"
-  return <ConfirmDialog open={change !== null} title={`Remove ${label} from ${change?.pool.label ?? "this pool"}`}
-    message={`${change ? providerTypeName(change.pool.provider_type) : "This provider"} leaves the ${label} order of ${projectName}. ${remaining} stays on.`} confirmLabel={`Remove ${label}`}
+  return <ConfirmDialog open={change !== null} title={`Stop ${label} in pool ${change?.pool.label ?? "—"}`}
+    message={`${change ? providerTypeName(change.pool.provider_type) : "This provider"} leaves the ${label} order of ${projectName}. ${remaining} stays on`} confirmLabel={`Stop ${label}`}
     pending={operation.pending} error={operation.error} onClose={operation.close} onConfirm={operation.confirm} />
 }
 

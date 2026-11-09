@@ -19,7 +19,7 @@ from freesearch.persistence.projects import ProjectRepository
 
 _OLD = "0002_capacity_actor"
 _VAULT = "0003_vault_rbac"
-_HEAD = "0006_keyless_credentials"
+_HEAD = migrations.migration_head()
 
 
 @pytest.fixture

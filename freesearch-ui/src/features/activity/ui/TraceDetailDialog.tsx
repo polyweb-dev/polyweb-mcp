@@ -146,7 +146,7 @@ export function TraceDetailDialog({
       {status === "error" && (
         <div className="space-y-3">
           <p role="alert" className="text-[13px]" style={{ color: "var(--status-danger)" }}>
-            Trace detail unavailable: {error}
+            Trace detail unavailable: {error?.replace(/\.$/, "")}
           </p>
           <Button variant="outline" size="form" onClick={onRetry}>
             Retry
@@ -156,7 +156,7 @@ export function TraceDetailDialog({
 
       {status === "missing" && (
         <p role="alert" className="text-[13px] text-[var(--muted)]">
-          {error}
+          {error?.replace(/\.$/, "")}
         </p>
       )}
 

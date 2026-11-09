@@ -53,7 +53,7 @@ export function UsdGrantForm(props: UsdGrantFormProps) {
     <FormActions {...(staleVersion ? { start: <Button type="button" variant="ghost" size="form"
       onClick={props.onReload}>Reload limits</Button> } : {})}>
       <Button type="button" variant="outline" size="form" onClick={props.onClose}>Cancel</Button>
-      <Button type="submit" size="form" disabled={saving}>{saving ? "Saving?" : "Save budget limit"}</Button>
+      <Button type="submit" size="form" disabled={saving}>{saving ? "Saving…" : "Save budget limit"}</Button>
     </FormActions>
   </form>
 }

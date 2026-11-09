@@ -1,7 +1,7 @@
 import { catalogFree, catalogQuotaInfo } from "../model/catalogQuota"
 import { useMemo, useState } from "react"
 import type { ReactNode } from "react"
-import { ProviderLogo } from "@/shared/ui/ProviderLogo"
+import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { Tag } from "@/shared/ui/Tag"
 import { formatDateTime, formatRelativeTime } from "@/shared/lib/formatTime"
 import type { KeyBalance } from "../model/keyBalances"
@@ -60,26 +60,34 @@ interface TableRowsInput {
   refresh: ReactNode
   identity: ReactNode
   actions: ReactNode
+  oauthActions: ReactNode
   fallback: string | null
   refreshable: boolean
   now: number
+}
+
+function keyOAuthActions(key: KeyBalance | null, actions: ReactNode, status: ReactNode): ReactNode {
+  if (key === null) return status == null ? actions : null
+  if (key.authMode !== "oauth" || key.oauthConnected !== false) return null
+  return <><Tag tone="neutral">Disconnected</Tag>{actions}</>
 }
 
 function keyTableRows(input: TableRowsInput): ReactNode {
   const rows: (KeyBalance | null)[] = input.keys.length ? input.keys : [null]
   return rows.map((key, index) => (
     <tr key={key?.keyId ?? "empty"}>
-      {index === 0 && <td rowSpan={rows.length} className="align-middle">{input.identity}</td>}
+      {index === 0 && <td rowSpan={rows.length} className="fs-cell-strong align-middle">{input.identity}</td>}
       <td className="align-middle">{key?.label ?? input.keyStatus ?? "—"}</td>
-      <td className="align-middle text-[var(--muted)]">
+      <td className="align-middle">
         {keyBalanceText(key, input.keys.length <= 1 ? input.fallback : null, input.refreshable)}
       </td>
       <td className="align-middle text-[var(--muted)]">{keyRefreshTime(key, input.now)}</td>
-      {index === 0 && <td rowSpan={rows.length} className="align-middle">
+      <td className="fs-cell-actions min-w-80 align-middle">
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {input.refresh}{input.actions}{input.keys.length > 0 && input.keyStatus}
+          {index === 0 && <>{input.refresh}{input.actions}{input.keys.length > 0 && input.keyStatus}</>}
+          {keyOAuthActions(key, input.oauthActions, input.keyStatus)}
         </div>
-      </td>}
+      </td>
     </tr>
   ))
 }
@@ -123,8 +131,8 @@ export function ProviderUsageRow(props: ProviderUsageRowProps): ReactNode {
         onClose={() => setModal(null)}
       />
   const identity = <><div className="flex items-center gap-2">
-    <ProviderLogo providerId={providerId} name={providerName} />
-    <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={view.auth} inlineLabel
+    <ProviderBadge providerId={providerId} name={providerName} />
+    <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={view.auth}
       {...(view.nativeDisplay === null ? {} : { nativeDisplay: view.nativeDisplay })} />
     {free && <Tag tone="neutral">Free</Tag>}
   </div>{modals}</>
@@ -132,7 +140,7 @@ export function ProviderUsageRow(props: ProviderUsageRowProps): ReactNode {
     <ProviderCardActions providerName={providerName} syncing={controller.syncing}
       updatedAt={controller.updatedAt} onSync={() => void controller.syncNow()}
       refreshSkipped={hideRowRefresh(view, controller, props.keyBalances != null)}
-      syncNote={note === status ? null : note} oauthActions={oauthActions} />
+      syncNote={note === status ? null : note} />
     <ProviderCardMenu providerName={providerName} manualEligible={manualEligible && !free}
       budgetAllowed={!free} historyAllowed={!(free && view.auth.rate_progress.some((entry) => entry.source === "local_attempts"))}
       onOpenModal={setModal} />
@@ -140,7 +148,7 @@ export function ProviderUsageRow(props: ProviderUsageRowProps): ReactNode {
   const renderTable = (keys: KeyBalance[], keyStatus: ReactNode, refresh: ReactNode) => {
     if (view.keyless && keys.length === 0 && keyStatus == null) return null
     const fallback = view.keyless || (keys.length === 0 && props.keyBalances != null) ? null : status
-    return keyTableRows({ keys, keyStatus, refresh, identity, actions, fallback, refreshable: view.refreshable, now })
+    return keyTableRows({ keys, keyStatus, refresh, identity, actions, oauthActions, fallback, refreshable: view.refreshable, now })
   }
   return props.keyBalances == null ? renderTable([], null, null) : (
     <KeyBalancesLayoutScope.Provider value={{ compact: true, actionsTarget: null, renderTable }}>

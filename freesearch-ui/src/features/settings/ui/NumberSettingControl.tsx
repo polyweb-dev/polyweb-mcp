@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { SETTING_FIELD_CLASS } from "./settingControlStyles"
+import { NumericField } from "@/shared/ui/NumericField"
 
 interface NumberSettingControlProps {
   id: string
@@ -13,10 +13,6 @@ interface NumberSettingControlProps {
   /** Called on mount, on every validity change, and with `true` on unmount. */
   onValidity?: (valid: boolean) => void
 }
-
-/** Hide the native spinner arrows; the value is typed. */
-const NO_SPINNER =
-  "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
 
 function parseInBounds(text: string, bounds: NumberSettingControlProps["bounds"]): number | null {
   if (text.trim() === "") return null
@@ -39,7 +35,6 @@ function rangeMessage(bounds: NumberSettingControlProps["bounds"]): string {
 export function NumberSettingControl({ id, label, value, bounds, disabled, suffix, onChange, onValidity }: NumberSettingControlProps) {
   const [text, setText] = useState(value === null ? "" : String(value))
   const invalid = parseInBounds(text, bounds) === null
-  const errorId = `${id}-error`
   const report = useRef(onValidity)
 
   useEffect(() => {
@@ -51,36 +46,25 @@ export function NumberSettingControl({ id, label, value, bounds, disabled, suffi
   useEffect(() => () => report.current?.(true), [])
 
   return (
-    <div>
-      <div className="relative">
-        <input
-          id={id}
-          aria-label={label}
-          type="number"
-          min={bounds.min}
-          max={bounds.max}
-          step={bounds.step}
-          value={text}
-          disabled={disabled}
-          aria-invalid={invalid}
-          aria-describedby={invalid ? errorId : undefined}
-          className={`${SETTING_FIELD_CLASS} ${NO_SPINNER}${suffix === undefined ? "" : " pr-8"}`}
-          onChange={(event) => {
-            setText(event.target.value)
-            const next = parseInBounds(event.target.value, bounds)
-            if (next !== null) onChange(next)
-          }}
-        />
-        {suffix !== undefined && (
-          <span aria-hidden="true" className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[13px] text-[var(--muted)]">
-            {suffix}
-          </span>
-        )}
-      </div>
-      {invalid && (
-        <p id={errorId} className="fs-field-error">
-          {rangeMessage(bounds)}
-        </p>
+    <div className={`relative [&_label]:sr-only${suffix === undefined ? "" : " [&_input]:pr-10"}`}>
+      <NumericField
+        id={id}
+        label={label}
+        min={bounds.min}
+        step={bounds.step}
+        value={text}
+        disabled={disabled}
+        error={invalid ? rangeMessage(bounds) : undefined}
+        onChange={(text) => {
+          setText(text)
+          const next = parseInBounds(text, bounds)
+          if (next !== null) onChange(next)
+        }}
+      />
+      {suffix !== undefined && (
+        <span aria-hidden="true" className="pointer-events-none absolute top-4 right-3 -translate-y-1/2 text-[13px] text-[var(--muted)]">
+          {suffix}
+        </span>
       )}
     </div>
   )

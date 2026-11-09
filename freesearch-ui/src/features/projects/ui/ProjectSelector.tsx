@@ -20,7 +20,7 @@ export interface ProjectSelectorProps {
  * loads or after a failure, the shell's main area shows the status or the
  * error with Retry. The menu lists projects by name. Choosing a project goes to the path
  * the shell builds (it keeps the current section) and remembers the choice as
- * the account's last project: an explicit choice is the only writer. Escape
+ * the account's last project. Successful project page visits remember it too. Escape
  * and outside clicks dismiss the menu; Escape returns focus to the trigger.
  */
 export function ProjectSelector({

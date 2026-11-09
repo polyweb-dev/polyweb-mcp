@@ -1,9 +1,10 @@
-import { useMemo } from "react"
+import { useEffect, useMemo } from "react"
 import type { ReactNode } from "react"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
 import type { ScopedResourceState } from "@/shared/lib/useScopedResource"
 import { getProjectAccess } from "../api/projectsApi"
 import type { ProjectAccess } from "../model/types"
+import { writeLastProject } from "../model/lastProject"
 import { ProjectScopeContext } from "./context"
 import type { ProjectScopeContextValue } from "./context"
 import { useProjects } from "./useProjects"
@@ -42,6 +43,14 @@ export function ProjectScopeProvider({
     if (resource.status === "error") return { status: "error", error: resource.error }
     return { status: "loading" }
   }, [resource])
+
+  // Direct links and project-list navigation also count as visits. Wait for
+  // access to succeed so an unavailable project never replaces the preference.
+  useEffect(() => {
+    if (accountId !== "" && projectId !== null && accessState.status === "ready") {
+      writeLastProject(accountId, projectId)
+    }
+  }, [accountId, projectId, accessState.status])
 
   const value = useMemo<ProjectScopeContextValue | undefined>(() => {
     if (projectId === null) return undefined

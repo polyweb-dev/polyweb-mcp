@@ -7,6 +7,11 @@ const SINGLE_CONTRIBUTOR = 1
 
 function plainSnippet(snippet: string): string {
   return snippet
+    .replace(/^[ \t]*\|?[ \t:|-]*---[ \t:|-]*\|?[ \t]*$/gm, "")
+    .replace(/^[ \t]*\|.*$/gm, (row) => row
+      .replace(/^[ \t]*\|[ \t]*|[ \t]*\|[ \t]*$/g, "")
+      .replace(/(?<!\\)[ \t]*\|[ \t]*/g, " "))
+    .replace(/\\\|/g, "|")
     .replace(/!?\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|>\s*)/gm, "")
     .replace(/(\*\*|__|~~|`)(.*?)\1/g, "$2")
@@ -38,13 +43,13 @@ function contributorsOf(result: SearchResult): ResultProviderView[] {
  * Playground adapter: one execution result in the shared presentation. The
  * match score stays a percentage and the recorded published date is kept.
  */
-export function toPlaygroundResultView(result: SearchResult): SearchResultView {
+export function toPlaygroundResultView(result: SearchResult, showAttribution = true): SearchResultView {
   return {
     id: result.id,
     title: result.title,
     url: result.url,
     snippet: plainSnippet(result.snippet),
-    providers: contributorsOf(result),
+    providers: showAttribution ? contributorsOf(result) : [],
     attributionLabel: "Attributed",
     score: { label: "Score", value: result.relevanceScore, format: "percent" },
     ...(result.publishedDate !== undefined ? {

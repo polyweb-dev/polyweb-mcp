@@ -24,7 +24,7 @@ describe("AddCapacityDialog", () => {
   it("explains the inline key step and marks empty required fields", async () => {
     render(<AddCapacityDialog provider="exa" projects={[{ id: "p1", name: "Gamma - Admins only", available_providers: ["exa"] }]}
       onClose={vi.fn()} onSaved={vi.fn()} />)
-    expect(screen.getByRole("dialog", { name: "Add key" })).toBeInTheDocument()
+    expect(screen.getByRole("dialog", { name: /Add key for / })).toBeInTheDocument()
     expect(screen.getByText("You have no Exa key yet. Add one, then create the pool for Gamma - Admins only")).toBeInTheDocument()
     expect(screen.getByLabelText("Label")).toHaveValue("Exa key")
     await userEvent.clear(screen.getByLabelText("Label"))
@@ -39,7 +39,7 @@ describe("AddCapacityDialog", () => {
     render(<AddCapacityDialog provider="exa" projects={[]} onClose={vi.fn()} onSaved={vi.fn()} />)
     await userEvent.type(screen.getByLabelText("API key"), "secret")
     await userEvent.click(screen.getByRole("button", { name: "Add key" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent("The key did not save. A key with this label exists.")
+    expect(await screen.findByRole("alert")).toHaveTextContent("The key did not save. A key with this label exists")
     expect(screen.getByLabelText("API key")).toHaveValue("")
   })
 
@@ -48,7 +48,7 @@ describe("AddCapacityDialog", () => {
     expect(screen.getByLabelText("Budget (USD)")).toHaveValue(20)
     expect(screen.getByRole("combobox", { name: "Budget period" })).toHaveTextContent("Per month")
     expect(screen.getByText("$0.00 of $20.00 this month")).toBeInTheDocument()
-    expect(screen.getByText("Calls with no known cost do not count. Resets each period")).toBeInTheDocument()
+    expect(screen.getByText("Calls with no known cost do not count toward the budget. Resets each period")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Advanced" })).not.toBeInTheDocument()
     expect(screen.getByLabelText("Request rate")).toHaveValue(60)
     expect(screen.getByText("Brave Search has no Fetch")).toBeInTheDocument()
@@ -59,7 +59,7 @@ describe("AddCapacityDialog", () => {
   it.each([false, true])("hides budget controls for a free provider (edit: %s)", async (edit) => {
     render(<AddCapacityDialog item={{ ...item, provider_type: "tinyfish" }} pool={edit ? { ...pool, provider_type: "tinyfish" } : undefined}
       projects={[{ id: "p1", name: "Alpha", available_providers: ["tinyfish"] }]} onClose={vi.fn()} onSaved={vi.fn()} />)
-    expect(screen.queryByRole("switch", { name: "Add a budget" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("switch", { name: "Budget" })).not.toBeInTheDocument()
     expect(screen.queryByLabelText("Budget (USD)")).not.toBeInTheDocument()
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument()
     expect(screen.getByRole("switch", { name: "Limit Search and Fetch separately" })).toBeInTheDocument()
@@ -78,20 +78,20 @@ describe("AddCapacityDialog", () => {
       { id: "b", name: "Beta", available_providers: ["you"] },
     ]} onClose={vi.fn()} onSaved={vi.fn()} />)
     const user = userEvent.setup()
-    const keyDialog = screen.getByRole("dialog", { name: "Add key" })
+    const keyDialog = screen.getByRole("dialog", { name: /Add key for / })
     expect(within(keyDialog).getByTestId("provider-logo-youcom")).toBeInTheDocument()
     await user.type(within(keyDialog).getByLabelText("API key"), "secret")
     await user.click(within(keyDialog).getByRole("button", { name: "Add key" }))
-    const poolDialog = await screen.findByRole("dialog", { name: "Create pool from You.com key" })
+    const poolDialog = await screen.findByRole("dialog", { name: "Create pool for You.com" })
     await user.click(within(poolDialog).getByRole("combobox", { name: "Project" }))
     await user.click(await screen.findByRole("option", { name: "Beta" }))
-    await user.click(within(poolDialog).getByRole("switch", { name: "Add a budget" }))
+    await user.click(within(poolDialog).getByRole("switch", { name: "Budget" }))
     await user.type(within(poolDialog).getByLabelText("Budget (USD)"), "5")
     await user.click(within(poolDialog).getByRole("combobox", { name: "Budget period" }))
     await user.click(await screen.findByRole("option", { name: "Per week" }))
     await user.click(within(poolDialog).getByRole("button", { name: "Create pool" }))
     await waitFor(() => expect(api.createKeyPool).toHaveBeenCalledWith("key", expect.objectContaining({
-      project_id: "b", label: "Beta - You.com", budget: { limit: 5, period: "week" },
+      project_id: "b", label: "Beta", budget: { limit: 5, period: "week" },
     })))
   })
 })

@@ -250,7 +250,7 @@ describe("TraceInspectionWorkspace", () => {
     expect(screen.queryByText(/fusion/i)).not.toBeInTheDocument()
   })
 
-  it("shows the complete recorded fetch document in its full-height pane", () => {
+  it("shows the complete recorded fetch document in its full-height pane", async () => {
     const content = "Stored document body. ".repeat(40)
     const detail = mapTraceDetail(errorTraceDetailFixture({
       output: {
@@ -272,6 +272,8 @@ describe("TraceInspectionWorkspace", () => {
     )
 
     const article = screen.getByRole("article")
+    expect(article).toHaveTextContent(content.trim())
+    await userEvent.click(within(article).getByRole("button", { name: "Raw" }))
     expect(article.querySelector("pre")?.textContent).toBe(content)
     expect(within(article).getByText(`${content.length.toLocaleString("en-US")} characters`)).toBeInTheDocument()
     expect(within(article).queryByRole("button", { name: /show full content/i })).not.toBeInTheDocument()

@@ -22,7 +22,7 @@ export function ProviderCardHeader({ providerId, providerName, titleId, free, st
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h4 id={titleId} className="truncate text-[15px] font-semibold text-[var(--text-strong)]">{providerName}</h4>
-            {free && <Tag tone="neutral">Free tier</Tag>}
+            {free && <Tag tone="neutral">Free</Tag>}
             {info}
           </div>
           {statement !== null && <p className="text-[12px] text-[var(--muted)]" title={recordedAt}>{statement}</p>}

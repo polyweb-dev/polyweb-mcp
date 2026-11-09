@@ -7,6 +7,7 @@ import { listKeyBalances } from "@/features/quota/model/keyBalances"
 import type { RateTierSlotArgs } from "@/features/quota/ui/ProviderLimitsCard"
 import { isManualQuotaEligible } from "@/features/quota/model/quotaEligibility"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
+import { LinkButton } from "@/shared/ui/LinkButton"
 import { TavilyRateTierSelect } from "./TavilyRateTierSelect"
 
 /**
@@ -52,8 +53,8 @@ export const QuotaAnalytics: FC<{
       manualQuotaEligible={manualQuotaEligible}
       refreshableProviders={oauth.status === "ready" && oauth.data ? new Set(["parallel"]) : new Set()}
       renderOAuthActions={({ providerId }) => (
-        providerId === "parallel" && oauth.status === "ready" && !oauth.data
-          ? <span className="text-[12px] text-[var(--muted)]">Connect Parallel in <a className="underline" href="/account/keys">Keys and pools</a></span>
+        providerId === "parallel" && oauth.status === "ready"
+          ? <LinkButton to="/account/keys">Connect in Keys and pools</LinkButton>
           : null
       )}
       renderKeyBalances={canEditControls ? (providerId, providerName) => (

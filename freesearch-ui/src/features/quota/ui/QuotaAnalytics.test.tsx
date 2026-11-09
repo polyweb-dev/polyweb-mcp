@@ -1,6 +1,7 @@
 import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, render as renderUi, screen, waitFor, within } from "@testing-library/react"
+import { MemoryRouter } from "react-router"
 import userEvent from "@testing-library/user-event"
 import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { QuotaAnalytics } from "./QuotaAnalytics"
@@ -19,6 +20,10 @@ import {
   dashboardFixture as manualDashboardFixture,
   type WireDashboardQuota,
 } from "@/test/backendFixtures"
+
+function render(ui: React.ReactElement) {
+  return renderUi(ui, { wrapper: MemoryRouter })
+}
 
 /**
  * UI7 shell: QuotaAnalytics is a compatibility shell over QuotaPage.
@@ -179,10 +184,14 @@ describe("QuotaAnalytics shell (UI7)", () => {
       }
       if (status === "connected") {
         expect(await screen.findByRole("button", { name: "Refresh Parallel balances" })).toBeInTheDocument()
-        expect(screen.queryByRole("link", { name: "Keys and pools" })).toBeNull()
+        expect(screen.queryByRole("link", { name: "Connect in Keys and pools" })).toBeNull()
       } else {
         expect(screen.queryByRole("button", { name: "Refresh Parallel balances" })).toBeNull()
-        expect(await screen.findByRole("link", { name: "Keys and pools" })).toHaveAttribute("href", "/account/keys")
+        if (status === "api-only") {
+          expect(screen.queryByRole("link", { name: "Connect in Keys and pools" })).toBeNull()
+        } else {
+          expect(await screen.findByRole("link", { name: "Connect in Keys and pools" })).toHaveAttribute("href", "/account/keys")
+        }
       }
       expect(stub.requests.some((req) => req.url.includes("/account/vault/keys"))).toBe(false)
     },
@@ -241,10 +250,8 @@ describe("QuotaAnalytics shell (UI7)", () => {
     expect(within(card).queryByRole("button", { name: /Provider Balance/ })).toBeNull()
     const creditRow = screen.getByText("$4.5").closest("span")?.parentElement?.parentElement
     const children = Array.from(creditRow?.children ?? [])
-    expect(children.length).toBe(2)
-    // This fixture names no usage API, so the leading slot holds no Refresh.
-    expect(children[0]?.textContent).toBe("")
-    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
+    expect(children.length).toBe(1)
+    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
     const bar = screen.getByRole("progressbar", { name: "Brave Search balance remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
   })

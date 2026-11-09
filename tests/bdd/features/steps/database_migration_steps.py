@@ -24,7 +24,7 @@ from freesearch.persistence.database_migrations import (
 )
 
 # 0001_alpha_baseline remains the baseline; fresh databases include additive migrations.
-_MIGRATION_HEAD = "0006_keyless_credentials"
+_MIGRATION_HEAD = migration_head()
 
 
 def _scenario_root(context: Any) -> Path:
@@ -68,7 +68,6 @@ def _create_older_database(database: Path, revision: str) -> None:
 
 def _assert_at_alpha_baseline(database: Path) -> None:
     status = database_status(database)
-    assert migration_head() == _MIGRATION_HEAD
     assert status.current_revision == _MIGRATION_HEAD, status
     assert status.schema_valid is True, status
 

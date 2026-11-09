@@ -12,12 +12,11 @@ import { displayAdapterOf } from "../model/tavilyCredits"
 import { ProviderInfoPopover } from "./ProviderInfoPopover"
 
 describe("ProviderInfoPopover table trigger", () => {
-  it("opens details from the provider name", async () => {
+  it("opens details from the separate info button", async () => {
     const auth = tavilyAuth()
     render(<ProviderInfoPopover providerId="tavily" providerName="Tavily"
-      auth={auth} info={providerInfo(auth, "tavily")} inlineLabel />)
+      auth={auth} info={providerInfo(auth, "tavily")} />)
     const trigger = screen.getByRole("button", { name: "Credit details for Tavily" })
-    expect(trigger).toHaveTextContent("Tavily")
     await userEvent.click(trigger)
     expect(screen.getByText("Quota details")).toBeInTheDocument()
   })
@@ -201,7 +200,7 @@ describe("ProviderInfoPopover order", () => {
       const position = elements[index - 1].compareDocumentPosition(elements[index])
       expect(position & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     }
-    expect(screen.getByText("Free tier")).not.toBeNull()
+    expect(screen.getByText("Free")).not.toBeNull()
     expect(screen.getByText("Search budget limit")).not.toBeNull()
     expect(screen.getByText("Extract budget limit")).not.toBeNull()
     expect(screen.getByRole("link", { name: "Tavily usage page" })).not.toBeNull()

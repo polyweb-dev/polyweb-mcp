@@ -1,7 +1,7 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
-import { ProviderLogo } from "@/shared/ui/ProviderLogo"
+import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { unitLabel } from "@/services/api/mappers"
 import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQuotaWire"
@@ -28,6 +28,8 @@ export interface ManualEntryVariant {
   creditMode?: CreditMode
   /** The selectable providers of the dropdown; the own provider is the default. */
   providers?: ProviderConfig[]
+  /** A provider menu fixes the target for this entry session. */
+  providerFixed?: boolean
   /** Native entry units for each selectable provider. */
   providerUnits?: Readonly<Record<string, ManualUnit>>
   /** The observed balance per provider, which starts a new entry as an estimate. */
@@ -202,7 +204,7 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
       isOpen={open}
       onClose={onClose}
       maxWidth="md"
-      title={<><ProviderLogo providerId={target.id} name={target.name} />{"Balance for " + target.name}</>}
+      title={<ProviderDialogTitle providerId={target.id} providerName={target.name} action="Balance" />}
       subtitle={BALANCE_ENTRY_NOTE}
     >
       <ManualEntryForm
@@ -214,7 +216,7 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
         observed={observed?.[target.id] ?? null}
         creditMode={creditMode}
         amountMode={targetUnit.amountMode}
-        providerField={providerField(options, target, setTarget)}
+        providerField={props.providerFixed ? null : providerField(options, target, setTarget)}
         onSave={saveFor(onSave, own, target.id)}
         {...deleteProp(onDelete)}
         onClose={onClose}

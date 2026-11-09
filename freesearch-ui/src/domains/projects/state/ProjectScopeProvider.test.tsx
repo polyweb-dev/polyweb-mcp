@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
-import { err, installFetchStub, ok } from "@/test/fetchMock"
+import { deferred, err, installFetchStub, ok } from "@/test/fetchMock"
+import { readLastProject } from "../model/lastProject"
 import { ProjectsProvider } from "./ProjectsProvider"
 import { ProjectScopeProvider } from "./ProjectScopeProvider"
 import { useProjectScope, useProjectScopeOptional } from "./useProjectScope"
@@ -33,7 +34,35 @@ function stubAll() {
 }
 
 describe("ProjectScopeProvider", () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.localStorage.clear()
+  })
+
+  it("remembers a direct project visit only once its access succeeds", async () => {
+    const access = deferred<Response>()
+    installFetchStub((req) => req.url === "/api/v1/projects/p-a/access" ? access.promise : ok([]))
+    render(
+      <ProjectsProvider accountId="acc">
+        <ProjectScopeProvider accountId="acc" projectId="p-a"><Probe /></ProjectScopeProvider>
+      </ProjectsProvider>
+    )
+    expect(readLastProject("acc")).toBeNull()
+    access.resolve(ok(ACCESS_A))
+    await waitFor(() => expect(readLastProject("acc")).toBe("p-a"))
+    expect(readLastProject("another-account")).toBeNull()
+  })
+
+  it("does not remember an inaccessible project", async () => {
+    installFetchStub((req) => req.url === "/api/v1/projects/p-a/access" ? err(404, null) : ok([]))
+    render(
+      <ProjectsProvider accountId="acc">
+        <ProjectScopeProvider accountId="acc" projectId="p-a"><Probe /></ProjectScopeProvider>
+      </ProjectsProvider>
+    )
+    await waitFor(() => expect(screen.getByTestId("access")).toHaveTextContent("error"))
+    expect(readLastProject("acc")).toBeNull()
+  })
 
   it("loads the access of the scoped project", async () => {
     stubAll()

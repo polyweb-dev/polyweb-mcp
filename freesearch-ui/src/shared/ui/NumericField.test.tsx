@@ -14,4 +14,14 @@ it("accepts decimal values and retains native numeric validation", async () => {
   await userEvent.type(input, "12.34")
   expect(input).toHaveValue(12.34)
   expect(input).toBeValid()
+  expect(screen.getByText("$")).toHaveAttribute("aria-hidden", "true")
+})
+
+it("associates validation and disables the numeric control during a save", () => {
+  render(<NumericField id="balance" label="Balance" value="-1" onChange={() => {}}
+    prefix="$" error="Balance must be positive" disabled />)
+  const input = screen.getByRole("spinbutton", { name: "Balance" })
+  expect(input).toBeDisabled()
+  expect(input).toHaveAttribute("aria-invalid", "true")
+  expect(input).toHaveAccessibleDescription("Balance must be positive")
 })

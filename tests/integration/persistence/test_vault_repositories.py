@@ -124,7 +124,6 @@ async def test_vault_credential_ownership_and_policy(tmp_path: Path) -> None:
         )
         updated = await repo.update_policy(first, key, overcommit=False, contention_mode="ratio")
         assert updated is not None and not updated.overcommit and updated.contention_mode == "ratio"
-        assert migration_head() == "0006_keyless_credentials"
 
 
 @pytest.mark.asyncio

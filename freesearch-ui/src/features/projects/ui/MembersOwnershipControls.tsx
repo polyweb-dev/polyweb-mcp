@@ -25,8 +25,8 @@ export function MembersOwnershipControls({ owner, canManage, projectId, accountI
       setClaiming(false)
       onSaved("Provider ownership transferred")
     } catch (failure) {
-      setError(failure instanceof ApiError && failure.status === 404 ? "This action is not available yet."
-        : "The provider owner changed. Reload and try again.")
+      setError(failure instanceof ApiError && failure.status === 404 ? "This action is not available yet"
+        : "The provider owner changed. Reload and try again")
       setClaiming(false)
     } finally {
       setPending(false)
@@ -36,11 +36,11 @@ export function MembersOwnershipControls({ owner, canManage, projectId, accountI
   const canClaim = canManage && owner.status === "ready" && owner.data === null
   return (
     <>
-      {unavailable && <p role="status" className="mb-4 text-[var(--muted)]">Provider ownership is not available yet.</p>}
+      {unavailable && <p role="status" className="mb-4 text-[var(--muted)]">Provider ownership is not available yet</p>}
       {error && <p role="alert" className="mb-4 text-[var(--muted)]">{error}</p>}
       {canClaim && <div className="mb-4"><Button onClick={() => setClaiming(true)}>Claim provider ownership</Button></div>}
       <ConfirmDialog open={claiming} title="Claim provider ownership"
-        message="You become the provider owner of this project. Add provider capacity before the calls work again."
+        message="You become the provider owner of this project. Add provider capacity before the calls work again"
         confirmLabel="Claim provider ownership" pending={pending} onClose={() => setClaiming(false)} onConfirm={() => void claim()} />
     </>
   )

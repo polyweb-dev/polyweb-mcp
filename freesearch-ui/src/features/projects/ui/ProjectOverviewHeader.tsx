@@ -1,7 +1,6 @@
-import { Link } from "react-router"
 import { PROJECT_PERMISSIONS, hasPermission } from "@/domains/projects"
 import type { Project, ProjectAccess } from "@/domains/projects"
-import { buttonVariants } from "@/shared/ui/button"
+import { LinkButton } from "@/shared/ui/LinkButton"
 import { PageHeader } from "@/shared/ui/PageHeader"
 import { Tag } from "@/shared/ui/Tag"
 
@@ -32,9 +31,9 @@ export function ProjectOverviewHeader({
   )
   const action =
     canExecute(access) && !archived ? (
-      <Link to={`/p/${projectId}/playground`} className={buttonVariants({ size: "form" })}>
+      <LinkButton to={`/p/${projectId}/playground`}>
         Open playground
-      </Link>
+      </LinkButton>
     ) : undefined
   return (
     <PageHeader

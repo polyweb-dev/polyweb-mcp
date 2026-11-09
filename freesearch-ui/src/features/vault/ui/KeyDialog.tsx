@@ -5,13 +5,14 @@ import { createVaultKey, rotateVaultKey, updateVaultKey } from "@/domains/vault"
 import type { VaultKey } from "@/domains/vault"
 import { AdvancedSection } from "@/shared/ui/AdvancedSection"
 import { Button } from "@/shared/ui/button"
-import { Checkbox } from "@/shared/ui/Checkbox"
 import { Field } from "@/shared/ui/Field"
 import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
+import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { Select } from "@/shared/ui/select"
-import { TextField } from "@/shared/ui/TextField"
+import { NumericField } from "@/shared/ui/NumericField"
+import { Switch } from "@/shared/ui/Switch"
 import { KeyFormFields } from "./KeyFormFields"
 import { keySaveError } from "./keySaveError"
 
@@ -100,7 +101,7 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
   const title = TITLES[mode]
   const action = ACTIONS[mode]
   return (
-    <Modal isOpen onClose={onClose} title={title} maxWidth="lg">
+    <Modal isOpen onClose={onClose} title={<ProviderDialogTitle providerId={providerIdentity(provider).id} providerName={providerTypeName(provider)} action={title} />} maxWidth="lg">
       <form noValidate onSubmit={(event) => void save(event)} className="space-y-4">
         {mode === "rotate" && <p>Enter the new API key. Each pool that uses this key switches to it at once</p>}
         {mode === "add" && (
@@ -126,12 +127,12 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
         </KeyFormFields>
         {mode !== "rotate" && (
           <AdvancedSection label="Advanced">
-            <TextField id="key-limit" label="Key limit" type="number" min="1" value={capacity} onChange={setCapacity} error={submitted && invalidCapacity(capacity) ? "Enter a positive whole number" : null} hint="Enter the requests that the provider allows for this key, or leave empty if unknown" />
+            <NumericField id="key-limit" label="Key limit" min="1" value={capacity} onChange={setCapacity} error={submitted && invalidCapacity(capacity) ? "Enter a positive whole number" : undefined} hint="Enter the requests that the provider allows for this key, or leave empty if unknown" />
             <Field id="key-window" label="Rate unit">
               <Select id="key-window" value={String(windowSeconds)} onValueChange={(value) => setWindowSeconds(Number(value))}
                 options={[{ value: "1", label: "Per second" }, { value: "60", label: "Per minute" }, { value: "3600", label: "Per hour" }]} />
             </Field>
-            <Checkbox checked={overcommit} onChange={setOvercommit} label="Allow overcommit" description="Pool limits can exceed the key limit. A busy pool can use idle capacity from other pools" />
+            <Switch checked={overcommit} onChange={setOvercommit} label="Overcommit" description="Pool limits can exceed the key limit. A busy pool can use idle capacity from other pools" />
             <Field id="key-contention" label="When pools compete">
               <Select id="key-contention" value={contention} onValueChange={(value) => setContention(value === "ratio" ? "ratio" : "equal")}
                 options={[{ value: "equal", label: "Equal split" }, { value: "ratio", label: "By pool size" }]} />

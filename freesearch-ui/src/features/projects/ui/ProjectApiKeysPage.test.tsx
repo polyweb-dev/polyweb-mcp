@@ -166,7 +166,7 @@ describe("ProjectApiKeysPage issue and reveal", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Copy key" }))
     expect(writeText).toHaveBeenCalledWith(ONE_TIME_VALUE)
-    expect(await within(dialog).findByText("Copied to the clipboard.")).toBeInTheDocument()
+    expect(await within(dialog).findByRole("status")).toHaveTextContent(/Copied to the clipboard/)
   })
 
   it("disables a scope the caller lacks and issues only the held scope", async () => {

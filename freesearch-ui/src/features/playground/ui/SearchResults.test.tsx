@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import { SearchResults } from "./SearchResults"
 import type { SearchResponse } from "@/domains/execution"
 
@@ -49,6 +49,16 @@ function result(providerId: string): SearchResponse {
 }
 
 describe("SearchResults usage label", () => {
+  it("shows per-result attribution only when the response contains multiple providers", () => {
+    const search = result("tavily")
+    const { rerender } = render(<SearchResults controller={controller() as never} result={search} />)
+    expect(within(screen.getByRole("button", { name: /^Result one/ })).queryByText("Tavily")).toBeNull()
+    rerender(<SearchResults controller={controller() as never} result={{ ...search,
+      results: [...search.results, { ...search.results[0]!, id: "brave-0", title: "Result two", providerId: "brave" }],
+    }} />)
+    expect(within(screen.getByRole("button", { name: /^Result one/ })).getByText("Tavily")).toBeInTheDocument()
+    expect(within(screen.getByRole("button", { name: /^Result two/ })).getByText("Brave Search")).toBeInTheDocument()
+  })
   it("labels Tavily native usage as Credits", () => {
     render(<SearchResults controller={controller() as never} result={result("tavily")} />)
     expect(screen.getByText("Credits")).not.toBeNull()

@@ -43,6 +43,13 @@ function BackProbe() {
   return <button onClick={() => navigate(-1)}>Go back</button>
 }
 
+function RoutingNavigationProbe() {
+  const navigate = useNavigate()
+  return ["/routing", "/system/routing", `/p/${PROJECT_BETA_ID}/providers`].map((path) => (
+    <button key={path} onClick={() => navigate(path)}>Visit {path}</button>
+  ))
+}
+
 function controlRoutes(req: Parameters<FetchHandler>[0]): Response {
   if (req.url === "/api/v1/providers") return ok(allProvidersFixture())
   if (req.url === "/api/v1/routing/config") return ok(routingConfigFixture())
@@ -62,13 +69,14 @@ function renderShell(route: string, account: UserAccount, handler: FetchHandler)
   installImmediateLocks()
   installFakeChannel()
   const stub = installAuthStub({ account }, handler)
-  render(
+  const view = render(
     <MemoryRouter initialEntries={[route]}>
       <App />
       <LocationProbe />
+      <RoutingNavigationProbe />
     </MemoryRouter>
   )
-  return stub
+  return { ...stub, unmount: view.unmount }
 }
 
 function renderWithAccess(route: string, options: WorkspaceAccessOptions = ACCESS, account = adminAccountFixture()) {
@@ -144,6 +152,28 @@ describe("DashboardShell project scope", () => {
 })
 
 describe("DashboardShell former global sections", () => {
+  it.each(["/routing", "/system/routing"])("remembers direct project visits for in-app navigation to %s", async (path) => {
+    renderWithAccess(`/p/${PROJECT_ALPHA_ID}/providers`)
+    await within(await screen.findByRole("main")).findByRole("heading", { name: "Providers" })
+    await userEvent.click(screen.getByRole("button", { name: `Visit /p/${PROJECT_BETA_ID}/providers` }))
+    await screen.findByRole("button", { name: "Select project (current: Beta)" })
+    await within(screen.getByRole("main")).findByRole("heading", { name: "Providers" })
+    await userEvent.click(screen.getByRole("button", { name: `Visit ${path}` }))
+
+    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_BETA_ID}/providers`))
+    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Providers" })).toBeInTheDocument()
+  })
+
+  it.each(["/routing", "/system/routing"])("remembers a direct project visit across a fresh app load at %s", async (path) => {
+    const view = renderWithAccess(`/p/${PROJECT_ALPHA_ID}/providers`)
+    await within(await screen.findByRole("main")).findByRole("heading", { name: "Providers" })
+    view.unmount()
+    renderWithAccess(path)
+
+    await waitFor(() => expect(location()).toBe(`/p/${PROJECT_ALPHA_ID}/providers`))
+    expect(await within(screen.getByRole("main")).findByRole("heading", { name: "Providers" })).toBeInTheDocument()
+  })
+
   it.each(["/routing", "/system/routing"])("redirects %s to the last readable project's Providers", async (path) => {
     writeLastProject(adminAccountFixture().id, PROJECT_ALPHA_ID)
     renderWithAccess(path)

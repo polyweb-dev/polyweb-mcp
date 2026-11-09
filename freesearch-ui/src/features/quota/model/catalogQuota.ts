@@ -22,5 +22,5 @@ export function catalogQuotaInfo(info: ProviderInfo, provider: ProviderConfig | 
     const value = price === "Free without a key" ? "Free" : price
     facts.unshift({ label: name + (value === "Free" ? " cost" : " cost (USD)"), value, note: null })
   }
-  return { ...info, facts, creditNote: catalogFree(provider, authMode) ? "Free tier" : info.creditNote }
+  return { ...info, facts, creditNote: catalogFree(provider, authMode) ? "Free" : info.creditNote }
 }

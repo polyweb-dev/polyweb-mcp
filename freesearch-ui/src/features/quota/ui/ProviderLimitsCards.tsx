@@ -156,7 +156,7 @@ export function ProviderLimitsCards({
       {keyed.length > 0 && (
         <div className="space-y-3">
           <h3 className="fs-section-title">Key balances</h3>
-          <div className="fs-panel overflow-hidden"><table className="fs-table w-full table-fixed" aria-label="Key balances"><thead><tr><th scope="col" className="w-1/5">Provider</th><th scope="col" className="w-1/5">Key</th><th scope="col" className="w-1/5">Balance</th><th scope="col" className="w-1/5">Last refresh</th><th scope="col" className="w-1/5 text-right">Actions</th></tr></thead><tbody>
+          <div className="fs-panel overflow-hidden"><table className="fs-table w-full" aria-label="Key balances"><thead><tr><th scope="col">Provider</th><th scope="col">Key</th><th scope="col">Balance</th><th scope="col">Last refresh</th><th scope="col"><span className="sr-only">Provider controls</span></th></tr></thead><tbody>
           {keyed.map((entry) => (
             <ProviderUsageRow
               key={entry.provider.id}

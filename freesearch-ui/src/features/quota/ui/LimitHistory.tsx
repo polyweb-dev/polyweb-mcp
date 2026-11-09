@@ -113,7 +113,7 @@ export function LimitHistory({ providerName, events, loading, error, hasMore, on
           })}</TableBody>
         </Table>
       )}
-      {hasMore && <Button type="button" variant="outline" size="lg" className="px-3" disabled={loading}
+      {hasMore && <Button type="button" variant="outline" size="sm" disabled={loading}
         aria-label={"Load older limit events for " + providerName} onClick={() => void onLoadMore()}>
         {loading ? "Loading…" : "Load older events"}
       </Button>}

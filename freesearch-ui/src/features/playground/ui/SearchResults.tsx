@@ -66,6 +66,9 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
     handleFetchResult,
   } = controller
   const usage = usageTelemetry(activeSearch)
+  const showAttribution = new Set(activeSearch.results.flatMap((result) =>
+    (result.sources?.length ? result.sources : [result.providerId]).map((id) => providerIdentity(id).id)
+  )).size > 1
   return (
     <div className="space-y-6 pt-2">
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--elevated)] py-2 pl-4 pr-2 text-[13px] text-[var(--muted)]">
@@ -112,6 +115,7 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
                   isSearching={isSearching}
                   isFetching={isFetching}
                   canFetch={canFetch}
+                  showAttribution={showAttribution}
                   onSelect={setSelectedResultForPreview}
                   onFetch={(selected) => void handleFetchResult(selected)}
                 />

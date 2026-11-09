@@ -156,7 +156,7 @@ describe("CopySettingsForm", () => {
     const { onApplied } = renderForm()
     await preview(user)
     await user.click(screen.getByRole("button", { name: "Apply changes" }))
-    expect(await screen.findByText("Settings changed since the preview. Preview again.")).toBeInTheDocument()
+    expect(await screen.findByText("Settings changed since the preview. Preview again")).toBeInTheDocument()
     expect(screen.queryByTestId("copy-preview")).toBeNull()
     expect(screen.getByRole("button", { name: "Preview changes" })).toBeEnabled()
     expect(onApplied).not.toHaveBeenCalled()

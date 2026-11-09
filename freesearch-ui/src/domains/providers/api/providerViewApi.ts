@@ -1,20 +1,16 @@
 /**
  * Full project provider view.
  *
- * The view carries provider types (capability, system state, available
- * credentials, bindings) plus this project's own allocations.
+ * The view carries provider policy, health and effective routes.
  */
 import { requestJson } from "@/shared/api/client"
 import { asRecord } from "@/shared/api/decode"
-import { decodeAllocation } from "./capacityWire"
 import { decodeProviderTypeView } from "./credentialsWire"
-import type { Allocation } from "../model/capacity"
-import type { ProviderTypeView } from "../model/credentials"
+import type { ProviderTypeView } from "../model/providerView"
 
-/** The project provider view plus its own allocations. */
+/** The provider data used by the project UI. */
 export interface ProjectProviderView {
   providers: ProviderTypeView[]
-  allocations: Allocation[]
 }
 
 function rows<T>(value: unknown, decode: (row: unknown) => T | null): T[] {
@@ -30,7 +26,6 @@ export function decodeProjectProviderView(payload: unknown): ProjectProviderView
   }
   return {
     providers: rows(record.providers, decodeProviderTypeView),
-    allocations: rows(record.allocations, decodeAllocation),
   }
 }
 

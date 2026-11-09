@@ -65,7 +65,7 @@ export function KeysPoolsPage() {
       else if (dialog.type === "disconnect") await disconnectVaultOAuth(dialog.row.key.id)
       saved()
     } catch {
-      setError("The change did not save. Try again.")
+      setError("The change did not save. Try again")
     } finally {
       setPending(false)
     }
@@ -164,13 +164,13 @@ function confirmTitle(dialog: Exclude<Dialog, { type: "add" }>, projects: VaultP
 }
 
 function confirmMessage(dialog: Exclude<Dialog, { type: "add" }>, projects: VaultProject[]): string {
-  if (dialog.type === "unassign") return `${providerTypeName(dialog.row.key.provider_type)} calls stop in this project. The pool stays in your vault.`
-  if (dialog.type === "disconnect") return "Disconnect this key."
-  if ("pool" in dialog) return "Delete this pool. This cannot be undone."
+  if (dialog.type === "unassign") return `${providerTypeName(dialog.row.key.provider_type)} calls stop in this project. The pool stays in your vault`
+  if (dialog.type === "disconnect") return "Disconnect this key"
+  if ("pool" in dialog) return "Delete this pool. This cannot be undone"
   const count = dialog.row.pools.length
-  if (count === 0) return "Delete this key."
+  if (count === 0) return "Delete this key"
   const ids = [...new Set(dialog.row.pools.flatMap((pool) => pool.project_id ? [pool.project_id] : []))]
   const names = ids.map((id) => projects.find((project) => project.id === id)?.name ?? id)
-  const impact = names.length ? ` ${names.join(", ")} ${names.length === 1 ? "loses" : "lose"} access to ${providerTypeName(dialog.row.key.provider_type)}.` : ""
-  return `Delete this key and ${count === 1 ? "its pool" : `its ${count} pools`}.${impact}`
+  const impact = names.length ? ` ${names.join(", ")} ${names.length === 1 ? "loses" : "lose"} access to ${providerTypeName(dialog.row.key.provider_type)}` : ""
+  return `Delete this key and ${count === 1 ? "its pool" : `its ${count} pools`}${impact ? `.${impact}` : ""}`
 }

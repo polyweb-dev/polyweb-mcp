@@ -17,30 +17,15 @@ export {
   providerTypeName,
   supportedOperationsOf,
   supportsOAuth,
-} from "./model/credentials";
+} from "./model/providerView";
 export type {
   AvailableCredential,
   CredentialAuthMode,
-  NewBindingInput,
   NewCredentialInput,
-  OAuthDeviceStart,
-  OAuthGrantStatus,
-  OAuthStatus,
-  ProjectCredential,
+  ManagedProjectKey,
   ProviderBinding,
   ProviderTypeView,
-} from "./model/credentials";
-export type {
-  Allocation,
-  AllocationInput,
-  Pool,
-  PoolInput,
-  PoolLink,
-  PoolStatus,
-  RateAlgorithm,
-  RateConstraint,
-  UpstreamScope,
-} from "./model/capacity";
+} from "./model/providerView";
 export type { ProviderIdentity } from "./model/providerIdentity";
 export {
   FETCH_BIT,

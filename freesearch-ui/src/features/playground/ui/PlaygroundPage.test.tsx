@@ -634,7 +634,9 @@ describe("C2 PG-S5: Results count replaces the Depth SegmentedControl", () => {
     }) as HTMLInputElement
     expect(spin.getAttribute("type")).toBe("number")
     expect(spin).toHaveAttribute("min", "1")
-    expect(spin).toHaveAttribute("max", "100")
+    fireEvent.change(spin, { target: { value: "101" } })
+    expect(spin).toHaveValue(100)
+    fireEvent.change(spin, { target: { value: "6" } })
     expect(spin).toHaveAttribute("step", "1")
     expect(spin).toHaveValue(6)
     expect(footer.textContent).toMatch(/Results/)
@@ -1477,7 +1479,9 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     }) as HTMLInputElement
     expect(spin.getAttribute("type")).toBe("number")
     expect(spin).toHaveAttribute("min", "1")
-    expect(spin).toHaveAttribute("max", "100")
+    fireEvent.change(spin, { target: { value: "101" } })
+    expect(spin).toHaveValue(100)
+    fireEvent.change(spin, { target: { value: "6" } })
     expect(spin).toHaveAttribute("step", "1")
     expect(spin).toHaveValue(6)
     expect(footer.textContent).toMatch(/Results/)
@@ -2591,7 +2595,9 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
     }) as HTMLInputElement
     expect(count.getAttribute("type")).toBe("number")
     expect(count).toHaveAttribute("min", "1")
-    expect(count).toHaveAttribute("max", "100")
+    fireEvent.change(count, { target: { value: "101" } })
+    expect(count).toHaveValue(100)
+    fireEvent.change(count, { target: { value: "6" } })
     expect(count).toHaveAttribute("step", "1")
     expect(count).toHaveValue(6)
     expect(footer!.textContent).toMatch(/Results/)
@@ -3592,7 +3598,9 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     }) as HTMLInputElement
     expect(count.getAttribute("type")).toBe("number")
     expect(count).toHaveAttribute("min", "1")
-    expect(count).toHaveAttribute("max", "100")
+    fireEvent.change(count, { target: { value: "101" } })
+    expect(count).toHaveValue(100)
+    fireEvent.change(count, { target: { value: "6" } })
     expect(count).toHaveAttribute("step", "1")
     expect(count).toHaveValue(6)
     expect(footer!.textContent).toMatch(/Results/)
@@ -3892,7 +3900,9 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     expect(composer.contains(spin)).toBe(true)
     expect(spin.getAttribute("type")).toBe("number")
     expect(spin).toHaveAttribute("min", "1")
-    expect(spin).toHaveAttribute("max", "100")
+    fireEvent.change(spin, { target: { value: "101" } })
+    expect(spin).toHaveValue(100)
+    fireEvent.change(spin, { target: { value: "6" } })
     expect(spin).toHaveAttribute("step", "1")
     expect(spin).toHaveValue(6)
 
@@ -4138,7 +4148,8 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     expect(playgroundSource).toContain("resultCount")
     expect(playgroundSource).toContain("Number of results")
     expect(playgroundSource).toContain("<span>Results</span>")
-    expect(playgroundSource).toMatch(/type\s*=\s*["']number["']/)
+    const numericFieldSource = readFileSync(path.resolve(testDir, "../../../shared/ui/NumericField.tsx"), "utf8")
+    expect(numericFieldSource).toMatch(/type\s*=\s*["']number["']/)
     expect(playgroundSource).toMatch(/maxResults\s*:\s*resultCount/)
 
     // Depth contract fully deleted from the playground.

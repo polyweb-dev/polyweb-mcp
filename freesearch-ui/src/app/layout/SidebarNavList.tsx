@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import { NavLink } from "react-router"
-import { ChartPie, FolderKanban, KeyRound, Plug, UserRound } from "lucide-react"
+import { ChartPie, FolderKanban, Library, Vault, UserRound } from "lucide-react"
 import { useProjectsOptional } from "@/domains/projects"
 import { TAB_PATHS, canAccessRoute, type TabId } from "../routes"
 import { NAV_ICON_CLASS, navLinkClass } from "./navLinkClass"
@@ -12,13 +12,13 @@ interface NavItem {
 }
 
 const systemItems: NavItem[] = [
-  { id: "settings", label: "Providers", icon: Plug },
+  { id: "settings", label: "Providers", icon: Library },
   { id: "quotas", label: "Quotas", icon: ChartPie },
 ]
 
 const workspaceItems: NavItem[] = [
   { id: "projects", label: "Projects", icon: FolderKanban },
-  { id: "accountKeys", label: "Keys and pools", icon: KeyRound },
+  { id: "accountKeys", label: "Keys and pools", icon: Vault },
   { id: "account", label: "Account", icon: UserRound },
 ]
 

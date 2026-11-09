@@ -1,4 +1,5 @@
 import type { KeyPool } from "@/domains/vault"
+import { POOL_BUDGET_HELP } from "@/domains/vault"
 import { BudgetFields } from "@/shared/ui/BudgetFields"
 import { Switch } from "@/shared/ui/Switch"
 import { PoolBudgetUsage } from "./PoolBudgetUsage"
@@ -13,12 +14,12 @@ export function PoolBudgetFields({ enabled, setEnabled, budget, setBudget, perio
   pool?: KeyPool
 }) {
   return <>
-    <Switch checked={enabled} onChange={setEnabled} label="Add a budget" />
+    <Switch checked={enabled} onChange={setEnabled} label="Budget" />
     {enabled && <div className="space-y-2">
       <BudgetFields id="pool-budget" label="Budget (USD)" amount={budget} onAmountChange={setBudget}
         period={period} onPeriodChange={setPeriod} />
       {pool?.budget && <PoolBudgetUsage pool={pool} />}
-      <p className="fs-hint whitespace-nowrap">Calls with no known cost do not count. Resets each period</p>
+      <p className="fs-hint">{POOL_BUDGET_HELP}</p>
     </div>}
   </>
 }

@@ -6,7 +6,7 @@ import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { ReorderHandle } from "@/shared/ui/ReorderHandle"
 import { Switch } from "@/shared/ui/Switch"
 import { Tag } from "@/shared/ui/Tag"
-import { KeyHealthCell } from "./KeyHealthCell"
+import { HealthStatus } from "@/shared/ui/HealthStatus"
 
 export interface ProviderOrderRowProps {
   item: OrderProvider
@@ -81,7 +81,7 @@ export function ProviderOrderRow(props: ProviderOrderRowProps) {
       {providerCell(props, enabled, opLabel)}
       <td>{poolCell(props)}</td>
       <td className="tabular-nums text-[var(--muted)]">{providerCallCost(props.provider, operation, item.keyless)}</td>
-      <td><KeyHealthCell project health={props.provider?.healthStatus ?? null} checkedAt={props.provider?.healthCheckedAt ?? null} /></td>
+      <td><HealthStatus health={props.provider?.healthStatus ?? null} checkedAt={props.provider?.healthCheckedAt ?? null} /></td>
       {props.showOperation !== false && <td>{operationCell(props, enabled, opLabel)}</td>}
       <td className="fs-cell-actions">{props.menu}</td>
     </tr>

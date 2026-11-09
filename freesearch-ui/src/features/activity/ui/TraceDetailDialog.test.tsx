@@ -354,7 +354,7 @@ describe("TraceDetailDialog", () => {
   it("says the results were not stored for a success without output", () => {
     renderDialog({ ...searchDetail(), output: null })
 
-    expect(screen.getByText("The results of this trace were not stored.")).toBeInTheDocument()
+    expect(screen.getByText("The results of this trace were not stored")).toBeInTheDocument()
     expect(screen.queryByText(/stored metadata only/)).not.toBeInTheDocument()
   })
 
@@ -368,7 +368,7 @@ describe("TraceDetailDialog", () => {
   it("shows the project copy without retry for a trace outside the project", () => {
     renderDialog(null, { status: "missing", error: "This trace is not available in this project." })
 
-    expect(screen.getByRole("alert")).toHaveTextContent("This trace is not available in this project.")
+    expect(screen.getByRole("alert")).toHaveTextContent("This trace is not available in this project")
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument()
   })
 

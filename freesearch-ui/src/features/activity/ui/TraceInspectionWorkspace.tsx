@@ -73,7 +73,7 @@ function emptyOutputMessage(trace: TraceDetail): string {
   return (
     tracePayloadNotice({ input: "", output: trace.output, outcome: trace.outcome }) ??
     NO_RESULTS_MESSAGE
-  )
+  ).replace(/\.$/, "")
 }
 
 /** Provider the shown output belongs to, if it has one. */

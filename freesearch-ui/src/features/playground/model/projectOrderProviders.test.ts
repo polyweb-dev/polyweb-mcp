@@ -6,7 +6,7 @@ import { projectOrderProviders } from "./projectOrderProviders"
 function provider(providerType: string, systemEnabledOperations: ("search" | "fetch")[]): ProviderTypeView {
   return {
     providerType, name: providerType, keyless: false, capability: ["search", "fetch"],
-    killSwitch: false, systemEnabledOperations, available: false, enabled: false,
+    killSwitch: false, systemEnabledOperations,
     credentials: [], bindings: [], effectiveOperations: [],
   }
 }
