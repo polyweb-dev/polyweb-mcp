@@ -35,6 +35,9 @@ The repository secret is `gitea_artifact_upload_token`.
 It contains the token for the `ci-upload` account, with `write:package` scope.
 Woodpecker exposes it only on manual events. Test steps do not receive this secret.
 The secret has no image filter because the upload step executes commands rather than a plugin.
+Set `GITEA_PACKAGE_OWNER` as a Woodpecker repository variable when the package
+owner differs from `polyweb`. This keeps external package ownership separate
+from the application brand and lets an existing package namespace move later.
 
 The package write permission also permits deletion. Do not give this token to untrusted jobs.
 Future production image uploads need separate credentials.

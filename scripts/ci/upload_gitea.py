@@ -105,7 +105,10 @@ def make_bundle(root: Path, workflow: str, destination: Path) -> None:
 
 def publish(archive: Path, package: str, version: str, token: str) -> None:
     """Use the tailnet route with canonical SNI, full TLS checks, and no redirects."""
-    path = f"/api/packages/{OWNER}/generic/{package}/{version}/reports.zip"
+    owner = os.environ.get("GITEA_PACKAGE_OWNER", OWNER).strip()
+    if not owner or "/" in owner:
+        raise ValueError("GITEA_PACKAGE_OWNER must be one non-empty path segment")
+    path = f"/api/packages/{owner}/generic/{package}/{version}/reports.zip"
     context = ssl.create_default_context()
     # Docker step resolvers need not implement MagicDNS. Pin only the connection
     # address, equivalent to curl --resolve; certificate checks still use HOST.
@@ -138,7 +141,7 @@ def publish(archive: Path, package: str, version: str, token: str) -> None:
     with archive.open("rb") as body:
         digest = hashlib.file_digest(body, "sha256").hexdigest()
     print(f"Artifact: https://{HOST}{path}")
-    print(f"Package: https://{HOST}/{OWNER}/-/packages/generic/{package}/{version}")
+    print(f"Package: https://{HOST}/{owner}/-/packages/generic/{package}/{version}")
     print(f"ZIP: {archive.stat().st_size} bytes, SHA256 {digest}")
 
 

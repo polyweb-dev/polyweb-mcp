@@ -20,7 +20,13 @@ REPO = SCRIPT_DIR.parent.parent
 
 
 class ArtifactTests(unittest.TestCase):
-    def symlink_or_skip(self, link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+    def symlink_or_skip(
+        self,
+        link: Path,
+        target: Path,
+        *,
+        target_is_directory: bool = False,
+    ) -> None:
         try:
             link.symlink_to(target, target_is_directory=target_is_directory)
         except OSError as exc:
@@ -144,6 +150,25 @@ class ArtifactTests(unittest.TestCase):
                     self.assertEqual(call.kwargs["headers"]["Content-Length"], "8")
                     self.assertEqual(call.kwargs["headers"]["Authorization"], "token credential")
                     connection.close.assert_called_once()
+
+    def test_package_owner_can_be_selected_at_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "bundle.zip"
+            archive.write_bytes(b"test ZIP")
+            with (
+                patch.dict(os.environ, {"GITEA_PACKAGE_OWNER": "existing-owner"}),
+                patch.object(uploader.socket, "create_connection"),
+                patch.object(uploader.ssl, "create_default_context"),
+                patch.object(uploader.http.client, "HTTPSConnection") as https,
+                patch("builtins.print"),
+            ):
+                https.return_value.getresponse.return_value.status = 201
+                uploader.publish(archive, "polyweb-api-unit", "version", "credential")
+                request = https.return_value.request.call_args
+                self.assertEqual(
+                    request.args[1],
+                    "/api/packages/existing-owner/generic/polyweb-api-unit/version/reports.zip",
+                )
 
     def test_missing_token_stops_before_archive_or_connection(self) -> None:
         with (
