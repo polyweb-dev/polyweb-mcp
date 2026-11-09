@@ -3,7 +3,7 @@
 Woodpecker CI Queue Autoscaler for GCP Spot Workers.
 
 Monitors Woodpecker CI queue via REST API and automatically spins up
-Spot instances (standard / mutation / combined) on GCP when workflows are queued,
+Independent Spot instances on GCP for ready workflows,
 and tears them down when builds finish.
 
 Zero external dependencies - Python stdlib only.
@@ -81,8 +81,10 @@ def load_state() -> dict[str, Any]:
 def save_state(state: dict[str, Any]) -> None:
     """Save tracked workers state to disk."""
     try:
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
+        temporary = STATE_FILE.with_suffix(".tmp")
+        with open(temporary, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
+        temporary.replace(STATE_FILE)
     except Exception as e:
         logger.error("Failed to write state file %s: %s", STATE_FILE, e)
 
@@ -178,125 +180,132 @@ def label_value(task_labels: Any, key: str) -> str:
     return ""
 
 
-def pipeline_key(task: dict[str, Any]) -> str:
-    """Scope a combined allocation to one repository and pipeline."""
-    if task.get("repo_id") and task.get("pipeline_id"):
-        return f"{task['repo_id']}:{task['pipeline_id']}"
-    return ""
+PROFILE_CPUS = {"standard": 16, "mutation": 64, "combined": 64}
 
 
-def queue_demand(
-    qinfo: dict[str, Any],
+def task_profile(task: dict[str, Any]) -> str | None:
+    """Only ready GCP workflows with a supported size request capacity."""
+    if label_value(task.get("labels"), "provider") != "gcp":
+        return None
+    return {"standard": "standard", "heavy": "mutation"}.get(
+        label_value(task.get("labels"), "size")
+    )
+
+
+def normalize_workers(state: dict[str, Any]) -> dict[str, Any]:
+    """Migrate profile-keyed state without losing ownership of live VMs."""
+    workers = {}
+    for key, worker in state.setdefault("workers", {}).items():
+        worker.setdefault("profile", key)
+        workers[worker["name"]] = worker
+    state["workers"] = workers
+    return workers
+
+
+def compatible(worker: dict[str, Any], profile: str) -> bool:
+    return worker["profile"] in {profile, "combined"}
+
+
+def retire_worker(name: str, workers: dict[str, Any], state: dict[str, Any]) -> bool:
+    if not destroy_worker(name):
+        return False
+    del workers[name]
+    save_state(state)
+    return True
+
+
+def busy_workers(qinfo: dict[str, Any], workers: dict[str, Any]) -> set[str]:
+    """Protect named running agents, conservatively handling legacy queue responses."""
+    busy = set()
+    for task in qinfo.get("running", []) or []:
+        name = task.get("agent_name")
+        if name in workers:
+            busy.add(name)
+        elif not name and (profile := task_profile(task)):
+            busy.update(name for name, worker in workers.items() if compatible(worker, profile))
+    return busy
+
+
+def make_room(
     workers: dict[str, Any],
-) -> tuple[dict[str, dict[str, bool]], list[str]]:
-    """Keep mixed pipelines on one wildcard 64-vCPU worker until all tasks finish."""
-    tasks = [
-        task
-        for state in ("pending", "waiting_on_deps", "running")
-        for task in qinfo.get(state, []) or []
-        if label_value(task.get("labels"), "provider") == "gcp"
-    ]
-    alive = {pipeline_key(task) for task in tasks} - {""}
-    combined = set(workers.get("combined", {}).get("pipelines", [])) & alive
-    sizes: dict[str, set[str]] = {}
-    for task in tasks:
-        key = pipeline_key(task)
-        if key:
-            sizes.setdefault(key, set()).add(label_value(task.get("labels"), "size"))
-    combined.update(key for key, values in sizes.items() if {"heavy", "standard"} <= values)
-    demand = {
-        profile: {"pending": False, "running": False}
-        for profile in ("combined", "mutation", "standard")
-    }
-    for state in ("pending", "running"):
-        for task in qinfo.get(state, []) or []:
-            if label_value(task.get("labels"), "provider") != "gcp":
-                continue
-            size = label_value(task.get("labels"), "size")
-            if size not in {"standard", "heavy"}:
-                continue
-            profile = (
-                "combined"
-                if pipeline_key(task) in combined
-                else ("mutation" if size == "heavy" else "standard")
-            )
-            demand[profile][state] = True
-    return demand, sorted(combined)
+    reserved: set[str],
+    profile: str,
+    state: dict[str, Any],
+    max_workers: int,
+    max_cpus: int,
+) -> bool:
+    """Reclaim unused workers when a different size needs the capacity budget."""
+
+    def fits() -> bool:
+        cpus = sum(PROFILE_CPUS[w["profile"]] for w in workers.values())
+        return len(workers) < max_workers and cpus + PROFILE_CPUS[profile] <= max_cpus
+
+    for name in list(workers):
+        if fits():
+            return True
+        if name not in reserved and not retire_worker(name, workers, state):
+            return False
+    return fits()
 
 
 def manage_queue(
-    qinfo: dict[str, Any], state: dict[str, Any], idle_timeout: int, now: float
-) -> None:
-    if qinfo.get("paused"):
-        return
-    workers = state.setdefault("workers", {})
-    demand, combined_pipelines = queue_demand(qinfo, workers)
-    for profile, size in (("standard", "standard"), ("mutation", "heavy")):
-        if profile in workers and any(
-            task.get("agent_name") == workers[profile]["name"]
-            or (not task.get("agent_name") and label_value(task.get("labels"), "size") == size)
-            for task in qinfo.get("running", []) or []
-        ):
-            demand[profile]["running"] = True
-    # Release idle incompatible workers before a new profile consumes CPU quota.
-    # Never terminate an active workflow or a worker needed by another pipeline.
-    if any(flags["pending"] and profile not in workers for profile, flags in demand.items()):
-        for profile in list(workers):
-            if profile in demand and not any(demand[profile].values()):
-                if not destroy_worker(workers[profile]["name"]):
-                    return
-                del workers[profile]
-                save_state(state)
-    for profile, flags in demand.items():
-        manage_profile_worker(
-            profile, flags["pending"], flags["running"], workers, idle_timeout, now, state
-        )
-    if "combined" in workers:
-        workers["combined"]["pipelines"] = combined_pipelines
-        save_state(state)
-
-
-def manage_profile_worker(
-    profile: str,
-    has_pending: bool,
-    has_running: bool,
-    workers: dict[str, Any],
+    qinfo: dict[str, Any],
+    state: dict[str, Any],
     idle_timeout: int,
     now: float,
-    state: dict[str, Any],
+    max_workers: int = 4,
+    max_cpus: int = 64,
+    startup_timeout: int = 300,
 ) -> None:
-    worker = workers.get(profile)
-    if has_pending:
-        if not worker:
-            name = f"gcp-spot-{profile}-{int(now)}"
-            if spawn_worker(profile, name):
-                workers[profile] = {
-                    "name": name,
-                    "profile": profile,
-                    "created_at": now,
-                    "last_busy": now,
-                }
-                save_state(state)
-        else:
-            worker["last_busy"] = now
-            save_state(state)
-    elif worker:
-        if has_running:
-            worker["last_busy"] = now
-            save_state(state)
-        else:
-            idle_time = now - worker.get("last_busy", now)
-            if idle_time >= idle_timeout:
-                logger.info(
-                    "%s worker '%s' idle for %.0fs (threshold: %ds). Triggering teardown.",
-                    profile.capitalize(),
-                    worker["name"],
-                    idle_time,
-                    idle_timeout,
-                )
-                if destroy_worker(worker["name"]):
-                    del workers[profile]
-                    save_state(state)
+    """Allocate one capacity-1 agent per ready workflow, including booting agents."""
+    if qinfo.get("paused"):
+        return
+    workers = normalize_workers(state)
+    busy = busy_workers(qinfo, workers)
+    for name in busy:
+        workers[name].update(last_busy=now, seen_running=True)
+    for name, worker in list(workers.items()):
+        if name in busy:
+            continue
+        expired = (
+            not worker.get("seen_running")
+            and now - worker.get("created_at", now) >= startup_timeout
+        )
+        idle = now - worker.get("last_busy", now) >= idle_timeout
+        if expired or idle:
+            retire_worker(name, workers, state)
+
+    reserved = set(busy)
+    failed_profiles: set[str] = set()
+    for task in qinfo.get("pending", []) or []:
+        profile = task_profile(task)
+        if profile is None:
+            continue
+        available = next(
+            (
+                name
+                for name, worker in workers.items()
+                if name not in reserved and compatible(worker, profile)
+            ),
+            None,
+        )
+        if available is not None:
+            reserved.add(available)
+            workers[available]["last_busy"] = now
+            continue
+        if profile in failed_profiles or not make_room(
+            workers, reserved, profile, state, max_workers, max_cpus
+        ):
+            continue
+        # Names remain unique for several allocations in the same poll and after restart.
+        name = f"gcp-spot-{profile}-{time.time_ns()}"
+        if not spawn_worker(profile, name):
+            failed_profiles.add(profile)
+            continue
+        workers[name] = {"name": name, "profile": profile, "created_at": now, "last_busy": now}
+        reserved.add(name)
+        save_state(state)
+    save_state(state)
 
 
 def run_loop() -> None:
@@ -320,7 +329,15 @@ def run_loop() -> None:
 
         qinfo = fetch_queue_info(server_url, token)
         if qinfo is not None:
-            manage_queue(qinfo, state, idle_timeout, time.time())
+            manage_queue(
+                qinfo,
+                state,
+                idle_timeout,
+                time.time(),
+                max_workers=max(1, int(config.get("MAX_WORKERS", "4"))),
+                max_cpus=max(1, int(config.get("MAX_TOTAL_CPUS", "64"))),
+                startup_timeout=max(1, int(config.get("WORKER_STARTUP_TIMEOUT_SECONDS", "300"))),
+            )
 
         # Sleep for poll interval
         for _ in range(poll_interval):

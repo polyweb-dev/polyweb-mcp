@@ -1,180 +1,170 @@
-"""Queue selection checks with no cloud allocation or daemon execution."""
+"""Autoscaler capacity and lifecycle checks without cloud allocation."""
 
+import copy
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import autoscaler
 
 
-def task(size, pipeline=1, repo=1, provider="gcp"):
-    return {
-        "repo_id": repo,
-        "pipeline_id": pipeline,
-        "labels": {"size": size, "provider": provider},
-    }
+def task(size="standard", name=None, provider="gcp"):
+    return {"labels": {"size": size, "provider": provider}, "agent_name": name}
+
+
+def worker(name="vm", profile="standard", **extra):
+    return {"name": name, "profile": profile, "created_at": 900, "last_busy": 990, **extra}
 
 
 class QueueTests(unittest.TestCase):
-    def test_standalone_standard_and_mutation(self):
-        for size, profile in [("standard", "standard"), ("heavy", "mutation")]:
-            with self.subTest(size=size):
-                demand, pipelines = autoscaler.queue_demand({"pending": [task(size)]}, {})
-                self.assertTrue(demand[profile]["pending"])
-                self.assertFalse(demand["combined"]["pending"])
-                self.assertEqual(pipelines, [])
-
-    def test_same_pipeline_uses_one_combined_worker(self):
-        state = {"workers": {}}
-        with (
-            patch.object(autoscaler, "spawn_worker", return_value=True) as spawn,
-            patch.object(autoscaler, "save_state"),
-        ):
-            autoscaler.manage_queue(
-                {"pending": [task("heavy"), task("standard")]}, state, 120, 1000
-            )
-        self.assertEqual(spawn.call_count, 1)
-        self.assertEqual(spawn.call_args.args[0], "combined")
-        self.assertEqual(state["workers"]["combined"]["pipelines"], ["1:1"])
-
-    def test_unrelated_pipelines_are_not_mistaken_for_combined_run(self):
-        demand, pipelines = autoscaler.queue_demand(
-            {"pending": [task("heavy", pipeline=1), task("standard", pipeline=2)]}, {}
+    def setUp(self):
+        self.spawn = self.enterContext(patch.object(autoscaler, "spawn_worker", return_value=True))
+        self.destroy = self.enterContext(
+            patch.object(autoscaler, "destroy_worker", return_value=True)
         )
-        self.assertTrue(demand["mutation"]["pending"])
-        self.assertTrue(demand["standard"]["pending"])
-        self.assertEqual(pipelines, [])
+        self.enterContext(patch.object(autoscaler, "save_state"))
 
-    def test_repository_identity_is_part_of_pipeline_identity(self):
-        _, pipelines = autoscaler.queue_demand(
-            {"pending": [task("heavy", repo=1), task("standard", repo=2)]}, {}
+    def manage(self, queue, state=None, now=1000, **limits):
+        if state is None:
+            state = {"workers": {}}
+        autoscaler.manage_queue(queue, state, 120, now, **limits)
+        return state
+
+    def test_two_standard_workflows_get_separate_vms(self):
+        state = self.manage({"pending": [task(), task()]})
+        self.assertEqual(self.spawn.call_count, 2)
+        self.assertEqual(len(state["workers"]), 2)
+        self.assertEqual({w["profile"] for w in state["workers"].values()}, {"standard"})
+
+    def test_mixed_pipeline_is_no_longer_serialized_on_combined_worker(self):
+        state = self.manage({"pending": [task("heavy"), task()]}, max_cpus=80)
+        self.assertEqual(
+            {w["profile"] for w in state["workers"].values()}, {"mutation", "standard"}
         )
-        self.assertEqual(pipelines, [])
 
-    def test_dependency_waiting_tasks_participate_in_combined_detection(self):
-        demand, pipelines = autoscaler.queue_demand(
-            {"pending": [task("standard")], "waiting_on_deps": [task("heavy")]}, {}
+    def test_booting_workers_are_counted_across_polls_and_restart(self):
+        queue = {"pending": [task(), task()]}
+        state = self.manage(queue)
+        restored = copy.deepcopy(state)
+        self.manage(queue, restored, now=1005)
+        self.assertEqual(self.spawn.call_count, 2)
+
+    def test_running_worker_does_not_cover_pending_capacity(self):
+        state = {"workers": {"vm": worker()}}
+        self.manage({"running": [task(name="vm")], "pending": [task()]}, state)
+        self.spawn.assert_called_once()
+        self.destroy.assert_not_called()
+        self.assertTrue(state["workers"]["vm"]["seen_running"])
+
+    def test_named_running_worker_is_protected_even_for_unrecognized_labels(self):
+        state = {"workers": {"vm": worker(last_busy=1)}}
+        self.manage({"running": [task(provider="other", name="vm")]}, state)
+        self.destroy.assert_not_called()
+
+    def test_legacy_profile_keyed_state_preserves_active_worker(self):
+        state = {"workers": {"standard": worker(last_busy=1)}}
+        self.manage({"running": [task(name="vm")]}, state)
+        self.assertEqual(set(state["workers"]), {"vm"})
+        self.spawn.assert_not_called()
+        self.destroy.assert_not_called()
+
+    def test_legacy_combined_worker_without_profile_can_drain(self):
+        state = {"workers": {"combined": {"name": "old", "last_busy": 1}}}
+        self.manage({"running": [task(name="old")]}, state)
+        self.destroy.assert_not_called()
+        self.assertEqual(state["workers"]["old"]["profile"], "combined")
+
+    def test_legacy_running_response_without_agent_name_is_conservative(self):
+        state = {"workers": {"standard": worker(last_busy=1)}}
+        self.manage({"running": [task()]}, state)
+        self.destroy.assert_not_called()
+
+    def test_worker_count_cap(self):
+        state = self.manage({"pending": [task()] * 5}, max_workers=2)
+        self.assertEqual(len(state["workers"]), 2)
+
+    def test_cpu_budget_limits_standard_workers(self):
+        state = self.manage({"pending": [task()] * 5}, max_cpus=32)
+        self.assertEqual(len(state["workers"]), 2)
+
+    def test_heavy_workflow_waits_for_busy_standard_worker_to_finish(self):
+        state = {"workers": {"vm": worker()}}
+        self.manage({"running": [task(name="vm")], "pending": [task("heavy")]}, state)
+        self.spawn.assert_not_called()
+        self.destroy.assert_not_called()
+
+    def test_idle_incompatible_worker_is_reclaimed_to_fit_heavy_workflow(self):
+        state = {"workers": {"vm": worker()}}
+        self.manage({"pending": [task("heavy")]}, state)
+        self.destroy.assert_called_once_with("vm")
+        self.spawn.assert_called_once()
+        self.assertEqual(self.spawn.call_args.args[0], "mutation")
+
+    def test_idle_matching_worker_is_reused(self):
+        self.manage({"pending": [task()]}, {"workers": {"vm": worker()}})
+        self.spawn.assert_not_called()
+        self.destroy.assert_not_called()
+
+    def test_dependent_and_other_provider_workflows_do_not_allocate(self):
+        self.manage(
+            {"waiting_on_deps": [task()], "pending": [task(provider="other"), task("unknown")]}
         )
-        self.assertTrue(demand["combined"]["pending"])
-        self.assertFalse(demand["standard"]["pending"])
-        self.assertEqual(pipelines, ["1:1"])
+        self.spawn.assert_not_called()
 
-    def test_combined_assignment_survives_mutation_completion_and_restart(self):
-        workers = {"combined": {"pipelines": ["1:1"]}}
-        demand, pipelines = autoscaler.queue_demand({"pending": [task("standard")]}, workers)
-        self.assertTrue(demand["combined"]["pending"])
-        self.assertFalse(demand["standard"]["pending"])
-        self.assertEqual(pipelines, ["1:1"])
+    def test_paused_queue_does_not_change_workers(self):
+        state = {"workers": {"vm": worker(last_busy=1)}}
+        before = copy.deepcopy(state)
+        self.manage({"paused": True, "pending": [task()]}, state)
+        self.assertEqual(state, before)
+        self.spawn.assert_not_called()
+        self.destroy.assert_not_called()
 
-    def test_other_providers_and_missing_pipeline_ids_do_not_create_combined_assignment(self):
-        demand, pipelines = autoscaler.queue_demand(
-            {
-                "pending": [
-                    task("heavy", provider="other"),
-                    task("heavy", pipeline=None),
-                    task("standard", pipeline=None),
-                ]
-            },
-            {},
-        )
-        self.assertFalse(demand["combined"]["pending"])
-        self.assertEqual(pipelines, [])
-
-    def test_running_combined_tasks_keep_worker_busy(self):
-        state = {
-            "workers": {"combined": {"name": "combined-vm", "pipelines": ["1:1"], "last_busy": 1}}
-        }
-        with (
-            patch.object(autoscaler, "destroy_worker") as destroy,
-            patch.object(autoscaler, "save_state"),
-        ):
-            autoscaler.manage_queue({"running": [task("standard")]}, state, 120, 1000)
-        destroy.assert_not_called()
-        self.assertEqual(state["workers"]["combined"]["last_busy"], 1000)
-
-    def test_idle_combined_worker_is_destroyed_after_timeout(self):
-        state = {
-            "workers": {"combined": {"name": "combined-vm", "pipelines": ["1:1"], "last_busy": 1}}
-        }
-        with (
-            patch.object(autoscaler, "destroy_worker", return_value=True) as destroy,
-            patch.object(autoscaler, "save_state"),
-        ):
-            autoscaler.manage_queue({}, state, 120, 1000)
-        destroy.assert_called_once_with("combined-vm")
+    def test_completed_worker_is_deleted_after_idle_timeout(self):
+        state = {"workers": {"vm": worker(last_busy=1, seen_running=True)}}
+        self.manage({}, state)
+        self.destroy.assert_called_once_with("vm")
         self.assertEqual(state["workers"], {})
 
     def test_failed_destruction_keeps_worker_tracked(self):
-        state = {"workers": {"standard": {"name": "standard-vm", "last_busy": 1}}}
-        with (
-            patch.object(autoscaler, "destroy_worker", return_value=False),
-            patch.object(autoscaler, "save_state"),
-        ):
-            autoscaler.manage_queue({}, state, 120, 1000)
-        self.assertIn("standard", state["workers"])
+        self.destroy.return_value = False
+        state = {"workers": {"vm": worker(last_busy=1)}}
+        self.manage({}, state)
+        self.assertIn("vm", state["workers"])
 
-    def test_idle_standard_worker_is_released_before_combined_allocation(self):
-        state = {"workers": {"standard": {"name": "idle16", "last_busy": 999}}}
-        calls = []
-        with (
-            patch.object(
-                autoscaler,
-                "destroy_worker",
-                side_effect=lambda name: calls.append("destroy") or True,
-            ),
-            patch.object(
-                autoscaler, "spawn_worker", side_effect=lambda *args: calls.append("spawn") or True
-            ),
-            patch.object(autoscaler, "save_state"),
-        ):
-            autoscaler.manage_queue(
-                {"pending": [task("heavy"), task("standard")]}, state, 120, 1000
-            )
-        self.assertEqual(calls, ["destroy", "spawn"])
-        self.assertNotIn("standard", state["workers"])
+    def test_failed_reclamation_does_not_exceed_budget(self):
+        self.destroy.return_value = False
+        self.manage({"pending": [task("heavy")]}, {"workers": {"vm": worker()}})
+        self.spawn.assert_not_called()
 
-    def test_busy_standard_worker_is_not_destroyed_for_combined_run(self):
-        state = {"workers": {"standard": {"name": "busy16", "last_busy": 999}}}
-        with (
-            patch.object(autoscaler, "destroy_worker") as destroy,
-            patch.object(autoscaler, "spawn_worker", return_value=True),
-            patch.object(autoscaler, "save_state"),
-        ):
-            autoscaler.manage_queue(
-                {
-                    "pending": [task("heavy"), task("standard")],
-                    "running": [task("standard", pipeline=2)],
-                },
-                state,
-                120,
-                3000,
-            )
-        destroy.assert_not_called()
+    def test_failed_provision_does_not_track_phantom_workers_or_retry_same_poll(self):
+        self.spawn.return_value = False
+        state = self.manage({"pending": [task()] * 3})
+        self.spawn.assert_called_once()
+        self.assertEqual(state["workers"], {})
 
-    def test_idle_combined_worker_is_released_before_new_standalone_run(self):
-        state = {
-            "workers": {"combined": {"name": "idle64", "last_busy": 999, "pipelines": ["1:1"]}}
-        }
-        calls = []
-        with (
-            patch.object(
-                autoscaler,
-                "destroy_worker",
-                side_effect=lambda name: calls.append("destroy") or True,
-            ),
-            patch.object(
-                autoscaler, "spawn_worker", side_effect=lambda *args: calls.append("spawn") or True
-            ),
-            patch.object(autoscaler, "save_state"),
-        ):
-            autoscaler.manage_queue({"pending": [task("standard", pipeline=2)]}, state, 120, 1000)
-        self.assertEqual(calls, ["destroy", "spawn"])
-        self.assertNotIn("combined", state["workers"])
-        self.assertIn("standard", state["workers"])
+    def test_worker_that_never_connects_is_replaced_after_startup_deadline(self):
+        state = {"workers": {"vm": worker(created_at=500)}}
+        self.manage({"pending": [task()]}, state)
+        self.destroy.assert_called_once_with("vm")
+        self.spawn.assert_called_once()
+        self.assertNotIn("vm", state["workers"])
 
-    def test_paused_queue_does_not_provision(self):
-        with patch.object(autoscaler, "spawn_worker") as spawn:
-            autoscaler.manage_queue({"paused": True, "pending": [task("standard")]}, {}, 120, 1000)
-        spawn.assert_not_called()
+    def test_live_worker_is_not_deleted_at_startup_deadline(self):
+        state = {"workers": {"vm": worker(created_at=1, last_busy=1)}}
+        self.manage({"running": [task(name="vm")]}, state)
+        self.destroy.assert_not_called()
+
+
+class StateTests(unittest.TestCase):
+    def test_saved_state_can_be_loaded_without_partial_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            state = {"workers": {"vm": worker()}}
+            with patch.object(autoscaler, "STATE_FILE", path):
+                autoscaler.save_state(state)
+                self.assertEqual(autoscaler.load_state(), state)
+                self.assertFalse(path.with_suffix(".tmp").exists())
 
 
 if __name__ == "__main__":
