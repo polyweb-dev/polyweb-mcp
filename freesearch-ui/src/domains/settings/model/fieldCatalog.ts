@@ -14,7 +14,6 @@ export type FieldControl =
   | { kind: "enum"; options: readonly EnumOption[] }
   | { kind: "boolean" }
   | { kind: "number"; integer: boolean; min: number; max: number; step: number }
-  | { kind: "list" }
 
 export interface FieldSpec {
   label: string
@@ -31,12 +30,7 @@ const int = (min: number, max: number): FieldControl => ({
 
 export const DETAIL_OPTIONS: readonly EnumOption[] = [
   { value: "metadata", label: "Metadata only" },
-  { value: "full", label: "Full payloads" },
-]
-
-export const REDACTION_OPTIONS: readonly EnumOption[] = [
-  { value: "standard", label: "Standard" },
-  { value: "strict", label: "Strict" },
+  { value: "full", label: "Full requests" },
 ]
 
 /** Editable fields by catalog id, in catalog order. */
@@ -51,18 +45,7 @@ export const FIELD_SPECS: Readonly<Record<string, FieldSpec>> = {
       ],
     },
   },
-  "routing.cost_optimization_preset": {
-    label: "Cost preset",
-    control: {
-      kind: "enum",
-      options: [
-        { value: "balanced", label: "Balanced" },
-        { value: "free_first", label: "Free first" },
-      ],
-    },
-  },
   "routing.max_attempts": { label: "Max attempts", control: int(1, 10) },
-  "routing.preferred_providers": { label: "Preferred providers", control: { kind: "list" } },
   "execution.cache_enabled": { label: "Cache", control: { kind: "boolean" } },
   "execution.default_timeout_seconds": {
     label: "Timeout (seconds)",
@@ -70,16 +53,8 @@ export const FIELD_SPECS: Readonly<Record<string, FieldSpec>> = {
   },
   "execution.max_fanout_concurrency": { label: "Fan-out concurrency", control: int(1, 20) },
   "execution.cache_ttl_seconds": { label: "Cache lifetime (seconds)", control: int(0, 86400) },
-  "trace.sampling_rate": {
-    label: "Sampling rate",
-    control: { kind: "number", integer: false, min: 0, max: 1, step: 0.01 },
-  },
   "trace.detail": { label: "Payload detail", control: { kind: "enum", options: DETAIL_OPTIONS } },
-  "trace.payload_redaction": {
-    label: "Redaction",
-    control: { kind: "enum", options: REDACTION_OPTIONS },
-  },
-  "trace.retention_days": { label: "Retention (days)", control: int(1, 365) },
+  "trace.retention_days": { label: "Retention", control: int(1, 365) },
 }
 
 /** Label of one field id, else the id itself. */
@@ -95,7 +70,7 @@ function enumLabel(fieldId: string, value: string): string {
 
 /** Human text of one settings value. */
 export function formatSettingsValue(fieldId: string, value: SettingsValue): string {
-  if (value === null) return "Inherited"
+  if (value === null) return fieldId === "trace.retention_days" ? "Keep all traces" : "Inherited"
   if (typeof value === "boolean") return value ? "On" : "Off"
   if (typeof value === "number") return String(value)
   if (typeof value === "string") return enumLabel(fieldId, value)

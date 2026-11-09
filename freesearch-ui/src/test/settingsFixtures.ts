@@ -21,10 +21,8 @@ const DEFAULT_SEEDS: Record<string, FieldSeed> = {
   "execution.default_timeout_seconds": { value: 30, limit: 300 },
   "execution.max_fanout_concurrency": { value: 5, limit: 20 },
   "execution.cache_ttl_seconds": { value: 300 },
-  "trace.sampling_rate": { value: 1 },
-  "trace.detail": { value: "metadata", limit: "metadata" },
-  "trace.payload_redaction": { value: "standard", limit: "standard" },
-  "trace.retention_days": { value: 30, limit: 90 },
+  "trace.detail": { value: "full", limit: "full" },
+  "trace.retention_days": { value: null, limit: 90 },
   "system.max_trace_retention_days": { value: 90, overrideAllowed: false },
 }
 
@@ -36,7 +34,7 @@ function fieldWire(id: string, seed: FieldSeed) {
     section,
     effective_value: seed.value,
     provenance: seed.provenance ?? (override === null ? "system_default" : "project_override"),
-    is_null: false,
+    is_null: seed.value === null,
     system_default: seed.systemDefault ?? (override === null ? seed.value : seed.systemDefault),
     project_override: override,
     source_scope: override === null ? "system" : "project",
@@ -63,7 +61,7 @@ export function settingsResolutionFixture(options: {
     system_revision: options.systemRevision ?? 1,
     project_revision: options.projectRevision ?? 4,
     project_id: options.projectId,
-    schema_version: 1,
+    schema_version: 2,
     overrides: {},
   }
 }

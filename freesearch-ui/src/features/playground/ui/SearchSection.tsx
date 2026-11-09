@@ -4,16 +4,14 @@ import { ProviderSetupNotice } from "./ProviderSetupNotice"
 import { SearchComposer } from "./SearchComposer"
 import { SearchResults } from "./SearchResults"
 
-/** Search panel: hero/docked composer wrapper, error banner, results. */
+/** Search panel: fixed composer position, error banner, results. */
 export function SearchSection({ controller }: { controller: PlaygroundController }) {
   return (
     <>
       <div
         data-testid="search-layout"
-        data-state={controller.hasSearchContent ? "docked" : "hero"}
-        className={"transition-all duration-300 ease-out motion-reduce:transition-none " + (controller.hasSearchContent
-          ? "top-docked"
-          : "w-full mx-auto flex flex-1 min-h-[55vh] max-w-3xl flex-col justify-center")}
+        data-state="docked"
+        className="top-docked w-full"
       >
         <SearchComposer controller={controller} />
       </div>

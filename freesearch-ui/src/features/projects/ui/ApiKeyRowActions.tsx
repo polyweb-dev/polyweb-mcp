@@ -1,8 +1,7 @@
 import type { ProjectApiKey } from "@/domains/projects"
+import { ConfirmDialog } from "@/shared/ui/ConfirmDialog"
+import { RowActionsMenu, type RowAction } from "@/shared/ui/RowActionsMenu"
 import type { ProjectApiKeysController } from "../model/useProjectApiKeysController"
-
-const ACTION_BUTTON =
-  "rounded px-2 py-1 text-[12px] text-[var(--muted)] hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] disabled:opacity-50"
 
 export interface ApiKeyRowActionsProps {
   apiKey: ProjectApiKey
@@ -14,58 +13,35 @@ export interface ApiKeyRowActionsProps {
 /**
  * Per-key controls of the API keys table.
  *
- * Only an active key has controls. Revoke asks for an inline confirmation
- * before it sends the request; Rotate opens the rotate dialog.
+ * Only an active key has controls. The row menu offers Rotate and Revoke;
+ * Rotate opens the rotate dialog and Revoke opens the shared confirmation
+ * before it sends the request. A revoke failure shows as the page alert.
  */
 export function ApiKeyRowActions({ apiKey, canRotate, controller }: ApiKeyRowActionsProps) {
   if (apiKey.status !== "active") return null
-  const confirming = controller.confirmingRevokeId === apiKey.id
 
-  if (confirming) {
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          className={ACTION_BUTTON}
-          disabled={controller.pending}
-          onClick={() => void controller.revoke(apiKey)}
-        >
-          Confirm revoke
-        </button>
-        <button
-          type="button"
-          className={ACTION_BUTTON}
-          disabled={controller.pending}
-          onClick={() => controller.requestRevoke(null)}
-        >
-          Cancel
-        </button>
-      </div>
-    )
-  }
-
+  const actions: RowAction[] = [
+    ...(canRotate
+      ? [{ key: "rotate", label: "Rotate key", onSelect: () => controller.openRotate(apiKey) }]
+      : []),
+    { key: "revoke", label: "Revoke key", danger: true, onSelect: () => controller.requestRevoke(apiKey.id) },
+  ]
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {canRotate && (
-        <button
-          type="button"
-          className={ACTION_BUTTON}
-          disabled={controller.pending}
-          aria-label={`Rotate ${apiKey.label}`}
-          onClick={() => controller.openRotate(apiKey)}
-        >
-          Rotate
-        </button>
-      )}
-      <button
-        type="button"
-        className={ACTION_BUTTON}
+    <>
+      <RowActionsMenu
+        label={`Actions for ${apiKey.label}`}
+        actions={actions}
         disabled={controller.pending}
-        aria-label={`Revoke ${apiKey.label}`}
-        onClick={() => controller.requestRevoke(apiKey.id)}
-      >
-        Revoke
-      </button>
-    </div>
+      />
+      <ConfirmDialog
+        open={controller.confirmingRevokeId === apiKey.id}
+        title={`Revoke ${apiKey.label}`}
+        message="Programs that use this key stop working at once. You cannot undo this change"
+        confirmLabel="Revoke key"
+        pending={controller.pending}
+        onConfirm={() => void controller.revoke(apiKey)}
+        onClose={() => controller.requestRevoke(null)}
+      />
+    </>
   )
 }

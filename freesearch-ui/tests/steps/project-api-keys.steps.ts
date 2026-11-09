@@ -14,7 +14,7 @@ import { secondTab } from "./tabs"
  */
 
 function issueSection(page: Page): Locator {
-  return page.getByRole("region", { name: "Issue an API key" })
+  return page.getByRole("region", { name: "New API key" })
 }
 
 function revealDialog(page: Page): Locator {
@@ -46,7 +46,11 @@ async function issueKey(page: Page, label: string | null, expiration: string): P
   const section = issueSection(page)
   await expect(section).toBeVisible({ timeout: 15_000 })
   if (label !== null) await section.getByLabel("Label", { exact: true }).fill(label)
-  await section.getByRole("radio", { name: expiration, exact: true }).check()
+  const choice = section
+    .getByRole("group", { name: "Expiration", exact: true })
+    .getByRole("button", { name: expiration, exact: true })
+  await choice.click()
+  await expect(choice).toHaveAttribute("aria-pressed", "true")
   await section.getByRole("button", { name: "Issue key", exact: true }).click()
 }
 
@@ -149,14 +153,19 @@ Then(
 )
 
 When("I rotate the API key {string} with the default options", async ({ page }, label: string) => {
-  await page.getByRole("button", { name: `Rotate ${label}`, exact: true }).click()
+  await page.getByRole("button", { name: `Actions for ${label}`, exact: true }).click()
+  await page.getByRole("button", { name: "Rotate", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: `Rotate ${label}` })
   await expect(dialog).toBeVisible()
   const overlap = dialog.getByLabel("Old key stays valid for", { exact: true })
   const tag = await overlap.evaluate((element) => element.tagName)
   if (tag === "SELECT") await expect(overlap).toHaveValue("86400")
   else await expect(overlap).toContainText("24 hours")
-  await expect(dialog.getByRole("radio", { name: "Keep current lifetime", exact: true })).toBeChecked()
+  await expect(
+    dialog
+      .getByRole("group", { name: "Expiration", exact: true })
+      .getByRole("button", { name: "Keep current", exact: true })
+  ).toHaveAttribute("aria-pressed", "true")
   await dialog.getByRole("button", { name: "Rotate key", exact: true }).click()
 })
 
@@ -165,7 +174,7 @@ Then("the rotate request kept the 24 hour overlap and the current lifetime", asy
   const body = apiKeyTraffic.rotateBodies[0]
   // 86400 seconds; the backend applies the same default when the field is omitted.
   expect(body.overlap_seconds ?? 86_400).toBe(86_400)
-  // "Keep current lifetime" omits expires_at (null would mean no expiration).
+  // "Keep current" omits expires_at (null would mean no expiration).
   expect(Object.prototype.hasOwnProperty.call(body, "expires_at")).toBe(false)
 })
 
@@ -177,8 +186,12 @@ Then(
 )
 
 When("I revoke the API key {string} and confirm", async ({ page }, label: string) => {
-  await page.getByRole("button", { name: `Revoke ${label}`, exact: true }).click()
-  await page.getByRole("button", { name: "Confirm revoke", exact: true }).click()
+  await page.getByRole("button", { name: `Actions for ${label}`, exact: true }).click()
+  await page.getByRole("button", { name: "Revoke", exact: true }).click()
+  await page
+    .getByRole("dialog", { name: `Revoke ${label}` })
+    .getByRole("button", { name: "Revoke key", exact: true })
+    .click()
   await expect.poll(() => apiKeyTraffic.revokedIds.length).toBe(1)
 })
 
@@ -186,8 +199,7 @@ Then(
   "the API key row {string} offers no Rotate or Revoke action",
   async ({ page }, label: string) => {
     await expect(keyRows(page, label)).toHaveCount(1)
-    await expect(page.getByRole("button", { name: `Rotate ${label}`, exact: true })).toHaveCount(0)
-    await expect(page.getByRole("button", { name: `Revoke ${label}`, exact: true })).toHaveCount(0)
+    await expect(page.getByRole("button", { name: `Actions for ${label}`, exact: true })).toHaveCount(0)
   }
 )
 
@@ -314,13 +326,13 @@ Then(
   }
 )
 
-Then("the Back link {string} is visible", async ({ page }, name: string) => {
-  const link = page.getByRole("navigation", { name: "Project" }).getByRole("link", {
-    name: `Back to ${name}`,
-    exact: true,
-  })
-  await expect(link).toBeVisible({ timeout: 15_000 })
-  await expect(link).toHaveAttribute("title", `Back to ${name}`)
+Then("the Back link {string} is absent", async ({ page }, name: string) => {
+  await expect(
+    page.getByRole("navigation", { name: "Project" }).getByRole("link", {
+      name: `Back to ${name}`,
+      exact: true,
+    })
+  ).toHaveCount(0)
 })
 
 Then(

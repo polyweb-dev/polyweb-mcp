@@ -77,7 +77,7 @@ export function SearchResultInspector({
     return (
       emptyState ?? (
         <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] p-6 text-center text-[13px] text-[var(--muted)]">
-          Select a search result from the list to inspect full metadata and snippet extraction.
+          Select a result to see its details
         </div>
       )
     )
@@ -85,12 +85,9 @@ export function SearchResultInspector({
   return (
     <div className="min-w-0 space-y-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)] p-4">
       <div className="flex min-w-0 items-start justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
-        <div className="min-w-0">
-          <span className="mb-1 block text-[12px] text-[var(--signal)]">Result Inspector</span>
-          <h3 className="text-[16px] font-medium leading-snug text-[var(--text-strong)]">
-            Selected result
-          </h3>
-        </div>
+        <h3 className="min-w-0 text-[14px] font-medium leading-6 text-[var(--text-strong)]">
+          Result details
+        </h3>
 
         <a
           href={result.url}

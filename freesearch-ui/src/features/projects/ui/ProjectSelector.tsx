@@ -18,9 +18,9 @@ export interface ProjectSelectorProps {
  *
  * The control renders only once the projects surface has loaded; while it
  * loads or after a failure, the shell's main area shows the status or the
- * error with Retry. Choosing a project goes to the path
+ * error with Retry. The menu lists projects by name. Choosing a project goes to the path
  * the shell builds (it keeps the current section) and remembers the choice as
- * the account's last project: an explicit choice is the only writer. Escape
+ * the account's last project. Successful project page visits remember it too. Escape
  * and outside clicks dismiss the menu; Escape returns focus to the trigger.
  */
 export function ProjectSelector({
@@ -29,7 +29,7 @@ export function ProjectSelector({
   currentProjectId,
   pathForProject,
 }: ProjectSelectorProps) {
-  const { accountId, availability, rolloutState, projects } = useProjectsOptional()
+  const { accountId, availability, projects } = useProjectsOptional()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const navRef = useRef<HTMLElement>(null)
@@ -77,25 +77,21 @@ export function ProjectSelector({
     <nav
       ref={navRef}
       aria-label="Projects"
-      className="relative shrink-0 border-b border-[var(--border-subtle)] px-2 py-3"
+      className="relative shrink-0 px-2 pb-3"
     >
-      {!collapsed && (
-        <p className="px-3 pb-2 text-[12px] text-[var(--muted)]">
-          {rolloutState === "preview" ? "Project · Preview" : "Project"}
-        </p>
-      )}
       <ProjectSelectorTrigger
         ref={triggerRef}
         collapsed={collapsed}
         open={open}
         label={label}
         accessibleName={accessibleName}
+        hasProject={shown !== null}
         onToggle={() => setOpen((previous) => !previous)}
       />
       {open && (
         <ProjectSelectorMenu
           collapsed={collapsed}
-          projects={projects}
+          projects={[...projects].sort((a, b) => a.name.localeCompare(b.name))}
           currentId={currentProjectId}
           onChoose={choose}
           onList={goToList}

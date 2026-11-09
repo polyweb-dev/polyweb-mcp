@@ -42,6 +42,7 @@ describe("column labels", () => {
 
   it("labels known scopes and keeps unknown ones verbatim", () => {
     expect(scopesLabel(["search.execute", "fetch.execute"])).toBe("Search, Fetch")
+    expect(scopesLabel(["fetch.execute", "search.execute", "future.scope"])).toBe("Search, Fetch, future.scope")
     expect(scopesLabel(["future.scope"])).toBe("future.scope")
   })
 

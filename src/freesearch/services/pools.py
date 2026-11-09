@@ -134,13 +134,23 @@ def _require_feasible(
     that only compares equal windows.
     """
 
+    constraints = list(constraints)
     items = list(allocations)
+    if constraints and any(allocation.base_rate is None for allocation in items):
+        raise ResourceConflict(
+            ALLOCATION_INFEASIBLE, "an unlimited allocation exceeds a finite pool limit"
+        )
     totals: dict[int, int] = {}
     for allocation in items:
         window = allocation.rate_window_seconds
-        totals[window] = totals.get(window, 0) + allocation.base_rate
+        if allocation.base_rate is not None:
+            totals[window] = totals.get(window, 0) + allocation.base_rate
     per_second = sum(
-        (Fraction(allocation.base_rate, allocation.rate_window_seconds) for allocation in items),
+        (
+            Fraction(allocation.base_rate, allocation.rate_window_seconds)
+            for allocation in items
+            if allocation.base_rate is not None
+        ),
         Fraction(0),
     )
     for constraint in constraints:

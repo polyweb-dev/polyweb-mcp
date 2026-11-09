@@ -221,7 +221,6 @@ describe("useProviderStatus database authority", () => {
         id: "exa",
         name: "Exa",
         capabilities: ["search", "fetch"],
-        priority: 1,
         globalEnabled: true,
         searchEnabled: true,
         fetchEnabled: true,

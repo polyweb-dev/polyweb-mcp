@@ -25,6 +25,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from freesearch.models.budget_period import BudgetPeriod, window_bounds
 from freesearch.models.contracts import ProviderError, UnitKind
 from freesearch.models.observability import ActorType
 from freesearch.models.provider_limits import (
@@ -69,10 +70,12 @@ from freesearch.persistence.limit_rows import (
     LimitAdmissionRow,
     LimitEventRow,
     NativePoolRow,
+    ProviderBudgetRow,
     ProviderLimitRow,
     RateAttemptRow,
     RateWindowObservationRow,
 )
+from freesearch.persistence.pools import CredentialPoolLinkRow
 
 _WINDOW_SECONDS: dict[RateWindowName, int] = {
     RateWindowName.SECOND: 1,
@@ -509,6 +512,41 @@ class LimitRepository:
             rows = (await session.scalars(statement)).all()
         return [_pool_from_row(row) for row in rows]
 
+    async def observation_identities(self, provider: str) -> dict[str, tuple[str, set[int]]]:
+        """Map current observation scopes to funds identities and generations."""
+
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        ProviderCredentialRow.id,
+                        ProviderCredentialRow.generation,
+                        CredentialPoolLinkRow.pool_id,
+                        CredentialPoolLinkRow.operation_scope,
+                    )
+                    .outerjoin(
+                        CredentialPoolLinkRow,
+                        CredentialPoolLinkRow.credential_id == ProviderCredentialRow.id,
+                    )
+                    .where(
+                        ProviderCredentialRow.provider_type == provider,
+                        ProviderCredentialRow.status == "active",
+                    )
+                )
+            ).all()
+        credentials: dict[str, tuple[int, str | None, str | None]] = {}
+        for credential_id, generation, pool_id, operation in rows:
+            prior = credentials.get(credential_id)
+            if prior is None or operation == "search":
+                credentials[credential_id] = (generation, pool_id, operation)
+        identities: dict[str, tuple[str, set[int]]] = {}
+        for credential_id, (generation, pool_id, _) in credentials.items():
+            identity = f"pool:{pool_id}" if pool_id is not None else f"cred:{credential_id}"
+            identities[f"cred:{credential_id}"] = (identity, {generation})
+            if pool_id is not None:
+                identities.setdefault(identity, (identity, set()))[1].add(generation)
+        return identities
+
     async def get_pool(
         self, pool_id: str, *, session: AsyncSession | None = None
     ) -> NativePool | None:
@@ -736,13 +774,31 @@ class LimitRepository:
     # --------------------------------------------------------- grants and use
 
     async def save_grant(
-        self, provider: str, update: CRDGrantUpdate, *, auth_mode: AuthMode
+        self,
+        provider: str,
+        update: CRDGrantUpdate,
+        *,
+        auth_mode: AuthMode,
+        now: datetime | None = None,
     ) -> None:
         """Store one period grant and its audit event."""
 
         async with self._session_factory() as session:
-            for operation, granted in update.grants.items():
-                await _upsert_grant(session, provider, auth_mode, operation, update, granted)
+            await session.execute(text("BEGIN IMMEDIATE"))
+            values = dict(
+                provider=provider,
+                auth_mode=auth_mode.value,
+                period=update.period,
+                search_crd_text=_text(update.search_crd),
+                fetch_crd_text=_text(update.fetch_crd),
+                version=update.version + 1,
+            )
+            await session.execute(
+                sqlite_insert(ProviderBudgetRow)
+                .values(**values)
+                .on_conflict_do_update(index_elements=["provider", "auth_mode"], set_=values)
+            )
+            await _budget_rows(session, provider, auth_mode, now=now or datetime.now(UTC))
             await _insert_event(
                 session,
                 LimitAuditEvent(
@@ -753,8 +809,7 @@ class LimitRepository:
                     source="operator",
                     reason="grant",
                     detail={
-                        "period_start": update.period_start.isoformat(),
-                        "period_end": update.period_end.isoformat(),
+                        "period": update.period,
                         "search_crd": _text(update.search_crd),
                         "fetch_crd": _text(update.fetch_crd),
                     },
@@ -776,21 +831,15 @@ class LimitRepository:
         decision share a snapshot.
         """
 
-        today = now.date().isoformat()
-        statement = select(CRDGrantRow).where(
-            CRDGrantRow.provider == provider,
-            CRDGrantRow.auth_mode == auth_mode.value,
-            CRDGrantRow.period_start <= today,
-            CRDGrantRow.period_end >= today,
-        )
         if session is not None:
-            rows = (await session.scalars(statement)).all()
+            rows, period = await _budget_rows(session, provider, auth_mode, now=now)
         else:
             async with self._session_factory() as own_session:
-                rows = (await own_session.scalars(statement)).all()
+                rows, period = await _budget_rows(own_session, provider, auth_mode, now=now)
+                await own_session.commit()
         if not rows:
             return None
-        return _grants_summary(provider, auth_mode, rows)
+        return _grants_summary(provider, auth_mode, rows).model_copy(update={"period": period})
 
     async def reserve(
         self,
@@ -835,7 +884,9 @@ class LimitRepository:
                 if record is not None:
                     await self._recheck_native(session, admission, record)
                 await session.execute(
-                    sqlite_insert(LimitAdmissionRow).values(**_admission_values(admission))
+                    sqlite_insert(LimitAdmissionRow).values(
+                        **await _budget_admission_values(session, admission)
+                    )
                 )
                 attribution = _attribution_values(admission)
                 for reservation in admission.rate_reservations:
@@ -858,6 +909,11 @@ class LimitRepository:
                         admission.auth_mode,
                         admission.operation,
                         reserved_delta=admission.reserved_crd,
+                        window_start=await session.scalar(
+                            select(LimitAdmissionRow.grant_window_start).where(
+                                LimitAdmissionRow.attempt_id == admission.attempt_id
+                            )
+                        ),
                     )
                 await session.commit()
             except (OperationalError, IntegrityError) as error:
@@ -897,6 +953,7 @@ class LimitRepository:
                 debit.auth_mode,
                 debit.operation,
                 reserved_delta=-(_decimal(row.reserved_crd_text) or Decimal("0")),
+                window_start=row.grant_window_start,
                 consumed_delta=debit.crd_debit,
             )
             await session.execute(
@@ -953,6 +1010,7 @@ class LimitRepository:
                 AuthMode(row.auth_mode),
                 LimitOperation(row.operation),
                 reserved_delta=-(_decimal(row.reserved_crd_text) or Decimal("0")),
+                window_start=row.grant_window_start,
             )
             await session.execute(
                 update(LimitAdmissionRow)
@@ -1267,7 +1325,7 @@ class LimitRepository:
     ) -> None:
         """Write the admission, native rate rows, strict rows, and grant hold."""
 
-        values = _admission_values(core)
+        values = await _budget_admission_values(session, core)
         if spec is not None:
             payload = _strict_spec_payload(spec)
             if admission is not None:
@@ -1311,6 +1369,7 @@ class LimitRepository:
                 core.auth_mode,
                 core.operation,
                 reserved_delta=core.reserved_crd,
+                window_start=values["grant_window_start"],
             )
 
     def _dispatch_charger(
@@ -1472,6 +1531,7 @@ class LimitRepository:
                         AuthMode(row.auth_mode),
                         LimitOperation(row.operation),
                         reserved_delta=-reserved_crd,
+                        window_start=row.grant_window_start,
                     )
                 await session.execute(
                     update(LimitAdmissionRow)
@@ -1809,6 +1869,46 @@ class LimitRepository:
                 since=since,
             )
 
+    async def count_catalog_attempts(
+        self,
+        provider: str,
+        bucket_id: str,
+        *,
+        window: RateWindowName,
+        now: datetime,
+        since: datetime | None = None,
+    ) -> Decimal:
+        """Count a catalog bucket and its credential and pool scopes for display."""
+
+        start = since or (now - timedelta(seconds=_WINDOW_SECONDS[window]))
+        prefix = f"{bucket_id}#"
+        scope = func.substr(RateAttemptRow.bucket_id, len(prefix) + 1)
+        rows = (
+            select(
+                RateAttemptRow.attempt_id,
+                func.max(cast(RateAttemptRow.units_text, _QUANTUM)).label("units"),
+            )
+            .where(
+                RateAttemptRow.provider == provider,
+                RateAttemptRow.attempted_at >= _timestamp(start),
+                (RateAttemptRow.bucket_id == bucket_id)
+                | (
+                    (func.substr(RateAttemptRow.bucket_id, 1, len(prefix)) == prefix)
+                    & (
+                        (func.substr(scope, 1, 5) == "cred:")
+                        | (func.substr(scope, 1, 5) == "pool:")
+                    )
+                ),
+            )
+            .group_by(RateAttemptRow.attempt_id)
+            .subquery()
+        )
+        async with self._session_factory() as session:
+            total = (
+                await session.execute(select(func.coalesce(func.sum(rows.c.units), 0)))
+            ).scalar_one()
+        return Decimal(str(total))
+
     async def oldest_attempt(
         self, bucket_id: str, *, window: RateWindowName, now: datetime
     ) -> datetime | None:
@@ -1881,12 +1981,21 @@ class LimitRepository:
         for observation in await self.list_observations(provider):
             if observation.window.value not in _SLOW_WINDOWS:
                 continue
-            used = await self.count_attempts(
-                observation.bucket_id,
-                window=observation.window,
-                now=now,
-                since=observation.observed_at,
-            )
+            if "#" in observation.bucket_id:
+                used = await self.count_attempts(
+                    observation.bucket_id,
+                    window=observation.window,
+                    now=now,
+                    since=observation.observed_at,
+                )
+            else:
+                used = await self.count_catalog_attempts(
+                    provider,
+                    observation.bucket_id,
+                    window=observation.window,
+                    now=now,
+                    since=observation.observed_at,
+                )
             views.append(_progress_from_observation(observation, used))
         return sorted(views, key=lambda view: (view.bucket_id, view.window))
 
@@ -2660,37 +2769,83 @@ async def _apply_pool_debit(
     )
 
 
-async def _upsert_grant(
-    session: AsyncSession,
-    provider: str,
-    auth_mode: AuthMode,
-    operation: LimitOperation,
-    update: CRDGrantUpdate,
-    granted: Decimal,
-) -> None:
-    values = {
-        "provider": provider,
-        "operation": operation.value,
-        "auth_mode": auth_mode.value,
-        "period_start": update.period_start.isoformat(),
-        "period_end": update.period_end.isoformat(),
-        "granted_crd_text": _text(granted) or "0",
-        "consumed_crd_text": "0",
-        "reserved_crd_text": "0",
-        "version": update.version + 1,
-    }
-    await session.execute(
-        sqlite_insert(CRDGrantRow)
-        .values(**values)
-        .on_conflict_do_update(
-            index_elements=["provider", "operation", "auth_mode", "period_start"],
-            set_={
-                "period_end": values["period_end"],
-                "granted_crd_text": values["granted_crd_text"],
-                "version": values["version"],
-            },
+async def _budget_rows(
+    session: AsyncSession, provider: str, auth_mode: AuthMode, *, now: datetime
+) -> tuple[Sequence[CRDGrantRow], BudgetPeriod]:
+    """Materialize only the active calendar window, preserving earlier holds and spend."""
+    config = await session.get(ProviderBudgetRow, (provider, auth_mode.value))
+    if config is None:
+        return [], "month"
+    period = type_cast(BudgetPeriod, config.period)
+    start, end = window_bounds(now, period)
+    statement = (
+        select(CRDGrantRow)
+        .where(
+            CRDGrantRow.provider == provider,
+            CRDGrantRow.auth_mode == auth_mode.value,
+            CRDGrantRow.period_start == start,
         )
+        .execution_options(populate_existing=True)
     )
+    rows = (await session.scalars(statement)).all()
+    amounts = {"search": config.search_crd_text, "fetch": config.fetch_crd_text}
+    if len(rows) == 2 and all(
+        row.version == config.version
+        and row.period_end == end
+        and row.granted_crd_text == amounts[row.operation]
+        for row in rows
+    ):
+        return rows, period
+    for operation, granted in (
+        ("search", config.search_crd_text),
+        ("fetch", config.fetch_crd_text),
+    ):
+        await session.execute(
+            sqlite_insert(CRDGrantRow)
+            .values(
+                provider=provider,
+                operation=operation,
+                auth_mode=auth_mode.value,
+                period_start=start,
+                period_end=end,
+                granted_crd_text=granted,
+                consumed_crd_text="0",
+                reserved_crd_text="0",
+                version=config.version,
+            )
+            .on_conflict_do_update(
+                index_elements=["provider", "operation", "auth_mode", "period_start"],
+                set_=dict(period_end=end, granted_crd_text=granted, version=config.version),
+            )
+        )
+    rows = (await session.scalars(statement)).all()
+    return rows, period
+
+
+async def _budget_admission_values(
+    session: AsyncSession, admission: LimitAdmission
+) -> dict[str, Any]:
+    """Persist the actual budget window with the hold, as pool reservations do."""
+    values = _admission_values(admission)
+    rows, _ = await _budget_rows(
+        session, admission.provider, admission.auth_mode, now=admission.created_at
+    )
+    for row in rows:
+        if row.operation != admission.operation.value:
+            continue
+        available = (
+            Decimal(row.granted_crd_text)
+            - Decimal(row.consumed_crd_text)
+            - Decimal(row.reserved_crd_text)
+        )
+        if admission.reserved_crd > available:
+            raise local_funds_denial(
+                provider=admission.provider,
+                operation=admission.operation,
+                reasons=["budget_exhausted"],
+            )
+    values["grant_window_start"] = rows[0].period_start if rows else None
+    return values
 
 
 async def _adjust_grant(
@@ -2699,14 +2854,17 @@ async def _adjust_grant(
     auth_mode: AuthMode,
     operation: LimitOperation,
     *,
+    window_start: str | None,
     reserved_delta: Decimal | None = None,
     consumed_delta: Decimal | None = None,
 ) -> None:
-    """Adjust the reserved or consumed credit units of the current period grant."""
+    """Settle a hold in its persisted original window, never the current window."""
 
     if reserved_delta in (None, Decimal("0")) and consumed_delta in (None, Decimal("0")):
         return
-    row = await _current_grant_row(session, provider, auth_mode, operation)
+    if window_start is None:
+        return
+    row = await session.get(CRDGrantRow, (provider, operation.value, auth_mode.value, window_start))
     if row is None:
         return
     reserved = (_decimal(row.reserved_crd_text) or Decimal("0")) + (reserved_delta or Decimal("0"))
@@ -2724,20 +2882,6 @@ async def _adjust_grant(
             consumed_crd_text=_text(consumed if consumed > 0 else Decimal("0")),
         )
     )
-
-
-async def _current_grant_row(
-    session: AsyncSession, provider: str, auth_mode: AuthMode, operation: LimitOperation
-) -> CRDGrantRow | None:
-    today = datetime.now(UTC).date().isoformat()
-    statement = select(CRDGrantRow).where(
-        CRDGrantRow.provider == provider,
-        CRDGrantRow.auth_mode == auth_mode.value,
-        CRDGrantRow.operation == operation.value,
-        CRDGrantRow.period_start <= today,
-        CRDGrantRow.period_end >= today,
-    )
-    return (await session.scalars(statement)).first()
 
 
 def _grants_summary(

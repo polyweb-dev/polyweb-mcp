@@ -5,10 +5,3 @@ export interface FallbackConfig {
   fallbackOnTimeout: boolean;
   fallbackOnServerError: boolean;
 }
-
-export type RoutingPreset =
-  | "priority"
-  | "cost_optimized"
-  | "latency_optimized"
-  | "quality_first"
-  | "round_robin";

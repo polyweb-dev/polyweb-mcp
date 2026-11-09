@@ -10,11 +10,7 @@ export {
   formatSettingsValue,
 } from "./model/fieldCatalog"
 export type { EnumOption, FieldControl, FieldSpec } from "./model/fieldCatalog"
-export {
-  PROVENANCE_LABELS,
-  SECTION_TITLES,
-  SETTINGS_SECTIONS,
-} from "./model/settings"
+export { SECTION_TITLES } from "./model/settings"
 export type {
   CopyBinding,
   CopyField,
@@ -33,5 +29,4 @@ export type {
 export {
   disabledOptionReason,
   numericMax,
-  tracePolicySummary,
 } from "./model/tracePolicy"

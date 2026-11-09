@@ -1,4 +1,5 @@
 import type { ProviderAuthLimits } from "@/domains/dashboard"
+import { formatCallCost } from "@/domains/providers"
 import { normalizeUnitKind, type UnitKind } from "@/shared/api/units"
 import type { ManualAmountMode } from "./manualQuotaMath"
 
@@ -22,10 +23,9 @@ function nativeUnitOf(auth: ProviderAuthLimits, providerId: string): string | nu
   return providerId === "exa" ? "USD" : null
 }
 
-function displayUnitOf(providerId: string, unitKind: UnitKind): string {
-  return unitKind === "CREDIT" && (providerId === "tavily" || providerId === "firecrawl")
-    ? "Credits"
-    : unitKind
+function displayUnitOf(unitKind: UnitKind): string {
+  if (unitKind === "CREDIT") return "credits"
+  return unitKind === "FREE" ? formatCallCost(0) : unitKind
 }
 
 export function manualUnit(auth: ProviderAuthLimits, providerId: string): ManualUnit {
@@ -33,5 +33,5 @@ export function manualUnit(auth: ProviderAuthLimits, providerId: string): Manual
   const unitKind = normalizeUnitKind(nativeUnit)
   if (unitKind === "USD") return { unitKind, displayUnit: "USD", amountMode: "balance" }
   if (unitKind === null) return { unitKind: null, displayUnit: null, amountMode: "usage" }
-  return { unitKind, displayUnit: displayUnitOf(providerId, unitKind), amountMode: "usage" }
+  return { unitKind, displayUnit: displayUnitOf(unitKind), amountMode: "usage" }
 }

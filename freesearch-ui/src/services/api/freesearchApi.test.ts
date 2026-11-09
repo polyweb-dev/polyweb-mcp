@@ -145,7 +145,6 @@ describe("FreeSearchApiService (live HTTP)", () => {
 
     const full = {
       fallback_policy: "first_only",
-      cost_optimization_preset: "balanced",
       max_attempts: 1,
     }
     const result = await service.updateRoutingConfig(full as never)
@@ -166,17 +165,6 @@ describe("FreeSearchApiService (live HTTP)", () => {
     expect(stub.requests[0].method).toBe("PATCH")
     expect(stub.requests[0].body).toEqual({ enabled: false })
     expect(JSON.parse(stub.requests[0].bodyText!)).toEqual({ enabled: false })
-  })
-
-  it("patchProvider() sends a real-int priority without coercion", async () => {
-    const stub = installFetchStub(() => ok(allProvidersFixture()[3]))
-
-    await service.patchProvider("exa", { priority: 2 } as never)
-
-    expect(stub.requests[0].body).toEqual({ priority: 2 })
-    expect(typeof (stub.requests[0].body as { priority: unknown }).priority).toBe(
-      "number"
-    )
   })
 
   it("patchProvider() sends one-bit search and fetch bodies", async () => {
@@ -202,13 +190,14 @@ describe("FreeSearchApiService (live HTTP)", () => {
     )
   })
 
-  it("patchProvider() never sends support_mask or unknown keys", async () => {
+  it("patchProvider() never sends priority, support_mask or unknown keys", async () => {
     const stub = installFetchStub(() => ok(allProvidersFixture()[0]))
     await service.patchProvider(
       "brave",
-      { enabled: false, support_mask: 7, extra: true } as never,
+      { enabled: false, priority: 1, support_mask: 7, extra: true } as never,
     )
     expect(stub.requests[0].body).toEqual({ enabled: false })
+    expect("priority" in (stub.requests[0].body as object)).toBe(false)
     expect("support_mask" in (stub.requests[0].body as object)).toBe(false)
     expect("extra" in (stub.requests[0].body as object)).toBe(false)
   })
@@ -250,16 +239,10 @@ describe("FreeSearchApiService (live HTTP)", () => {
     }
   })
 
-  it("patchProvider() keeps access and priority patches free of the tier field", async () => {
+  it("patchProvider() keeps access patches free of the tier field", async () => {
     const accessStub = installFetchStub(() => ok(allProvidersFixture()[0]))
     await service.patchProvider("brave", { enabled: false } as never)
     expect(accessStub.requests[0].body).toEqual({ enabled: false })
-    vi.unstubAllGlobals()
-
-    const priorityStub = installFetchStub(() => ok(allProvidersFixture()[3]))
-    await service.patchProvider("exa", { priority: 2 } as never)
-    expect(priorityStub.requests[0].body).toEqual({ priority: 2 })
-    vi.unstubAllGlobals()
   })
 
   it("testProvider() POSTs relative /api/v1/providers/{id}/test", async () => {
@@ -327,7 +310,6 @@ describe("FreeSearchApiService (live HTTP)", () => {
     await service.getRoutingConfig()
     await service.updateRoutingConfig({
       fallback_policy: "chained",
-      cost_optimization_preset: "balanced",
       max_attempts: 3,
     } as never)
     await service.patchProvider("brave", { enabled: true } as never)

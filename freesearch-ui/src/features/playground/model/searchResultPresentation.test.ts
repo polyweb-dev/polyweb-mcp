@@ -32,7 +32,24 @@ describe("toPlaygroundResultView", () => {
       playgroundResult({ publishedDate: "2024-05-01" })
     )
 
-    expect(view.publishedDate).toBe("2024-05-01")
+    expect(view.publishedDate).toBe("May 1, 2024")
+  })
+
+  it("removes markdown from result snippets", () => {
+    const view = toPlaygroundResultView(playgroundResult({
+      snippet: "## [Title](https://example.com)\n**English:** a *result*",
+    }))
+    expect(view.snippet).toBe("Title\nEnglish: a result")
+  })
+
+  it("removes table delimiters from excerpts and keeps escaped literal pipes", () => {
+    const view = toPlaygroundResultView(playgroundResult({
+      snippet: "| Description | **English:** astronomy |\n| :--- | ---: |\n| Notes | A \\| B |",
+    }))
+    expect(view.snippet).toBe("English: astronomy\n\nNotes A | B")
+    expect(toPlaygroundResultView(playgroundResult({ snippet: "Use cat | head" })).snippet).toBe("Use cat | head")
+    expect(toPlaygroundResultView(playgroundResult({ snippet: "Description English: astronomy" })).snippet).toBe("English: astronomy")
+    expect(toPlaygroundResultView(playgroundResult({ snippet: "Description of astronomy" })).snippet).toBe("Description of astronomy")
   })
 
   it("omits the published date when the execution recorded none", () => {
@@ -50,7 +67,7 @@ describe("toPlaygroundResultView", () => {
       { id: "tavily", name: "Tavily" },
       { id: "exa", name: "Exa" },
     ])
-    expect(view.attributionLabel).toBe("Attributed")
+    expect(view.attributionLabel).toBe("Provider")
   })
 
   it("keeps the mapped provider for a single-source hit", () => {

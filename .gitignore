@@ -28,3 +28,6 @@ FEEDBACK/
 .agents/communication/
 .archive/
 test_reports/
+
+# Vitest cache
+/freesearch-ui/.vitest/

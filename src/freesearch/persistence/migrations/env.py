@@ -48,7 +48,9 @@ def run_migrations_online() -> None:
     """Run migrations against the configured SQLite database."""
 
     connectable = _engine()
-    with connectable.connect() as connection:
+    with connectable.begin() as connection:
+        # SQLite's legacy transaction mode otherwise commits DDL piecemeal.
+        connection.exec_driver_sql("BEGIN")
         _configure(connection)
     connectable.dispose()
 

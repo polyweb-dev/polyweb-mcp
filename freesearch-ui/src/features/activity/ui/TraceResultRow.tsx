@@ -1,7 +1,7 @@
 import type { TraceSearchResult } from "@/domains/activity"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { ResultScore } from "@/shared/ui/ResultScore"
-import { toTraceResultView } from "../model/traceResultPresentation"
+import { plainTraceSnippet, toTraceResultView } from "../model/traceResultPresentation"
 import type { RankingMode } from "./TraceRankingExplanation"
 
 export interface TraceResultRowProps {
@@ -52,7 +52,7 @@ export function TraceResultRow({
         }`}
       >
         <span className="tnum w-6 shrink-0 pt-0.5 text-[12px] text-[var(--muted)]">
-          {String(rank).padStart(2, "0")}
+          {rank}
         </span>
         <span className="grid min-w-0 flex-1 gap-y-0.5">
           <span
@@ -67,10 +67,10 @@ export function TraceResultRow({
           </span>
           <span
             className="text-[13px] leading-[1.35] text-[var(--text)] [overflow-wrap:anywhere]"
-            title={result.snippet || "Snippet not recorded"}
+            title={result.snippet ? plainTraceSnippet(result.snippet) : "Snippet not recorded"}
             style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden" }}
           >
-            {result.snippet || <span className="text-[var(--muted)]">Snippet not recorded</span>}
+            {result.snippet ? plainTraceSnippet(result.snippet) : <span className="text-[var(--muted)]">Snippet not recorded</span>}
           </span>
           <span className="flex min-w-0 items-center justify-between gap-3 border-t border-[var(--border-subtle)]/70 pt-0.5">
             <span className="flex min-w-0 items-center gap-x-2 text-[11px] leading-4 text-[var(--muted)]">

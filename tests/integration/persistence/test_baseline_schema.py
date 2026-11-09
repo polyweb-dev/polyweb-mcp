@@ -1,7 +1,7 @@
-"""The settled alpha baseline schema matches doc-000007 exactly (TASK-000040).
+"""The migrated schema matches the independently maintained snapshot.
 
-The expected table -> column map below is transcribed by hand from the schema
-of record (doc-000007). It deliberately does NOT import the validation
+The expected table -> column map starts with doc-000007 and includes later
+migrations. It deliberately does NOT import the validation
 constants from ``database_migrations.py``: the validator is under test too.
 Constraint checks use raw SQL with ``PRAGMA foreign_keys = ON`` so they prove
 what the database itself enforces, independent of any repository.
@@ -72,6 +72,9 @@ _SPEC_COLUMNS: dict[str, frozenset[str]] = {
         "usage_url",
         "version",
     ),
+    "provider_budgets": _columns(
+        "provider", "auth_mode", "period", "search_crd_text", "fetch_crd_text", "version"
+    ),
     "provider_crd_grants": _columns(
         "provider",
         "operation",
@@ -112,7 +115,7 @@ _SPEC_COLUMNS: dict[str, frozenset[str]] = {
     "projects": _columns(
         "id", "account_id", "name", "slug", "status", "created_by", "created_at", "version"
     ),
-    "project_memberships": _columns("project_id", "user_id", "status", "version"),
+    "project_memberships": _columns("project_id", "user_id", "status", "version", "permissions"),
     "project_role_assignments": _columns(
         "project_id", "user_id", "role_key", "granted_by", "version"
     ),
@@ -177,7 +180,29 @@ _SPEC_COLUMNS: dict[str, frozenset[str]] = {
         "created_at",
         "updated_at",
         "version",
+        "key_pool_id",
+        "limit_scope",
+        "budget_limit",
+        "budget_window_seconds",
     ),
+    "key_pools": _columns(
+        "id",
+        "credential_id",
+        "project_id",
+        "provider_type",
+        "label",
+        "rate_limit",
+        "rate_window_seconds",
+        "budget_limit",
+        "budget_window_seconds",
+        "operations",
+        "operation_limits",
+        "created_by",
+        "created_at",
+        "updated_at",
+        "version",
+    ),
+    "pool_budget_usage": _columns("pool_id", "window_start", "spent_micros", "updated_at"),
     "project_audit_events": _columns(
         "id",
         "project_id",
@@ -278,6 +303,13 @@ _SPEC_COLUMNS: dict[str, frozenset[str]] = {
         "created_at",
         "updated_at",
         "version",
+        "owner_user_id",
+        "overcommit",
+        "contention_mode",
+        "capacity_rate",
+        "capacity_rate_window_seconds",
+        "capacity_budget_micros",
+        "capacity_budget_window",
     ),
     "credential_oauth_grants": _columns(
         "credential_id",
@@ -370,6 +402,7 @@ _SPEC_COLUMNS: dict[str, frozenset[str]] = {
         "pool_id",
         "reserved_crd_text",
         "reserved_native_text",
+        "grant_window_start",
         "state",
         "created_at",
         "expires_at",
@@ -734,14 +767,66 @@ def test_orm_and_migration_share_index_and_check_names(baseline: Path) -> None:
     }
     assert "user_email_lower_key" in actual_indexes
 
-    missing_checks: list[tuple[str, str]] = []
+    orm_checks: set[tuple[str, str]] = set()
     for table in metadata.tables.values():
         for constraint in table.constraints:
             if isinstance(constraint, CheckConstraint) and isinstance(constraint.name, str):
-                sql = table_sql.get(table.name, "")
-                if not re.search(rf'CONSTRAINT\s+["`]?{re.escape(constraint.name)}["`]?\s', sql):
-                    missing_checks.append((table.name, constraint.name))
-    assert missing_checks == []
+                orm_checks.add((table.name, constraint.name))
+    db_checks = {
+        (table, name)
+        for table, sql in table_sql.items()
+        for name in re.findall(r'CONSTRAINT\s+["`]?(\w+)["`]?\s+CHECK\s*\(', sql, re.I)
+    }
+    assert orm_checks == db_checks, {
+        "missing_in_db": sorted(orm_checks - db_checks),
+        "missing_in_orm": sorted(db_checks - orm_checks),
+    }
+
+
+def test_vault_partial_indexes_match_migrated_definitions(baseline: Path) -> None:
+    expected = {
+        "provider_credentials_live_label_key": (
+            "provider_credentials",
+            ("owner_user_id", "provider_type", "label"),
+            "status = 'active'",
+        ),
+        "provider_credentials_keyless_provider_key": (
+            "provider_credentials",
+            ("account_id", "provider_type"),
+            "auth_mode = 'keyless'",
+        ),
+        "project_memberships_one_provider_owner": (
+            "project_memberships",
+            ("project_id",),
+            "(permissions & 32768) != 0",
+        ),
+        "key_pools_credential_project_key": (
+            "key_pools",
+            ("credential_id", "project_id"),
+            "project_id IS NOT NULL",
+        ),
+        "key_pools_project_provider_key": (
+            "key_pools",
+            ("project_id", "provider_type"),
+            "project_id IS NOT NULL",
+        ),
+    }
+    metadata = load_all_rows()
+    with sqlite3.connect(baseline) as connection:
+        for name, (table, columns, predicate) in expected.items():
+            index = next(index for index in metadata.tables[table].indexes if index.name == name)
+            assert index.unique
+            assert tuple(column.name for column in index.columns) == columns
+            assert str(index.dialect_options["sqlite"]["where"]) == predicate
+            sql = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", (name,)
+            ).fetchone()[0]
+            assert sql.upper().startswith("CREATE UNIQUE INDEX")
+            assert sql.split(" WHERE ", 1)[1] == predicate
+            actual_columns = tuple(
+                row[2] for row in connection.execute(f'PRAGMA index_info("{name}")')
+            )
+            assert actual_columns == columns
 
 
 def test_every_spec_table_exists_with_exactly_the_spec_columns(baseline: Path) -> None:
@@ -907,6 +992,58 @@ def test_allocation_defaults_to_strict_caps(db: sqlite3.Connection) -> None:
     assert db.execute(
         "SELECT borrow_enabled, max_rate FROM project_pool_allocations"
     ).fetchone() == (0, None)
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("overcommit", 2),
+        ("contention_mode", "invalid"),
+        ("capacity_rate", -1),
+        ("capacity_rate_window_seconds", 0),
+        ("capacity_budget_micros", -1),
+        ("capacity_budget_window", "year"),
+    ],
+)
+def test_credential_rebuilt_checks_are_enforced(
+    db: sqlite3.Connection, column: str, value: object
+) -> None:
+    creator = _user(db)
+    credential = _credential(db, created_by=creator)
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+        db.execute(
+            f"UPDATE provider_credentials SET {column} = ? WHERE id = ?", (value, credential)
+        )
+
+
+def test_rebuilt_foreign_key_actions_and_allocation_check(db: sqlite3.Connection) -> None:
+    creator = _user(db)
+    owner = _user(db)
+    project = _project(db, creator)
+    upstream_pool = _pool(db)
+    credential = _credential(db, created_by=creator)
+    db.execute(
+        "UPDATE provider_credentials SET owner_user_id = ? WHERE id = ?", (owner, credential)
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY constraint failed"):
+        db.execute("DELETE FROM user WHERE id = ?", (owner,))
+
+    key_pool = str(uuid4())
+    db.execute(
+        "INSERT INTO key_pools "
+        "(id, credential_id, provider_type, label, operations, created_by, created_at, updated_at) "
+        "VALUES (?, ?, 'tavily', 'pool', '[\"search\"]', ?, ?, ?)",
+        (key_pool, credential, creator, _T0, _T0),
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+        _allocation(
+            db, project_id=project, pool_id=upstream_pool, granted_by=creator, limit_scope="bad"
+        )
+    _allocation(
+        db, project_id=project, pool_id=upstream_pool, granted_by=creator, key_pool_id=key_pool
+    )
+    db.execute("DELETE FROM key_pools WHERE id = ?", (key_pool,))
+    assert db.execute("SELECT COUNT(*) FROM project_pool_allocations").fetchone() == (0,)
 
 
 @pytest.mark.parametrize(

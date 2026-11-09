@@ -29,6 +29,7 @@ class _World:
     project_a: UUID
     project_b: UUID
     user_id: UUID
+    conversion: StoredAuditEvent
 
 
 @pytest_asyncio.fixture
@@ -37,7 +38,18 @@ async def world(tmp_path: Path) -> AsyncIterator[_World]:
     try:
         a = await seed_execution_project(repo, name="A")
         b = await seed_execution_project(repo, user_id=a.actor_id, name="B")
-        yield _World(repo, a.project_id, b.project_id, a.actor_id)
+        async with repo.session() as session:
+            events = await AuditRepository(session).list_system_events(account_id=_ACCOUNT)
+        assert len(events) == 1
+        conversion = events[0]
+        assert conversion.action == "vault.migrated"
+        assert conversion.scope_id == _ACCOUNT
+        assert conversion.category is AuditCategory.AUDIT
+        assert conversion.actor_type is AuditActorType.SYSTEM
+        assert conversion.actor_id is None
+        assert conversion.outcome is AuditOutcome.SUCCESS
+        assert conversion.detail == {"moves": []}
+        yield _World(repo, a.project_id, b.project_id, a.actor_id, conversion)
     finally:
         await repo.close()
 
@@ -134,7 +146,11 @@ async def test_secret_like_detail_keys_raise_and_write_nothing(
             )
         await session.commit()
     assert _count(world, "project_audit_events") == 0
-    assert _count(world, "system_audit_events") == 0
+    assert _count(world, "system_audit_events") == 1
+    async with world.repo.session() as session:
+        assert await AuditRepository(session).list_system_events(account_id=_ACCOUNT) == [
+            world.conversion
+        ]
 
 
 def test_audit_detail_shares_the_telemetry_sanitizer() -> None:
@@ -234,7 +250,7 @@ async def test_project_events_never_visible_via_another_project(world: _World) -
     assert [event.id for event in listed_b] == [event_b.id]
     assert listed_unknown == []
     assert [event.id for event in paged_b] == [event_b.id]
-    assert system == []
+    assert system == [world.conversion]
 
 
 async def test_cursor_pagination_is_newest_first_and_exclusive(world: _World) -> None:
@@ -324,7 +340,11 @@ async def test_system_security_event_has_no_project(world: _World) -> None:
     assert security.actor_id is None
     assert security.detail == {"reason": "bad_password"}
     assert [event.id for event in only_security] == [security.id]
-    assert [event.id for event in everything] == [audit.id, security.id]
+    assert {event.id for event in everything} == {audit.id, security.id, world.conversion.id}
+    assert [event.id for event in everything if event.id != world.conversion.id] == [
+        audit.id,
+        security.id,
+    ]
     assert other_account == []
     assert project_view_a == []
 

@@ -53,15 +53,6 @@ export function renderInProject(ui: ReactNode, projectId: string = PROJECT_ALPHA
   )
 }
 
-/** Render one global page inside the projects surface. */
-export function renderInWorkspace(ui: ReactNode) {
-  return render(
-    <MemoryRouter>
-      <ProjectsProvider accountId={HARNESS_ACCOUNT}>{ui}</ProjectsProvider>
-    </MemoryRouter>
-  )
-}
-
 /** Return whether a value appears anywhere the browser could keep it. */
 export function leakedAnywhere(value: string): string[] {
   const places: string[] = []

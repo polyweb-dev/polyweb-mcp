@@ -1,6 +1,7 @@
-export { getEligibleProviders, getProviderReason } from "./model/routingPolicy";
-export type { RoutingOperation } from "./model/routingPolicy";
-export type { FallbackConfig, RoutingPreset } from "./model/types";
+export type { FallbackConfig } from "./model/types";
+export { getProjectOrder, putProjectOrder } from "./api/projectOrderApi"
+export type { OrderUpdate } from "./api/projectOrderApi"
+export type { OrderOperation, OrderProvider, OrderStrategy, OperationOrder, ProjectOrder } from "./model/projectOrder"
 export type {
   BackendRoutingMode,
   BackendRoutingPreference,

@@ -35,6 +35,7 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.project_permissions import ProjectPermission
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.api_keys import (
@@ -50,7 +51,7 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import add_execution_member, seed_execution_project
+from tests.fixtures.execution import seed_execution_project
 
 _KEY_SHAPE = re.compile(r"^fs_live_[a-z2-7]{12}_[A-Za-z0-9_-]{43}$")
 _GENERIC_401 = {"detail": "not authenticated"}
@@ -158,6 +159,14 @@ def _issue(world: _World, headers: dict[str, str], pid: UUID, **body: Any) -> di
 
 def _bearer(raw: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {raw}"}
+
+
+def _api_routes(routes: Any) -> Iterator[APIRoute]:
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        elif hasattr(route, "original_router"):
+            yield from _api_routes(route.original_router.routes)
 
 
 # --- lifecycle over HTTP ---------------------------------------------------------
@@ -337,9 +346,7 @@ def test_a_valid_key_is_rejected_by_every_non_execution_route(world: _World) -> 
     }
     checked = 0
     checked_paths: set[str] = set()
-    for route in world.client.app.routes:  # type: ignore[attr-defined]
-        if not isinstance(route, APIRoute):
-            continue
+    for route in _api_routes(world.client.app.routes):  # type: ignore[attr-defined]
         if route.path in {"/search", "/fetch", "/auth/register", "/auth/jwt/login"}:
             continue
         path = route.path
@@ -353,25 +360,20 @@ def test_a_valid_key_is_rejected_by_every_non_execution_route(world: _World) -> 
             checked += 1
             checked_paths.add(route.path)
     assert checked >= 40
-    # Every A4 control-plane route family is in the sweep (none was skipped).
-    a4_routes = {
+    # Every live control-plane route family is in the sweep (none was skipped).
+    control_routes = {
         "/api/v1/projects/{project_id}/providers",
-        "/api/v1/projects/{project_id}/bindings",
-        "/api/v1/projects/{project_id}/bindings/{binding_id}",
-        "/api/v1/system/pools",
-        "/api/v1/system/pools/{pool_id}",
-        "/api/v1/system/pools/{pool_id}/links",
-        "/api/v1/system/pools/{pool_id}/links/{credential_id}",
-        "/api/v1/system/projects/{project_id}/allocations",
-        "/api/v1/system/projects/{project_id}/allocations/{pool_id}",
-        "/api/v1/system/credentials/{credential_id}/oauth",
-        "/api/v1/system/credentials/{credential_id}/oauth/device",
-        "/api/v1/system/credentials/{credential_id}/oauth/poll",
-        "/api/v1/projects/{project_id}/credentials/{credential_id}/oauth",
-        "/api/v1/projects/{project_id}/credentials/{credential_id}/oauth/device",
-        "/api/v1/projects/{project_id}/credentials/{credential_id}/oauth/poll",
+        "/api/v1/projects/{project_id}/pools",
+        "/api/v1/account/vault/keys",
+        "/api/v1/account/vault/keys/{key_id}",
+        "/api/v1/account/vault/keys/{key_id}/pools",
+        "/api/v1/account/vault/keys/{key_id}/oauth",
+        "/api/v1/account/vault/keys/{key_id}/oauth/device",
+        "/api/v1/account/vault/keys/{key_id}/oauth/poll",
+        "/api/v1/account/vault/pools/{pool_id}",
+        "/api/v1/projects/{project_id}/routing/order",
     }
-    assert a4_routes <= checked_paths, sorted(a4_routes - checked_paths)
+    assert control_routes <= checked_paths, sorted(control_routes - checked_paths)
 
     # Nothing the key attempted changed anything: still one key, still live.
     listed = world.client.get(f"/api/v1/projects/{pid}/api-keys", headers=headers).json()
@@ -511,14 +513,15 @@ def test_key_execution_is_attributed_to_the_key_not_its_creator(world: _World) -
 
 
 def test_human_session_executes_by_membership_without_any_key(world: _World) -> None:
-    owner_headers, owner_id, pid = _admin_project(world)
+    owner_headers, _owner_id, pid = _admin_project(world)
     member_headers, member_id = world.human("keys-member")
     outsider_headers, _outsider = world.human("keys-outsider")
-    world.loop_run(
-        add_execution_member(
-            world.repository, project_id=pid, user_id=member_id, granted_by=owner_id
-        )
+    added = world.client.post(
+        f"/api/v1/projects/{pid}/members",
+        json={"user_id": str(member_id), "permissions": int(ProjectPermission.SEARCH)},
+        headers=owner_headers,
     )
+    assert added.status_code == 201
 
     for headers in (owner_headers, member_headers):
         ok = world.client.post(
@@ -542,19 +545,14 @@ def test_human_session_executes_by_membership_without_any_key(world: _World) -> 
 def test_token_manager_without_search_cannot_issue_a_search_key_over_http(world: _World) -> None:
     """R1 over HTTP: 403, no key row, no audit row."""
 
-    from freesearch.models.projects import BuiltinRole
-
-    owner_headers, owner_id, pid = _admin_project(world, "r1-owner")
+    owner_headers, _owner_id, pid = _admin_project(world, "r1-owner")
     manager_headers, manager_id = world.human("r1-manager")
-    world.loop_run(
-        add_execution_member(
-            world.repository,
-            project_id=pid,
-            user_id=manager_id,
-            role_key=BuiltinRole.TOKEN_MANAGER,
-            granted_by=owner_id,
-        )
+    added = world.client.post(
+        f"/api/v1/projects/{pid}/members",
+        json={"user_id": str(manager_id), "permissions": int(ProjectPermission.TOKENS)},
+        headers=owner_headers,
     )
+    assert added.status_code == 201
 
     denied = world.client.post(
         f"/api/v1/projects/{pid}/api-keys",

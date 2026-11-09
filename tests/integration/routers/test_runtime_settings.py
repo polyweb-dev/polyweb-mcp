@@ -46,7 +46,7 @@ CANONICAL_ALPHA_ORDER = [
 async def test_fresh_database_has_today_defaults_and_alphabetical_tie_break(
     tmp_path: Path, auth_secret: str
 ) -> None:
-    """AC-10: a new DB preserves enabled/100/closed and canonical tie order."""
+    """A new DB exposes enabled providers in canonical order with closed circuits."""
     # Use one system administrator account: system.settings.read is the live
     # replacement for the retired developer reader role.
     repository = await SQLiteRepository.open(tmp_path / "fresh.db")
@@ -63,7 +63,7 @@ async def test_fresh_database_has_today_defaults_and_alphabetical_tie_break(
         assert providers.status_code == 200
         body = providers.json()
         assert [item["provider_id"] for item in body] == CANONICAL_ALPHA_ORDER
-        assert all(item["enabled"] is True and item["priority"] == 100 for item in body)
+        assert all(item["enabled"] is True and "priority" not in item for item in body)
         assert all(item["enable_mask"] == 7 for item in body)
         for item in body:
             expected_support = 3 if item["provider_id"] == "brave" else 7
@@ -72,7 +72,6 @@ async def test_fresh_database_has_today_defaults_and_alphabetical_tie_break(
         assert routing.status_code == 200
         assert routing.json() == {
             "fallback_policy": "chained",
-            "cost_optimization_preset": "balanced",
             "max_attempts": 3,
         }
     finally:
@@ -311,12 +310,12 @@ async def test_corrupt_persisted_provider_config_falls_back_to_defaults_without_
         assert item.json()["enabled"] is True
         assert item.json()["enable_mask"] == 7
         assert item.json()["support_mask"] == 7
-        assert item.json()["priority"] == 100
+        assert "priority" not in item.json()
         assert listing.status_code == 200
         exa = next(entry for entry in listing.json() if entry["provider_id"] == "exa")
         assert exa["enabled"] is True
         assert exa["enable_mask"] == 7
-        assert exa["priority"] == 100
+        assert "priority" not in exa
         assert search.status_code == 200
         assert search.json()["provider"] == "exa"
     finally:

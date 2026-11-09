@@ -13,9 +13,9 @@ import {
 } from "./AuthPanel"
 
 describe("AuthPanel", () => {
-  it("renders a static centered card with the exact class contract", () => {
+  it("renders a static centered card without an empty subtitle", () => {
     const { container } = render(
-      <AuthPanel title="Sign in" subtitle="Use your FreeSearch account.">
+      <AuthPanel title="Sign in">
         <button type="submit" className={AUTH_SUBMIT_CLASSES}>
           Sign in
         </button>
@@ -23,7 +23,7 @@ describe("AuthPanel", () => {
     )
 
     expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument()
-    expect(screen.getByText("Use your FreeSearch account.")).toBeInTheDocument()
+    expect(screen.queryByText("Use your FreeSearch account.")).toBeNull()
     const card = screen.getByRole("heading", { name: "Sign in" }).closest("div")?.parentElement
     expect(card?.className).toContain("rounded-xl")
     expect(card?.className).toContain("max-w-sm")
@@ -31,13 +31,12 @@ describe("AuthPanel", () => {
     expect(container.querySelector("[role='dialog']")).toBeNull()
   })
 
-  it("keeps the shared submit, footer, and field classes of Section 13", () => {
+  it("keeps shared control styles with 24px footer spacing and no divider", () => {
     expect(AUTH_SUBMIT_CLASSES).toContain("h-10")
     expect(AUTH_SUBMIT_CLASSES).toContain("text-[13px]")
     expect(AUTH_SUBMIT_CLASSES).toContain("bg-[var(--signal)]")
-    expect(AUTH_FOOTER_CLASSES).toContain("mt-5")
-    expect(AUTH_FOOTER_CLASSES).toContain("pt-3")
-    expect(AUTH_FOOTER_CLASSES).toContain("border-t")
+    expect(AUTH_FOOTER_CLASSES).toContain("mt-6")
+    expect(AUTH_FOOTER_CLASSES).not.toContain("border-t")
     expect(AUTH_FOOTER_TEXT_CLASSES).toContain("underline-offset-3")
     expect(AUTH_FOOTER_TEXT_CLASSES).toContain("text-[13px]")
     expect(AUTH_LINK_CLASSES).toContain("focus-visible:ring-2")
@@ -45,9 +44,9 @@ describe("AuthPanel", () => {
     expect(AUTH_FIELD_CLASSES).not.toContain("rounded-xl")
   })
 
-  it("uses the 15px title size with a static header divider", () => {
+  it("uses the 15px title size without a header divider and retains optional subtitles", () => {
     render(
-      <AuthPanel title="Create an account" subtitle="Choose a role for the new account.">
+      <AuthPanel title="Create an account" subtitle="Create your FreeSearch account">
         <p>child</p>
       </AuthPanel>
     )
@@ -55,6 +54,8 @@ describe("AuthPanel", () => {
     const title = screen.getByRole("heading", { name: "Create an account" })
     expect(title.className).toContain("text-[15px]")
     expect(title.getAttribute("style")).toContain("font-size: 15px")
+    expect(title.parentElement).not.toHaveStyle({ borderBottom: "1px solid var(--border-subtle)" })
+    expect(screen.getByText("Create your FreeSearch account")).toBeInTheDocument()
   })
 
   it("shows the repository brand once above the card", () => {

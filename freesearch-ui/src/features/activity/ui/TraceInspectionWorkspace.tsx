@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react"
 import {
   selectUserTraceStages,
+  tracePayloadNotice,
   traceTrajectoryLabel,
   type TraceDetail,
   type TraceOutput,
@@ -25,7 +26,7 @@ export interface TraceInspectionWorkspaceProps {
   mode: RankingMode
 }
 
-type TraceView = "results" | "trace"
+type TraceView = "results" | "timeline"
 
 interface Selection {
   view: TraceView
@@ -34,6 +35,14 @@ interface Selection {
 }
 
 const AGGREGATED_PROVIDER = "aggregated"
+const RESULTS_LABEL = "Results"
+const TIMELINE_LABEL = "Timeline"
+const NO_RESULTS_MESSAGE = "No results were recorded for this trace"
+
+/** Each pane scrolls on its own, so the dialog only grows as tall as it needs. */
+const PANE_HEIGHT = "max-h-[min(60svh,640px)]"
+const SPLIT =
+  "grid min-w-0 grid-cols-1 items-stretch gap-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]"
 
 /** Identity of the inspected subject: a new trace or scope starts fresh. */
 function identityOf(trace: TraceDetail, attempt: TraceProviderAttempt | null): string {
@@ -44,6 +53,7 @@ function searchOutput(output: TraceOutput | null): TraceSearchOutput | null {
   return output !== null && output.kind === "search_results" ? output : null
 }
 
+/** Stored output opens on Results; absent output opens on the compact summary. */
 function initialSelection(trace: TraceDetail, output: TraceOutput | null): Selection {
   const results = searchOutput(output)?.results ?? []
   const stages = selectUserTraceStages(trace.stages)
@@ -53,6 +63,17 @@ function initialSelection(trace: TraceDetail, output: TraceOutput | null): Selec
     resultIndex: results.length > 0 ? 0 : null,
     spanId: firstStage?.spanId ?? null,
   }
+}
+
+/** The one sentence about absent results: not stored by policy, or never returned. */
+function emptyOutputMessage(trace: TraceDetail): string {
+  if (trace.input === null && trace.output === null) {
+    return "Results were not stored (metadata-only trace policy)"
+  }
+  return (
+    tracePayloadNotice({ input: "", output: trace.output, outcome: trace.outcome }) ??
+    NO_RESULTS_MESSAGE
+  ).replace(/\.$/, "")
 }
 
 /** Provider the shown output belongs to, if it has one. */
@@ -73,12 +94,24 @@ function providerNode(providerId: string | null, fallbackLabel: string): ReactNo
   return <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
 }
 
-function scopeText(
-  view: TraceView,
-  output: TraceOutput | null,
+function resultCountText(count: number, mode: RankingMode): string {
+  const noun = count === 1 ? "result" : "results"
+  return `${count} ${noun} in ${mode === "fusion" ? "fused" : "provider"} order`
+}
+
+interface ScopeTextOptions {
+  view: TraceView
+  trace: TraceDetail
+  output: TraceOutput | null
   attempt: TraceProviderAttempt | null
-): ReactNode {
-  if (view === "trace") return "Full trace · select a stage to inspect its timing and recorded data"
+  mode: RankingMode
+}
+
+/** The line beside the view switch: what the pane below shows. */
+function scopeText({ view, output, attempt, mode }: ScopeTextOptions): ReactNode {
+  if (view === "timeline") {
+    return "Select a stage to see its timing and recorded data"
+  }
   if (attempt !== null) {
     return (
       <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
@@ -87,20 +120,19 @@ function scopeText(
       </span>
     )
   }
-  if (output === null) return "No recorded output"
-  if (output.kind === "fetch_document") return "Fetched document"
-  return `${output.results.length} results in fused order`
+  if (output === null) return null
+  if (output.kind === "fetch_document") return null
+  return resultCountText(output.results.length, mode)
 }
 
-function viewSwitcher(view: TraceView, onChange: (view: TraceView) => void) {
-  const current = view === "trace" ? "Trace" : "Results"
+function viewSwitcher(view: TraceView, onChange: (view: TraceView) => void, hasOutput: boolean) {
+  const resultsLabel = hasOutput ? RESULTS_LABEL : "Summary"
   return (
     <SegmentedControl
-      options={["Results", "Trace"]}
-      value={current}
-      onChange={(label) => onChange(label === "Trace" ? "trace" : "results")}
+      options={[resultsLabel, TIMELINE_LABEL]}
+      value={view === "timeline" ? TIMELINE_LABEL : resultsLabel}
+      onChange={(label) => onChange(label === TIMELINE_LABEL ? "timeline" : "results")}
       ariaLabel="Trace detail views"
-      minColumnWidth="auto"
     />
   )
 }
@@ -117,19 +149,21 @@ interface SelectionPaneOptions {
   onSelectSpan: (spanId: string) => void
 }
 
-function resultsView({ output, mode, providerLabel, providerId, selection, onSelectResult }: SelectionPaneOptions) {
+function resultsView({ trace, output, mode, providerLabel, providerId, selection, onSelectResult }: SelectionPaneOptions) {
   const results = searchOutput(output)
   const shared = {
     output,
+    input: trace.input,
     mode,
     providerId,
     results: results?.results ?? [],
     selectedIndex: selection.resultIndex,
+    emptyMessage: emptyOutputMessage(trace),
     onSelect: onSelectResult,
   }
   if (results === null) {
     return (
-      <section aria-label="Results" className="h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+      <section aria-label={output === null ? "Summary" : "Results"} className="min-w-0">
         <div className="min-w-0 py-3">
           <TraceResults {...shared} />
         </div>
@@ -140,16 +174,16 @@ function resultsView({ output, mode, providerLabel, providerId, selection, onSel
     <InspectorSplitPane
       primaryLabel="Ranked results"
       detailLabel="Result inspector"
-      className="grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] items-stretch gap-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:grid-rows-1"
+      className={SPLIT}
       primary={
-        <div className="h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+        <div className={`${PANE_HEIGHT} min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]`}>
           <div className="min-w-0 pr-3 py-2">
             <TraceResults {...shared} />
           </div>
         </div>
       }
       detail={
-        <div className="h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain border-t border-[var(--border-subtle)] lg:border-l lg:border-t-0 [scrollbar-gutter:stable]">
+        <div className={`${PANE_HEIGHT} min-h-0 min-w-0 overflow-y-auto overscroll-contain border-t border-[var(--border-subtle)] lg:border-l lg:border-t-0 [scrollbar-gutter:stable]`}>
           <div className="min-w-0 px-3 py-3 lg:pl-5">
             <TraceResultInspector
               result={results.results[selection.resultIndex ?? -1] ?? null}
@@ -166,15 +200,15 @@ function resultsView({ output, mode, providerLabel, providerId, selection, onSel
   )
 }
 
-function traceView({ trace, selection, onSelectSpan }: SelectionPaneOptions) {
+function timelineView({ trace, selection, onSelectSpan }: SelectionPaneOptions) {
   const stage = selectedStage(trace.stages, selection.spanId)
   return (
     <InspectorSplitPane
       primaryLabel="Trace timeline"
       detailLabel={stage === null ? "Span details" : `${traceTrajectoryLabel(stage)} details`}
-      className="grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] items-stretch gap-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:grid-rows-1 lg:gap-3"
+      className={`${SPLIT} lg:gap-3`}
       primary={
-        <section className="h-full min-h-0 min-w-0 overflow-hidden border-b border-[var(--border-subtle)] pb-2 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-3">
+        <section className={`flex ${PANE_HEIGHT} min-h-0 min-w-0 flex-col overflow-hidden border-b border-[var(--border-subtle)] pb-2 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-3`}>
           <TraceTrajectory
             stages={trace.stages}
             totalMs={trace.totalMs}
@@ -184,7 +218,7 @@ function traceView({ trace, selection, onSelectSpan }: SelectionPaneOptions) {
         </section>
       }
       detail={
-        <section className="h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+        <section className={`${PANE_HEIGHT} min-h-0 min-w-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]`}>
           <div className="min-w-0 px-3 py-3">
             <TraceSpanInspector
               key={stage?.spanId ?? "none"}
@@ -199,7 +233,11 @@ function traceView({ trace, selection, onSelectSpan }: SelectionPaneOptions) {
   )
 }
 
-/** Results beside one unified trace timeline and selected-span inspector. */
+/**
+ * Results beside the selected result, or the stage timeline beside the
+ * selected stage. One switch flips between them; a trace without recorded
+ * output starts on its compact summary.
+ */
 export function TraceInspectionWorkspace({ trace, output, attempt, mode }: TraceInspectionWorkspaceProps) {
   const [identity, setIdentity] = useState(() => identityOf(trace, attempt))
   const [selection, setSelection] = useState(() => initialSelection(trace, output))
@@ -226,14 +264,14 @@ export function TraceInspectionWorkspace({ trace, output, attempt, mode }: Trace
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2">
       <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-2">
-        <p className="min-w-0 text-[11px] text-[var(--muted)]">
-          {scopeText(selection.view, output, attempt)}
+        {viewSwitcher(selection.view, (view) => setSelection((previous) => ({ ...previous, view })), output !== null)}
+        <p className="min-w-0 text-[12px] text-[var(--muted)]">
+          {scopeText({ view: selection.view, trace, output, attempt, mode })}
         </p>
-        {viewSwitcher(selection.view, (view) => setSelection((previous) => ({ ...previous, view })))}
       </div>
-      <div className="min-h-0 min-w-0 flex-1">
+      <div className="min-h-0 min-w-0">
         {selection.view === "results" && resultsView(options)}
-        {selection.view === "trace" && traceView(options)}
+        {selection.view === "timeline" && timelineView(options)}
       </div>
     </div>
   )

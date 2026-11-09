@@ -19,12 +19,6 @@ export const SETTINGS_PROVENANCES: readonly SettingsProvenance[] = [
   "system_constrained",
 ]
 
-export const PROVENANCE_LABELS: Record<SettingsProvenance, string> = {
-  system_default: "System default",
-  project_override: "Project override",
-  system_constrained: "Limited by system",
-}
-
 /** One JSON settings value; `null` means inherit. */
 export type SettingsValue = string | number | boolean | readonly string[] | null
 

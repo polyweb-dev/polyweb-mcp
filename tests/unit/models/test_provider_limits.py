@@ -32,6 +32,7 @@ from freesearch.models.provider_limits import (
     local_rate_denial,
     native_pool_id,
     parse_exact_decimal,
+    unpriced_ceiling_error,
 )
 from freesearch.routers.limits import _validate_usage_url
 
@@ -189,8 +190,7 @@ def test_provider_limits_response_auth_shape() -> None:
 
 def test_grant_payload_grants_mapping() -> None:
     payload = CRDGrantPayload(
-        period_start=date(2026, 1, 1),
-        period_end=date(2026, 1, 31),
+        period="month",
         search_crd=Decimal("10"),
         fetch_crd=Decimal("4"),
     )
@@ -198,13 +198,10 @@ def test_grant_payload_grants_mapping() -> None:
     assert payload.grants[LimitOperation.FETCH] == Decimal("4")
 
 
-def test_grant_period_order_lives_in_router_not_model() -> None:
-    # The model decodes dates; routers/limits.py:81-82 rejects end <= start.
-    inverted = CRDGrantPayload(
-        period_start=date(2026, 1, 31),
-        period_end=date(2026, 1, 1),
-    )
-    assert inverted.period_end <= inverted.period_start
+def test_grant_period_defaults_to_month_and_rejects_custom_ranges() -> None:
+    assert CRDGrantPayload().period == "month"
+    with pytest.raises(ValidationError):
+        CRDGrantPayload.model_validate({"period": "year"})
 
 
 def test_history_limit_accepts_one_to_one_hundred() -> None:
@@ -256,10 +253,17 @@ def test_local_funds_denial_is_402_with_local_origin() -> None:
     assert error.status_code == 402
     assert error.refusal == "funds"
     assert error.error.status_code == 402
-    assert error.error.code == "crd_exhausted"
+    assert error.error.code == "budget_exhausted"
     assert error.error.details["origin"] == "local"
     assert error.error.details["refusal"] == "funds"
     assert error.retry_after_seconds is None
+
+
+def test_unknown_budget_price_has_public_error_code() -> None:
+    error = unpriced_ceiling_error("synth", LimitOperation.SEARCH)
+    assert error.error.code == "budget_price_unknown"
+    assert error.error.status_code == 422
+    assert error.error.details["reasons"] == ["price_unknown"]
 
 
 def test_local_rate_denial_is_429_with_retry_after() -> None:

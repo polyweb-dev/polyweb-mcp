@@ -115,28 +115,3 @@ export async function fillField(scope: Page | Locator, label: string, value: str
   }
   await control.fill(value)
 }
-
-/** The write-only secret input with this accessible label. */
-export function secretInput(scope: Page | Locator, label: string): Locator {
-  const page = "page" in scope ? scope.page() : scope
-  return scope.getByLabel(label, { exact: true }).and(page.locator('input[type="password"]'))
-}
-
-/** Assert the write-only secret input contract before typing into it. */
-export async function expectWriteOnlySecretInput(input: Locator): Promise<void> {
-  await expect(input).toHaveCount(1)
-  await expect(input).toHaveAttribute("type", "password")
-  await expect(input).toHaveAttribute("autocomplete", "off")
-  await expect(input).toHaveValue("")
-}
-
-/** Click a confirm button when a confirmation dialog appears. */
-export async function confirmIfAsked(page: Page, name: string): Promise<void> {
-  const button = page.getByRole("dialog").getByRole("button", { name, exact: true })
-  try {
-    await button.waitFor({ state: "visible", timeout: 2_000 })
-  } catch {
-    return
-  }
-  await button.click()
-}

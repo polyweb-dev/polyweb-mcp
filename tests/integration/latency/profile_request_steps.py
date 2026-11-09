@@ -246,11 +246,7 @@ async def _exercise(
             queries = recorder.since(marker)
             trace_id = response.headers.get("x-trace-id")
             await drain_background_tasks()
-            spans = (
-                await _read_spans(repository, trace_id)
-                if trace_id
-                else {}
-            )
+            spans = await _read_spans(repository, trace_id) if trace_id else {}
             if phase == "measured":
                 measured.append(RequestSample(wall_ms=wall_ms, queries=queries, spans=spans))
 
@@ -308,9 +304,7 @@ def _report(
 ) -> None:
     wal = sorted(sample.wall_ms for sample in samples)
     roots = sorted(
-        float(sample.spans[ROOT_SPAN][0])
-        for sample in samples
-        if sample.spans.get(ROOT_SPAN)
+        float(sample.spans[ROOT_SPAN][0]) for sample in samples if sample.spans.get(ROOT_SPAN)
     )
     label = "fanout" if fanout else mode
     print()
@@ -360,8 +354,7 @@ def _report(
     print()
     print("== SQL statements (median per execution) ==")
     print(
-        f"   {'statement':<34}{'exec/req':>10}{'median_us':>12}{'p95_us':>10}"
-        f"{'total_us/req':>14}"
+        f"   {'statement':<34}{'exec/req':>10}{'median_us':>12}{'p95_us':>10}{'total_us/req':>14}"
     )
     keys: dict[str, tuple[list[float], float]] = {}
     for sample in samples:

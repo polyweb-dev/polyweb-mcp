@@ -7,8 +7,8 @@ Feature: Provider access flags against the stubbed backend
 
   Background:
     Given I navigate to the web application
-    When I select the "Provider settings" header tab
-    And I open the "Providers" settings tab
+    When I select the "Providers" header tab
+    And I view the provider catalog
 
   @stub @access
   Scenario: Successful search PATCH updates the access flag
@@ -22,7 +22,7 @@ Feature: Provider access flags against the stubbed backend
     When I set the "Tavily" "fetch" access flag off
     Then the "Tavily" "fetch" access flag should be off
     When I reload the page
-    And I open the "Providers" settings tab
+    And I view the provider catalog
     Then the "Tavily" "fetch" access flag should be off
     When I set the "Tavily" "fetch" access flag on
     Then the "Tavily" "fetch" access flag should be on

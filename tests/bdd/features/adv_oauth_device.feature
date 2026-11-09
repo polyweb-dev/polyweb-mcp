@@ -17,12 +17,8 @@ Feature: Parallel OAuth device flow contract
     Then the smuggled value should never surface
 
   Scenario Outline: Only parallel supports OAuth
-    When I request a device code for "<provider>"
-    Then the OAuth response should be 404
-    When I read OAuth status for "<provider>"
-    Then the OAuth response should be 404
-    When I disconnect OAuth for "<provider>"
-    Then the OAuth response should be 404
+    When I create a vault OAuth key for "<provider>"
+    Then the vault should reject the unsupported OAuth provider without vendor calls
 
     Examples:
       | provider  |

@@ -86,6 +86,19 @@ class CRDGrantRow(Base):
     version: Mapped[int] = mapped_column(Integer)
 
 
+class ProviderBudgetRow(Base):
+    """Recurring provider budget configuration, separate from each window's spend."""
+
+    __tablename__ = "provider_budgets"
+
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    auth_mode: Mapped[str] = mapped_column(Text, primary_key=True)
+    period: Mapped[str] = mapped_column(Text)
+    search_crd_text: Mapped[str] = mapped_column(Text)
+    fetch_crd_text: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer)
+
+
 class LimitEventRow(Base):
     """Immutable balance-change, denial, grant, or reset record."""
 
@@ -165,6 +178,7 @@ class LimitAdmissionRow(Base):
     operation: Mapped[str] = mapped_column(Text)
     auth_mode: Mapped[str] = mapped_column(Text)
     pool_id: Mapped[str | None] = mapped_column(Text)
+    grant_window_start: Mapped[str | None] = mapped_column(Text)
     reserved_crd_text: Mapped[str] = mapped_column(Text)
     reserved_native_text: Mapped[str | None] = mapped_column(Text)
     state: Mapped[str] = mapped_column(Text)

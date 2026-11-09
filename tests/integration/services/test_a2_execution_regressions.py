@@ -693,7 +693,7 @@ async def test_disabled_provider_config_propagates_to_a_second_repository_handle
         await persist_provider_config(
             first,
             ProviderName.EXA,
-            before.model_copy(update={"priority": 7, "enable_mask": 0}),
+            before.model_copy(update={"enable_mask": 0}),
         )
         after = await effective_config_for_name(second, "exa")
     finally:
@@ -701,10 +701,6 @@ async def test_disabled_provider_config_propagates_to_a_second_repository_handle
         await second.close()
         clear_config_cache()
 
-    assert after.priority == 7, (
-        "a supported config write on one repository handle stayed invisible to a "
-        "second handle through its per-handle cache"
-    )
     assert not after.allows(UsageOperation.SEARCH), (
         "the second handle still enabled a provider the first handle disabled"
     )

@@ -8,7 +8,7 @@ B04-B06, B11-B13, B19-B27, B33, B37-B41. Rev5 K=0.001 exact Decimal math.
 
 import asyncio
 import tempfile
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -542,8 +542,7 @@ def step_grant(context: Any) -> None:
             SYNTH,
             GrantPayload(
                 version=0,
-                period_start=date(2026, 3, 1),
-                period_end=date(2026, 4, 1),
+                period="month",
                 search_crd=Decimal("10"),
                 fetch_crd=Decimal("4"),
             ),
@@ -1482,13 +1481,12 @@ def step_brave_fetch_grant_422(context: Any) -> None:
 
     with TestClient(context.brave_app) as client:
         response = client.put(
-            "/api/v1/providers/brave/crd-grants/keyed",
+            "/api/v1/providers/brave/budgets/keyed",
             json={
                 "version": 0,
-                "period_start": "2026-03-01",
-                "period_end": "2026-04-01",
-                "search_crd": "10",
-                "fetch_crd": "4",
+                "period": "month",
+                "search_usd": "0.010",
+                "fetch_usd": "0.004",
             },
             headers=context.brave_admin_headers,
         )
@@ -1561,7 +1559,7 @@ def step_brave_402(context: Any) -> None:
     assert context.brave_admission is None
     assert context.brave_denial is not None
     assert context.brave_denial.status_code == 402
-    assert context.brave_denial.error.code == "crd_exhausted"
+    assert context.brave_denial.error.code == "budget_exhausted"
     assert context.brave_denial.error.retryable is False
     assert context.vendor_calls == []
 
@@ -1682,8 +1680,7 @@ def step_brave_grant(context: Any) -> None:
             "brave",
             GrantPayload(
                 version=0,
-                period_start=date(2026, 3, 1),
-                period_end=date(2026, 4, 1),
+                period="month",
                 search_crd=Decimal("10"),
                 fetch_crd=Decimal("0"),
             ),
@@ -2971,8 +2968,7 @@ def step_tavily_funds_state(context: Any, state: str) -> None:
                 "tavily",
                 GrantPayload(
                     version=0,
-                    period_start=date(2026, 3, 1),
-                    period_end=date(2027, 12, 31),
+                    period="month",
                     search_crd=Decimal("8"),
                     fetch_crd=Decimal("0"),
                 ),
@@ -3100,9 +3096,8 @@ def step_tavily_grant(context: Any) -> None:
             "tavily",
             GrantPayload(
                 version=0,
-                period_start=date(2026, 3, 1),
-                period_end=date(2026, 4, 1),
-                search_crd=Decimal("10"),
+                period="month",
+                search_crd=Decimal("20"),
                 fetch_crd=Decimal("4"),
             ),
             AuthMode.KEYED,
@@ -3120,7 +3115,7 @@ def step_tavily_grant(context: Any) -> None:
 def step_tavily_grant_audit(context: Any) -> None:
     auth = context.tavily_saved.auth(AuthMode.KEYED)
     assert auth is not None
-    assert auth.grants.search_granted_crd == Decimal("10")
+    assert auth.grants.search_granted_crd == Decimal("20")
     assert auth.grants.fetch_granted_crd == Decimal("4")
     reasons = [e.reason for e in context.tavily_history.events]
     assert "grant" in reasons
@@ -3866,7 +3861,7 @@ def step_tavily_fanout_released_assert(context: Any) -> None:
     waterfall = body.get("waterfall", [])
     tavily_legs = [entry for entry in waterfall if entry.get("provider") == "tavily"]
     assert len(tavily_legs) == 1
-    assert "crd_exhausted" in (tavily_legs[0].get("error") or "")
+    assert "budget_exhausted" in (tavily_legs[0].get("error") or "")
 
 
 @then("the Tavily single fallback answer is a local 402 with no new vendor attempt")
@@ -3877,7 +3872,7 @@ def step_tavily_single_fallback_assert(context: Any) -> None:
     detail = body.get("detail")
     assert isinstance(detail, dict)
     assert detail.get("provider") == "tavily"
-    assert detail.get("code") == "crd_exhausted"
+    assert detail.get("code") == "budget_exhausted"
     assert detail.get("status_code") == 402
     assert len(context.tavily_fanout_sdk.search_calls) == 1
     _tavily_assert_zero_debit(context)

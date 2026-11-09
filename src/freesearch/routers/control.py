@@ -13,10 +13,10 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError, model_validator
 
 from freesearch.adapters.base import ProviderAdapter
 from freesearch.configuration.provider_config import (
@@ -28,12 +28,12 @@ from freesearch.models.contracts import (
     BreakerState,
     CircuitBreakerState,
     CircuitBreakerStatusResponse,
-    CostPreset,
     HealthStatus,
     ManualQuota,
     ManualQuotaResponse,
     ManualQuotaUpdate,
     ProviderHealth,
+    ProviderPriceRead,
     ProviderStatusResponse,
     ProviderTestResponse,
     RoutingConfigResponse,
@@ -41,13 +41,16 @@ from freesearch.models.contracts import (
     SecretPresence,
 )
 from freesearch.models.users import UserPrincipal
+from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.auth import require_admin, require_control_reader
+from freesearch.routers.auth import current_principal, require_admin, require_control_reader
+from freesearch.routers.control_errors import control_repository
 from freesearch.services.manual_quota import clear_manual_quota as clear_shared_manual_quota
 from freesearch.services.manual_quota import load_manual_quota as load_shared_manual_quota
 from freesearch.services.manual_quota import manual_quota_response
 from freesearch.services.manual_quota import persist_manual_quota as persist_shared_manual_quota
 from freesearch.services.monitoring import latency_p95_ms
+from freesearch.services.projects import ProjectService
 from freesearch.services.provider_runtime import (
     effective_provider_config,
     patch_provider_config,
@@ -58,8 +61,27 @@ from freesearch.services.provider_runtime import (
 from freesearch.services.provider_runtime import (
     store_get as _store_get,
 )
+from freesearch.services.routing_order import catalog_call_costs
 
 SecretSource = Literal["encrypted_db", "none"]
+
+
+def _catalog_patch_schema(schema: dict[str, Any]) -> None:
+    schema.get("properties", {}).pop("priority", None)
+
+
+class CatalogProviderUpdate(ProviderConfigUpdate):
+    """Provider catalog writes exclude the legacy system priority."""
+
+    model_config = ConfigDict(json_schema_extra=_catalog_patch_schema)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_priority(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "priority" in value:
+            raise ValueError("provider priority is no longer supported")
+        return value
+
 
 #: Live system-scope gates. ``require_admin`` requires the common service's
 #: ``system.settings.write`` permission for every control mutation and provider
@@ -75,6 +97,20 @@ _ROUTING_KEY = "routing"
 _MANUAL_QUOTA_PREFIX = "manual_quota:"
 
 
+async def _price_reader(request: Request) -> UserPrincipal:
+    principal = current_principal(request)
+    repository = control_repository(request)
+    async with repository.session() as session:
+        vault_access = await ProjectRepository(session).user_can_use_vault(principal.id)
+    if not vault_access and not await ProjectService(repository).list_projects(
+        principal, include_archived=False
+    ):
+        raise HTTPException(
+            status_code=403, detail="provider prices require vault or project access"
+        )
+    return principal
+
+
 def register_control_routes(app: FastAPI) -> None:
     """Register the control-plane endpoints on ``app`` under ``/api/v1``.
 
@@ -83,6 +119,25 @@ def register_control_routes(app: FastAPI) -> None:
     with a ``path`` attribute.
     """
 
+    @app.get("/api/v1/provider-prices", response_model=list[ProviderPriceRead])
+    async def list_provider_prices(
+        _principal: Annotated[UserPrincipal, Depends(_price_reader)],
+    ) -> list[ProviderPriceRead]:
+        entries: list[ProviderPriceRead] = []
+        for provider in ProviderName:
+            costs = catalog_call_costs(provider.value)
+            keyless_costs = catalog_call_costs(provider.value, keyless=True)
+            entries.append(
+                ProviderPriceRead(
+                    provider_id=provider.value,
+                    call_cost_usd=costs,
+                    keyless_call_cost_usd=keyless_costs,
+                    free=bool(costs) and all(cost == 0 for cost in costs.values()),
+                    keyless=bool(keyless_costs),
+                )
+            )
+        return entries
+
     @app.get("/api/v1/providers", response_model=list[ProviderStatusResponse])
     async def list_providers(
         _principal: _ReaderPrincipal, request: Request
@@ -90,7 +145,6 @@ def register_control_routes(app: FastAPI) -> None:
         """Enumerate every canonical provider with its current control state."""
 
         repository: SQLiteRepository | None = request.app.state.repository
-        policy = await routing_policy(repository)
         entries = [
             await _provider_entry(
                 repository,
@@ -99,10 +153,7 @@ def register_control_routes(app: FastAPI) -> None:
             )
             for name in ProviderName
         ]
-        ordered = sorted(entries, key=lambda entry: (entry.priority, entry.provider_id))
-        if policy.cost_optimization_preset is CostPreset.FREE_FIRST:
-            return _free_first_order(ordered)
-        return ordered
+        return sorted(entries, key=lambda entry: entry.provider_id)
 
     @app.get("/api/v1/providers/{provider_id}", response_model=ProviderStatusResponse)
     async def get_provider(
@@ -119,7 +170,7 @@ def register_control_routes(app: FastAPI) -> None:
         _principal: _AdminPrincipal,
         provider_id: str,
         request: Request,
-        update: ProviderConfigUpdate | None = None,
+        update: CatalogProviderUpdate | None = None,
     ) -> ProviderStatusResponse:
         """Merge a partial provider config update onto the effective record.
 
@@ -196,8 +247,6 @@ def register_control_routes(app: FastAPI) -> None:
         current = await routing_policy(repository)
         merged = RoutingConfigResponse(
             fallback_policy=update.fallback_policy or current.fallback_policy,
-            cost_optimization_preset=update.cost_optimization_preset
-            or current.cost_optimization_preset,
             max_attempts=update.max_attempts
             if update.max_attempts is not None
             else current.max_attempts,
@@ -213,18 +262,15 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
 
     @app.get(
         "/api/v1/providers/{provider_id}/manual-quota",
-        response_model=ManualQuotaResponse,
+        response_model=ManualQuotaResponse | None,
     )
     async def get_manual_quota(
-        _principal: _ReaderPrincipal, provider_id: str, request: Request
-    ) -> ManualQuotaResponse:
+        _principal: _AdminPrincipal, provider_id: str, request: Request
+    ) -> ManualQuotaResponse | None:
         """Return the operator-entered billing anchor; never touches routing."""
 
         name = _require_provider(provider_id)
-        stored = await load_manual_quota(request.app.state.repository, name)
-        if stored is None:
-            raise HTTPException(status_code=404, detail=f"no manual quota for {provider_id!r}")
-        return stored
+        return await load_manual_quota(request.app.state.repository, name)
 
     @app.put(
         "/api/v1/providers/{provider_id}/manual-quota",
@@ -419,16 +465,25 @@ async def clear_manual_quota(repository: SQLiteRepository | None, provider: Prov
 
 
 async def _latest_health(
-    repository: SQLiteRepository | None, provider: str
+    repository: SQLiteRepository | None, provider: str, *, has_key: bool
 ) -> ProviderHealth | None:
-    """Return the newest health observation; read failures degrade to ``None``."""
+    """Return the newest health observation; read failures degrade to ``None``.
+
+    Calls through live system or project credentials record credential-scoped
+    observations, so the newer of those and the provider-wide observation is
+    the provider's last real result. The provider-wide observation counts
+    only while the legacy store holds a key, since nothing else backs it.
+    """
 
     if repository is None:
         return None
     try:
-        return await repository.latest_health(provider)
+        through_credential = await repository.latest_live_credential_health(provider)
+        provider_wide = await repository.latest_health(provider) if has_key else None
     except Exception:
         return None
+    candidates = [health for health in (through_credential, provider_wide) if health is not None]
+    return max(candidates, key=lambda health: health.checked_at, default=None)
 
 
 async def _provider_entry(
@@ -440,18 +495,18 @@ async def _provider_entry(
 
     config = await effective_provider_config(repository, provider)
     breaker = await load_breaker(repository, provider)
-    health = await _latest_health(repository, provider.value)
     key, _source = await _resolve_secret(provider, store)
-    reported_health = health.status if health is not None else None
-    if key is None and provider not in (ProviderName.KEENABLE, ProviderName.TAVILY):
-        reported_health = None
+    has_key = key is not None or provider in (ProviderName.KEENABLE, ProviderName.TAVILY)
+    health = await _latest_health(repository, provider.value, has_key=has_key)
     return ProviderStatusResponse(
         provider_id=provider.value,
         enabled=config.enabled,
         enable_mask=config.enable_mask,
         support_mask=config.support_mask,
-        priority=config.priority,
-        health=reported_health,
+        call_cost_usd=catalog_call_costs(provider.value),
+        keyless_call_cost_usd=catalog_call_costs(provider.value, keyless=True),
+        health=health.status if health is not None else None,
+        health_checked_at=health.checked_at if health is not None else None,
         circuit_breaker=breaker,
         latency_p95_ms=await latency_p95_ms(repository, provider.value),
         secret_presence=_secret_presence(provider, key),
@@ -463,16 +518,6 @@ async def _provider_entry(
             config.tavily_key_environment if provider is ProviderName.TAVILY else None
         ),
     )
-
-
-def _free_first_order(
-    ordered: list[ProviderStatusResponse],
-) -> list[ProviderStatusResponse]:
-    """Pin Keenable to the front when the cost preset is ``free_first``."""
-
-    pinned = [entry for entry in ordered if entry.provider_id == "keenable"]
-    rest = [entry for entry in ordered if entry.provider_id != "keenable"]
-    return pinned + rest
 
 
 def _restart_hint(provider: str) -> str:

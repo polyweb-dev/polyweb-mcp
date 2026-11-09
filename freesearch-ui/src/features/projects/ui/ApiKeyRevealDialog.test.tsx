@@ -31,7 +31,7 @@ describe("ApiKeyRevealDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Copy key" }))
     expect(writeText).toHaveBeenCalledWith(ONE_TIME_VALUE)
-    const status = await screen.findByText("Copied to the clipboard.")
+    const status = await screen.findByText("Copied to the clipboard")
     expect(status.textContent).not.toContain(ONE_TIME_VALUE)
   })
 

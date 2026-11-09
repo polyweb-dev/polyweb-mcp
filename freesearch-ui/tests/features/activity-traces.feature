@@ -3,7 +3,7 @@ Feature: Activity trace redesign acceptance
   trace discloses one nested row per provider attempt with span-recorded
   identities; View details opens a provider-scoped dialog; the detail explains
   ranking once in mode-appropriate words; results select into a side
-  inspector; the "Trace" view (formerly Trajectory) fuses timing into rows with a
+  inspector; the "Timeline" view (formerly Trajectory) fuses timing into rows with a
   side span inspector; the dialog holds its geometry and focus contract at
   desktop and narrow widths. Activity is a project section (U2): the list
   and every detail come from the Alpha project trace routes.
@@ -16,6 +16,7 @@ Feature: Activity trace redesign acceptance
   @stub
   Scenario: Trace list shows Actions with real buttons and no payloads
     Then the activity table should expose the columns "Time", "Operation", "Provider", "Status", "Latency", and "Results" with a "Actions" action column
+    And the activity list shows relative time with an absolute timestamp
     And the activity list should not contain the disclosed query or result URLs
     And each activity row should expose a "View details" button
     And every "View details" control should be a real button
@@ -52,7 +53,7 @@ Feature: Activity trace redesign acceptance
     When I open the "View details" control in row 1
     And I select the result "Keenable acceptance result"
     Then the result inspector badges should number 1 and each show a logo
-    When I switch to the "Trace" trace view
+    When I switch to the "Timeline" trace view
     Then the trajectory provider rows should show provider logos followed by names
 
   @stub
@@ -163,7 +164,7 @@ Feature: Activity trace redesign acceptance
   Scenario: Trajectory fuses timing into rows with a side span inspector
     When I open the "View details" control in row 1
     Then the trace detail dialog should be visible
-    When I switch to the "Trace" trace view
+    When I switch to the "Timeline" trace view
     Then the trajectory should show seven provider rows each with a duration and a latency bar
     And the trajectory should show a "Search request" row
     And the trajectory should show a "Backend handling" row
@@ -178,7 +179,7 @@ Feature: Activity trace redesign acceptance
   Scenario: Trajectory hides transport, parse, and function-level spans
     When I open the "View details" control in row 6
     Then the trace detail dialog should be visible
-    When I switch to the "Trace" trace view
+    When I switch to the "Timeline" trace view
     Then the trajectory should show a "Search request" row
     And the trajectory should show a "Route selection" row
     And the trajectory should show a "Backend handling" row
@@ -193,7 +194,7 @@ Feature: Activity trace redesign acceptance
   Scenario: Trajectory ruler and bars share one time axis
     When I open the "View details" control in row 1
     Then the trace detail dialog should be visible
-    When I switch to the "Trace" trace view
+    When I switch to the "Timeline" trace view
     Then the trajectory ruler and every row track should align within "2" pixels
     And the trajectory bars should match recorded offsets and durations within "2" pixels
     And the trajectory ruler should state its millisecond unit once
@@ -203,14 +204,14 @@ Feature: Activity trace redesign acceptance
   Scenario: Latency summary counts overlapping provider calls once
     When I open the "View details" control in row 1
     Then the trace detail dialog should be visible
-    When I switch to the "Trace" trace view
+    When I switch to the "Timeline" trace view
     Then the latency summary should count overlapping provider calls once
 
   @stub
   Scenario: Trajectory row selection replaces request and response payloads
     When I open the "View details" control in row 6
     Then the trace detail dialog should be visible
-    When I switch to the "Trace" trace view
+    When I switch to the "Timeline" trace view
     And I select the trajectory row "Brave Search request"
     Then the span inspector should show "https://e2e.freesearch.dev/fusion/brave"
     When I select the trajectory row "Keenable request"
@@ -221,7 +222,7 @@ Feature: Activity trace redesign acceptance
   Scenario: Fetch trajectory keeps the fetch total row
     When I open the error trace detail
     Then the trace detail dialog should be visible
-    When I switch to the "Trace" trace view
+    When I switch to the "Timeline" trace view
     Then the trajectory should show a "Fetch request" row
     And the trajectory should show a "Keenable request" row
 
@@ -243,7 +244,7 @@ Feature: Activity trace redesign acceptance
     When I focus the result "Keenable acceptance result" and press Enter
     Then the result "Keenable acceptance result" should be marked as selected
     And the result inspector should show the full "Keenable" payload
-    When I switch to the "Trace" trace view
+    When I switch to the "Timeline" trace view
     And I focus the trajectory row "Keenable request" and press Enter
     Then the span inspector should show provider "Keenable" with the recorded request and response payload
     When I press Escape
@@ -276,7 +277,7 @@ Feature: Activity trace redesign acceptance
   Scenario: Error fetch detail shows the failure and the failed stage
     When I open the error trace detail
     Then the trace detail dialog should be visible
-    And the trace detail should show an error "http_error: HTTP 502"
+    And the trace detail should show an error "HTTP 502"
     And the trace detail should show the fetched url "https://docs.freesearch.dev/getting-started"
     And the trace detail should show no recorded results
 

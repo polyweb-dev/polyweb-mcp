@@ -18,10 +18,23 @@ import { playgroundPersistKey } from "@/store/playgroundPersistence"
 
 type Handler = (req: RecordedRequest) => Response | Promise<Response> | null
 
+function orderFixture(search: string[], fetch: string[] = search, notAllowed: string[] = []) {
+  const operation = (ids: string[], excluded: string[] = []) => ({
+    strategy: "custom",
+    providers: ids.map((provider) => ({ provider, name: provider, call_cost_usd: null, keyless: false })),
+    has_saved_custom: true,
+    not_allowed: excluded,
+  })
+  return { revision: 1, search: operation(search, notAllowed), fetch: operation(fetch) }
+}
+
 function stub(handler: Handler = () => null) {
   return installFetchStub((req) => {
     const answered = handler(req)
     if (answered !== null) return answered
+    if (req.method === "GET" && req.url.endsWith("/routing/order")) {
+      return ok(orderFixture(["brave", "you"], ["you"]))
+    }
     if (req.method === "GET" && req.url.endsWith("/providers")) {
       const projectId = req.url.split("/")[4] ?? ""
       return ok(projectProvidersFixture(projectId))
@@ -36,6 +49,13 @@ async function openPicker(testId: string): Promise<string[]> {
   fireEvent.click(trigger)
   const options = await screen.findAllByRole("option")
   return options.map((option) => option.textContent?.trim() ?? "")
+}
+
+async function expectPicker(testId: string, expected: string[]) {
+  fireEvent.click(await screen.findByTestId(testId))
+  await waitFor(() => {
+    expect(screen.getAllByRole("option").map((option) => option.textContent?.trim() ?? "")).toEqual(expected)
+  })
 }
 
 async function submitSearch(query: string) {
@@ -65,14 +85,29 @@ describe("ProjectPlaygroundPage provider picker", () => {
     )
     render(<PlaygroundHarness />)
 
-    await waitFor(async () => {
-      expect(await openPicker("playground-search-provider")).toEqual([
-        "Auto",
-        "All providers",
-        "Brave Search",
-        "You.com",
-      ])
+    await expectPicker("playground-search-provider", ["Auto", "All providers", "Brave Search", "You.com"])
+  })
+
+  it("uses separate project orders and excludes providers that are off for the operation", async () => {
+    stub((req) => {
+      if (req.url.endsWith("/routing/order")) {
+        return ok(orderFixture(["you", "keenable", "brave"], ["keenable", "you"], ["keenable"]))
+      }
+      if (req.url === projectProvidersUrl()) {
+        return ok(projectProvidersFixture(PLAYGROUND_PROJECT_ID, [
+          projectProviderType("brave"),
+          projectProviderType("you", []),
+          projectProviderType("keenable"),
+        ]))
+      }
+      return null
     })
+    render(<PlaygroundHarness />)
+    await expectPicker("playground-search-provider", [
+      "Auto", "All providers", "You.com", "Brave Search",
+    ])
+    fireEvent.click(screen.getByRole("tab", { name: "Fetch" }))
+    expect(await openPicker("playground-fetch-provider")).toEqual(["Auto", "Keenable", "You.com"])
   })
 
   it("offers only Auto and All providers without providers.read, with no view request", async () => {
@@ -82,6 +117,7 @@ describe("ProjectPlaygroundPage provider picker", () => {
 
     expect(await openPicker("playground-search-provider")).toEqual(["Auto", "All providers"])
     expect(fetchStub.requestsTo(projectProvidersUrl())).toHaveLength(0)
+    expect(fetchStub.requestsTo(`/api/v1/projects/${PLAYGROUND_PROJECT_ID}/routing/order`)).toHaveLength(0)
   })
 
   it("disables the Fetch mode without fetch.execute", async () => {
@@ -95,12 +131,26 @@ describe("ProjectPlaygroundPage provider picker", () => {
 })
 
 describe("ProjectPlaygroundPage provider read states", () => {
+  it("offers retry when the project order cannot be read", async () => {
+    let reads = 0
+    stub((req) => {
+      if (!req.url.endsWith("/routing/order")) return null
+      reads += 1
+      return reads === 1 ? err(503, null) : ok(orderFixture(["brave"], []))
+    })
+    render(<PlaygroundHarness />)
+    expect(await screen.findByText(/Couldn't load this project's providers/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    await expectPicker("playground-search-provider", ["Auto", "All providers", "Brave Search"])
+  })
+
   it("shows the setup notice and disables submit while no provider can run the mode", async () => {
-    stub((req) =>
-      req.url === projectProvidersUrl()
+    stub((req) => {
+      if (req.url.endsWith("/routing/order")) return ok(orderFixture([], []))
+      return req.url === projectProvidersUrl()
         ? ok(projectProvidersFixture(PLAYGROUND_PROJECT_ID, [projectProviderType("brave", [])]))
         : null
-    )
+    })
     render(<PlaygroundHarness />)
 
     expect(
@@ -132,14 +182,7 @@ describe("ProjectPlaygroundPage provider read states", () => {
     ).toBeInTheDocument()
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }))
 
-    await waitFor(async () => {
-      expect(await openPicker("playground-search-provider")).toEqual([
-        "Auto",
-        "All providers",
-        "Brave Search",
-        "You.com",
-      ])
-    })
+    await expectPicker("playground-search-provider", ["Auto", "All providers", "Brave Search", "You.com"])
     expect(fetchStub.requestsTo(projectProvidersUrl()).length).toBeGreaterThanOrEqual(2)
     expect(screen.queryByText(/Couldn't load this project's providers/)).toBeNull()
   })

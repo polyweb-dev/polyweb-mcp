@@ -1,4 +1,7 @@
+import { Copy } from "lucide-react"
 import { Button } from "@/shared/ui/button"
+import { Field } from "@/shared/ui/Field"
+import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
 import { useClipboard } from "@/shared/clipboard/useClipboard"
 
@@ -12,9 +15,9 @@ export interface ApiKeyRevealDialogProps {
 /**
  * One-time reveal of a newly issued or rotated key.
  *
- * The key shows in a read-only field with Copy and a "shown only once"
- * warning. Done, Escape and the close control all clear it through `onDone`;
- * nothing here stores, logs or announces the value.
+ * The key shows in a read-only mono field with Copy beside it, under a
+ * "shown only once" warning. Done, Escape and the close control all clear it
+ * through `onDone`; nothing here stores, logs or announces the value.
  */
 export function ApiKeyRevealDialog({ rawKey, onDone }: ApiKeyRevealDialogProps) {
   const { copied, copy, reset } = useClipboard({ resetAfterMs: 2000 })
@@ -27,42 +30,43 @@ export function ApiKeyRevealDialog({ rawKey, onDone }: ApiKeyRevealDialogProps) 
   return (
     <Modal isOpen={rawKey !== null} onClose={done} title="Copy your new API key" maxWidth="lg">
       {rawKey !== null && (
-        <div className="space-y-4">
-          <p className="text-[13px] font-medium text-[var(--status-warning)]">
-            This key is shown only once.
+        <>
+          <p className="mb-4 text-[13px] text-[var(--muted)]">
+            <span className="font-medium text-[var(--status-warning)]">This key is shown only once.</span>{" "}
+            Store it in a secret manager before you close this dialog
           </p>
-          <p className="text-[13px] text-[var(--muted)]">
-            Store it in a secret manager now. You cannot view it again after you close this dialog.
-          </p>
-          <div>
-            <label htmlFor="api-key-reveal" className="mb-1 block text-[12px] text-[var(--muted)]">
-              API key
-            </label>
-            <input
-              id="api-key-reveal"
-              type="text"
-              readOnly
-              value={rawKey}
-              autoComplete="off"
-              spellCheck={false}
-              onFocus={(event) => event.currentTarget.select()}
-              className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1.5 font-mono text-[13px] text-[var(--text)] outline-none focus-visible:border-[var(--signal)]"
-            />
-          </div>
-          {copied && (
-            <p role="status" className="text-[12px] text-[var(--muted)]">
-              Copied to the clipboard.
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => void copy(rawKey)}>
-              Copy key
-            </Button>
-            <Button type="button" onClick={done}>
+          <Field id="api-key-reveal" label="API key">
+            <div className="flex items-center gap-2">
+              <input
+                id="api-key-reveal"
+                type="text"
+                readOnly
+                value={rawKey}
+                autoComplete="off"
+                spellCheck={false}
+                onFocus={(event) => event.currentTarget.select()}
+                className="fs-input min-w-0 flex-1 font-mono text-[12px]"
+              />
+              <Button type="button" size="form" variant="outline" onClick={() => void copy(rawKey)}>
+                <Copy aria-hidden="true" />
+                Copy key
+              </Button>
+            </div>
+          </Field>
+          <FormActions
+            start={
+              copied ? (
+                <span role="status" className="text-[12px]">
+                  Copied to the clipboard
+                </span>
+              ) : undefined
+            }
+          >
+            <Button type="button" size="form" onClick={done}>
               Done
             </Button>
-          </div>
-        </div>
+          </FormActions>
+        </>
       )}
     </Modal>
   )

@@ -1,6 +1,6 @@
 import { createContext } from "react";
 import type {
-  CRDUsageTotal,
+  UsdUsageTotal,
   DashboardQuota,
   ProviderLimits,
   UsageEvent,
@@ -16,7 +16,7 @@ export interface DashboardValue {
   /** Decoded credit-unit limit state, one entry per provider rail. */
   providerLimits: ProviderLimits[];
   /** Exact credit-unit use totals from the dashboard payload. */
-  crdUsageTotals: CRDUsageTotal[];
+  usdUsageTotals: UsdUsageTotal[];
   quotaAvailable: boolean;
   dashboardNotice: string | null;
   /** Role capability flags from the composition. */

@@ -7,11 +7,12 @@ import {
 import { PageHeader } from "@/shared/ui/PageHeader"
 import { useProjectApiKeysController } from "../model/useProjectApiKeysController"
 import { ApiKeyRevealDialog } from "./ApiKeyRevealDialog"
-import { ApiKeysTable } from "./ApiKeysTable"
+import { ApiKeysPanel } from "./ApiKeysPanel"
 import { IssueApiKeyForm } from "./IssueApiKeyForm"
 import { RotateApiKeyDialog } from "./RotateApiKeyDialog"
 
 const ARCHIVED_NOTE = "This project is archived. Its keys can be revoked but not issued or rotated."
+const TWO_COLUMNS = "grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"
 
 /**
  * API key management of one project (`tokens.manage`, gated by the shell).
@@ -33,42 +34,30 @@ export function ProjectApiKeysPage({ accountId }: { accountId: string }) {
   })
   const archived = project?.status === "archived"
   const permittedScopes = API_KEY_SCOPES.filter((scope) => hasPermission(access, scope))
-  const showPageMessage = controller.message !== null && controller.rotatingKey === null
+  const pageMessage = controller.rotatingKey === null ? controller.message : null
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
-      <PageHeader
-        title="API keys"
-        description={`Keys let programs call search and fetch in ${project?.name ?? "this project"}.`}
-      />
+      <PageHeader title="API keys" description="Keys for scripts and services that call search and fetch" />
 
-      {showPageMessage && (
+      {pageMessage !== null && (
         <p role="alert" className="text-[13px] text-[var(--status-danger)]">
-          {controller.message}
+          {pageMessage}
         </p>
       )}
 
-      {archived ? (
+      {archived && (
         <p role="note" className="text-[13px] text-[var(--muted)]">
           {ARCHIVED_NOTE}
         </p>
-      ) : (
-        <IssueApiKeyForm controller={controller} permittedScopes={permittedScopes} />
       )}
 
-      {controller.keys.status === "loading" && (
-        <p role="status" className="text-[13px] text-[var(--muted)]">
-          Loading API keys…
-        </p>
-      )}
-      {controller.keys.status === "error" && (
-        <p role="alert" className="text-[13px] text-[var(--muted)]">
-          The API key list could not be loaded.
-        </p>
-      )}
-      {controller.keys.status === "ready" && (
-        <ApiKeysTable keys={controller.keys.data} controller={controller} archived={archived} />
-      )}
+      <div className={archived ? undefined : TWO_COLUMNS}>
+        <div className="min-w-0">
+          <ApiKeysPanel controller={controller} archived={archived} />
+        </div>
+        {!archived && <IssueApiKeyForm controller={controller} permittedScopes={permittedScopes} />}
+      </div>
 
       <RotateApiKeyDialog controller={controller} />
       <ApiKeyRevealDialog rawKey={controller.revealedKey} onDone={controller.dismissReveal} />

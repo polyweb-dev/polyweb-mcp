@@ -13,6 +13,7 @@ from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
 from freesearch.models.schema_enums import OAuthGrantStatus
 from freesearch.services.monitoring import refresh_quotas
 from freesearch.services.parallel_oauth import OAuthUnpaired, ParallelOAuthError
+from tests.fixtures.vault_oauth import vault_oauth_case as vault_oauth_case
 from tests.integration.services.oauth.oauth_stubs import (
     cents_to_usd,
     expected_remaining,
@@ -162,9 +163,9 @@ async def test_balance_precedence_over_seed_and_manual(oauth_case):
     assert (await case.repository.latest_quota("parallel")) == seed
 
 
-async def test_balance_ttl_and_failure_backoff(oauth_case):
+async def test_balance_ttl_and_failure_backoff(vault_oauth_case):
     """Origin test_adv_oauth_balance.py::test_balance_ttl_and_failure_backoff."""
-    case = oauth_case
+    case = vault_oauth_case
     await case.connect()
     # No hidden singleton poll on pairing, status/dashboard, or generic refresh.
     assert case.stub.balance_calls == 0

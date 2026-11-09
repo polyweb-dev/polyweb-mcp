@@ -1,11 +1,17 @@
-"""Pure trace-policy helpers: sampling and payload redaction (TASK-000044 A5)."""
+"""Pure trace-policy payload projection."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
+from uuid import uuid4
+
+from opentelemetry.sdk.trace.export import SpanExportResult
 
 from freesearch.models.observability import (
+    ActorType,
     TraceAttribute,
     TraceEventDetail,
     TraceSpanKind,
@@ -14,9 +20,9 @@ from freesearch.models.observability import (
 from freesearch.models.projects import (
     ProjectTracePolicy,
     TraceDetailPolicy,
-    TraceRedactionPolicy,
 )
-from freesearch.persistence.trace_policy import apply_trace_policy, trace_is_sampled
+from freesearch.persistence.otel_exporter import SQLiteSpanExporter
+from freesearch.persistence.trace_policy import apply_trace_policy
 
 
 def _record(**overrides: Any) -> TraceSpanRecord:
@@ -57,39 +63,11 @@ def _record(**overrides: Any) -> TraceSpanRecord:
     return TraceSpanRecord(**payload)
 
 
-def test_zero_sampling_drops_every_trace_and_full_sampling_keeps_all() -> None:
-    """The 0.0 and 1.0 boundaries are absolute, not probabilistic."""
-
-    assert trace_is_sampled("0" * 32, 0.0) is False
-    assert trace_is_sampled("f" * 32, 0.0) is False
-    assert trace_is_sampled("0" * 32, 1.0) is True
-    assert trace_is_sampled("f" * 32, 1.0) is True
-
-
-def test_mid_rate_sampling_is_deterministic_per_trace_id() -> None:
-    """One trace id always decides the same way, so a whole trace agrees."""
-
-    low = "0" * 32
-    high = "f" * 32
-    assert trace_is_sampled(low, 0.5) is True
-    assert trace_is_sampled(high, 0.5) is False
-    assert trace_is_sampled(low, 0.5) == trace_is_sampled(low, 0.5)
-    assert trace_is_sampled(high, 0.5) == trace_is_sampled(high, 0.5)
-
-
-def test_unparseable_trace_id_is_kept() -> None:
-    """A malformed id fails open to capture rather than silently dropping."""
-
-    assert trace_is_sampled("not-a-trace-id", 0.5) is True
-
-
-def test_full_standard_policy_preserves_payload() -> None:
-    """FULL detail with STANDARD redaction keeps request/response content."""
+def test_full_policy_preserves_payload() -> None:
+    """FULL detail keeps request/response content."""
 
     policy = ProjectTracePolicy(
-        sampling_rate=1.0,
         detail=TraceDetailPolicy.FULL,
-        payload_redaction=TraceRedactionPolicy.STANDARD,
     )
     record = _record()
     assert apply_trace_policy(record, policy) == record
@@ -110,14 +88,12 @@ def test_metadata_policy_strips_content_but_keeps_safe_attributes() -> None:
     assert stripped.events[0].attributes == {"result_count": 2, "exception.type": "RuntimeError"}
 
 
-def test_strict_redaction_strips_payload_even_with_full_detail() -> None:
-    """STRICT redaction never persists payload content, whatever the detail."""
-
-    policy = ProjectTracePolicy(
-        detail=TraceDetailPolicy.FULL,
-        payload_redaction=TraceRedactionPolicy.STRICT,
-    )
-    stripped = apply_trace_policy(_record(), policy)
-    assert stripped.input_text is None
-    assert stripped.output_json is None
-    assert TraceAttribute.REQUEST_QUERY not in stripped.attributes
+def test_exporter_does_not_drop_legacy_unsampled_spans(monkeypatch: Any, tmp_path: Path) -> None:
+    span = Mock()
+    span.attributes = {TraceAttribute.SAMPLED: False, TraceAttribute.CAPTURE_PAYLOAD: True}
+    record = _record(project_id=uuid4(), actor_type=ActorType.HUMAN, actor_id=uuid4())
+    collect = Mock(return_value=[])
+    monkeypatch.setattr("freesearch.persistence.otel_exporter.span_record", lambda _: record)
+    monkeypatch.setattr("freesearch.persistence.otel_exporter._record_rows", collect)
+    assert SQLiteSpanExporter(tmp_path / "unused.db").export([span]) is SpanExportResult.SUCCESS
+    collect.assert_called_once_with([record])

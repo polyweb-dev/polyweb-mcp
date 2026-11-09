@@ -1,118 +1,77 @@
-import { describe, expect, it } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { render, screen, within } from "@testing-library/react"
+import type { UsdUsageTotal } from "@/domains/dashboard"
 import { UsageTotals } from "./UsageTotals"
+import { installFetchStub, ok } from "@/test/fetchMock"
 
-/**
- * Tavily native usage totals: converted Credits state themselves in their own
- * block while every other provider keeps its CRD rows.
- */
+beforeEach(() => { installFetchStub(() => ok([])) })
+afterEach(() => vi.unstubAllGlobals())
 
-function tavilyProfile() {
-  return {
-    reference_usd_per_crd: "0.001",
-    native_usd_per_unit: "0.008",
-    cost_basis: "paygo_reference",
-    price_version: "paygo-reference",
-    source: "documented",
-    estimated: true,
-  }
-}
+/** One merged usage table: one row per provider, USD cost, and one p95. */
 
-function tavilyLimits() {
-  const search = {
-    provider: "tavily",
-    operation: "search",
-    auth_mode: "keyed",
-    supported: true,
-    transport_available: true,
-    native_pool_id: "tavily:keyed:credits",
-    rate: null,
-    budget: null,
-    conversion_profile: tavilyProfile(),
-    plan_name: "Tavily",
-    usage_url: null,
-    version: 2,
-  }
-  const fetch = {
-    provider: "tavily",
-    operation: "fetch",
-    auth_mode: "keyed",
-    supported: true,
-    transport_available: true,
-    native_pool_id: "tavily:keyed:credits",
-    rate: null,
-    budget: null,
-    conversion_profile: tavilyProfile(),
-    plan_name: "Tavily",
-    usage_url: null,
-    version: 2,
-  }
-  return {
-    provider: "tavily",
-    active_auth_mode: "keyed",
-    auths: [
-      {
-        auth_mode: "keyed",
-        transport_available: true,
-        search,
-        fetch,
-        free_tiers: [],
-        paid_tiers: [],
-        unknown_tiers: [],
-        tier_split_known: true,
-        aggregate_pool: null,
-        crd_views: [],
-        rate_progress: [],
-        grants: null,
-        detail: null,
-      },
-    ],
-    documented_keyless_operations: [],
-    version: 2,
-    generated_at: "2026-09-06T10:05:00Z",
-  }
-}
+const TOTALS: UsdUsageTotal[] = [
+  { provider: "brave", operation: "search", spend_usd: "0.005", attempt_count: 1, volume_count: 1 },
+  { provider: "tavily", operation: "search", spend_usd: "0.008", attempt_count: 1, volume_count: 1200 },
+  { provider: "tavily", operation: "fetch", spend_usd: "0.016", attempt_count: 2, volume_count: 3 },
+]
 
-function providers() {
-  return [
-    { id: "brave", name: "Brave", latencyP95Ms: null },
-    { id: "tavily", name: "Tavily", latencyP95Ms: null },
-  ]
-}
+const PROVIDERS = [
+  { id: "brave", name: "Brave", latencyP95Ms: 1192 },
+  { id: "tavily", name: "Tavily", latencyP95Ms: null },
+]
 
-describe("UsageTotals native Credits", () => {
-  it("separates Tavily native Credits from other providers CRD rows", () => {
-    render(
-      <UsageTotals
-        crdUsageTotals={[
-          { provider: "brave", operation: "search", normalized_crd: "5", attempt_count: 1, volume_count: 1 },
-          { provider: "tavily", operation: "search", normalized_crd: "8", attempt_count: 1, volume_count: 1 },
-          { provider: "tavily", operation: "fetch", normalized_crd: "16", attempt_count: 2, volume_count: 10 },
-        ]}
-        providers={providers() as never}
-        providerLimits={[tavilyLimits()] as never}
-      />,
-    )
-    expect(screen.getByText("Credit-unit use")).not.toBeNull()
-    expect(screen.getByText("Tavily native Credits use")).not.toBeNull()
-    expect(screen.getByText("5 CRD")).not.toBeNull()
-    expect(screen.queryByText("8 CRD")).toBeNull()
-    expect(screen.queryByText("16 CRD")).toBeNull()
-    expect(screen.getByText("1 Credit")).not.toBeNull()
-    expect(screen.getByText("2 Credits")).not.toBeNull()
-    expect(screen.getAllByText("extract")).toHaveLength(2)
+describe("UsageTotals", () => {
+  it("merges every provider into one row with separators and units in the headers", () => {
+    render(<UsageTotals usdUsageTotals={TOTALS} providers={PROVIDERS as never} />)
+    const table = screen.getByRole("table", { name: "Usage totals" })
+    expect(Array.from(table.querySelectorAll("th")).map((th) => th.textContent)).toEqual([
+      "Provider",
+      "Searches",
+      "URLs fetched",
+      "Cost",
+      "p95",
+    ])
+    const rows = table.querySelectorAll("tbody tr")
+    expect(rows).toHaveLength(2)
+    const tavily = within(rows[1] as HTMLElement)
+    expect(tavily.getByText("1,200")).not.toBeNull()
+    expect(within(rows[0] as HTMLElement).getByText("$0.005")).not.toBeNull()
+    expect(tavily.getByText("$0.024")).not.toBeNull()
+    expect(tavily.getByText("—")).toBeInTheDocument()
+    expect(within(rows[0] as HTMLElement).getByText("1,192 ms")).not.toBeNull()
+    expect(table.querySelector('[data-testid="provider-logo-brave"]')).not.toBeNull()
   })
 
-  it("keeps recorded CRD rows unchanged without price profiles", () => {
-    render(
-      <UsageTotals
-        crdUsageTotals={[
-          { provider: "tavily", operation: "search", normalized_crd: "8", attempt_count: 1, volume_count: 1 },
-        ]}
-        providers={providers() as never}
-      />,
-    )
-    expect(screen.getByText("8 CRD")).not.toBeNull()
-    expect(screen.queryByText("Tavily native Credits use")).toBeNull()
+  it("shows one quiet line without recorded usage", () => {
+    render(<UsageTotals usdUsageTotals={[]} providers={PROVIDERS as never} />)
+    expect(screen.getByText("No usage recorded yet")).not.toBeNull()
+    expect(screen.queryByRole("table")).toBeNull()
+  })
+
+  it("distinguishes free providers from paid providers with zero spend", () => {
+    render(<UsageTotals providers={[
+      { id: "keenable", name: "Keenable", callCostUsd: { search: "0", fetch: "0" } },
+      { id: "brave", name: "Brave Search", callCostUsd: { search: "0.005" } },
+    ] as never} usdUsageTotals={["keenable", "brave"].map((provider) => ({
+      provider, operation: "search", spend_usd: "0", attempt_count: 1, volume_count: 1,
+    }))} />)
+    expect(within(screen.getByRole("row", { name: /Keenable/ })).getByText("Free")).toBeInTheDocument()
+    expect(within(screen.getByRole("row", { name: /Brave Search/ })).getByText("$0.00")).toBeInTheDocument()
+  })
+
+  it("uses the price catalog when the provider snapshot has no pricing", async () => {
+    installFetchStub(() => ok([{ provider_id: "keenable", free: true, keyless: true,
+      call_cost_usd: { search: "0", fetch: "0" }, keyless_call_cost_usd: { search: "0", fetch: "0" } }]))
+    render(<UsageTotals providers={[{ id: "keenable", name: "Keenable" }] as never}
+      usdUsageTotals={[{ provider: "keenable", operation: "search", spend_usd: "0", attempt_count: 1, volume_count: 1 }]} />)
+    expect(await screen.findByText("Free")).toBeInTheDocument()
+    expect(screen.queryByText("$0.00")).toBeNull()
+  })
+
+  it("shows USD cost without a price profile", () => {
+    render(<UsageTotals usdUsageTotals={TOTALS} providers={PROVIDERS as never} />)
+    const table = screen.getByRole("table", { name: "Usage totals" })
+    expect(within(table).getByText("$0.024")).toBeInTheDocument()
+    expect(table.textContent).not.toContain("Tavily credit")
   })
 })

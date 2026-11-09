@@ -1,6 +1,7 @@
 import { disabledOptionReason } from "@/domains/settings"
 import type { EnumOption, SettingsField } from "@/domains/settings"
-import { SETTING_FIELD_CLASS } from "./settingControlStyles"
+import { Select } from "@/shared/ui/select"
+import type { SelectOption } from "@/shared/ui/select"
 
 interface EnumSettingControlProps {
   id: string
@@ -12,37 +13,28 @@ interface EnumSettingControlProps {
   onChange: (value: string) => void
 }
 
-/** Select of one enum field; options looser than the system are disabled with the reason. */
+/** "The system allows metadata only." → "The system allows metadata only" */
+function phrase(reason: string): string {
+  return reason.replace(/\.$/, "")
+}
+
+/** Select of one enum field; an option looser than the system is disabled with its reason. */
 export function EnumSettingControl(props: EnumSettingControlProps) {
   const { id, label, field, options, value, disabled, onChange } = props
-  const reasons = options
-    .map((option) => disabledOptionReason(field, option.value))
-    .filter((reason): reason is string => reason !== null)
+  const rows: SelectOption[] = options.map((option) => {
+    const reason = disabledOptionReason(field, option.value)
+    return reason === null
+      ? { value: option.value, label: option.label }
+      : { value: option.value, label: option.label, disabled: true, description: phrase(reason) }
+  })
   return (
-    <div className="space-y-1">
-      <select
-        id={id}
-        aria-label={label}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        className={SETTING_FIELD_CLASS}
-      >
-        {options.map((option) => (
-          <option
-            key={option.value}
-            value={option.value}
-            disabled={disabledOptionReason(field, option.value) !== null}
-          >
-            {option.label}
-          </option>
-        ))}
-      </select>
-      {reasons.map((reason) => (
-        <p key={reason} className="text-[12px] text-[var(--muted)]">
-          {reason}
-        </p>
-      ))}
-    </div>
+    <Select
+      id={id}
+      ariaLabel={label}
+      value={value}
+      options={rows}
+      disabled={disabled}
+      onValueChange={onChange}
+    />
   )
 }

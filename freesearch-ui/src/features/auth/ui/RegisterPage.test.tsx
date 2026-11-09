@@ -136,6 +136,19 @@ describe("RegisterPage", () => {
     expect(stub.requests.every((req) => req.url === "/auth/register")).toBe(true)
   })
 
+  it("prevents duplicate account creation while the request is pending", async () => {
+    const stub = installFetchStub(() => new Promise<Response>(() => {}))
+    renderRegister()
+    fillForm(EMAIL, PASSWORD, PASSWORD)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Create account" }))
+    const pending = await screen.findByRole("button", { name: "Creating account…" })
+    expect(pending).toBeDisabled()
+    expect(pending).toHaveAttribute("aria-busy", "true")
+    await user.click(pending)
+    expect(stub.requests).toHaveLength(1)
+  })
+
   it("confirms the creation without role text and without automatic login", async () => {
     const user = userEvent.setup()
     const stub = installFetchStub((req) => {

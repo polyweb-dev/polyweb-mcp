@@ -1,40 +1,35 @@
 import type { ReactNode } from "react"
-import { Fragment } from "react"
+import { Fragment, useState } from "react"
 import { ChevronRight } from "lucide-react"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/shared/ui/table"
-import { Button } from "@/shared/ui/button"
 import type { TraceSummary } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
-import { OperationTags } from "@/shared/ui/OperationTags"
+import { formatDateTime, formatLatency, formatRelativeTime } from "@/shared/lib/formatTime"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import type { TraceLoadState } from "../model/useActivityController"
 import { ActivityProviderRows } from "./ActivityProviderRows"
+import { ActivityRowAction } from "./ActivityRowAction"
 import { TraceStatusPill } from "./TraceStatusPill"
 
 const AGGREGATED_PROVIDER = "aggregated"
 
 const COLUMNS = [
-  { label: "Time", align: "" },
-  { label: "Operation", align: "" },
-  { label: "Provider", align: "" },
-  { label: "Status", align: "text-center" },
-  { label: "Latency", align: "text-right" },
-  { label: "Results", align: "text-right" },
-  { label: "Actions", align: "text-right" },
+  { label: "Time", className: "" },
+  { label: "Operation", className: "" },
+  { label: "Provider", className: "" },
+  { label: "Status", className: "" },
+  { label: "Latency", className: "text-right" },
+  { label: "Results", className: "text-right" },
 ]
 
-const CELL = "px-4 py-2.5"
-
-function timeLabel(startedAt: string): string {
+function timeLabel(startedAt: string, now: number): string {
   const parsed = new Date(startedAt)
-  return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleTimeString()
+  return Number.isNaN(parsed.getTime()) ? "—" : formatRelativeTime(parsed.getTime(), now)
+}
+
+function operationLabel(summary: TraceSummary): string {
+  if (summary.operation === "search") return "Search"
+  if (summary.operation === "fetch") return "Fetch"
+  return "—"
 }
 
 function resultLabel(summary: TraceSummary): string {
@@ -58,7 +53,7 @@ function providerExpander(
         event.stopPropagation()
         onToggle()
       }}
-      className="rounded-sm text-[var(--muted)] transition-colors hover:text-[var(--accent-cyan)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
+      className="relative z-10 inline-flex size-5 items-center justify-center rounded-sm text-[var(--muted)] transition-colors hover:bg-[var(--raised)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40"
     >
       <ChevronRight
         aria-hidden="true"
@@ -99,15 +94,10 @@ interface TraceRowOptions {
 function traceRow(options: TraceRowOptions): ReactNode {
   const { summary, time, expanded, panelId, onSelect, onToggleProviders } = options
   return (
-    <TableRow
-      onClick={() => onSelect(summary.traceId)}
-      className="cursor-pointer border-b border-[var(--border-subtle)] last:border-b-0"
-    >
-      <TableCell className={`${CELL} text-[var(--muted)] tnum`}>{time}</TableCell>
-      <TableCell className={`${CELL} text-[var(--text)]`}>
-        <OperationTags operations={summary.operation ? [summary.operation] : []} />
-      </TableCell>
-      <TableCell className={`${CELL} font-medium text-[var(--text-strong)]`}>
+    <tr onClick={() => onSelect(summary.traceId)} className="relative cursor-pointer">
+      <td className="tnum whitespace-nowrap text-[var(--muted)]" title={formatDateTime(summary.startedAt)}>{time}</td>
+      <td>{operationLabel(summary)}</td>
+      <td className="fs-cell-strong">
         <span className="inline-flex items-center gap-1.5">
           {summary.provider === AGGREGATED_PROVIDER &&
             providerExpander(time, expanded, panelId, () =>
@@ -115,31 +105,16 @@ function traceRow(options: TraceRowOptions): ReactNode {
             )}
           {providerValue(summary)}
         </span>
-      </TableCell>
-      <TableCell className={`${CELL} text-center`}>
+      </td>
+      <td>
         <TraceStatusPill outcome={summary.outcome} />
-      </TableCell>
-      <TableCell className={`${CELL} text-right text-[var(--text)] tnum`}>
-        {summary.durationMs}ms
-      </TableCell>
-      <TableCell className={`${CELL} text-right text-[var(--muted)] tnum`}>
-        {resultLabel(summary)}
-      </TableCell>
-      <TableCell className={`${CELL} text-right`}>
-        <Button
-          variant="outline"
-          size="default"
-          onClick={(event) => {
-            // The row is a click target too: stop the bubble so one interaction
-            // selects the trace exactly once.
-            event.stopPropagation()
-            onSelect(summary.traceId)
-          }}
-        >
-          View details
-        </Button>
-      </TableCell>
-    </TableRow>
+      </td>
+      <td className="tnum text-right">{formatLatency(summary.durationMs)}</td>
+      <td className="tnum text-right text-[var(--muted)]">{resultLabel(summary)}</td>
+      <td className="fs-cell-actions">
+        <ActivityRowAction onOpen={() => onSelect(summary.traceId)} />
+      </td>
+    </tr>
   )
 }
 
@@ -154,10 +129,10 @@ export interface ActivityListProps {
 }
 
 /**
- * Activity list: one scannable row per trace with a visible Actions column, so
- * the detail is reachable by keyboard as well as by clicking the row. A fanout
- * trace ("All providers") can disclose its per-provider attempts inline
- * (PLAN §5, REQUIREMENTS §3.2–3.4).
+ * Activity list: one scannable row per trace on the shared table. The whole
+ * row opens the trace; its trailing chevron is the row's button, so the detail
+ * is reachable by keyboard with a visible focus ring. A fanout trace ("All
+ * providers") can disclose its per-provider attempts inline.
  */
 export function ActivityList({
   summaries,
@@ -168,22 +143,23 @@ export function ActivityList({
   onInspect,
   onRetry,
 }: ActivityListProps) {
+  const [now] = useState(Date.now)
   return (
-    <div className="min-w-0 overflow-hidden rounded-lg border border-[var(--border-subtle)]">
-      <Table className="text-[13px]">
-        <TableHeader>
-          <TableRow className="border-b border-[var(--border-subtle)] bg-[var(--elevated)] hover:bg-[var(--elevated)]">
+    <div className="fs-panel min-w-0 overflow-hidden">
+      <table aria-label="Activity" className="fs-table">
+        <thead>
+          <tr>
             {COLUMNS.map((column) => (
-              <TableHead
-                key={column.label}
-                className={`h-9 px-4 text-[12px] text-[var(--muted)] ${column.align}`}
-              >
+              <th key={column.label} scope="col" className={column.className}>
                 {column.label}
-              </TableHead>
+              </th>
             ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
+            <th scope="col" className="fs-cell-actions">
+              <span className="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
           {summaries.map((summary) => {
             const expanded = expandedTraceId === summary.traceId
             const panelId = `trace-providers-${summary.traceId}`
@@ -191,7 +167,7 @@ export function ActivityList({
               <Fragment key={summary.traceId}>
                 {traceRow({
                   summary,
-                  time: timeLabel(summary.startedAt),
+                  time: timeLabel(summary.startedAt, now),
                   expanded,
                   panelId,
                   onSelect,
@@ -208,8 +184,8 @@ export function ActivityList({
               </Fragment>
             )
           })}
-        </TableBody>
-      </Table>
+        </tbody>
+      </table>
     </div>
   )
 }

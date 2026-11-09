@@ -153,11 +153,13 @@ Feature: Local user accounts, migration, and settings
 
   Scenario: Provider controls follow scoped system and project authority
     Given an offline users API with account auth and stub adapters
+    And a Brave stub for the scoped authority scenario
     When I prepare system admin, project admin, and member accounts
+    And the member has search permission and the project has a Brave pool
     Then anonymous control calls should fail with HTTP 401
     And provider reads should allow only the system admin
     And provider mutations should allow only the system admin
-    And the member should search its project but the system admin should not
+    And the member should search the pooled project but the system admin should not
 
   Scenario: Browser login issues a strict cookie without a JSON refresh credential
     Given an offline users API with browser cookie transport
@@ -210,34 +212,3 @@ Feature: Local user accounts, migration, and settings
     Given an offline users API with account auth and stub adapters
     When I register account "t2-omitted-bdd@example.com"
     Then the registration should create an ordinary account without tokens
-
-  Scenario: A system admin provisions one ordinary account
-    Given an offline users API with account auth and stub adapters
-    When I prepare system admin, project admin, and member accounts
-    And the system admin provisions an account
-    Then the provisioning should create an ordinary account without credentials
-
-  Scenario: Accounts without system authority cannot provision accounts
-    Given an offline users API with account auth and stub adapters
-    When I prepare system admin, project admin, and member accounts
-    Then a project admin provisioning should fail with HTTP 403
-    And a member provisioning should fail with HTTP 403
-    And an anonymous provisioning should fail with HTTP 401
-
-  Scenario: Legacy account lookup and role change deny every caller
-    Given an offline users API with account auth and stub adapters
-    When I prepare system admin, project admin, and member accounts
-    Then legacy account routes should deny every role with HTTP 403 and keep sessions live
-
-  Scenario: Public and provisioning creation share one limit
-    Given an offline users API with account auth and stub adapters
-    When I prepare one system admin account
-    And I consume the shared creation limit
-    Then the sixth creation should fail with HTTP 429 and a retry delay
-
-  Scenario: Creation input stays safe
-    Given an offline users API with account auth and stub adapters
-    When I prepare one system admin account
-    Then invalid creation roles should fail with safe HTTP 422
-    And privileged creation fields should fail with safe HTTP 422
-    And weak provisioned passwords and duplicate email should fail safely

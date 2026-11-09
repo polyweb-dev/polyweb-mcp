@@ -3,6 +3,7 @@
 import tempfile
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
@@ -21,7 +22,8 @@ from freesearch.models.contracts import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, temp_email
-from tests.fixtures.execution import bdd_project_id
+from tests.fixtures.execution import _install_bdd_adapters, account_id_from_headers, bdd_project_id
+from tests.fixtures.project_order import seed_order_pools
 
 
 class _FanoutStubAdapter(ProviderAdapter):
@@ -125,6 +127,26 @@ def step_given_fanout_registry(context: Any) -> None:
     context.fanout_adapters = adapters
 
 
+@given("the fanout providers have pooled vault keys")
+def step_given_fanout_pools(context: Any) -> None:
+    context.app = create_app(list(context.fanout_adapters), repository=context.repository)
+    with TestClient(context.app) as client:
+        headers = _ensure_agent_headers(client, context)
+        project_id = UUID(bdd_project_id(context, headers))
+        secrets: dict[str, str] = {}
+        context.loop.run_until_complete(
+            seed_order_pools(
+                context.repository,
+                project_id=project_id,
+                actor_id=account_id_from_headers(headers),
+                store=context.app.state.secret_store,
+                providers=tuple(adapter.name for adapter in context.fanout_adapters),
+                secrets=secrets,
+            )
+        )
+    _install_bdd_adapters(context, context.fanout_adapters, secrets)
+
+
 def _post_fanout_search(
     context: Any, query: str, limit: int, allow_list: tuple[str, ...] = ()
 ) -> None:
@@ -171,6 +193,12 @@ def step_then_participating(context: Any, expected: str) -> None:
     """Verify exactly which providers contributed fused results."""
     wanted = [name.strip() for name in expected.split(",") if name.strip()]
     assert context.fanout_response["participating_providers"] == wanted
+
+
+@then('the participating providers should include exactly "{expected}" in any order')
+def step_then_participating_unordered(context: Any, expected: str) -> None:
+    wanted = [name.strip() for name in expected.split(",") if name.strip()]
+    assert sorted(context.fanout_response["participating_providers"]) == sorted(wanted)
 
 
 @then("the fused result count should be {count:d}")

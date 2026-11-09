@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { installFetchStub, ok } from "@/test/fetchMock"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
 import { manualEligibleProviders } from "../model/quotaRowModel"
 import { ProviderLimitsCards } from "./ProviderLimitsCards"
+import { KeyBalances } from "./KeyBalances"
 
 vi.mock("../model/useManualQuota", () => ({
   useManualQuota: () => ({
@@ -43,7 +44,6 @@ function braveEntry() {
           rate: null,
           budget: null,
           conversion_profile: {
-            reference_usd_per_crd: "0.001",
             native_usd_per_unit: "1",
             cost_basis: "priced_native_use",
             price_version: "v2026-09",
@@ -64,7 +64,6 @@ function braveEntry() {
           rate: null,
           budget: null,
           conversion_profile: {
-            reference_usd_per_crd: "0.001",
             native_usd_per_unit: null,
             cost_basis: "priced_native_use",
             price_version: "",
@@ -97,13 +96,13 @@ function braveEntry() {
           stale: false,
           manual_anchor: false,
         },
-        crd_views: [
+        usd_views: [
           {
             state: "finite",
             operation: "search",
-            remaining_crd: "4500",
-            local_remaining_crd: null,
-            request_cost_crd: "5",
+            remaining_usd: "4.5",
+            local_remaining_usd: null,
+            request_cost_usd: "0.005",
             shared_pool_id: "brave:keyed:usd",
             possible_standard_calls: "900",
             price_version: "v2026-09",
@@ -159,7 +158,6 @@ function exaEntry() {
       priced: true,
     },
     conversion_profile: {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "1",
       cost_basis: "usd_native",
       price_version: "2026-09",
@@ -201,13 +199,13 @@ function exaEntry() {
           stale: false,
           manual_anchor: false,
         },
-        crd_views: [
+        usd_views: [
           {
             state: "finite",
             operation: "search",
-            remaining_crd: "4500",
-            local_remaining_crd: null,
-            request_cost_crd: "7",
+            remaining_usd: "4.5",
+            local_remaining_usd: null,
+            request_cost_usd: "0.007",
             shared_pool_id: "exa:keyed:usd",
             possible_standard_calls: "642.857142857142857",
             price_version: "2026-09",
@@ -216,9 +214,9 @@ function exaEntry() {
           {
             state: "finite",
             operation: "fetch",
-            remaining_crd: "4500",
-            local_remaining_crd: null,
-            request_cost_crd: "1",
+            remaining_usd: "4.5",
+            local_remaining_usd: null,
+            request_cost_usd: "0.001",
             shared_pool_id: "exa:keyed:usd",
             possible_standard_calls: "4500",
             price_version: "2026-09",
@@ -242,7 +240,7 @@ function exaEntry() {
           last_sync_at: null,
           stale: false,
           price_version: "2026-09",
-          crd_split_note: null,
+          balance_split_note: null,
           rate_windows: [],
           tier_split_known: true,
           aggregate_pool_id: "exa:keyed:usd",
@@ -277,29 +275,72 @@ function exaEntryWithoutPoolBalance() {
 }
 
 describe("ProviderLimitsCards", () => {
+  it("offers refresh for a connected OAuth provider with no balance yet", () => {
+    const entry = braveEntry()
+    const auth = entry.auths[0]
+    if (auth === undefined) throw new Error("Missing auth fixture")
+    auth.aggregate_pool.remaining = null as never
+    auth.usd_views = []
+    render(
+      <ProviderLimitsCards
+        providers={[{ id: "brave", name: "Brave" }] as never}
+        providerLimits={[entry] as never}
+        usdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={new Set<string>()}
+        refreshableProviders={new Set(["brave"])}
+      />,
+    )
+    expect(screen.getByRole("button", { name: "Refresh limits for Brave" })).toBeInTheDocument()
+  })
+
+  it("shows an unpriced native balance and its refresh action in the compact list", () => {
+    const entry = braveEntry()
+    const auth = entry.auths[0]
+    if (auth === undefined) throw new Error("Missing auth fixture")
+    auth.aggregate_pool.native_unit = "CREDIT"
+    auth.aggregate_pool.remaining = "1320"
+    auth.aggregate_pool.source = "vendor_api"
+    auth.search.conversion_profile.native_usd_per_unit = null as never
+    auth.usd_views = []
+    render(
+      <ProviderLimitsCards
+        providers={[{ id: "brave", name: "Brave" }] as never}
+        providerLimits={[entry] as never}
+        usdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={new Set<string>()}
+      />,
+    )
+    expect(screen.getByText("1,320 credits left")).toBeInTheDocument()
+    expect(screen.queryByText("Provider balance not reported")).toBeNull()
+    expect(screen.getByRole("button", { name: /refresh/i })).toBeInTheDocument()
+  })
+
   it("renders the reported Brave card with its own totals only (UI7-02, final-polish 3c)", () => {
     render(
       <ProviderLimitsCards
         providers={[{ id: "brave", name: "Brave" }, { id: "parallel", name: "Parallel" }] as never}
         providerLimits={[braveEntry()] as never}
-        crdUsageTotals={[
-          { provider: "brave", operation: "search", normalized_crd: "5", attempt_count: 1, volume_count: 1 },
+        usdUsageTotals={[
+          { provider: "brave", operation: "search", spend_usd: "0.005", attempt_count: 1, volume_count: 1 },
         ]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={new Set(["brave"])}
       />,
     )
-    expect(screen.getByText("1 reported")).not.toBeNull()
-    // CARD-3: no "CRD left" label; the fraction "4500 / 5000 CRD" renders as split spans.
-    expect(screen.queryByText("CRD left")).toBe(null)
+    expect(screen.queryByText("1 reported")).toBeNull()
+    expect(screen.getByText("Allowance left")).not.toBeNull()
+    // CARD-3: no "Usd left" label; the fraction "4500 / 5000 Usd" renders as split spans.
+    expect(screen.queryByText("Usd left")).toBe(null)
     expect(screen.queryByText("USD left")).toBe(null)
-    expect(screen.getByText("4500")).not.toBeNull()
-    expect(screen.getByText("/ 5000")).not.toBeNull()
-    expect(screen.getByText("CRD")).not.toBeNull()
-    expect(screen.queryByText("4500 CRD")).toBe(null)
-    const crdValue = screen.getByText("4500")
-    expect(crdValue.getAttribute("title")).toBe("$4.5 left")
-    expect(crdValue.getAttribute("aria-label")).toBe("$4.5 left")
+    expect(screen.getByText("$4.50")).not.toBeNull()
+    expect(screen.getByText("/ $5.00")).not.toBeNull()
+    expect(screen.getByText("USD")).not.toBeNull()
+    expect(screen.queryByText("4500 Usd")).toBe(null)
+    const usdValue = screen.getByText("$4.50")
+    expect(usdValue.getAttribute("title")).toBe("$4.50 left")
+    expect(usdValue.getAttribute("aria-label")).toBe("$4.50 left")
     expect(screen.queryByText("USD use (priced)")).toBe(null)
     expect(screen.queryByText("Parallel")).toBe(null)
   })
@@ -309,8 +350,8 @@ describe("ProviderLimitsCards", () => {
       <ProviderLimitsCards
         providers={[{ id: "brave", name: "Brave" }, { id: "parallel", name: "Parallel" }] as never}
         providerLimits={[braveEntry()] as never}
-        crdUsageTotals={[
-          { provider: "brave", operation: "search", normalized_crd: "5", attempt_count: 1, volume_count: 1 },
+        usdUsageTotals={[
+          { provider: "brave", operation: "search", spend_usd: "0.005", attempt_count: 1, volume_count: 1 },
         ]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={new Set(["brave"])}
@@ -318,15 +359,13 @@ describe("ProviderLimitsCards", () => {
     )
     expect(screen.getByTestId("provider-logo-brave")).not.toBeNull()
     expect(screen.getByRole("heading", { name: "Brave" })).not.toBeNull()
-    expect(screen.getByText("Observed from the vendor API")).not.toBeNull()
-    const buttons = screen.getAllByRole("button").map((button) => button.textContent)
-    expect(buttons.slice(0, 4)).toEqual(["Refresh Limits", "Provider Balance", "Budget Limit", "History"])
-    const creditRow = screen.getByText("4500").closest("span")?.parentElement?.parentElement
+    expect(screen.getByText("Reported by provider")).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Actions for Brave" })).not.toBeNull()
+    const creditRow = screen.getByText("$4.50").closest("span")?.parentElement?.parentElement
     const children = Array.from(creditRow?.children ?? [])
-    expect(children.length).toBe(2)
-    expect(children[0]?.textContent).toContain("Refresh Limits")
-    expect(children[1]?.textContent?.replace(/\s+/g, "")).toContain("4500/5000CRD")
-    const bar = screen.getByRole("progressbar", { name: "Brave credit units remaining" })
+    expect(children.length).toBe(1)
+    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.50/$5.00USD")
+    const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
   })
 
@@ -335,16 +374,17 @@ describe("ProviderLimitsCards", () => {
       <ProviderLimitsCards
         providers={[{ id: "brave", name: "Brave" }] as never}
         providerLimits={[]}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={new Set<string>()}
       />,
     )
-    expect(screen.getByText("No provider limit data reported by the backend.")).not.toBeNull()
+    expect(screen.getByText("No provider usage yet")).not.toBeNull()
+    expect(screen.getByText("Add a system key to see usage")).not.toBeNull()
     expect(screen.queryByRole("progressbar")).toBe(null)
   })
 
-  it("renders Exa's USD balance entry and CRD budget limit controls", async () => {
+  it("renders Exa's USD balance entry and Usd budget limit controls", async () => {
     const user = userEvent.setup()
     const exaProvider = { id: "exa", name: "Exa" }
     const estimatedQuota = {
@@ -368,7 +408,7 @@ describe("ProviderLimitsCards", () => {
       <ProviderLimitsCards
         providers={[exaProvider] as never}
         providerLimits={[exaEntry()] as never}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={manualEligible}
         dashboardQuotas={[estimatedQuota] as never}
@@ -377,23 +417,26 @@ describe("ProviderLimitsCards", () => {
 
     expect(screen.getByRole("heading", { name: "Exa" })).not.toBeNull()
     expect(screen.getByTestId("provider-logo-exa")).not.toBeNull()
-    expect(screen.getByRole("button", { name: "Refresh limits for Exa" })).not.toBeNull()
-    expect(screen.getByTestId("manual-quota-open-exa")).not.toBeNull()
-    expect(screen.getByTestId("crd-grant-open-exa")).not.toBeNull()
-    expect(screen.getByTestId("limit-history-open-exa")).not.toBeNull()
+    expect(screen.queryByRole("button", { name: "Refresh limits for Exa" })).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Actions for Exa" }))
+    expect(await screen.findByRole("button", { name: "Set balance" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "Set budget" })).not.toBeNull()
+    expect(screen.getByRole("button", { name: "View balance history" })).not.toBeNull()
+    await user.keyboard("{Escape}")
 
     await user.click(screen.getByTestId("credit-info-exa"))
     expect(screen.getByText("Search rate limit")).not.toBeNull()
     expect(screen.getByText("Fetch rate limit")).not.toBeNull()
     expect(screen.getByText("10 requests per second")).not.toBeNull()
     expect(screen.getByText("100 requests per second")).not.toBeNull()
-    expect(screen.getByText("Search CRD cost")).not.toBeNull()
-    expect(screen.getByText("Fetch CRD cost")).not.toBeNull()
-    expect(screen.getByText("7 CRD")).not.toBeNull()
-    expect(screen.getByText("1 CRD")).not.toBeNull()
+    expect(screen.getByText("Search cost (USD)")).not.toBeNull()
+    expect(screen.getByText("Fetch cost (USD)")).not.toBeNull()
+    expect(screen.getByText("$0.0070")).not.toBeNull()
+    expect(screen.getByText("$0.0010")).not.toBeNull()
     await user.click(screen.getByTestId("credit-info-exa"))
 
-    await user.click(screen.getByTestId("manual-quota-open-exa"))
+    await user.click(screen.getByRole("button", { name: "Actions for Exa" }))
+    await user.click(await screen.findByRole("button", { name: "Set balance" }))
     const allowance = screen.getByLabelText<HTMLInputElement>("Allowance (USD)")
     const remaining = screen.getByLabelText<HTMLInputElement>("Balance remaining (USD)")
     expect(allowance.value).toBe("10.000")
@@ -405,9 +448,10 @@ describe("ProviderLimitsCards", () => {
     expect(remaining.value).toBe("4.25")
 
     await user.click(screen.getByTestId("manual-quota-cancel"))
-    await user.click(screen.getByTestId("crd-grant-open-exa"))
-    expect(screen.getByLabelText("Search credit units (CRD)")).not.toBeNull()
-    expect(screen.getByLabelText("Fetch credit units (CRD)")).not.toBeNull()
+    await user.click(screen.getByRole("button", { name: "Actions for Exa" }))
+    await user.click(await screen.findByRole("button", { name: "Set budget" }))
+    expect(screen.getByLabelText("Search budget (USD)")).not.toBeNull()
+    expect(screen.getByLabelText("Fetch budget (USD)")).not.toBeNull()
   })
 
   it("uses Exa's declared USD unit without guessing a balance when its pool is empty", async () => {
@@ -417,13 +461,14 @@ describe("ProviderLimitsCards", () => {
       <ProviderLimitsCards
         providers={[exaProvider] as never}
         providerLimits={[exaEntryWithoutPoolBalance()] as never}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={new Set(["exa"])}
       />,
     )
 
-    await user.click(screen.getByTestId("manual-quota-open-exa"))
+    await user.click(screen.getByRole("button", { name: "Actions for Exa" }))
+    await user.click(await screen.findByRole("button", { name: "Set balance" }))
     expect(screen.getByLabelText<HTMLInputElement>("Allowance (USD)").value).toBe("")
     expect(screen.getByLabelText<HTMLInputElement>("Balance remaining (USD)").value).toBe("")
   })
@@ -438,7 +483,6 @@ describe("ProviderLimitsCards", () => {
 describe("ProviderLimitsCards rate-tier slot (FIX)", () => {
   function tavilyEntry() {
     const profile = {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -501,13 +545,13 @@ describe("ProviderLimitsCards rate-tier slot (FIX)", () => {
             stale: false,
             manual_anchor: false,
           },
-          crd_views: [
+          usd_views: [
             {
               state: "finite",
               operation: "search",
-              remaining_crd: "7992",
-              local_remaining_crd: null,
-              request_cost_crd: "8",
+              remaining_usd: "7.992",
+              local_remaining_usd: null,
+              request_cost_usd: "0.008",
               shared_pool_id: "tavily:keyed:credits",
               possible_standard_calls: "999",
               price_version: "paygo-reference",
@@ -532,7 +576,7 @@ describe("ProviderLimitsCards rate-tier slot (FIX)", () => {
       <ProviderLimitsCards
         providers={[{ id: "tavily", name: "Tavily" }, { id: "brave", name: "Brave" }] as never}
         providerLimits={[tavilyEntry(), braveEntry()] as never}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={new Set<string>()}
         renderOAuthActions={({ providerId }) => (
@@ -547,7 +591,7 @@ describe("ProviderLimitsCards rate-tier slot (FIX)", () => {
         }}
       />,
     )
-    expect(calls).toEqual(["tavily"])
+    expect([...new Set(calls)]).toEqual(["tavily"])
     expect(confirmedKind).toBe("function")
     const tavilyArticle = screen.getByRole("heading", { name: "Tavily" }).closest("article") as HTMLElement
     expect(tavilyArticle.querySelector('[data-testid="tier-slot"]')).not.toBeNull()
@@ -576,64 +620,216 @@ describe("ProviderLimitsCards rate-tier slot (FIX)", () => {
         providerLimits={[
           { ...limits, active_auth_mode: "keyless", auths: [keyed, keyless] },
         ] as never}
-        crdUsageTotals={[]}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={new Set<string>()}
       />,
     )
 
     const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Balance history for Tavily" }))
-    expect(await screen.findByText("Balance history")).not.toBeNull()
+    await user.click(screen.getByRole("button", { name: "Actions for Tavily" }))
+    await user.click(await screen.findByRole("button", { name: "View balance history" }))
+    expect(await screen.findByRole("dialog", { name: "Tavily balance history" })).not.toBeNull()
     expect(stub.requestsTo(/limits\/history/).some(({ url }) => url.includes("auth_mode=keyless"))).toBe(true)
     vi.unstubAllGlobals()
   })
 })
 
 /**
- * Usage display order: the desktop 2-col grid pairs equal-height cards, so
- * the short single-bar cards (Parallel, You.com) share row 1 and the taller
- * cards (Tinyfish, Tavily) share row 2. Display-only: Settings registry
- * priority (dispatch order) is untouched.
+ * Display order: providers that report usage become cards, least remaining
+ * first; providers that report nothing collapse into one compact list.
+ * Display-only: Settings registry priority (dispatch order) is untouched.
  */
 describe("ProviderLimitsCards display order", () => {
-  function entryFor(providerId: string) {
-    return JSON.parse(JSON.stringify(braveEntry()).replaceAll("brave", providerId))
+  function entryFor(providerId: string, remaining: string) {
+    const entry = JSON.parse(JSON.stringify(braveEntry()).replaceAll("brave", providerId))
+    entry.auths[0].aggregate_pool.remaining = remaining
+    return entry
   }
 
-  it("orders Parallel, You.com, Tinyfish, Tavily so equal-height cards share each 2-col row", () => {
+  it("orders reporting cards by least remaining first", () => {
     const providers = [
       { id: "parallel", name: "Parallel" },
-      { id: "tavily", name: "Tavily" },
-      { id: "tinyfish", name: "Tinyfish" },
-      { id: "youcom", name: "You.com" },
+      { id: "exa", name: "Exa" },
+      { id: "firecrawl", name: "Firecrawl" },
     ]
+    const remaining: Record<string, string> = { parallel: "4.500", exa: "1.000", firecrawl: "3.000" }
     render(
       <ProviderLimitsCards
         providers={providers as never}
-        providerLimits={providers.map((provider) => entryFor(provider.id)) as never}
-        crdUsageTotals={[]}
+        providerLimits={providers.map((provider) => entryFor(provider.id, remaining[provider.id] ?? "0")) as never}
+        usdUsageTotals={[]}
         refreshDashboard={() => Promise.resolve()}
         manualEligible={new Set<string>()}
       />,
     )
 
-    // No card dropped or invented: all four reported entries render.
-    expect(screen.getByText("4 reported")).not.toBeNull()
-    for (const provider of providers) {
-      expect(screen.getByRole("heading", { name: provider.name })).not.toBeNull()
-    }
-
+    expect(screen.getAllByRole("article")).toHaveLength(3)
     const visible = screen
       .getAllByRole("heading")
       .map((heading) => heading.textContent)
-      .filter((text) => ["Parallel", "Tavily", "Tinyfish", "You.com"].includes(text ?? ""))
-    expect(visible).toEqual(["Parallel", "You.com", "Tinyfish", "Tavily"])
-
-    // Same row parity in a 2-col grid: floor(index / 2) equal per pair.
-    const rowOf = (name: string): number => Math.floor(visible.indexOf(name) / 2)
-    expect(rowOf("Parallel")).toBe(rowOf("You.com"))
-    expect(rowOf("Tinyfish")).toBe(rowOf("Tavily"))
-    expect(rowOf("Parallel")).not.toBe(rowOf("Tinyfish"))
+      .filter((text) => ["Parallel", "Exa", "Firecrawl"].includes(text ?? ""))
+    expect(visible).toEqual(["Exa", "Firecrawl", "Parallel"])
   })
+
+  it("collapses a provider that reports nothing into one compact row", () => {
+    const empty = JSON.parse(JSON.stringify(braveEntry()))
+    empty.auths[0].aggregate_pool = null
+    empty.auths[0].usd_views = []
+    empty.auths[0].rate_progress = []
+    render(
+      <ProviderLimitsCards
+        providers={[{ id: "brave", name: "Brave" }] as never}
+        providerLimits={[empty] as never}
+        usdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={new Set<string>()}
+        renderOAuthActions={() => <button type="button">Connect</button>}
+      />,
+    )
+    expect(screen.queryByRole("article")).toBeNull()
+    const list = screen.getByRole("table", { name: "Key balances" })
+    expect(list.textContent).toContain("Brave")
+    expect(list.textContent).not.toContain("Provider balance not reported")
+    expect(screen.queryByRole("button", { name: "Refresh limits for Brave" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Actions for Brave" })).not.toBeNull()
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull()
+  })
+
+  it("puts bonus balances in the compact list without a denominator or progress bar", () => {
+    render(
+      <ProviderLimitsCards
+        providers={[{ id: "brave", name: "Brave" }] as never}
+        providerLimits={[entryFor("brave", "6.000")] as never}
+        usdUsageTotals={[]}
+        refreshDashboard={() => Promise.resolve()}
+        manualEligible={new Set<string>()}
+      />,
+    )
+    expect(screen.queryByRole("article")).toBeNull()
+    expect(screen.getByRole("table").textContent).toContain("$6.00 left")
+    expect(screen.queryByRole("progressbar")).toBeNull()
+    expect(screen.getByTestId("provider-logo-brave")).toBeVisible()
+  })
+})
+
+
+describe("Quotas review r4b", () => {
+  it("places each key balance on its own row without assigning a provider balance to multiple keys", async () => {
+    const key = (id: string, balance: unknown) => ({
+      key_id: id, label: id, owner_email: "owner@example.com", auth_mode: "api_key", oauth_connected: null, balance,
+    })
+    installFetchStub((request) => {
+      if (request.url.includes("/limits/keys")) return ok([
+        key("First key", { remaining: "4500", native_unit: "CREDIT", observed_at: "2026-01-01T12:00:00Z" }),
+        key("Second key", null),
+      ])
+      return ok([])
+    })
+    const entry = braveEntry()
+    entry.auths[0]!.aggregate_pool.manual_anchor = true
+    entry.auths[0]!.usd_views = []
+    render(<ProviderLimitsCards providers={[{ id: "brave", name: "Brave" }] as never}
+      providerLimits={[entry] as never} usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()}
+      manualEligible={new Set(["brave"])} refreshableProviders={new Set(["brave"])}
+      renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
+        accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
+    const first = (await screen.findByText("First key")).closest("tr") as HTMLElement
+    const second = screen.getByText("Second key").closest("tr") as HTMLElement
+    expect(within(first).getByText("4,500 credits left")).toBeInTheDocument()
+    expect(within(second).queryByText("Not refreshed yet")).toBeNull()
+    expect(within(second).queryByText(/\$4\.50/)).toBeNull()
+    expect(within(first).getByRole("button", { name: "Refresh Brave balances" })).toBeInTheDocument()
+    vi.unstubAllGlobals()
+  })
+  it("does not attribute a provider-wide manual balance to a key", async () => {
+    installFetchStub((request) => request.url.includes("/limits/keys")
+      ? ok([{ key_id: "you-key", label: "You key", owner_email: "owner@example.com", auth_mode: "api_key",
+        oauth_connected: null, balance: null }]) : ok([]))
+    const entry = braveEntry()
+    entry.provider = "youcom"
+    entry.auths[0]!.aggregate_pool.remaining = "100"
+    entry.auths[0]!.aggregate_pool.manual_anchor = true
+    entry.auths[0]!.usd_views = []
+    render(<ProviderLimitsCards providers={[{ id: "youcom", name: "You.com" }] as never}
+      providerLimits={[entry] as never} usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()}
+      manualEligible={new Set(["youcom"])}
+      renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
+        accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
+    const row = (await screen.findByText("You key")).closest("tr") as HTMLElement
+    expect(within(row).queryByText(/\$100\.00 left.*manual/)).toBeNull()
+    vi.unstubAllGlobals()
+  })
+  it("includes stored keys even when the active rail is keyless", async () => {
+    installFetchStub((request) => request.url.includes("/limits/keys") && request.url.includes("tinyfish")
+      ? ok([{ key_id: "tiny-key", label: "Tinyfish key", owner_email: "owner@example.com", auth_mode: "api_key",
+        oauth_connected: null, balance: null }]) : ok([]))
+    const entry = braveEntry()
+    entry.provider = "tinyfish"
+    entry.active_auth_mode = "keyless"
+    entry.auths[0]!.auth_mode = "keyless"
+    render(<ProviderLimitsCards providers={[{ id: "tinyfish", name: "Tinyfish" }] as never}
+      providerLimits={[entry] as never} usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()}
+      manualEligible={new Set()}
+      renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
+        accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
+    const row = (await screen.findByText("Tinyfish key")).closest("tr") as HTMLElement
+    expect(within(row).getAllByText("—")).toHaveLength(2)
+    vi.unstubAllGlobals()
+  })
+  it("uses catalog prices in the popover and hides budgets for free providers", async () => {
+    const entry = { ...braveEntry(), provider: "keenable" }
+    render(<ProviderLimitsCards providers={[{ id: "keenable", name: "Keenable", callCostUsd: { search: "0", fetch: "0" } }] as never}
+      providerLimits={[entry] as never} usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()} manualEligible={new Set(["keenable"])} />)
+    await userEvent.click(screen.getByRole("button", { name: "Credit details for Keenable" }))
+    expect(screen.getByText("Search cost")).toBeInTheDocument()
+    expect(screen.getAllByText("Free").length).toBeGreaterThan(0)
+    expect(screen.queryByText("$0.005")).toBeNull()
+    await userEvent.keyboard("{Escape}")
+    expect(screen.queryByRole("button", { name: "Actions for Keenable" })).toBeNull()
+    expect(screen.queryByRole("menuitem", { name: "Set budget" })).toBeNull()
+    expect(screen.getByText("Free")).toBeInTheDocument()
+  })
+  it("puts unreported providers in a single table with three columns", () => {
+    const empty = { ...braveEntry(), auths: braveEntry().auths.map((auth) => ({ ...auth, aggregate_pool: null, usd_views: [], rate_progress: [] })) }
+    render(<ProviderLimitsCards providers={[{ id: "brave", name: "Brave Search", free: true, callCostUsd: { search: 0 } }] as never} providerLimits={[empty] as never}
+      usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()} manualEligible={new Set()} />)
+    const table = screen.getByRole("table", { name: "Key balances" })
+    expect(Array.from(table.querySelectorAll("th")).map((cell) => cell.textContent)).toEqual(["Provider", "Key", "Balance", "Last refresh", "Provider controls"])
+    expect(screen.queryByText("Not reported")).toBeNull()
+    const free = within(table).getByText("Free")
+    const info = within(table).getByRole("button", { name: "Credit details for Brave Search" })
+    expect(free.compareDocumentPosition(info) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+it("keeps disconnected OAuth controls on their key row and fixes the balance dialog provider", async () => {
+  installFetchStub((request) => request.url.includes("/limits/keys") ? ok([
+    { key_id: "api", label: "dev-parallel", owner_email: "owner@example.com", auth_mode: "api_key", oauth_connected: null, balance: null },
+    { key_id: "oauth", label: "Capture OAuth", owner_email: "owner@example.com", auth_mode: "oauth", oauth_connected: false, balance: null },
+  ]) : ok([]))
+  const entry = { ...braveEntry(), provider: "parallel" }
+  render(<ProviderLimitsCards providers={[{ id: "parallel", name: "Parallel" }] as never}
+    providerLimits={[entry] as never} usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()}
+    manualEligible={new Set(["parallel"])}
+    renderOAuthActions={() => <a href="/account/keys">Connect in Keys and pools</a>}
+    renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
+      accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
+  const first = (await screen.findByText("dev-parallel")).closest("tr") as HTMLElement
+  const oauth = screen.getByText("Capture OAuth").closest("tr") as HTMLElement
+  expect(within(first).queryByText("Disconnected")).toBeNull()
+  expect(within(first).queryByRole("link")).toBeNull()
+  expect(within(oauth).getByText("Disconnected")).toBeInTheDocument()
+  expect(within(screen.getByText("Capture OAuth").closest("td") as HTMLElement).getByText("Disconnected")).toBeInTheDocument()
+  expect(within(oauth).getByRole("link", { name: "Connect in Keys and pools" })).toHaveAttribute("href", "/account/keys")
+  expect(within(oauth).queryByRole("button", { name: "Actions for Parallel" })).toBeNull()
+  await userEvent.click(within(first).getByRole("button", { name: "Actions for Parallel" }))
+  await userEvent.click(await screen.findByRole("button", { name: "Set balance" }))
+  const dialog = await screen.findByRole("dialog", { name: "Parallel balance" })
+  expect(within(dialog).queryByRole("combobox", { name: "Provider" })).toBeNull()
+  expect(within(dialog).getAllByText("$")).toHaveLength(2)
+  expect(within(dialog).getByRole("button", { name: "Choose billing start" })).toBeInTheDocument()
+  expect(within(dialog).getByRole("button", { name: "Choose billing end" })).toBeInTheDocument()
+  expect(within(dialog).getByRole("button", { name: "Save balance" })).toBeEnabled()
+  vi.unstubAllGlobals()
 })

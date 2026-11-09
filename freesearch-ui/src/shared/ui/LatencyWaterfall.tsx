@@ -146,28 +146,53 @@ function tickLabelClass(percent: number): string {
   )
 }
 
+/** The smallest 1, 2, 2.5 or 5 × 10ⁿ step that splits `totalMs` into at most `intervals` parts. */
+function roundStep(totalMs: number, intervals: number): number {
+  const raw = totalMs / intervals
+  const magnitude = 10 ** Math.floor(Math.log10(raw))
+  const factor = [1, 2, 2.5, 5, 10].find((candidate) => candidate * magnitude >= raw) ?? 10
+  return factor * magnitude
+}
+
+/**
+ * Ticks at round values (0 / 200 / 400 / 600 for a 719 ms trace) placed
+ * against the exact extent, so the plot still ends at the real request end.
+ * A last tick crowding the end label gives way.
+ */
+function tickValues(totalMs: number, compact: boolean): number[] {
+  const intervals = (compact ? COMPACT_TICK_PERCENTS : TICK_PERCENTS).length - 1
+  if (totalMs <= 0) return [0]
+  const step = roundStep(totalMs, intervals)
+  const values: number[] = []
+  for (let value = 0; value <= totalMs + 1e-9; value += step) values.push(Math.round(value * 100) / 100)
+  return values
+}
+
 /** Ticks stay bare numbers; the millisecond unit lives outside the axis track. */
-function tickText(totalMs: number, percent: number): string {
-  return String(Math.round((totalMs * percent) / PERCENT_SCALE))
+function tickText(value: number): string {
+  return Math.round(value).toLocaleString("en-US")
 }
 
 function renderRuler(totalMs: number, hasScale: boolean, compact: boolean) {
-  const ticks = compact ? COMPACT_TICK_PERCENTS : TICK_PERCENTS
+  const ticks = tickValues(totalMs, compact).map((value) => ({
+    value,
+    percent: totalMs > 0 ? (value / totalMs) * PERCENT_SCALE : 0,
+  }))
   return (
     <div aria-hidden="true" className="relative h-5 min-w-0">
       <div className="absolute inset-x-0 bottom-0 h-px bg-[var(--border-subtle)]" />
       {hasScale &&
-        ticks.map((percent) => (
+        ticks.map(({ value, percent }) => (
           <span
-            key={`${percent}-guide`}
+            key={`${value}-guide`}
             className="absolute bottom-0 top-0 w-px bg-[var(--border-subtle)]"
             style={{ left: `${percent}%` }}
           />
         ))}
       {hasScale &&
-        ticks.map((percent) => (
-          <span key={percent} className={tickLabelClass(percent)} style={{ left: `${percent}%` }}>
-            {tickText(totalMs, percent)}
+        ticks.map(({ value, percent }) => (
+          <span key={value} className={tickLabelClass(percent)} style={{ left: `${percent}%` }}>
+            {tickText(value)}
           </span>
         ))}
     </div>

@@ -23,6 +23,7 @@ from freesearch.models.observability import (
     TraceSpanKind,
     TraceSpanRecord,
 )
+from freesearch.models.project_permissions import ProjectPermission
 from freesearch.models.projects import (
     BuiltinRole,
     ExecutionSettings,
@@ -36,7 +37,6 @@ from freesearch.models.projects import (
     SettingsProvenance,
     SettingsScope,
     TraceDetailPolicy,
-    TraceRedactionPolicy,
     TraceSettings,
 )
 from freesearch.models.retention import RetentionRunRequest
@@ -143,7 +143,6 @@ async def test_inheritance_provenance_and_safety_constraints(tmp_path: Path) -> 
                 expected_revision=0,
                 routing=SystemRoutingDefaults(
                     max_attempts=4,
-                    preferred_providers=("exa", "tavily"),
                 ),
                 execution=SystemExecutionDefaults(
                     cache_enabled=True,
@@ -172,7 +171,6 @@ async def test_inheritance_provenance_and_safety_constraints(tmp_path: Path) -> 
                 routing=RoutingSettings(
                     fallback_policy=FallbackPolicy.FIRST_ONLY,
                     max_attempts=5,
-                    preferred_providers=("brave", "exa"),
                 ),
                 execution=ExecutionSettings(
                     cache_enabled=False,
@@ -187,7 +185,6 @@ async def test_inheritance_provenance_and_safety_constraints(tmp_path: Path) -> 
         assert written.project_revision == 1
         assert written.effective_settings["routing.fallback_policy"] == "first_only"
         assert written.effective_settings["routing.max_attempts"] == 5
-        assert written.effective_settings["routing.preferred_providers"] == ["brave", "exa"]
         assert written.effective_settings["execution.cache_enabled"] is False
         assert written.effective_settings["execution.cache_ttl_seconds"] == 0
         assert written.effective_settings["execution.default_timeout_seconds"] == 60.0
@@ -210,13 +207,11 @@ async def test_inheritance_provenance_and_safety_constraints(tmp_path: Path) -> 
         assert written.fields["execution.cache_enabled"].provenance is (
             SettingsProvenance.PROJECT_OVERRIDE
         )
-        assert written.fields["routing.preferred_providers"].project_override == ["brave", "exa"]
         assert written.fields["system.max_timeout_seconds"].override_allowed is False
         assert written.overrides["execution.default_timeout_seconds"] == 120.0
         assert written.overrides["execution.max_fanout_concurrency"] == 15
         assert written.overrides["execution.cache_enabled"] is False
         assert written.overrides["execution.cache_ttl_seconds"] == 0
-        assert written.overrides["routing.preferred_providers"] == ["brave", "exa"]
 
         system2 = await service.update_system_settings(
             admin,
@@ -224,7 +219,6 @@ async def test_inheritance_provenance_and_safety_constraints(tmp_path: Path) -> 
                 expected_revision=1,
                 routing=SystemRoutingDefaults(
                     max_attempts=6,
-                    preferred_providers=("tavily",),
                 ),
                 execution=SystemExecutionDefaults(
                     cache_enabled=True,
@@ -244,10 +238,6 @@ async def test_inheritance_provenance_and_safety_constraints(tmp_path: Path) -> 
         assert after_system_change.system_revision == 2
         assert after_system_change.project_revision == 1
         assert after_system_change.effective_settings["routing.max_attempts"] == 5
-        assert after_system_change.effective_settings["routing.preferred_providers"] == [
-            "brave",
-            "exa",
-        ]
         assert after_system_change.effective_settings["execution.cache_enabled"] is False
         assert after_system_change.effective_settings["execution.default_timeout_seconds"] == 70.0
         assert after_system_change.effective_settings["execution.max_fanout_concurrency"] == 8
@@ -359,7 +349,6 @@ async def test_omission_reset_replacement_and_empty_values(tmp_path: Path) -> No
                 expected_revision=0,
                 routing=SystemRoutingDefaults(
                     max_attempts=3,
-                    preferred_providers=("exa",),
                 ),
                 execution=SystemExecutionDefaults(
                     cache_enabled=True,
@@ -382,7 +371,6 @@ async def test_omission_reset_replacement_and_empty_values(tmp_path: Path) -> No
                 routing=RoutingSettings(
                     fallback_policy=FallbackPolicy.FIRST_ONLY,
                     max_attempts=5,
-                    preferred_providers=("brave", "exa"),
                 ),
                 execution=ExecutionSettings(
                     cache_enabled=False,
@@ -405,37 +393,35 @@ async def test_omission_reset_replacement_and_empty_values(tmp_path: Path) -> No
         assert retained.project_revision == 2
         assert retained.effective_settings["routing.fallback_policy"] == "first_only"
         assert retained.effective_settings["routing.max_attempts"] == 5
-        assert retained.effective_settings["routing.preferred_providers"] == ["brave", "exa"]
         assert retained.effective_settings["execution.cache_enabled"] is False
         assert retained.effective_settings["execution.default_timeout_seconds"] == 45.0
         assert retained.effective_settings["execution.max_fanout_concurrency"] == 5
         assert retained.effective_settings["execution.cache_ttl_seconds"] == 30
 
-        empty_list = await service.update_project_settings(
+        changed = await service.update_project_settings(
             admin,
             project_id,
             ProjectSettingsUpdate(
                 expected_revision=2,
-                routing=RoutingSettings(preferred_providers=()),
+                routing=RoutingSettings(max_attempts=7),
             ),
         )
-        assert empty_list.project_revision == 3
-        assert empty_list.effective_settings["routing.preferred_providers"] == []
-        assert empty_list.fields["routing.preferred_providers"].provenance is (
+        assert changed.project_revision == 3
+        assert changed.fields["routing.max_attempts"].provenance is (
             SettingsProvenance.PROJECT_OVERRIDE
         )
-        assert empty_list.effective_settings["routing.max_attempts"] == 5
+        assert changed.effective_settings["routing.max_attempts"] == 7
 
         replaced = await service.update_project_settings(
             admin,
             project_id,
             ProjectSettingsUpdate(
                 expected_revision=3,
-                routing=RoutingSettings(preferred_providers=("tavily",)),
+                routing=RoutingSettings(max_attempts=8),
             ),
         )
         assert replaced.project_revision == 4
-        assert replaced.effective_settings["routing.preferred_providers"] == ["tavily"]
+        assert replaced.effective_settings["routing.max_attempts"] == 8
 
         field_reset = await service.update_project_settings(
             admin,
@@ -457,7 +443,7 @@ async def test_omission_reset_replacement_and_empty_values(tmp_path: Path) -> No
         )
         assert field_reset.effective_settings["execution.default_timeout_seconds"] == 45.0
         assert field_reset.effective_settings["execution.max_fanout_concurrency"] == 5
-        assert field_reset.effective_settings["routing.preferred_providers"] == ["tavily"]
+        assert field_reset.effective_settings["routing.max_attempts"] == 8
 
         routing_reset = await service.update_project_settings(
             admin,
@@ -467,7 +453,6 @@ async def test_omission_reset_replacement_and_empty_values(tmp_path: Path) -> No
         assert routing_reset.project_revision == 6
         assert routing_reset.effective_settings["routing.fallback_policy"] == "chained"
         assert routing_reset.effective_settings["routing.max_attempts"] == 3
-        assert routing_reset.effective_settings["routing.preferred_providers"] == ["exa"]
         assert routing_reset.effective_settings["execution.default_timeout_seconds"] == 45.0
         assert routing_reset.fields["routing.max_attempts"].provenance is (
             SettingsProvenance.SYSTEM_DEFAULT
@@ -518,7 +503,7 @@ async def test_stale_revisions_and_invalid_overrides_are_atomic(tmp_path: Path) 
             project_id,
             ProjectSettingsUpdate(
                 expected_revision=0,
-                routing=RoutingSettings(max_attempts=5, preferred_providers=("exa",)),
+                routing=RoutingSettings(max_attempts=5),
                 execution=ExecutionSettings(cache_enabled=False),
             ),
         )
@@ -536,21 +521,13 @@ async def test_stale_revisions_and_invalid_overrides_are_atomic(tmp_path: Path) 
         unchanged = await service.get_project_settings(admin, project_id)
         assert unchanged.project_revision == 1
         assert unchanged.effective_settings["routing.max_attempts"] == 5
-        assert unchanged.effective_settings["routing.preferred_providers"] == ["exa"]
         assert unchanged.effective_settings["execution.cache_enabled"] is False
 
-        with pytest.raises(SettingsValidationError, match="unknown provider"):
-            await service.update_project_settings(
-                admin,
-                project_id,
-                ProjectSettingsUpdate(
-                    expected_revision=1,
-                    routing=RoutingSettings(preferred_providers=("ghost",)),
-                ),
-            )
+        with pytest.raises(ValidationError):
+            RoutingSettings.model_validate({"preferred_providers": ["ghost"]})
         after_invalid = await service.get_project_settings(admin, project_id)
         assert after_invalid.project_revision == 1
-        assert after_invalid.effective_settings["routing.preferred_providers"] == ["exa"]
+        assert after_invalid.effective_settings["routing.max_attempts"] == 5
 
         with pytest.raises(ValidationError):
             ProjectSettingsUpdate(
@@ -570,14 +547,8 @@ async def test_stale_revisions_and_invalid_overrides_are_atomic(tmp_path: Path) 
         assert system_after.revision == 1
         assert system_after.routing.max_attempts == 4
 
-        with pytest.raises(SettingsValidationError, match="unknown provider"):
-            await service.update_system_settings(
-                admin,
-                SystemSettingsUpdate(
-                    expected_revision=1,
-                    routing=SystemRoutingDefaults(preferred_providers=("ghost",)),
-                ),
-            )
+        with pytest.raises(ValidationError):
+            SystemRoutingDefaults.model_validate({"preferred_providers": ["ghost"]})
         system_after_invalid = await service.get_system_settings(admin)
         assert system_after_invalid.revision == 1
         assert system_after_invalid.routing.max_attempts == 4
@@ -689,7 +660,7 @@ async def test_context_resolution_and_facade_reject_invalid_or_foreign_state(
         project_b_admin = temp_principal(project_b_admin_row)
         project_b = await _create_second_project(
             repository,
-            system_actor=admin,
+            system_actor=system_admin,
             project_admin=project_b_admin,
         )
 
@@ -721,17 +692,18 @@ async def test_context_resolution_and_facade_reject_invalid_or_foreign_state(
             project_id,
             ProjectMemberAdd(
                 user_id=token_manager.id,
-                initial_role=BuiltinRole.TOKEN_MANAGER.value,
+                initial_role=BuiltinRole.PROJECT_MEMBER.value,
+                permissions=int(ProjectPermission.TOKENS),
             ),
         )
         token_manager_context = await authorization.resolve_project_context(
             human_principal(token_manager), project_id
         )
         assert token_manager_context is not None
-        assert PermissionAction.SETTINGS_READ not in token_manager_context.effective_permissions
+        assert PermissionAction.SETTINGS_READ in token_manager_context.effective_permissions
         assert PermissionAction.PROJECT_READ in token_manager_context.effective_permissions
-        with pytest.raises(AuthorizationDenied):
-            await service.get_project_settings(token_manager, project_id)
+        assert PermissionAction.TOKENS_MANAGE in token_manager_context.effective_permissions
+        assert (await service.get_project_settings(token_manager, project_id)).project_revision == 0
         with pytest.raises(AuthorizationDenied):
             await service.update_project_settings(
                 token_manager,
@@ -1052,7 +1024,6 @@ async def test_copy_overrides_only_skips_inherited_values(tmp_path: Path) -> Non
                 routing=RoutingSettings(
                     fallback_policy=FallbackPolicy.FIRST_ONLY,
                     max_attempts=5,
-                    preferred_providers=("brave", "exa"),
                 ),
                 execution=ExecutionSettings(cache_enabled=False),
             ),
@@ -1075,7 +1046,6 @@ async def test_copy_overrides_only_skips_inherited_values(tmp_path: Path) -> Non
         assert copied == {
             "routing.fallback_policy",
             "routing.max_attempts",
-            "routing.preferred_providers",
             "execution.cache_enabled",
         }
         assert preview.rejected == []
@@ -1083,9 +1053,8 @@ async def test_copy_overrides_only_skips_inherited_values(tmp_path: Path) -> Non
         assert preview.target.system_revision == 0
         assert preview.target.project_revision == 0
         assert preview.target.effective_settings["routing.max_attempts"] == 5
-        assert preview.target.effective_settings["routing.preferred_providers"] == ["brave", "exa"]
         assert preview.target.effective_settings["execution.cache_enabled"] is False
-        assert preview.target.effective_settings["routing.cost_optimization_preset"] == "balanced"
+        assert "routing.cost_optimization_preset" not in preview.target.effective_settings
         # Preview must not write: the live target still inherits the defaults.
         untouched = await service.get_project_settings(copier, target.id)
         assert untouched.project_revision == 0
@@ -1125,7 +1094,6 @@ async def test_copy_overrides_only_skips_inherited_values(tmp_path: Path) -> Non
         reread = await service.get_project_settings(copier, target.id)
         assert reread.project_revision == 1
         assert reread.effective_settings["routing.max_attempts"] == 5
-        assert reread.overrides["routing.preferred_providers"] == ["brave", "exa"]
 
         # Re-applying the same state is a no-op: no new revision, same overrides.
         same = await service.apply_copy(
@@ -1161,7 +1129,7 @@ async def test_copy_effective_snapshot_pins_inherited_values_as_overrides(
             admin,
             SystemSettingsUpdate(
                 expected_revision=0,
-                routing=SystemRoutingDefaults(max_attempts=6, preferred_providers=("exa",)),
+                routing=SystemRoutingDefaults(max_attempts=6),
                 execution=SystemExecutionDefaults(
                     default_timeout_seconds=40.0,
                     max_fanout_concurrency=4,
@@ -1197,11 +1165,9 @@ async def test_copy_effective_snapshot_pins_inherited_values_as_overrides(
         snapshot = {field.field_id: field.value for field in preview.fields}
         # Inherited system values are pinned as explicit overrides here.
         assert snapshot["routing.max_attempts"] == 5
-        assert list(snapshot["routing.preferred_providers"]) == ["exa"]
         assert snapshot["execution.cache_enabled"] is True
         assert snapshot["execution.default_timeout_seconds"] == 40.0
         assert preview.effective_snapshot["routing.max_attempts"] == 5
-        assert preview.effective_snapshot["routing.preferred_providers"] == ["exa"]
         assert preview.target.project_revision == 0
         assert preview.target.effective_settings["routing.max_attempts"] == 5
 
@@ -1222,11 +1188,61 @@ async def test_copy_effective_snapshot_pins_inherited_values_as_overrides(
             ),
         )
         assert result.target_revision == 1
-        assert result.overrides["routing.preferred_providers"] == ["exa"]
         assert result.overrides["execution.cache_enabled"] is True
         reread = await service.get_project_settings(copier, target.id)
-        assert reread.overrides["routing.preferred_providers"] == ["exa"]
         assert reread.overrides["execution.cache_enabled"] is True
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_keep_all_clears_finite_retention_before_retention_run(tmp_path: Path) -> None:
+    boot = await bootstrap_fresh_alpha(tmp_path / "copy-keep-all.db")
+    try:
+        service = SettingsService(boot.repository)
+        admin = temp_principal(boot.admin_user)
+        source_id = boot.default_project.id
+        target, copier = await _copy_pair(boot.repository, source_id, admin, "copy-keep-all")
+        await service.update_project_settings(
+            copier,
+            target.id,
+            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(retention_days=7)),
+        )
+        now = datetime.now(UTC)
+        old = TraceSpanRecord(
+            project_id=target.id,
+            actor_type=ActorType.HUMAN,
+            actor_id=copier.id,
+            span_id="old-copy",
+            trace_id="d" * 32,
+            name="POST /search",
+            kind=TraceSpanKind.SERVER,
+            started_at=now - timedelta(days=30),
+            ended_at=now - timedelta(days=30),
+            duration_ms=5,
+            operation=TraceOperation.SEARCH,
+            outcome=TraceOutcome.SUCCESS,
+            user_id=str(copier.id),
+        )
+        write_trace_spans(boot.repository.database_path, [old])
+        request = SettingsCopyRequest(
+            source_project_id=source_id,
+            expected_source_revision=0,
+            expected_target_revision=1,
+            expected_system_revision=0,
+            mode=SettingsCopyMode.EFFECTIVE_SNAPSHOT,
+        )
+        preview = await service.preview_copy(copier, target.id, request)
+        assert preview.effective_snapshot["trace.retention_days"] is None
+        await service.apply_copy(copier, target.id, request)
+        reread = await service.get_project_settings(copier, target.id)
+        assert reread.effective_settings["trace.retention_days"] is None
+        assert "trace.retention_days" not in reread.overrides
+        result = await ProjectRetentionService(boot.repository).run(
+            copier, target.id, RetentionRunRequest(data_class=RetentionDataClass.TRACES)
+        )
+        assert result.deleted_rows == 0
+        assert await get_project_trace(boot.repository, copier, target.id, "d" * 32) is not None
     finally:
         await boot.repository.close()
 
@@ -1262,7 +1278,7 @@ async def test_copy_reports_system_only_and_unset_overrides_as_rejections(
                 expected_system_revision=0,
                 fields=(
                     "routing.max_attempts",
-                    "routing.preferred_providers",
+                    "routing.fallback_policy",
                     "system.max_timeout_seconds",
                 ),
             ),
@@ -1270,7 +1286,7 @@ async def test_copy_reports_system_only_and_unset_overrides_as_rejections(
         assert [field.field_id for field in preview.fields] == ["routing.max_attempts"]
         rejected = {item.field_id: item.reason for item in preview.rejected}
         assert rejected == {
-            "routing.preferred_providers": COPY_FIELD_NOT_OVERRIDDEN,
+            "routing.fallback_policy": COPY_FIELD_NOT_OVERRIDDEN,
             "system.max_timeout_seconds": COPY_FIELD_SYSTEM_ONLY,
         }
 
@@ -1495,8 +1511,8 @@ async def test_copy_refuses_archived_targets_and_preserves_without_secret_copy(
 
 
 @pytest.mark.asyncio
-async def test_trace_inheritance_zero_sampling_and_system_ceilings(tmp_path: Path) -> None:
-    """Trace overrides inherit, zero sampling is explicit, and ceilings bind."""
+async def test_trace_inheritance_and_system_ceilings(tmp_path: Path) -> None:
+    """Trace overrides inherit and ceilings bind."""
 
     boot = await bootstrap_fresh_alpha(tmp_path / "p05-trace-inherit.db")
     try:
@@ -1505,10 +1521,10 @@ async def test_trace_inheritance_zero_sampling_and_system_ceilings(tmp_path: Pat
         project_id = boot.default_project.id
 
         inherited = await service.get_project_settings(admin, project_id)
-        assert inherited.effective_settings["trace.sampling_rate"] == 1.0
-        assert inherited.effective_settings["trace.detail"] == "metadata"
-        assert inherited.effective_settings["trace.payload_redaction"] == "standard"
-        assert inherited.effective_settings["trace.retention_days"] == 30
+        assert inherited.effective_settings["trace.detail"] == "full"
+        assert inherited.effective_settings["trace.retention_days"] is None
+        assert "trace.sampling_rate" not in inherited.fields
+        assert "trace.payload_redaction" not in inherited.fields
         assert inherited.overrides == {}
 
         written = await service.update_project_settings(
@@ -1517,20 +1533,16 @@ async def test_trace_inheritance_zero_sampling_and_system_ceilings(tmp_path: Pat
             ProjectSettingsUpdate(
                 expected_revision=0,
                 trace=TraceSettings(
-                    sampling_rate=0.0,
                     detail=TraceDetailPolicy.METADATA,
-                    payload_redaction=TraceRedactionPolicy.STRICT,
                     retention_days=120,
                 ),
             ),
         )
         assert written.project_revision == 1
-        assert written.effective_settings["trace.sampling_rate"] == 0.0
         assert written.effective_settings["trace.detail"] == "metadata"
-        assert written.effective_settings["trace.payload_redaction"] == "strict"
         assert written.effective_settings["trace.retention_days"] == 120
-        assert written.overrides["trace.sampling_rate"] == 0.0
-        assert written.fields["trace.sampling_rate"].provenance is (
+        assert written.overrides["trace.retention_days"] == 120
+        assert written.fields["trace.retention_days"].provenance is (
             SettingsProvenance.PROJECT_OVERRIDE
         )
 
@@ -1538,7 +1550,7 @@ async def test_trace_inheritance_zero_sampling_and_system_ceilings(tmp_path: Pat
             admin,
             SystemSettingsUpdate(
                 expected_revision=0,
-                routing=SystemRoutingDefaults(max_attempts=3, preferred_providers=()),
+                routing=SystemRoutingDefaults(max_attempts=3),
                 execution=SystemExecutionDefaults(
                     cache_enabled=True,
                     default_timeout_seconds=30.0,
@@ -1547,8 +1559,6 @@ async def test_trace_inheritance_zero_sampling_and_system_ceilings(tmp_path: Pat
                 ),
                 trace=SystemTraceDefaults(
                     detail=TraceDetailPolicy.METADATA,
-                    payload_redaction=TraceRedactionPolicy.STRICT,
-                    retention_days=14,
                 ),
                 safety_limits=SystemSafetyLimits(max_trace_retention_days=14),
             ),
@@ -1558,7 +1568,6 @@ async def test_trace_inheritance_zero_sampling_and_system_ceilings(tmp_path: Pat
         assert reread.system_revision == 1
         assert reread.project_revision == 1
         assert reread.effective_settings["trace.detail"] == "metadata"
-        assert reread.effective_settings["trace.payload_redaction"] == "strict"
         # The project asked for a longer window than the ceiling allows.
         assert reread.effective_settings["trace.retention_days"] == 14
 
@@ -1569,7 +1578,6 @@ async def test_trace_inheritance_zero_sampling_and_system_ceilings(tmp_path: Pat
                 expected_revision=1,
                 trace=TraceSettings(
                     detail=TraceDetailPolicy.FULL,
-                    payload_redaction=TraceRedactionPolicy.STANDARD,
                     retention_days=60,
                 ),
             ),
@@ -1585,9 +1593,8 @@ async def test_trace_inheritance_zero_sampling_and_system_ceilings(tmp_path: Pat
             ProjectSettingsUpdate(expected_revision=2, trace=None),
         )
         assert reset.project_revision == 3
-        assert reset.effective_settings["trace.sampling_rate"] == 1.0
         assert reset.effective_settings["trace.detail"] == "metadata"
-        assert reset.effective_settings["trace.retention_days"] == 14
+        assert reset.effective_settings["trace.retention_days"] is None
         assert reset.overrides == {}
     finally:
         await boot.repository.close()
@@ -1616,14 +1623,6 @@ async def test_trace_retention_uses_effective_policy_and_isolates_project(
             ),
         )
 
-        await settings.update_project_settings(
-            admin,
-            project_id,
-            ProjectSettingsUpdate(
-                expected_revision=0,
-                trace=TraceSettings(retention_days=7),
-            ),
-        )
         retention = ProjectRetentionService(boot.repository)
         now = datetime.now(UTC)
         old_root = TraceSpanRecord(
@@ -1658,6 +1657,23 @@ async def test_trace_retention_uses_effective_policy_and_isolates_project(
         )
         write_trace_spans(boot.repository.database_path, [old_root, new_root, foreign_root])
 
+        keep_all = await retention.run(
+            admin, project_id, RetentionRunRequest(data_class=RetentionDataClass.TRACES)
+        )
+        assert keep_all.deleted_rows == 0
+        assert await get_project_trace(boot.repository, admin, project_id, "a" * 32) is not None
+        explicit_cutoff = await retention.run(
+            admin,
+            project_id,
+            RetentionRunRequest(data_class=RetentionDataClass.TRACES, cutoff=now),
+        )
+        assert explicit_cutoff.deleted_rows == 0
+        assert await get_project_trace(boot.repository, admin, project_id, "a" * 32) is not None
+        await settings.update_project_settings(
+            admin,
+            project_id,
+            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(retention_days=7)),
+        )
         run = await retention.run(
             admin,
             project_id,
@@ -1784,7 +1800,8 @@ async def test_activity_reads_are_isolated_between_projects(tmp_path: Path) -> N
             project_id,
             ProjectMemberAdd(
                 user_id=token_manager.id,
-                initial_role=BuiltinRole.TOKEN_MANAGER.value,
+                initial_role=BuiltinRole.PROJECT_MEMBER.value,
+                permissions=int(ProjectPermission.TOKENS),
             ),
         )
         with pytest.raises(AuthorizationDenied):
@@ -1794,7 +1811,7 @@ async def test_activity_reads_are_isolated_between_projects(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_settings_edits_and_copy_are_mandatory_audits_at_zero_trace_sampling(
+async def test_settings_edits_and_copy_are_mandatory_audits(
     tmp_path: Path,
 ) -> None:
     boot = await bootstrap_fresh_alpha(tmp_path / "mandatory-audit.db")
@@ -1806,12 +1823,12 @@ async def test_settings_edits_and_copy_are_mandatory_audits_at_zero_trace_sampli
         await settings.update_project_settings(
             admin,
             source,
-            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(sampling_rate=0.0)),
+            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(detail="metadata")),
         )
         await settings.update_project_settings(
             copier,
             target.id,
-            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(sampling_rate=0.0)),
+            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(detail="metadata")),
         )
         result = await settings.apply_copy(
             copier,
@@ -1860,6 +1877,9 @@ async def test_audit_failure_rolls_back_settings_revision_and_cached_resolution(
         before = await settings.get_project_settings(copier, target.id)
         async with boot.repository.session() as session:
             audit_before = await AuditRepository(session).list_project_events(project_id=target.id)
+            bindings_before = await ProjectBindingRepository(session).list_for_project(
+                project_id=target.id
+            )
         with monkeypatch.context() as patch:
             patch.setattr(
                 "freesearch.services.settings.record_project_event",
@@ -1891,7 +1911,8 @@ async def test_audit_failure_rolls_back_settings_revision_and_cached_resolution(
         async with boot.repository.session() as session:
             audit_after = await AuditRepository(session).list_project_events(project_id=target.id)
             assert (
-                await ProjectBindingRepository(session).list_for_project(project_id=target.id) == []
+                await ProjectBindingRepository(session).list_for_project(project_id=target.id)
+                == bindings_before
             )
         assert audit_after == audit_before
         # The same expected revision remains usable after rollback.
@@ -2046,12 +2067,17 @@ async def test_copy_only_explicitly_selected_binding_versions_and_never_authorit
                 }
 
         before = authority_snapshot()
+        async with boot.repository.session() as session:
+            bindings_before = await ProjectBindingRepository(session).list_for_project(
+                project_id=target.id
+            )
         result = await settings.apply_copy(copier, target.id, selected)
         assert len(result.bindings_copied) == 1
         assert "fake-only-never-copy" not in result.model_dump_json()
         assert authority_snapshot() == before
         async with boot.repository.session() as session:
             copied = await ProjectBindingRepository(session).list_for_project(project_id=target.id)
+        copied = [item for item in copied if item.id not in {row.id for row in bindings_before}]
         assert len(copied) == 1
         assert copied[0].credential_id == binding.credential_id
         assert copied[0].route_label == binding.route_label
@@ -2099,6 +2125,10 @@ async def test_copy_rechecks_binding_grant_status_and_private_ownership_at_apply
             binding_versions={binding.id: binding.version},
         )
         preview = await settings.preview_copy(copier, target.id, request)
+        async with boot.repository.session() as session:
+            bindings_before = await ProjectBindingRepository(session).list_for_project(
+                project_id=target.id
+            )
         if reason in {"revoked", "unavailable"}:
             assert preview.bindings[0].eligible is True
             async with boot.repository.session() as session:
@@ -2129,7 +2159,8 @@ async def test_copy_rechecks_binding_grant_status_and_private_ownership_at_apply
         assert fresh.bindings[0].eligible is False
         async with boot.repository.session() as session:
             assert (
-                await ProjectBindingRepository(session).list_for_project(project_id=target.id) == []
+                await ProjectBindingRepository(session).list_for_project(project_id=target.id)
+                == bindings_before
             )
             events = await AuditRepository(session).list_project_events(project_id=target.id)
         assert len([event for event in events if event.action == "settings.copy"]) == 1
@@ -2151,6 +2182,10 @@ async def test_copy_binding_edit_or_unknown_selection_conflicts_with_preview(
         source = boot.default_project.id
         target, copier = await _copy_pair(boot.repository, source, admin, "version-target")
         binding = await _copy_binding(boot.repository, source, target.id, admin.id)
+        async with boot.repository.session() as session:
+            bindings_before = await ProjectBindingRepository(session).list_for_project(
+                project_id=target.id
+            )
         settings = SettingsService(boot.repository)
         request = SettingsCopyRequest(
             source_project_id=source,
@@ -2177,7 +2212,8 @@ async def test_copy_binding_edit_or_unknown_selection_conflicts_with_preview(
                 await settings.apply_copy(copier, target.id, stale)
         async with boot.repository.session() as session:
             assert (
-                await ProjectBindingRepository(session).list_for_project(project_id=target.id) == []
+                await ProjectBindingRepository(session).list_for_project(project_id=target.id)
+                == bindings_before
             )
     finally:
         await boot.repository.close()

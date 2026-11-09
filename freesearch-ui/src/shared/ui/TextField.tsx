@@ -1,47 +1,54 @@
+import { cn } from "cn"
+import { Field } from "./Field"
+import { fieldDescribedBy } from "./fieldIds"
+
 interface TextFieldProps {
   id: string
   label: string
-  type: "email" | "password" | "text"
+  type: "email" | "password" | "text" | "number" | "url" | "date"
   value: string
   onChange: (value: string) => void
   disabled?: boolean
   autoComplete?: string
   /** Accepted input rule or other help, announced with the field. */
   hint?: string
+  /** Validation message; it replaces the hint and marks the input invalid. */
+  error?: string | null
+  placeholder?: string
+  required?: boolean
+  min?: number | string
+  max?: number | string
+  maxLength?: number
+  /** Monospace value, for keys, ids and endpoints. */
+  mono?: boolean
+  className?: string
 }
 
-/** Labeled text field with the shared surface, focus, and hint styling. */
+/** Labeled text field with the shared surface, focus, hint and error styling. */
 export function TextField({
   id,
   label,
   type,
   value,
   onChange,
-  disabled = false,
-  autoComplete,
   hint,
+  error,
+  mono = false,
+  className,
+  ...inputProps
 }: TextFieldProps) {
-  const hintId = hint === undefined ? undefined : `${id}-hint`
   return (
-    <div>
-      <label htmlFor={id} className="block text-[12px] text-[var(--muted)] mb-1">
-        {label}
-      </label>
+    <Field id={id} label={label} hint={hint} error={error} className={className}>
       <input
+        {...inputProps}
         id={id}
         type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        disabled={disabled}
-        {...(autoComplete === undefined ? {} : { autoComplete })}
-        {...(hintId === undefined ? {} : { "aria-describedby": hintId })}
-        className="w-full rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1.5 text-[13px] text-[var(--text)] outline-none focus-visible:border-[var(--signal)] disabled:opacity-60"
+        aria-describedby={fieldDescribedBy(id, hint, error)}
+        aria-invalid={error ? true : undefined}
+        className={cn("fs-input", type === "number" && "tnum", mono && "font-mono text-[12px]")}
       />
-      {hint !== undefined && (
-        <p id={hintId} className="mt-1 text-[12px] text-[var(--muted)]">
-          {hint}
-        </p>
-      )}
-    </div>
+    </Field>
   )
 }

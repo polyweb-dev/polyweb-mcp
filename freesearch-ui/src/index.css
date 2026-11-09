@@ -16,6 +16,18 @@
   --signal: #007acc;
   --signal-muted: rgba(0, 122, 204, 0.14);
 
+  /* Supporting steps of the Carbon Black scale. Raised is the hover and
+     active-row step above a card; the hairline separates rows inside a
+     panel more quietly than the chrome border; signal ink is the readable
+     text tone of the signal on dark surfaces (links, selected labels). */
+  --raised: #2d2d30;
+  --raised-hover: #333337;
+  --hairline: rgba(255, 255, 255, 0.06);
+  --signal-ink: #3ea6f0;
+  /* The on-state track of operational switches: a neutral step, so a table of
+     switches never becomes a wall of accent. Blue stays for focus and primary. */
+  --control-on: #5d6575;
+
   /* Three restrained accents: provider/time keys and JSON keys (cyan),
      FreeSearch processing and JSON strings (seafoam), rank/score emphasis and
      JSON numbers/booleans (gold). Providers are never colored per-vendor. */
@@ -94,27 +106,31 @@ body {
   margin: 0;
 }
 
-/* Typography — Plus Jakarta Sans, sentence case, no all-caps */
-h1, h2, h3, h4 {
-  font-family: var(--sans);
-  font-weight: 500;
-  color: var(--text-strong);
-  letter-spacing: -0.01em;
-  margin: 0;
-}
+/* Typography — Plus Jakarta Sans, sentence case, no all-caps. These element
+   defaults sit in the base layer so a utility on the element (a size, a
+   margin) always wins over them. */
+@layer base {
+  h1, h2, h3, h4 {
+    font-family: var(--sans);
+    font-weight: 500;
+    color: var(--text-strong);
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
 
-h1 { font-size: 24px; }
-h2 { font-size: 18px; }
-h3 { font-size: 16px; }
-h4 { font-size: 14px; }
+  h1 { font-size: 24px; }
+  h2 { font-size: 18px; }
+  h3 { font-size: 16px; }
+  h4 { font-size: 14px; }
 
-p { margin: 0; }
+  p { margin: 0; }
 
-/* Monospace only for raw query/URL strings, JSON blobs, masked key
-   fingerprints, and baseUrl endpoints. Everything else stays sans. */
-code, .mono {
-  font-family: var(--mono);
-  font-size: 13px;
+  /* Monospace only for raw query/URL strings, JSON blobs, masked key
+     fingerprints, and baseUrl endpoints. Everything else stays sans. */
+  code, .mono {
+    font-family: var(--mono);
+    font-size: 13px;
+  }
 }
 
 /* Tabular numerals for aligned metrics (latency, quota, cost) */
@@ -212,6 +228,173 @@ code, .mono {
   html {
     @apply font-sans;
   }
+}
+
+/* Shared workspace patterns. Every page builds its panels, tables and form
+   controls from these classes, so one change restyles the whole product.
+   They sit in the components layer, so a utility can still adjust width or
+   spacing at the call site. */
+@layer components {
+  .fs-panel {
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background: var(--elevated);
+  }
+
+  .fs-section-title {
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 500;
+    color: var(--text-strong);
+  }
+
+  .fs-section-description {
+    margin-top: 2px;
+    font-size: 13px;
+    line-height: 20px;
+    color: var(--muted);
+  }
+
+  .fs-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 13px;
+    line-height: 20px;
+  }
+  .fs-table th {
+    height: 36px;
+    padding: 0 16px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .fs-table td {
+    padding: 10px 16px;
+    color: var(--text);
+    vertical-align: middle;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .fs-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .fs-table tbody tr:hover td {
+    background: rgba(255, 255, 255, 0.015);
+  }
+  .fs-table .fs-cell-strong {
+    color: var(--text-strong);
+  }
+  .fs-table .fs-cell-actions {
+    width: 1%;
+    padding-right: 8px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .fs-table .fs-cell-empty {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  .fs-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .fs-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--muted);
+  }
+  .fs-field-error {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--status-danger);
+  }
+
+  .fs-input,
+  .fs-select,
+  .fs-select-trigger {
+    display: block;
+    width: 100%;
+    /* 2rem matches the h-8 form button on the 15px root scale. */
+    height: 2rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface);
+    padding: 0 10px;
+    font-size: 13px;
+    color: var(--text-strong);
+    outline: none;
+    transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
+  }
+  .fs-input::placeholder {
+    color: var(--muted);
+  }
+  .fs-input:focus-visible,
+  .fs-select:focus-visible,
+  .fs-select-trigger:focus-visible,
+  .fs-select-trigger[aria-expanded="true"] {
+    border-color: var(--signal);
+    box-shadow: 0 0 0 2px var(--signal-muted);
+  }
+  .fs-input:disabled,
+  .fs-select:disabled,
+  .fs-select-trigger:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+  .fs-input[aria-invalid="true"],
+  .fs-select[aria-invalid="true"],
+  .fs-select-trigger[aria-invalid="true"] {
+    border-color: var(--status-danger);
+  }
+  .fs-select-trigger {
+    padding-right: 8px;
+  }
+  .fs-select {
+    appearance: none;
+    padding-right: 28px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238B94A7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 14px;
+  }
+
+  .fs-keycap {
+    display: inline-grid;
+    min-width: 22px;
+    height: 20px;
+    place-items: center;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .fs-link {
+    color: var(--signal-ink);
+    text-underline-offset: 3px;
+  }
+  .fs-link:hover {
+    text-decoration: underline;
+  }
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--signal);
 }
 
 @utility scrollbar-none {

@@ -476,7 +476,6 @@ async def test_env_switch_dev_to_prod_preserves_pool_caps_terminal_and_bucket(
     repository: SQLiteRepository,
 ) -> None:
     """Dev-to-prod keeps the native pool, local grant cap, terminal state, bucket."""
-    from datetime import date
 
     from freesearch.models.provider_limits import CRDGrantPayload as GrantPayload
 
@@ -488,8 +487,7 @@ async def test_env_switch_dev_to_prod_preserves_pool_caps_terminal_and_bucket(
         "tavily",
         GrantPayload(
             version=0,
-            period_start=date(2026, 3, 1),
-            period_end=date(2026, 4, 1),
+            period="month",
             search_crd=Decimal("10"),
             fetch_crd=Decimal("4"),
         ),
@@ -531,7 +529,6 @@ async def test_env_switch_prod_to_dev_preserves_pool_caps_terminal_and_bucket(
     repository: SQLiteRepository,
 ) -> None:
     """Prod-to-dev keeps the native pool, local grant cap, terminal state, bucket."""
-    from datetime import date
 
     from freesearch.models.provider_limits import CRDGrantPayload as GrantPayload
 
@@ -545,8 +542,7 @@ async def test_env_switch_prod_to_dev_preserves_pool_caps_terminal_and_bucket(
         "tavily",
         GrantPayload(
             version=0,
-            period_start=date(2026, 3, 1),
-            period_end=date(2026, 4, 1),
+            period="month",
             search_crd=Decimal("10"),
             fetch_crd=Decimal("4"),
         ),

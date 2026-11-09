@@ -41,6 +41,7 @@ export interface PlaygroundScope {
   projectId: string
   /** Project provider view; empty without `providers.read`. */
   providers: readonly ProjectProvider[]
+  orderedProviders?: Record<PlaygroundMode, ProjectProvider[]>
   providersLoading: boolean
   /** The provider view read settled successfully at least once. */
   providersReady: boolean
@@ -144,7 +145,7 @@ export function usePlaygroundController(scope: PlaygroundScope): PlaygroundContr
   const preview = useResultPreview()
   const { setSelectedResultForPreview } = preview
 
-  const eligibleProviders = providersForOperation(providers, fields.mode)
+  const eligibleProviders = scope.orderedProviders?.[fields.mode] ?? providersForOperation(providers, fields.mode)
 
   const effectiveSelectedProviderId = resolveEffectiveProviderId(
     fields.selectedProviderId,

@@ -32,17 +32,19 @@ function renderForm(controller: ProjectApiKeysController) {
 }
 
 describe("RotateApiKeyForm", () => {
-  it("offers the four overlaps with 24 hours by default and keeps the current lifetime", () => {
+  it("offers the four overlaps with 24 hours by default and keeps the current lifetime", async () => {
     renderForm(controllerStub())
-    const overlap = screen.getByLabelText("Old key stays valid for")
-    expect(Array.from((overlap as HTMLSelectElement).options).map((option) => option.textContent)).toEqual([
+    const overlap = screen.getByRole("combobox", { name: "Old key stays valid for" })
+    expect(overlap).toHaveTextContent("24 hours")
+    await userEvent.setup().click(overlap)
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Revoke old key now",
       "1 hour",
       "24 hours",
       "7 days",
     ])
-    expect(overlap).toHaveValue("86400")
-    expect(screen.getByRole("radio", { name: "Keep current lifetime" })).toBeChecked()
+    expect(screen.getByRole("button", { name: "Keep current" })).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByText("The new key keeps the old key's expiry date")).toBeInTheDocument()
   })
 
   it("rotates with the chosen overlap and expiry", async () => {
@@ -50,8 +52,9 @@ describe("RotateApiKeyForm", () => {
     const user = userEvent.setup()
     const key = renderForm(controller)
 
-    await user.selectOptions(screen.getByLabelText("Old key stays valid for"), "7 days")
-    await user.click(screen.getByRole("radio", { name: "No expiration" }))
+    await user.click(screen.getByRole("combobox", { name: "Old key stays valid for" }))
+    await user.click(screen.getByRole("option", { name: "7 days" }))
+    await user.click(screen.getByRole("button", { name: "No expiration" }))
     await user.click(screen.getByRole("button", { name: "Rotate key" }))
     expect(controller.rotate).toHaveBeenCalledWith(key, { overlapSeconds: 604_800, expiry: { kind: "never" } })
   })
@@ -71,16 +74,25 @@ describe("RotateApiKeyForm", () => {
     expect(controller.rotate).not.toHaveBeenCalled()
   })
 
-  it("rejects a past custom date and shows the controller message", async () => {
+  it("shows the controller message and rejects a past custom date under the date field", async () => {
     const controller = controllerStub({ message: "This key is no longer active." })
     const user = userEvent.setup()
     renderForm(controller)
     expect(screen.getByRole("alert")).toHaveTextContent("This key is no longer active.")
 
-    await user.click(screen.getByRole("radio", { name: "Custom date" }))
+    await user.click(screen.getByRole("button", { name: "Custom date" }))
     await user.type(screen.getByLabelText("Expiration date"), "2000-01-01")
     await user.click(screen.getByRole("button", { name: "Rotate key" }))
-    expect(controller.showMessage).toHaveBeenCalledWith("Choose an expiration date in the future.")
+    expect(screen.getByText("Choose an expiration date in the future")).toBeInTheDocument()
+    expect(screen.getByLabelText("Expiration date")).toHaveAttribute("aria-invalid", "true")
+    expect(controller.showMessage).not.toHaveBeenCalled()
     expect(controller.rotate).not.toHaveBeenCalled()
+  })
+
+  it("puts Cancel first and the primary Rotate key last", () => {
+    renderForm(controllerStub())
+    const cancel = screen.getByRole("button", { name: "Cancel" })
+    const rotate = screen.getByRole("button", { name: "Rotate key" })
+    expect(cancel.compareDocumentPosition(rotate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

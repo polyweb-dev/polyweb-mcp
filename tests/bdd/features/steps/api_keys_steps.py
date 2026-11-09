@@ -19,7 +19,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr
 
 from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import create_server
+from freesearch.mcp.server import create_server, shutdown_injected_observability
 from freesearch.models.contracts import (
     CostEstimate,
     FetchedDocument,
@@ -42,7 +42,8 @@ from tests.fixtures.auth import (
     register_and_login,
     temp_email,
 )
-from tests.fixtures.execution import bdd_bind_project, seed_execution_project
+from tests.fixtures.execution import _install_bdd_adapters, seed_execution_project
+from tests.fixtures.project_order import seed_order_pools
 
 
 class _CountingAdapter(ProviderAdapter):
@@ -51,7 +52,7 @@ class _CountingAdapter(ProviderAdapter):
 
     @property
     def name(self) -> str:
-        return "counting"
+        return "brave"
 
     @property
     def capabilities(self) -> ProviderCapabilities:
@@ -94,6 +95,23 @@ def _mcp_server(context: Any) -> Any:
     )
 
 
+async def _call_mcp(context: Any, query: str) -> Any:
+    server = _mcp_server(context)
+    try:
+        async with server._mcp_server.lifespan(server):
+            return await server.call_tool(
+                "search",
+                {
+                    "request": {
+                        "query": query,
+                        "routing": {"mode": "require", "providers": ["brave"]},
+                    }
+                },
+            )
+    finally:
+        await shutdown_injected_observability(server)
+
+
 @given("an offline API with a project administrator and a counting provider")
 def step_given_key_api(context: Any) -> None:
     configure_bdd_secret(context)
@@ -113,7 +131,18 @@ def step_given_key_api(context: Any) -> None:
         seed_execution_project(context.repository, user_id=account_id_from_pair(pair))
     )
     context.key_project_id = str(project.project_id)
-    bdd_bind_project(context, context.app, project.project_id, project.actor_id)
+    secrets: dict[str, str] = {}
+    context.loop.run_until_complete(
+        seed_order_pools(
+            context.repository,
+            project_id=project.project_id,
+            actor_id=project.actor_id,
+            store=context.app.state.secret_store,
+            providers=("brave",),
+            secrets=secrets,
+        )
+    )
+    _install_bdd_adapters(context, [context.key_adapter], secrets)
 
 
 @when("the project administrator issues an API key through the API")
@@ -146,12 +175,14 @@ def step_then_key_once(context: Any) -> None:
 def step_then_key_executes(context: Any) -> None:
     headers = {"Authorization": f"Bearer {context.raw_key}"}
     with TestClient(context.app) as client:
-        rest = client.post("/search", json={"query": "rest key"}, headers=headers)
-    assert rest.status_code == 200
-    result = context.loop.run_until_complete(
-        _mcp_server(context).call_tool("search", {"request": {"query": "mcp key"}})
-    )
-    assert result[1]["provider"] == "counting"
+        rest = client.post(
+            "/search",
+            json={"query": "rest key", "routing": {"mode": "require", "providers": ["brave"]}},
+            headers=headers,
+        )
+    assert rest.status_code == 200, rest.text
+    result = context.loop.run_until_complete(_call_mcp(context, "mcp key"))
+    assert result[1]["provider"] == "brave"
     assert context.key_adapter.calls == 2
 
 
@@ -173,9 +204,7 @@ def step_then_revoked_fails(context: Any) -> None:
     assert rest.status_code == 401
     assert rest.json() == {"detail": "not authenticated"}
     try:
-        context.loop.run_until_complete(
-            _mcp_server(context).call_tool("search", {"request": {"query": "after"}})
-        )
+        context.loop.run_until_complete(_call_mcp(context, "after"))
     except ToolError as error:
         assert "authentication is required" in str(error)
     else:
@@ -188,8 +217,12 @@ def step_then_human_executes(context: Any) -> None:
     with TestClient(context.app) as client:
         response = client.post(
             "/search",
-            json={"project_id": context.key_project_id, "query": "browser"},
+            json={
+                "project_id": context.key_project_id,
+                "query": "browser",
+                "routing": {"mode": "require", "providers": ["brave"]},
+            },
             headers=context.admin_headers,
         )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert context.key_adapter.calls == 3

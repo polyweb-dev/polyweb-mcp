@@ -14,6 +14,7 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from freesearch.infrastructure.secrets import ProviderName
 from freesearch.models.contracts import (
     ManualQuota,
     ManualQuotaUpdate,
@@ -24,7 +25,14 @@ from freesearch.models.contracts import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.monitoring import effective_quota
-from tests.fixtures.auth import raw_auth_headers, register_system_admin_login, temp_email
+from tests.fixtures.auth import (
+    account_id_from_pair,
+    raw_auth_headers,
+    register_and_login,
+    register_system_admin_login,
+    temp_email,
+)
+from tests.fixtures.execution import seed_execution_project
 
 
 def _unlink_with_retries(path: Path, *, attempts: int = 20) -> None:
@@ -238,7 +246,8 @@ async def test_manual_quota_clear_returns_to_none(
         cleared = client.delete("/api/v1/providers/brave/manual-quota", headers=headers)
         assert cleared.status_code == 204
         missing = client.get("/api/v1/providers/brave/manual-quota", headers=headers)
-        assert missing.status_code == 404
+        assert missing.status_code == 200
+        assert missing.json() is None
         # Clearing twice stays idempotent.
         assert (
             client.delete("/api/v1/providers/brave/manual-quota", headers=headers).status_code
@@ -247,17 +256,59 @@ async def test_manual_quota_clear_returns_to_none(
 
 
 @pytest.mark.asyncio
-async def test_manual_quota_get_missing_is_404(
+async def test_manual_quota_get_missing_is_empty_for_admin_only(
     repository: SQLiteRepository, auth_secret: str
 ) -> None:
-    # Use one Developer account for the read.
     app = create_app([], repository=repository)
     with TestClient(app) as client:
         assert client.get("/api/v1/providers/brave/manual-quota").status_code == 401
         pair = await register_system_admin_login(client, repository, temp_email("quota-miss"))
         headers = raw_auth_headers(pair["access_token"])
-        response = client.get("/api/v1/providers/brave/manual-quota", headers=headers)
-        assert response.status_code == 404
+        for provider in ProviderName:
+            response = client.get(
+                f"/api/v1/providers/{provider.value}/manual-quota", headers=headers
+            )
+            assert response.status_code == 200, provider.value
+            assert response.json() is None, provider.value
+        developer = register_and_login(client, temp_email("quota-developer"))
+        developer_headers = raw_auth_headers(developer["access_token"])
+        assert client.get(
+            "/api/v1/providers/brave/manual-quota", headers=developer_headers
+        ).status_code in (403, 404)
+        project_admin = register_and_login(client, temp_email("quota-project-admin"))
+        await seed_execution_project(repository, user_id=account_id_from_pair(project_admin))
+        project_headers = raw_auth_headers(project_admin["access_token"])
+        assert (
+            client.get("/api/v1/providers/brave/manual-quota", headers=project_headers).status_code
+            == 403
+        )
+        assert (
+            client.put(
+                "/api/v1/providers/brave/manual-quota", json=_payload(), headers=project_headers
+            ).status_code
+            == 403
+        )
+        assert (
+            client.delete(
+                "/api/v1/providers/brave/manual-quota", headers=project_headers
+            ).status_code
+            == 403
+        )
+        assert client.put(
+            "/api/v1/providers/brave/manual-quota", json=_payload(), headers=developer_headers
+        ).status_code in (403, 404)
+        assert client.delete(
+            "/api/v1/providers/brave/manual-quota", headers=developer_headers
+        ).status_code in (403, 404)
+        assert (
+            client.put(
+                "/api/v1/providers/brave/manual-quota", json=_payload(), headers=headers
+            ).status_code
+            == 200
+        )
+        assert client.get(
+            "/api/v1/providers/brave/manual-quota", headers=developer_headers
+        ).status_code in (403, 404)
 
 
 @pytest.mark.asyncio

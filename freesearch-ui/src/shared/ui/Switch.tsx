@@ -25,12 +25,7 @@ export const Switch: React.FC<SwitchProps> = ({
   const switchId = id || generatedId
 
   return (
-    <div
-      className={cn(
-        "inline-flex items-center gap-3 select-none group",
-        disabled && "cursor-not-allowed opacity-45"
-      )}
-    >
+    <div className="inline-flex items-center gap-3 select-none group has-[:disabled]:cursor-not-allowed">
       <SwitchPrimitive.Root
         id={switchId}
         checked={checked}
@@ -40,13 +35,13 @@ export const Switch: React.FC<SwitchProps> = ({
         nativeButton
         render={<button type="button" />}
         className={cn(
-          "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-all duration-200 ease-in-out outline-none motion-reduce:transition-none",
+          "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-colors duration-150 ease-out outline-none motion-reduce:transition-none",
           "before:absolute before:-inset-2 before:content-['']",
           "focus-visible:border-[var(--signal)] focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40",
           checked
-            ? "border-transparent bg-[var(--signal)]"
-            : "border-[var(--border-subtle)] bg-transparent",
-          "disabled:cursor-not-allowed disabled:opacity-50"
+            ? "border-transparent bg-[var(--signal)] disabled:opacity-70"
+            : "border-[var(--border-subtle)] bg-transparent disabled:opacity-45",
+          "disabled:cursor-not-allowed"
         )}
       >
         <SwitchPrimitive.Thumb
@@ -60,7 +55,7 @@ export const Switch: React.FC<SwitchProps> = ({
       {(label || description) && (
         <label
           htmlFor={switchId}
-          className={cn("flex flex-col", !disabled && "cursor-pointer")}
+          className={cn("flex flex-col", disabled ? "opacity-45" : "cursor-pointer")}
         >
           {label && (
             <span className="text-[13px] font-medium text-[var(--text-strong)] group-hover:text-white transition-colors">

@@ -1,16 +1,18 @@
 import { useMemo } from "react"
 import type { ReactNode } from "react"
 import { useFreeSearch } from "@/context/useFreeSearch"
+import { PageHeader } from "@/shared/ui/PageHeader"
 import { isManualQuotaEligible } from "../model/quotaEligibility"
 import { manualEligibleProviders } from "../model/quotaRowModel"
-import { CRDPriceNote } from "./CRDPriceNote"
 import { ProviderLimitsCards } from "./ProviderLimitsCards"
 import type { RateTierSlotArgs } from "./ProviderLimitsCard"
-import type { OAuthSlotArgs } from "./QuotaRow"
+import type { OAuthSlotArgs } from "../model/oauthSlot"
 import { UsageTotals } from "./UsageTotals"
 
 export interface QuotaPageProps {
   manualQuotaEligible?: typeof isManualQuotaEligible
+  refreshableProviders?: ReadonlySet<string>
+  renderKeyBalances?: ((providerId: string, providerName: string) => ReactNode) | undefined
   /**
    * OAuth pairing controls per provider row. Supplied by composition (the
    * quota overlay stays in app composition) so the quota feature never
@@ -26,19 +28,19 @@ export interface QuotaPageProps {
 }
 
 /**
- * Usage page: the credit-unit cards, the recorded aggregates, the provider
- * actions, and one price note. The legacy native grid and its cache widgets
- * left this page; the reusable dialog and row parts stay in the feature.
+ * Show provider balances and recorded usage totals.
  */
 export function QuotaPage({
   manualQuotaEligible = isManualQuotaEligible,
+  refreshableProviders,
+  renderKeyBalances,
   renderOAuthActions,
   renderRateTier,
 }: QuotaPageProps): ReactNode {
   const {
     providers,
     providerLimits,
-    crdUsageTotals,
+    usdUsageTotals,
     dashboardQuotas,
     usageLoading,
     usageError,
@@ -52,38 +54,36 @@ export function QuotaPage({
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col gap-2 pb-2 border-b border-[var(--border-subtle)]">
-        <h2 className="text-[var(--text-strong)]">Usage</h2>
-      </div>
+      <PageHeader
+        title="Quotas"
+        description="Provider balances and allowances across all projects"
+      />
 
       {usageError && (
-        <p
-          role="alert"
-          className="p-3 rounded border border-[var(--status-danger)]/40 bg-[var(--elevated)] text-[13px]"
-          style={{ color: "var(--status-danger)" }}
-        >
-          Usage data unavailable — {usageError}
+        <p role="alert" className="fs-panel px-4 py-3 text-[13px] text-[var(--status-danger)]">
+          Usage data unavailable: {usageError}
         </p>
       )}
 
       {usageLoading && (
-        <p className="text-[13px] text-[var(--muted)]" role="status">Loading usage telemetry...</p>
+        <p className="text-[13px] text-[var(--muted)]" role="status">Loading usage…</p>
       )}
 
       <ProviderLimitsCards
         providers={providers}
         providerLimits={providerLimits}
-        crdUsageTotals={crdUsageTotals}
+        usdUsageTotals={usdUsageTotals}
         refreshDashboard={refreshDashboard}
         manualEligible={manualEligible}
+        {...(refreshableProviders !== undefined ? { refreshableProviders } : {})}
+        {...(renderKeyBalances !== undefined ? { renderKeyBalances } : {})}
         dashboardQuotas={dashboardQuotas}
         {...(renderOAuthActions !== undefined ? { renderOAuthActions } : {})}
         {...(renderRateTier !== undefined ? { renderRateTier } : {})}
       />
 
-      <UsageTotals crdUsageTotals={crdUsageTotals} providers={providers} providerLimits={providerLimits} />
+      <UsageTotals usdUsageTotals={usdUsageTotals} providers={providers} />
 
-      <CRDPriceNote providers={providers} providerLimits={providerLimits} />
     </div>
   )
 }

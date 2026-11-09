@@ -1,6 +1,7 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
+import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { unitLabel } from "@/services/api/mappers"
 import type { BackendManualQuotaPayload } from "@/domains/dashboard/api/manualQuotaWire"
@@ -9,7 +10,7 @@ import type { UnitKind } from "@/shared/api/units"
 import type { ManualAmountMode } from "../model/manualQuotaMath"
 import type { ManualUnit } from "../model/manualQuotaUnit"
 import type { BalancePrefill } from "../model/providerInfo"
-import { BALANCE_ENTRY, BALANCE_ENTRY_NOTE, type CreditMode } from "../model/quotaLabels"
+import { BALANCE_ENTRY_NOTE, type CreditMode } from "../model/quotaLabels"
 import type { ManualQuotaDefaults } from "../model/useQuotaForm"
 import { ManualEntryForm } from "./ManualEntryForm"
 import { ManualQuotaField } from "./ManualQuotaField"
@@ -27,6 +28,8 @@ export interface ManualEntryVariant {
   creditMode?: CreditMode
   /** The selectable providers of the dropdown; the own provider is the default. */
   providers?: ProviderConfig[]
+  /** A provider menu fixes the target for this entry session. */
+  providerFixed?: boolean
   /** Native entry units for each selectable provider. */
   providerUnits?: Readonly<Record<string, ManualUnit>>
   /** The observed balance per provider, which starts a new entry as an estimate. */
@@ -94,7 +97,6 @@ function providerField(
         <ProviderSelect
           id={inputProps.id}
           testId={inputProps["data-testid"]}
-          className={inputProps.className}
           value={target.id}
           options={rows}
           onValueChange={(next) => onChange({ id: next, name: nameOf(next) })}
@@ -113,11 +115,6 @@ function providerField(
  * provider, so a new target starts from its own saved entry or from its own
  * observed balance.
  */
-/** The modal title: an existing entry states the update. */
-function titleOf(isEditing: boolean): string {
-  return isEditing ? "Update " + BALANCE_ENTRY.toLowerCase() : BALANCE_ENTRY
-}
-
 function editingEntry(own: boolean, defaults: ManualQuotaDefaults | null): boolean {
   return own && Boolean(defaults?.allowance)
 }
@@ -207,7 +204,7 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
       isOpen={open}
       onClose={onClose}
       maxWidth="md"
-      title={titleOf(isEditing)}
+      title={<ProviderDialogTitle providerId={target.id} title={`${target.name} balance`} />}
       subtitle={BALANCE_ENTRY_NOTE}
     >
       <ManualEntryForm
@@ -219,7 +216,7 @@ export function ManualEntryModal(props: ManualEntryVariant): ReactNode {
         observed={observed?.[target.id] ?? null}
         creditMode={creditMode}
         amountMode={targetUnit.amountMode}
-        providerField={providerField(options, target, setTarget)}
+        providerField={props.providerFixed ? null : providerField(options, target, setTarget)}
         onSave={saveFor(onSave, own, target.id)}
         {...deleteProp(onDelete)}
         onClose={onClose}

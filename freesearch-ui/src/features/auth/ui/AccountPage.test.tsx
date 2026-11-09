@@ -19,15 +19,29 @@ afterEach(() => {
 })
 
 describe("AccountPage", () => {
-  it("shows the email, id, active, and verification values and no role row", () => {
+  it("shows one card of email and sign-in facts without id, status, verification or role", () => {
     renderAuthenticated(<AccountPage />, { account: adminAccountFixture() })
 
     expect(screen.getByText("admin@example.com")).toBeInTheDocument()
-    expect(screen.getByText(ADMIN_ACCOUNT_ID)).toBeInTheDocument()
+    expect(screen.queryByText(ADMIN_ACCOUNT_ID)).toBeNull()
     expect(screen.queryByText("Role")).toBeNull()
     expect(screen.queryByText("Admin")).toBeNull()
-    expect(screen.getAllByText("Active")).toHaveLength(2)
-    expect(screen.getByText("Verified")).toBeInTheDocument()
+    expect(screen.queryByText("Status")).toBeNull()
+    expect(screen.queryByText("Active")).toBeNull()
+    expect(screen.queryByText("Email verification")).toBeNull()
+    expect(screen.queryByText("Verified")).toBeNull()
+    expect(screen.queryByText("Name")).toBeNull()
+    expect(screen.getByText("Email and password")).toBeInTheDocument()
+    expect(screen.getByText("Email").closest("dl")).toHaveClass("grid-cols-2")
+    expect(screen.getAllByRole("heading")).toHaveLength(1)
+  })
+
+  it("omits verification when no supported action exists", () => {
+    renderAuthenticated(<AccountPage />, { account: adminAccountFixture({ is_verified: false }) })
+    expect(screen.queryByText("Email verification")).toBeNull()
+    expect(screen.queryByText("Not verified")).toBeNull()
+    expect(screen.getByText("admin@example.com")).toBeInTheDocument()
+    expect(screen.queryByRole("button")).toBeNull()
   })
 
   it("shows the full name when the account has one, else the username", () => {
@@ -49,14 +63,13 @@ describe("AccountPage", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("shows the account creation link with system.settings.write", () => {
+  it("shows no account creation link even with system.settings.write", () => {
     renderAuthenticated(<AccountPage />, {
       account: adminAccountFixture(),
       systemPermissions: SYSTEM_ADMIN_PERMISSIONS,
     })
 
-    const adminLink = screen.getByRole("link", { name: "Create accounts" })
-    expect(adminLink).toHaveAttribute("href", "/admin/users")
+    expect(screen.queryByRole("link", { name: "Create accounts" })).toBeNull()
   })
 
   it("shows no account creation link with system.settings.read only", () => {
@@ -75,9 +88,9 @@ describe("AccountPage", () => {
     expect(screen.queryByRole("link", { name: "Create accounts" })).toBeNull()
   })
 
-  it("never offers the creation link from the account alone", () => {
+  it("shows no security explainer copy", () => {
     renderAuthenticated(<AccountPage />, { account: adminAccountFixture() })
-    expect(screen.queryByRole("link", { name: "Create accounts" })).toBeNull()
+    expect(screen.queryByText(/never shows a credential/)).toBeNull()
   })
 
   it("renders nothing when the account is null", () => {

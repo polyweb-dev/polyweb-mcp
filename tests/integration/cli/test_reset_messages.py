@@ -1,6 +1,6 @@
 """Every entry point shows the alpha reset message instead of hiding it (rework_1 M4).
 
-A database at an older revision must produce the actionable reset instruction
+A database with an unversioned legacy schema must produce the reset instruction
 on stderr with exit status 1 and no traceback, from the operator CLIs and
 before either server starts. The servers are never actually started: their
 start functions are replaced with failing stand-ins.
@@ -18,10 +18,7 @@ import pytest
 from _pytest.capture import CaptureResult
 
 from freesearch.configuration.config import get_settings
-from freesearch.persistence.database_migrations import absolute_database_path
-
-_OLDER_REVISION = "0009_provider_credentials"
-_HEAD = "0002_capacity_actor"
+from freesearch.persistence.database_migrations import absolute_database_path, migration_head
 
 
 def _older_database(directory: Path) -> Path:
@@ -30,10 +27,8 @@ def _older_database(directory: Path) -> Path:
     connection = sqlite3.connect(database)
     try:
         connection.executescript(
-            f"""
+            """
             PRAGMA journal_mode = DELETE;
-            CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY);
-            INSERT INTO alembic_version (version_num) VALUES ('{_OLDER_REVISION}');
             CREATE TABLE runtime_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
             """
         )
@@ -51,8 +46,8 @@ def _assert_reset_on_stderr(captured: CaptureResult[str], database: Path) -> Non
     combined = captured.out + captured.err
     assert "Traceback" not in combined
     assert str(absolute_database_path(database)) in captured.err, captured.err
-    assert _OLDER_REVISION in captured.err, captured.err
-    assert _HEAD in captured.err, captured.err
+    assert "unversioned" in captured.err, captured.err
+    assert migration_head() in captured.err, captured.err
     assert "FREESEARCH_DB" in captured.err, captured.err
     assert "-wal" in captured.err and "-shm" in captured.err, captured.err
 
@@ -244,4 +239,4 @@ def test_pre_start_check_reports_a_really_locked_database(
     captured = capsys.readouterr()
     assert "Traceback" not in captured.out + captured.err
     assert "lock" in captured.err.lower(), captured.err
-    assert _OLDER_REVISION not in captured.err, "a locked file must not be told to reset"
+    assert "unversioned" not in captured.err, "a locked file must not be told to reset"

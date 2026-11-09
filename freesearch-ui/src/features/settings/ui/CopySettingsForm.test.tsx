@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import type { UserEvent } from "@testing-library/user-event"
 import { err, ok } from "@/test/fetchMock"
 import type { RecordedRequest } from "@/test/fetchMock"
 import { PROJECT_ALPHA_ID, PROJECT_BETA_ID, projectFixture } from "@/test/accessFixtures"
@@ -59,6 +60,17 @@ function renderForm(onApplied = vi.fn(), onClose = vi.fn()) {
   return { onApplied, onClose }
 }
 
+async function chooseSource(user: UserEvent) {
+  await user.click(screen.getByLabelText("Source project"))
+  await user.click(screen.getByRole("option", { name: "Beta" }))
+}
+
+async function preview(user: UserEvent) {
+  await chooseSource(user)
+  await user.click(screen.getByRole("button", { name: "Preview changes" }))
+  return screen.findByTestId("copy-preview")
+}
+
 afterEach(() => vi.unstubAllGlobals())
 
 describe("CopySettingsForm", () => {
@@ -66,19 +78,19 @@ describe("CopySettingsForm", () => {
     const stub = installCopyStub()
     const user = userEvent.setup()
     renderForm()
-    expect(screen.getByRole("button", { name: "Apply copy" })).toBeDisabled()
-    expect(screen.getByRole("radio", { name: "Overrides only" })).toBeChecked()
-    expect(screen.getByText("Pins current values and stops inheritance.")).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText("Source project"), SOURCE)
-    await user.click(screen.getByRole("button", { name: "Preview" }))
-    const preview = await screen.findByTestId("copy-preview")
-    expect(within(preview).getByText("Max attempts")).toBeInTheDocument()
-    expect(within(preview).getByText("Changes")).toBeInTheDocument()
-    expect(within(preview).getByText("Not copied")).toBeInTheDocument()
-    expect(within(preview).getByText(/The target system allows metadata only\./)).toBeInTheDocument()
-    expect(within(preview).getByRole("checkbox", { name: "Copy binding private" })).toBeDisabled()
-    expect(within(preview).getByText("The credential is not granted to this project.")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Apply copy" })).toBeEnabled()
+    expect(screen.queryByRole("button", { name: "Apply changes" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Preview changes" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Changed values" })).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByText("Copies only the values the other project changed from the system defaults")).toBeInTheDocument()
+    const shown = await preview(user)
+    expect(within(shown).getByText("Max attempts")).toBeInTheDocument()
+    expect(within(shown).getByText("Changes")).toBeInTheDocument()
+    expect(within(shown).getByText("Not copied")).toBeInTheDocument()
+    expect(within(shown).getByText(/The target system allows metadata only\./)).toBeInTheDocument()
+    expect(within(shown).getByRole("checkbox", { name: /^private/ })).toBeDisabled()
+    expect(within(shown).getByText("The credential is not granted to this project.")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Apply changes" })).toBeEnabled()
+    expect(screen.queryByRole("button", { name: "Preview changes" })).toBeNull()
     expect(stub.requests.filter((req) => req.url === APPLY_URL)).toHaveLength(0)
     expect(stub.requests.find((req) => req.url === PREVIEW_URL)?.body).toEqual({
       source_project_id: SOURCE,
@@ -90,37 +102,42 @@ describe("CopySettingsForm", () => {
     })
   })
 
-  it("invalidates the preview on a mode or binding change", async () => {
+  it("keeps Preview enabled and asks for a source inline when none is chosen", async () => {
+    const stub = installCopyStub()
+    const user = userEvent.setup()
+    renderForm()
+    await user.click(screen.getByRole("button", { name: "Preview changes" }))
+    expect(screen.getByText("Choose a project to copy from")).toBeInTheDocument()
+    expect(screen.getByLabelText("Source project")).toHaveAttribute("aria-invalid", "true")
+    expect(stub.requests.filter((req) => req.url === PREVIEW_URL)).toHaveLength(0)
+    await chooseSource(user)
+    expect(screen.queryByText("Choose a project to copy from")).toBeNull()
+  })
+
+  it("invalidates the preview on a mode change but keeps it on a binding change", async () => {
     installCopyStub()
     const user = userEvent.setup()
     renderForm()
-    await user.selectOptions(screen.getByLabelText("Source project"), SOURCE)
-    await user.click(screen.getByRole("button", { name: "Preview" }))
-    await screen.findByTestId("copy-preview")
-    await user.click(screen.getByRole("checkbox", { name: "Copy binding primary" }))
+    await preview(user)
+    await user.click(screen.getByRole("checkbox", { name: "primary" }))
+    expect(screen.getByTestId("copy-preview")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Apply changes" })).toBeEnabled()
+    await user.click(screen.getByRole("button", { name: "All current values" }))
     expect(screen.queryByTestId("copy-preview")).toBeNull()
-    expect(screen.getByRole("button", { name: "Apply copy" })).toBeDisabled()
-    await user.click(screen.getByRole("button", { name: "Preview" }))
-    await screen.findByTestId("copy-preview")
-    await user.click(screen.getByRole("radio", { name: "Effective snapshot" }))
-    expect(screen.queryByTestId("copy-preview")).toBeNull()
-    expect(screen.getByRole("button", { name: "Apply copy" })).toBeDisabled()
+    expect(screen.queryByRole("button", { name: "Apply changes" })).toBeNull()
+    expect(screen.getByText("Copies every current value; this project stops following the system defaults")).toBeInTheDocument()
   })
 
   it("applies with the preview revisions and the selected binding versions", async () => {
     const stub = installCopyStub()
     const user = userEvent.setup()
     const { onApplied, onClose } = renderForm()
-    await user.selectOptions(screen.getByLabelText("Source project"), SOURCE)
-    await user.click(screen.getByRole("button", { name: "Preview" }))
-    await screen.findByTestId("copy-preview")
-    await user.click(screen.getByRole("checkbox", { name: "Copy binding primary" }))
-    await user.click(screen.getByRole("button", { name: "Preview" }))
-    const preview = await screen.findByTestId("copy-preview")
-    expect(within(preview).getByRole("checkbox", { name: "Copy binding primary" })).toBeChecked()
-    expect(stub.requests.filter((req) => req.url === PREVIEW_URL)[1]?.body).toMatchObject({ binding_versions: { b1: 3 } })
-    await user.click(screen.getByRole("button", { name: "Apply copy" }))
+    await preview(user)
+    await user.click(screen.getByRole("checkbox", { name: "primary" }))
+    expect(screen.getByRole("checkbox", { name: "primary" })).toBeChecked()
+    await user.click(screen.getByRole("button", { name: "Apply changes" }))
     await waitFor(() => expect(onApplied).toHaveBeenCalled())
+    expect(stub.requests.filter((req) => req.url === PREVIEW_URL)).toHaveLength(1)
     expect(stub.requests.find((req) => req.url === APPLY_URL)?.body).toEqual({
       source_project_id: SOURCE,
       expected_source_revision: 7,
@@ -129,7 +146,7 @@ describe("CopySettingsForm", () => {
       mode: "overrides_only",
       binding_versions: { b1: 3 },
     })
-    expect(onApplied.mock.calls[0]?.[1]).toBe("Copied 1 settings.")
+    expect(onApplied.mock.calls[0]?.[1]).toBe("Copied 1 setting.")
     expect(onClose).toHaveBeenCalled()
   })
 
@@ -137,13 +154,11 @@ describe("CopySettingsForm", () => {
     installCopyStub(() => err(409, { detail: { code: "SETTINGS_REVISION_CONFLICT", message: "stale" } }))
     const user = userEvent.setup()
     const { onApplied } = renderForm()
-    await user.selectOptions(screen.getByLabelText("Source project"), SOURCE)
-    await user.click(screen.getByRole("button", { name: "Preview" }))
-    await screen.findByTestId("copy-preview")
-    await user.click(screen.getByRole("button", { name: "Apply copy" }))
-    expect(await screen.findByText("Settings changed since the preview. Preview again.")).toBeInTheDocument()
+    await preview(user)
+    await user.click(screen.getByRole("button", { name: "Apply changes" }))
+    expect(await screen.findByText("Settings changed since the preview. Preview again")).toBeInTheDocument()
     expect(screen.queryByTestId("copy-preview")).toBeNull()
-    expect(screen.getByRole("button", { name: "Apply copy" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Preview changes" })).toBeEnabled()
     expect(onApplied).not.toHaveBeenCalled()
   })
 })

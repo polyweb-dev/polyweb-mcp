@@ -20,9 +20,10 @@ export const SYSTEM_ADMIN_PERMISSIONS: readonly string[] = [
   "system.roles.assign",
   "system.settings.read",
   "system.settings.write",
+  "vault.manage",
 ]
 
-/** Wire shape of GET /users/me, registration and POST /api/v1/users. */
+/** Wire shape of GET /users/me and registration. */
 export interface StubUserAccount {
   id: string
   email: string

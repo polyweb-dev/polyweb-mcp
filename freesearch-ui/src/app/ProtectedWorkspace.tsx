@@ -3,7 +3,7 @@ import { Navigate, useLocation } from "react-router"
 import { useAuth } from "@/domains/auth"
 import { ProjectsProvider } from "@/domains/projects"
 import { RestoreStatusView } from "./RestoreStatusView"
-import { loginPathFor } from "./routes"
+import { legacyKeysDestination, loginPathFor } from "./routes"
 import { WorkspaceControls } from "./WorkspaceControls"
 
 const RESTORE_FAILURE = "The account session could not be restored."
@@ -47,7 +47,8 @@ export function ProtectedWorkspace({ children }: { children: ReactNode }) {
   }
 
   if (account === null) {
-    return <Navigate to={loginPathFor(location.pathname)} replace />
+    const destination = legacyKeysDestination(location.pathname, location.search) ?? location.pathname
+    return <Navigate to={loginPathFor(destination)} replace />
   }
 
   return (

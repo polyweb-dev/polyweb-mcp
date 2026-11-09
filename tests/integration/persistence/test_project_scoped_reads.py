@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import sqlite3
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -10,10 +11,13 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
 
+from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
+from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
 from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
 from freesearch.models.credentials import CredentialOperation
 from freesearch.models.observability import (
@@ -28,9 +32,14 @@ from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, Credenti
 from freesearch.models.schema_enums import UpstreamScope
 from freesearch.persistence.bindings import ProjectBindingRepository
 from freesearch.persistence.credentials import CredentialRepository
+from freesearch.persistence.oauth_grants import CredentialOAuthGrantRepository
 from freesearch.persistence.otel_exporter import write_trace_spans
 from freesearch.persistence.pools import UpstreamPoolRepository
 from freesearch.persistence.storage import SQLiteRepository
+from freesearch.services.control_errors import ResourceNotFound
+from freesearch.services.credential_oauth import OAuthTarget
+from freesearch.services.vault_keys import VaultOAuthService
+from tests.fixtures.auth import create_temp_user, temp_email, temp_principal
 from tests.fixtures.execution import seed_execution_project
 
 _T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
@@ -248,8 +257,6 @@ def test_project_owned_repository_methods_require_project_id() -> None:
 
 
 def test_oauth_grant_methods_require_the_owner_pair() -> None:
-    from freesearch.persistence.oauth_grants import CredentialOAuthGrantRepository
-
     methods = _public_async_methods(CredentialOAuthGrantRepository)
     assert set(methods) >= {
         "get",
@@ -259,6 +266,7 @@ def test_oauth_grant_methods_require_the_owner_pair() -> None:
         "disconnect",
         "list_pending_for_owner",
         "list_pending_for_account",
+        "list_pending_for_vaults",
     }
 
     def _required_keyword(name: str, parameter_name: str) -> None:
@@ -267,15 +275,14 @@ def test_oauth_grant_methods_require_the_owner_pair() -> None:
         assert parameter.default is inspect.Parameter.empty, (name, parameter_name)
         assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, (name, parameter_name)
 
-    # The ONE named exemption from the owner pair: the account-wide pending scan
-    # used only by account deactivation. It requires a keyword-only account_id
-    # and takes nothing else, so no optional argument can widen or narrow it.
-    _required_keyword("list_pending_for_account", "account_id")
-    scan_parameters = set(inspect.signature(methods["list_pending_for_account"]).parameters)
-    assert scan_parameters == {"self", "account_id"}
+    # Internal cleanup scans require an account and cannot accept wider filters.
+    scans = {"list_pending_for_account", "list_pending_for_vaults"}
+    for name in scans:
+        _required_keyword(name, "account_id")
+        assert set(inspect.signature(methods[name]).parameters) == {"self", "account_id"}
 
     for name, method in methods.items():
-        if name == "list_pending_for_account":
+        if name in scans:
             continue
         parameters = inspect.signature(method).parameters
         # Every other method requires the owner pair; none takes an optional one.
@@ -288,6 +295,66 @@ def test_oauth_grant_methods_require_the_owner_pair() -> None:
             assert set(parameters) == {"self", "account_id", "owner_scope", "owner_project_id"}
             continue
         _required_keyword(name, "credential_id")
+
+
+async def test_vault_oauth_owner_key_and_cleanup_scan_are_scoped(world: _World) -> None:
+    owner = temp_principal(
+        await create_temp_user(world.repo, temp_email("vault-owner"), system_admin=True)
+    )
+    other = temp_principal(
+        await create_temp_user(world.repo, temp_email("vault-other"), system_admin=True)
+    )
+    async with world.repo.session() as session:
+        credentials = CredentialRepository(session)
+        grants = CredentialOAuthGrantRepository(session)
+        keys = []
+        for user_id in (owner.id, other.id, None):
+            credential = await credentials.insert_credential(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                provider_type="parallel",
+                owner_scope=CredentialOwnerScope.SYSTEM,
+                owner_project_id=None,
+                owner_user_id=user_id,
+                label=f"oauth-{user_id}",
+                auth_mode="oauth",
+                created_by=owner.id,
+            )
+            pending = await grants.begin_connect(
+                credential_id=credential.id,
+                owner_scope=CredentialOwnerScope.SYSTEM,
+                owner_project_id=None,
+                credential_generation=1,
+                client_id="client",
+                scopes=None,
+            )
+            assert pending is not None
+            keys.append(credential.id)
+        listed = await grants.list_pending_for_vaults(account_id=DEFAULT_INSTALLATION_ACCOUNT_ID)
+        assert {item.grant.credential_id: item.owner_user_id for item in listed} == {
+            keys[0]: owner.id,
+            keys[1]: other.id,
+        }
+        assert await grants.list_pending_for_vaults(account_id=uuid4()) == []
+        await session.commit()
+
+    store = EncryptedDbSecretStore(world.repo, SecretCodec(MasterKey(os.urandom(32))))
+    owner_service = VaultOAuthService(world.repo, store, owner.id)
+    other_service = VaultOAuthService(world.repo, store, other.id)
+    target = OAuthTarget()
+    before = await owner_service.status(owner, target, keys[0])
+    for method in (
+        other_service.status,
+        other_service.start,
+        other_service.poll,
+        other_service.disconnect,
+    ):
+        with pytest.raises(ResourceNotFound):
+            await method(other, target, keys[0])
+    with pytest.raises(ResourceNotFound):
+        await other_service.refresh(target, keys[0])
+    with pytest.raises(ResourceNotFound):
+        await owner_service.status(other, target, keys[0])
+    assert await owner_service.status(owner, target, keys[0]) == before
 
 
 async def test_list_provider_usage_without_provider_is_a_type_error(world: _World) -> None:

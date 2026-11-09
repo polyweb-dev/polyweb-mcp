@@ -1,4 +1,5 @@
 import type { CopyBinding } from "@/domains/settings"
+import { Checkbox } from "@/shared/ui/Checkbox"
 
 interface CopyBindingChoicesProps {
   bindings: readonly CopyBinding[]
@@ -7,29 +8,24 @@ interface CopyBindingChoicesProps {
   onToggle: (bindingId: string, on: boolean) => void
 }
 
-/** Source bindings with a checkbox each; ineligible ones are disabled with the reason. */
+/** Routes of the source project to copy too; one that cannot be copied is disabled with the reason. */
 export function CopyBindingChoices({ bindings, selected, disabled, onToggle }: CopyBindingChoicesProps) {
   if (bindings.length === 0) return null
   return (
-    <fieldset className="space-y-1">
-      <legend className="mb-1 text-[12px] text-[var(--muted)]">Bindings</legend>
-      {bindings.map((binding) => (
-        <div key={binding.bindingId} className="text-[13px]">
-          <label className="inline-flex items-center gap-2">
-            <input
-              type="checkbox"
-              aria-label={`Copy binding ${binding.routeLabel}`}
-              checked={binding.eligible && selected.has(binding.bindingId)}
-              disabled={disabled || !binding.eligible}
-              onChange={(event) => onToggle(binding.bindingId, event.target.checked)}
-            />
-            {binding.routeLabel}
-          </label>
-          {!binding.eligible && binding.rejection !== null && (
-            <p className="ml-6 text-[12px] text-[var(--muted)]">{binding.rejection}</p>
-          )}
-        </div>
-      ))}
+    <fieldset>
+      <legend className="fs-label">Also copy routes</legend>
+      <div className="flex flex-col gap-2">
+        {bindings.map((binding) => (
+          <Checkbox
+            key={binding.bindingId}
+            checked={binding.eligible && selected.has(binding.bindingId)}
+            disabled={disabled || !binding.eligible}
+            label={binding.routeLabel}
+            {...(!binding.eligible && binding.rejection !== null ? { description: binding.rejection } : {})}
+            onChange={(on) => onToggle(binding.bindingId, on)}
+          />
+        ))}
+      </div>
     </fieldset>
   )
 }

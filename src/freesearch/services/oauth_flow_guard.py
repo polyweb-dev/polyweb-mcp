@@ -41,6 +41,7 @@ from freesearch.persistence.oauth_grants import (
     PendingOAuthGrant,
     oauth_secret_slot,
 )
+from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.timestamps import resolve_now
 from freesearch.services.authorization import ScopedAuthorizationService
 
@@ -127,25 +128,25 @@ async def end_unauthorized_oauth_flows(
     project_id: UUID | None = None,
     system_only: bool = False,
     initiator_ids: frozenset[UUID] | None = None,
+    credential_id: UUID | None = None,
     actor_id: UUID | None = None,
     now: datetime | None = None,
 ) -> int:
     """End every pending flow in scope whose initiator lost permission; return the count.
 
-    Scope: ``project_id`` selects that project's private credentials;
-    ``system_only`` selects system credentials; neither selects every pending
-    flow of the account. ``initiator_ids`` further limits the scan to flows
-    those accounts started.
+    Scope: ``project_id`` selects that project's private credentials and
+    account vault flows; ``system_only`` selects system and vault credentials;
+    neither selects every pending flow of the account. ``initiator_ids`` and
+    ``credential_id`` further limit the scan.
 
     For each flow the device payload is decrypted and the initiator's live
     permission re-checked in ``session``. A failing flow is disconnected with
     a token-generation compare-and-set and ``initiator_permission_revoked``,
     every slot of its generation (including the device code) is tombstoned,
     and ``credential.oauth_flow_ended`` is audited, all in the caller's
-    transaction. A flow whose payload cannot be read (no store configured,
-    undecryptable or malformed) cannot prove its initiator, so it is ended
-    too: the check fails closed. Pass the encrypted store for precise
-    per-initiator results.
+    transaction. An unreadable payload fails closed. If no store is configured,
+    vault ownership still identifies the initiator: vault flows survive only
+    while their owner retains access. Pass the store for precise legacy checks.
     """
 
     if project_id is not None and system_only:
@@ -157,6 +158,7 @@ async def end_unauthorized_oauth_flows(
             owner_scope=CredentialOwnerScope.PROJECT,
             owner_project_id=project_id,
         )
+        pending.extend(await grants.list_pending_for_vaults(account_id=account_id))
     elif system_only:
         pending = await grants.list_pending_for_owner(
             account_id=account_id, owner_scope=CredentialOwnerScope.SYSTEM, owner_project_id=None
@@ -165,6 +167,20 @@ async def end_unauthorized_oauth_flows(
         pending = await grants.list_pending_for_account(account_id=account_id)
     ended = 0
     for item in pending:
+        if credential_id is not None and item.grant.credential_id != credential_id:
+            continue
+        if item.owner_user_id is not None:
+            if initiator_ids is not None and item.owner_user_id not in initiator_ids:
+                continue
+            owner_allowed = await ProjectRepository(session).user_can_use_vault(item.owner_user_id)
+            if owner_allowed and secret_store is None:
+                continue
+            initiator = await _initiator(session, secret_store, item)
+            if owner_allowed and initiator is not None and initiator.user_id == item.owner_user_id:
+                continue
+            if await _end(session, item, actor_id=actor_id, account_id=account_id, now=now):
+                ended += 1
+            continue
         initiator = await _initiator(session, secret_store, item)
         if (
             initiator is not None

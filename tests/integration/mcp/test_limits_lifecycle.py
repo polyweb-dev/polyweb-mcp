@@ -30,6 +30,7 @@ from freesearch.models.provider_limits import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.provider_limits import ProviderLimitsService
+from tests.fixtures.api_keys import mcp_project_key
 from tests.fixtures.auth import TEMP_PASSWORD, raw_auth_headers, temp_email
 from tests.fixtures.execution import (
     bind_existing_project,
@@ -82,18 +83,20 @@ async def test_generation_lifecycle_closes_cleanly(
 ) -> None:
     service_repository = await SQLiteRepository.open(database)
     try:
-        service, token, pid = await bound_mcp_credentials(
-            service_repository, [_StubAdapter("x")], "mcp-lifecycle", monkeypatch
-        )
+        service, key = await mcp_project_key(service_repository, "mcp-lifecycle")
+        adapter = _StubAdapter("x")
         server = create_server(
             None,
             database=database,
             auth_service=service,
-            stdio_token=SecretStr(token.get_secret_value()),
+            stdio_token=key.key,
         )
         async with server._mcp_server.lifespan(server):
+            await bind_existing_project(
+                service_repository, key.project_id, key.owner.id, [adapter], monkeypatch
+            )
             result = await server.call_tool(
-                "search", {"request": {"project_id": pid, "query": "s0 probe"}}
+                "search", {"request": {"project_id": str(key.project_id), "query": "s0 probe"}}
             )
             assert isinstance(result, tuple)
     finally:
@@ -106,22 +109,24 @@ async def test_overlapping_generations_share_one_repository(
 ) -> None:
     service_repository = await SQLiteRepository.open(database)
     try:
-        service, token, pid = await bound_mcp_credentials(
-            service_repository, [_StubAdapter("x")], "mcp-overlap", monkeypatch
-        )
+        service, key = await mcp_project_key(service_repository, "mcp-overlap")
+        adapter = _StubAdapter("x")
         server = create_server(
             None,
             database=database,
             auth_service=service,
-            stdio_token=SecretStr(token.get_secret_value()),
+            stdio_token=key.key,
         )
         first = server._mcp_server.lifespan(server)
         second = server._mcp_server.lifespan(server)
         await first.__aenter__()
         await second.__aenter__()
         try:
+            await bind_existing_project(
+                service_repository, key.project_id, key.owner.id, [adapter], monkeypatch
+            )
             result = await server.call_tool(
-                "search", {"request": {"project_id": pid, "query": "s0"}}
+                "search", {"request": {"project_id": str(key.project_id), "query": "s0"}}
             )
             assert isinstance(result, tuple)
         finally:

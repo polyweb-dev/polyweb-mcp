@@ -3,12 +3,12 @@ import type { Page } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
 
 Given("I am on the Settings view", async ({ page }) => {
-  await page.getByRole("link", { name: "Settings", exact: true }).click()
-  await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible()
+  await page.getByRole("link", { name: "Providers", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Providers", exact: true })).toBeVisible()
 })
 
-When("I open the {string} settings tab", async ({ page }, tabLabel: string) => {
-  await page.getByRole("tab", { name: tabLabel, exact: true }).click()
+When("I view the provider catalog", async ({ page }) => {
+  await expect(page.getByRole("heading", { name: "Providers", exact: true })).toBeVisible()
 })
 
 Then("the settings page should expose exactly {int} sub-tabs", async ({ page }, count: number) => {
@@ -23,30 +23,12 @@ Then("the settings page should not expose an {string} button", async ({ page }, 
   await expect(page.getByRole("button", { name: buttonLabel, exact: true })).toHaveCount(0)
 })
 
-Then(
-  "the {string} upward priority arrow should be disabled",
-  async ({ page }, provider: string) => {
-    await expect(getProviderRow(page, provider).getByRole("button", { name: /up/i })).toBeDisabled()
-  }
-)
-
-Then(
-  "the {string} downward priority arrow should be disabled",
-  async ({ page }, provider: string) => {
-    await expect(getProviderRow(page, provider).getByRole("button", { name: /down/i })).toBeDisabled()
-  }
-)
-
-Then("the first provider row upward priority arrow should be disabled", async ({ page }) => {
-  // Boundary-agnostic: live registries may reorder (equal priorities sort by
-  // provider_id), so the boundary is the first RENDERED row, not a fixed name.
-  const upButtons = page.getByRole("button", { name: /priority up/i })
-  await expect(upButtons.first()).toBeDisabled()
-})
-
-Then("the last provider row downward priority arrow should be disabled", async ({ page }) => {
-  const downButtons = page.getByRole("button", { name: /priority down/i })
-  await expect(downButtons.last()).toBeDisabled()
+Then("the provider catalog has no order controls", async ({ page }) => {
+  const table = page.getByRole("table").first()
+  await expect(table.getByRole("columnheader", { name: "Cost per call" })).toBeVisible()
+  await expect(table.getByRole("columnheader", { name: /priority|rank/i })).toHaveCount(0)
+  await expect(table.getByRole("button", { name: /priority (up|down)/i })).toHaveCount(0)
+  await expect(table.locator("[draggable=true]")).toHaveCount(0)
 })
 
 When(
@@ -110,46 +92,27 @@ Then("the failover switch {string} should be visible", async ({ page }, label: s
   await expect(page.getByText(label, { exact: true })).toBeVisible()
 })
 
-Then("each failover switch should expose a description", async ({ page }) => {
-  const labels = [
-    "Fallback chaining",
-    "Failover on rate limit (429)",
-    "Failover on timeout",
-    "Failover on server error (5xx)",
-  ]
-
-  for (const label of labels) {
-    const labelNode = page.getByText(label, { exact: true })
-    await expect(labelNode).toBeVisible()
-    const labelParent = labelNode.locator("xpath=..")
-    const textElements = labelParent.locator("span, p").filter({ hasText: /\S/ })
-    expect(await textElements.count()).toBeGreaterThan(1)
-  }
-})
-
-Then("the failover operation switches should be vertically stacked", async ({ page }) => {
-  const labels = [
-    "Failover on rate limit (429)",
-    "Failover on timeout",
-    "Failover on server error (5xx)",
-  ]
-  const boxes = await Promise.all(
-    labels.map(async (label) => page.getByText(label, { exact: true }).boundingBox())
-  )
-
-  expect(boxes.every((box): box is NonNullable<typeof box> => box !== null)).toBe(true)
-  for (let index = 1; index < boxes.length; index += 1) {
-    expect(boxes[index]!.y).toBeGreaterThan(boxes[index - 1]!.y)
-  }
-})
-
 Then("the failover row {string} should be visible", async ({ page }, label: string) => {
   await expect(page.getByText(label, { exact: true })).toBeVisible()
 })
 
+Then("the failover tab should not show the removed per-condition switches", async ({ page }) => {
+  for (const removed of [
+    "Fallback chaining",
+    "Failover on rate limit (429)",
+    "Failover on timeout",
+    "Failover on server error (5xx)",
+    "Cascade depth",
+    "Timeout budget",
+  ]) {
+    await expect(page.getByText(removed, { exact: true })).toHaveCount(0)
+  }
+  await expect(page.locator("main")).not.toContainText(/session-only|not enforced|not exposed/i)
+})
+
 function getProviderRow(page: Page, provider: string) {
   const cell = page.getByText(provider, { exact: true }).first()
-  return cell.locator("xpath=ancestor-or-self::tr | ancestor::*[.//*[normalize-space()='Global']][1]").first()
+  return cell.locator("xpath=ancestor-or-self::tr | ancestor::*[.//*[normalize-space()='Enabled']][1]").first()
 }
 
 function getSegmentButton(

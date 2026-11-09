@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { apiKeyFixture } from "@/test/accessFixtures"
 import type { ProjectApiKeysController } from "../model/useProjectApiKeysController"
@@ -25,6 +25,11 @@ function controllerStub(overrides: Partial<ProjectApiKeysController> = {}): Proj
   }
 }
 
+/** The one row menu trigger: a `…` button named after the key label. */
+function actionsTrigger(label: string): HTMLElement {
+  return screen.getByRole("button", { name: `Actions for ${label}` })
+}
+
 describe("ApiKeyRowActions", () => {
   it("offers Rotate and Revoke named by the key label for an active key", async () => {
     const controller = controllerStub()
@@ -32,29 +37,51 @@ describe("ApiKeyRowActions", () => {
     render(<ApiKeyRowActions apiKey={key} canRotate controller={controller} />)
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole("button", { name: "Rotate CI runner" }))
+    const trigger = actionsTrigger("CI runner")
+    expect(trigger).toHaveAttribute("aria-label", "Actions for CI runner")
+
+    await user.click(trigger)
+    await user.click(screen.getByRole("button", { name: "Rotate key" }))
     expect(controller.openRotate).toHaveBeenCalledWith(key)
-    await user.click(screen.getByRole("button", { name: "Revoke CI runner" }))
+
+    await user.click(actionsTrigger("CI runner"))
+    await user.click(screen.getByRole("button", { name: "Revoke key" }))
     expect(controller.requestRevoke).toHaveBeenCalledWith("k1")
     expect(controller.revoke).not.toHaveBeenCalled()
   })
 
-  it("hides Rotate when rotation is not allowed", () => {
-    render(<ApiKeyRowActions apiKey={apiKeyFixture({ label: "CI runner" })} canRotate={false} controller={controllerStub()} />)
-    expect(screen.queryByRole("button", { name: "Rotate CI runner" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Revoke CI runner" })).toBeInTheDocument()
+  it("hides Rotate when rotation is not allowed", async () => {
+    const user = userEvent.setup()
+    render(
+      <ApiKeyRowActions
+        apiKey={apiKeyFixture({ label: "CI runner" })}
+        canRotate={false}
+        controller={controllerStub()}
+      />
+    )
+    await user.click(actionsTrigger("CI runner"))
+    expect(screen.queryByRole("button", { name: "Rotate key" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Revoke key" })).toBeInTheDocument()
   })
 
-  it("asks for an inline confirmation before revoking", async () => {
+  it("asks for confirmation in the shared dialog before revoking", async () => {
     const key = apiKeyFixture({ id: "k1", label: "CI runner" })
     const controller = controllerStub({ confirmingRevokeId: "k1" })
     render(<ApiKeyRowActions apiKey={key} canRotate controller={controller} />)
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole("button", { name: "Cancel" }))
+    const dialog = screen.getByRole("dialog", { name: "Revoke CI runner" })
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
     expect(controller.requestRevoke).toHaveBeenCalledWith(null)
-    await user.click(screen.getByRole("button", { name: "Confirm revoke" }))
+    await user.click(within(dialog).getByRole("button", { name: "Revoke key" }))
     expect(controller.revoke).toHaveBeenCalledWith(key)
+  })
+
+  it("shows no confirmation for another key", () => {
+    const controller = controllerStub({ confirmingRevokeId: "other" })
+    render(<ApiKeyRowActions apiKey={apiKeyFixture({ id: "k1", label: "CI runner" })} canRotate controller={controller} />)
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(screen.getByRole("button", { name: "Actions for CI runner" })).toBeInTheDocument()
   })
 
   it.each([["revoked" as const], ["expired" as const]])("renders no controls for a %s key", (status) => {
@@ -64,9 +91,21 @@ describe("ApiKeyRowActions", () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it("disables the controls while a mutation is pending", () => {
-    render(<ApiKeyRowActions apiKey={apiKeyFixture({ label: "CI runner" })} canRotate controller={controllerStub({ pending: true })} />)
-    expect(screen.getByRole("button", { name: "Revoke CI runner" })).toBeDisabled()
-    expect(screen.getByRole("button", { name: "Rotate CI runner" })).toBeDisabled()
+  it("disables the controls while a mutation is pending", async () => {
+    const user = userEvent.setup()
+    render(
+      <ApiKeyRowActions
+        apiKey={apiKeyFixture({ label: "CI runner" })}
+        canRotate
+        controller={controllerStub({ pending: true })}
+      />
+    )
+    const trigger = actionsTrigger("CI runner")
+    expect(trigger).toBeDisabled()
+    // A disabled trigger opens no menu, so no row action is reachable.
+    await user.click(trigger)
+    expect(screen.queryByRole("button", { name: "Rotate key" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Revoke key" })).toBeNull()
+    expect(trigger).toBeDisabled()
   })
 })

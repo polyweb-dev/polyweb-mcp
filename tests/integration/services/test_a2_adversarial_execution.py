@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import httpx
 import pytest
@@ -42,7 +42,9 @@ from freesearch.models.projects import (
 from freesearch.models.provider_limits import LimitDeniedError, LimitStoreUnavailable
 from freesearch.persistence.bindings import ProjectBindingRepository
 from freesearch.persistence.credentials import CredentialRepository
+from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
 from freesearch.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
+from freesearch.persistence.settings import ProjectSettingsRepository
 from freesearch.persistence.storage import UsageEventRow
 from freesearch.services.api_keys import ApiKeyService
 from freesearch.services.credentials import credential_secret_slot
@@ -56,10 +58,12 @@ from freesearch.services.execution_scope import (
     execution_attribution,
     resolve_execution_scope,
 )
+from freesearch.services.pool_materializer import materialize_pools
 from tests.fixtures.a2_execution import (
     ExecutionWorld,
     PoolSpec,
     RecordingAdapter,
+    SeededCredential,
     _seed_credential,
     build_execution_world,
     provider_error,
@@ -148,6 +152,82 @@ async def _two_binding_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         priorities={"a1": 1, "a2": 100},
         limits=False,
     )
+
+
+async def _two_vault_pool_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ExecutionWorld:
+    """Build two provider candidates through assigned vault pools and routing order."""
+    import freesearch.services.execution as execution_module
+
+    world = await build_execution_world(tmp_path, monkeypatch, labels=(), limits=False)
+    async with world.repository.session() as session:
+        for label, provider in (("a1", "exa"), ("a2", "brave")):
+            secret = f"fixture-{provider}-{uuid4().hex}"
+            credential = await CredentialRepository(session).insert_credential(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                provider_type=provider,
+                owner_scope=CredentialOwnerScope.SYSTEM,
+                owner_project_id=None,
+                owner_user_id=world.project.actor_id,
+                label=label,
+                auth_mode="api_key",
+                created_by=world.project.actor_id,
+            )
+            await world.store.create_slot_in_session(
+                session, credential_secret_slot(credential.id, credential.generation), secret
+            )
+            pool = await KeyPoolRepository(session).create(
+                credential_id=credential.id,
+                project_id=world.project.project_id,
+                provider_type=provider,
+                created_by=world.project.actor_id,
+                values=KeyPoolValues(label=label, operations=frozenset({"search", "fetch"})),
+            )
+            world.credentials[label] = SeededCredential(
+                label,
+                credential.id,
+                uuid5(NAMESPACE_URL, f"freesearch:binding:{pool.id}"),
+                secret,
+                credential.generation,
+            )
+            adapter = RecordingAdapter(provider)
+            world.adapters[label] = adapter
+            world.adapters_by_secret[secret] = adapter
+        await materialize_pools(session, project_id=world.project.project_id)
+        await ProjectSettingsRepository(session).compare_and_set(
+            project_id=world.project.project_id,
+            namespace="provider_order",
+            schema_version=1,
+            overrides={"search": {"strategy": "custom", "custom_order": ["exa", "brave"]}},
+            expected_revision=0,
+        )
+        await session.commit()
+
+    def adapter_factory(name: str) -> Any:
+        if name not in {"exa", "brave"}:
+            return None
+
+        def build(_client: Any, api_key: Any = None) -> RecordingAdapter:
+            return world.adapters_by_secret[api_key.get_secret_value()]
+
+        return build
+
+    monkeypatch.setattr(execution_module, "adapter_factory", adapter_factory)
+    return world
+
+
+def _hold_fallback_resolution(
+    world: ExecutionWorld, monkeypatch: pytest.MonkeyPatch
+) -> asyncio.Event:
+    release = asyncio.Event()
+    original_resolve = world.service._resolve_leg
+
+    async def resolve_after_change(*args: Any, **kwargs: Any) -> Any:
+        if args[1].id == world.credentials["a2"].binding_id:
+            await release.wait()
+        return await original_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(world.service, "_resolve_leg", resolve_after_change)
+    return release
 
 
 async def _key_context(world: ExecutionWorld) -> tuple[ProjectKey, ProjectContext]:
@@ -267,7 +347,8 @@ async def test_human_scope_lost_after_boundary_makes_zero_provider_calls(
 async def test_human_scope_lost_mid_request_blocks_the_fallback_leg(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
-    world = await _two_binding_world(tmp_path, monkeypatch)
+    world = await _two_vault_pool_world(tmp_path, monkeypatch)
+    release_fallback = _hold_fallback_resolution(world, monkeypatch)
     try:
 
         async def lose_scope_then_fail(adapter: RecordingAdapter, request: Any) -> Any:
@@ -279,6 +360,7 @@ async def test_human_scope_lost_mid_request_blocks_the_fallback_leg(
                 )
             else:
                 await archive_project(world.repository, world.project.project_id)
+            release_fallback.set()
             return _forbidden_403(adapter, request)
 
         world.adapters["a1"].search_handler = lose_scope_then_fail
@@ -302,30 +384,27 @@ async def test_human_scope_lost_mid_request_blocks_the_fallback_leg(
 async def test_binding_or_credential_change_mid_request_blocks_the_fallback_leg(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
-    world = await _two_binding_world(tmp_path, monkeypatch)
+    world = await _two_vault_pool_world(tmp_path, monkeypatch)
     target = world.credentials["a2"]
-    replacement = RecordingAdapter("exa")
+    replacement = RecordingAdapter("brave")
+    release_fallback = _hold_fallback_resolution(world, monkeypatch)
     try:
 
         async def change_then_fail(adapter: RecordingAdapter, request: Any) -> Any:
             async with world.repository.session() as session:
                 if change == "binding_disabled":
-                    bindings = ProjectBindingRepository(session)
-                    binding = await bindings.get(
-                        project_id=world.project.project_id, binding_id=target.binding_id
+                    pools = KeyPoolRepository(session)
+                    pool = await pools.get_for_project_provider(world.project.project_id, "brave")
+                    assert pool is not None
+                    assert await pools.update(
+                        pool.id, KeyPoolValues(label=pool.label, operations=frozenset({"fetch"}))
                     )
-                    assert binding is not None
-                    assert await bindings.set_enabled_operations(
-                        project_id=world.project.project_id,
-                        binding_id=target.binding_id,
-                        operations=frozenset(),
-                        expected_version=binding.version,
-                    )
+                    await materialize_pools(session, project_id=world.project.project_id)
                 elif change == "credential_rotated":
                     assert await CredentialRepository(session).advance_generation(
                         credential_id=target.credential_id,
-                        owner_scope=CredentialOwnerScope.PROJECT,
-                        owner_project_id=world.project.project_id,
+                        owner_scope=CredentialOwnerScope.SYSTEM,
+                        owner_project_id=None,
                         expected_generation=target.generation,
                     )
                     rotated = f"fake-rotated-{uuid4().hex[:10]}"
@@ -338,19 +417,23 @@ async def test_binding_or_credential_change_mid_request_blocks_the_fallback_leg(
                 else:
                     assert await CredentialRepository(session).mark_deleted(
                         credential_id=target.credential_id,
-                        owner_scope=CredentialOwnerScope.PROJECT,
-                        owner_project_id=world.project.project_id,
+                        owner_scope=CredentialOwnerScope.SYSTEM,
+                        owner_project_id=None,
                     )
                 await session.commit()
+            release_fallback.set()
             return _forbidden_403(adapter, request)
 
         world.adapters["a1"].search_handler = change_then_fail
         refusal_kind = ExecutionBindingMissing
-        refusal = await _refusal(
-            world.service.search(
+        try:
+            await world.service.search(
                 search_request(world), attribution=world.project, context=world.context
             )
-        )
+        except Exception as error:
+            refusal: BaseException | None = error
+        else:
+            refusal = None
         calls = {label: adapter.search_calls for label, adapter in world.adapters.items()}
     finally:
         await world.aclose()
@@ -362,6 +445,7 @@ async def test_binding_or_credential_change_mid_request_blocks_the_fallback_leg(
     assert replacement.search_calls == 0, (
         "a request already in flight silently switched to a rotated credential generation"
     )
+    assert refusal is not None, "the execution was not refused"
     _assert_refusal(refusal, refusal_kind)
 
 

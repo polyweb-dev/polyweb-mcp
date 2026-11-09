@@ -29,8 +29,9 @@ from pydantic import (
     model_validator,
 )
 
-from freesearch.models.contracts import ContractModel, CostPreset, FallbackPolicy
+from freesearch.models.contracts import ContractModel, FallbackPolicy
 from freesearch.models.observability import ActorType
+from freesearch.models.project_permissions import DEVELOPER_BITS, STANDARD, validate_permission_bits
 from freesearch.models.users import normalize_email
 
 #: Lifetime of a project API key whose create request omits ``expires_at``.
@@ -83,13 +84,13 @@ class PermissionAction(StrEnum):
     # Provider and credential operations
     PROVIDERS_READ = "providers.read"
     PROVIDERS_CONFIGURE = "providers.configure"
+    PROVIDERS_SUPPLY = "providers.supply"
     CREDENTIALS_MANAGE_PRIVATE = "credentials.manage_private"
 
     # Token operations
     TOKENS_MANAGE = "tokens.manage"
 
     # Execution and routing operations
-    ROUTING_WRITE = "routing.write"
     TRACES_READ = "traces.read"
     USAGE_READ = "usage.read"
     SEARCH_EXECUTE = "search.execute"
@@ -210,7 +211,6 @@ BUILTIN_ROLE_DEFINITIONS: Final[dict[str, RoleDefinition]] = {
                 PermissionAction.PROVIDERS_CONFIGURE,
                 PermissionAction.CREDENTIALS_MANAGE_PRIVATE,
                 PermissionAction.TOKENS_MANAGE,
-                PermissionAction.ROUTING_WRITE,
                 PermissionAction.TRACES_READ,
                 PermissionAction.USAGE_READ,
                 PermissionAction.SEARCH_EXECUTE,
@@ -246,7 +246,6 @@ BUILTIN_ROLE_DEFINITIONS: Final[dict[str, RoleDefinition]] = {
                 PermissionAction.PROJECT_READ,
                 PermissionAction.SETTINGS_READ,
                 PermissionAction.PROVIDERS_READ,
-                PermissionAction.ROUTING_WRITE,
             }
         ),
         is_builtin=True,
@@ -620,6 +619,12 @@ class ProjectMemberAdd(ContractModel):
     user_id: UUID | None = None
     email: str | None = None
     initial_role: str = BuiltinRole.PROJECT_MEMBER
+    permissions: int = STANDARD
+
+    @field_validator("permissions")
+    @classmethod
+    def _developer_permissions(cls, bits: int) -> int:
+        return validate_permission_bits(bits) & DEVELOPER_BITS
 
     @field_validator("email")
     @classmethod
@@ -637,6 +642,8 @@ class ProjectMemberAdd(ContractModel):
                 f"Initial project member role must have project scope. "
                 f"Role {role!r} has scope {definition.scope_type.value!r}"
             )
+        if role not in {BuiltinRole.PROJECT_ADMIN, BuiltinRole.PROJECT_MEMBER}:
+            raise ValueError(f"Role {role!r} is not assignable")
         return role
 
     @model_validator(mode="after")
@@ -651,7 +658,20 @@ class ProjectMemberUpdate(ContractModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    status: MembershipStatus
+    status: MembershipStatus | None = None
+    role: Literal["admin", "developer", "project_admin", "project_member"] | None = None
+    permissions: int | None = None
+
+    @field_validator("permissions")
+    @classmethod
+    def _developer_permissions(cls, bits: int | None) -> int | None:
+        return None if bits is None else validate_permission_bits(bits) & DEVELOPER_BITS
+
+    @model_validator(mode="after")
+    def _require_change(self) -> "ProjectMemberUpdate":
+        if self.status is None and self.role is None and self.permissions is None:
+            raise ValueError("a membership change is required")
+        return self
 
 
 class ProjectMemberChange(ContractModel):
@@ -661,25 +681,18 @@ class ProjectMemberChange(ContractModel):
 
     user_id: UUID
     status: MembershipStatus | None = None
-    add_roles: frozenset[str] = Field(default_factory=frozenset)
-    remove_roles: frozenset[str] = Field(default_factory=frozenset)
+    role: Literal["admin", "developer", "project_admin", "project_member"] | None = None
+    permissions: int | None = None
 
-    @field_validator("add_roles", "remove_roles")
+    @field_validator("permissions")
     @classmethod
-    def _validate_project_roles(cls, roles: frozenset[str]) -> frozenset[str]:
-        for role_key in roles:
-            if role_key not in BUILTIN_ROLE_DEFINITIONS:
-                raise ValueError(f"Unknown project role {role_key!r}")
-            if BUILTIN_ROLE_DEFINITIONS[role_key].scope_type is not ScopeType.PROJECT:
-                raise ValueError(f"Role {role_key!r} is not a project-scoped role")
-        return roles
+    def _developer_permissions(cls, bits: int | None) -> int | None:
+        return None if bits is None else validate_permission_bits(bits) & DEVELOPER_BITS
 
     @model_validator(mode="after")
     def _validate_change_is_effective(self) -> "ProjectMemberChange":
-        if self.status is None and not self.add_roles and not self.remove_roles:
+        if self.status is None and self.role is None and self.permissions is None:
             raise ValueError("A membership change must set status or change roles")
-        if self.add_roles & self.remove_roles:
-            raise ValueError("A role cannot be added and removed by the same change")
         return self
 
 
@@ -709,11 +722,41 @@ class ProjectMemberRead(ContractModel):
     status: MembershipStatus
     roles: list[str]
     version: int
+    role: Literal["admin", "developer"] = "developer"
+    permissions: int = 0
+    provider_owner: bool = False
+    account_active: bool = True
 
     @field_validator("email")
     @classmethod
     def _normalize_email(cls, email: str) -> str:
         return normalize_email(email)
+
+
+class ProviderOwnerChange(ContractModel):
+    """Target administrator for a provider ownership transfer."""
+
+    user_id: UUID
+
+
+class ProviderOwnerRead(ContractModel):
+    """Public identity of a provider owner."""
+
+    user_id: UUID
+    email: str
+
+
+class UnassignedPoolRead(ContractModel):
+    """A pool that no longer serves the project."""
+
+    pool_id: UUID
+    label: str
+
+
+class ProviderOwnerTransferRead(ProviderOwnerRead):
+    """The new provider owner and the pools removed from the project."""
+
+    unassigned_pools: list[UnassignedPoolRead]
 
 
 class RoleAssignmentRead(ContractModel):
@@ -980,27 +1023,6 @@ TRACE_DETAIL_CONSTRAINT_ORDER: Final[tuple[str, ...]] = (
 )
 
 
-class TraceRedactionPolicy(StrEnum):
-    """How aggressively a project trace scrubs payload content.
-
-    ``STRICT`` never persists request/response payload content, regardless of
-    the selected detail. ``STANDARD`` keeps the documented credential-shaped
-    key redaction and captures content when the detail policy allows it. The
-    system value is the loosest redaction the deployment allows; a project may
-    choose a stricter value but never a looser one.
-    """
-
-    STRICT = "strict"
-    STANDARD = "standard"
-
-
-#: Constraint order for :class:`TraceRedactionPolicy`, strictest first.
-TRACE_REDACTION_CONSTRAINT_ORDER: Final[tuple[str, ...]] = (
-    TraceRedactionPolicy.STRICT.value,
-    TraceRedactionPolicy.STANDARD.value,
-)
-
-
 class SettingsScope(StrEnum):
     """Scope level for settings."""
 
@@ -1048,24 +1070,12 @@ def normalize_preferred_providers(value: Any) -> tuple[str, ...]:
 
 
 class RoutingSettings(ContractModel):
-    """Typed project routing preferences.
-
-    ``None`` means inherit the system default. ``preferred_providers`` accepts
-    an explicit empty tuple to clear the preference order. A non-empty tuple is
-    a complete ordered replacement, never a merge with the system preference.
-    """
+    """Typed project routing preferences; ``None`` inherits the default."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     fallback_policy: FallbackPolicy | None = None
-    cost_optimization_preset: CostPreset | None = None
     max_attempts: int | None = Field(default=None, ge=1, le=10)
-    preferred_providers: tuple[str, ...] | None = None
-
-    @field_validator("preferred_providers")
-    @classmethod
-    def _ordered_provider_preferences(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
-        return None if value is None else normalize_preferred_providers(value)
 
 
 class ExecutionSettings(ContractModel):
@@ -1085,19 +1095,11 @@ class ExecutionSettings(ContractModel):
 
 
 class TraceSettings(ContractModel):
-    """Typed project trace policy with explicit inheritance.
-
-    ``None`` inherits the system value. A stored value is always a real
-    override, including a sampling rate of ``0`` and an explicit retention
-    window; the resolution step applies the system ceiling for constrained
-    fields.
-    """
+    """Typed project trace policy with explicit inheritance."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    sampling_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     detail: TraceDetailPolicy | None = None
-    payload_redaction: TraceRedactionPolicy | None = None
     retention_days: int | None = Field(default=None, ge=1, le=365)
 
 
@@ -1123,19 +1125,14 @@ class ProjectTracePolicy(ContractModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    sampling_rate: float = Field(default=1.0, ge=0.0, le=1.0)
-    detail: TraceDetailPolicy = TraceDetailPolicy.METADATA
-    payload_redaction: TraceRedactionPolicy = TraceRedactionPolicy.STANDARD
-    retention_days: int = Field(default=30, ge=1, le=365)
+    detail: TraceDetailPolicy = TraceDetailPolicy.FULL
+    retention_days: int | None = Field(default=None, ge=1, le=365)
 
     @property
     def captures_payload(self) -> bool:
         """Return whether request/response content may be persisted."""
 
-        return (
-            self.detail is TraceDetailPolicy.FULL
-            and self.payload_redaction is TraceRedactionPolicy.STANDARD
-        )
+        return self.detail is TraceDetailPolicy.FULL
 
 
 class SettingsFieldResolution(ContractModel):

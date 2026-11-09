@@ -1,5 +1,7 @@
 import { ExternalLink, FileText } from "lucide-react"
 import type { SearchResult } from "@/domains/execution"
+import { Button } from "@/shared/ui/button"
+import { LinkButton } from "@/shared/ui/LinkButton"
 import { SearchResultCard } from "@/shared/ui/SearchResultCard"
 import { toPlaygroundResultView } from "../model/searchResultPresentation"
 
@@ -10,6 +12,7 @@ export interface ResultCardProps {
   isFetching: boolean
   /** The caller holds `fetch.execute` in the project; without it the fetch action is disabled. */
   canFetch: boolean
+  showAttribution?: boolean
   onSelect: (result: SearchResult) => void
   onFetch: (result: SearchResult) => void
 }
@@ -25,18 +28,21 @@ export function ResultCard({
   isSearching,
   isFetching,
   canFetch,
+  showAttribution = true,
   onSelect,
   onFetch,
 }: ResultCardProps) {
   return (
     <SearchResultCard
-      result={toPlaygroundResultView(result)}
+      result={toPlaygroundResultView(result, showAttribution)}
       selected={selected}
       onSelect={() => onSelect(result)}
       actions={
         <>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-sm"
             data-testid={"fetch-result-" + result.id}
             title={canFetch ? "Fetch this page" : "Fetch is not permitted in this project"}
             aria-label={"Fetch " + result.title}
@@ -45,20 +51,20 @@ export function ResultCard({
               e.stopPropagation()
               void onFetch(result)
             }}
-            className="p-1 text-[var(--muted)] transition-colors hover:text-[var(--text-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="text-[var(--muted)]"
           >
-            <FileText className="size-3.5" />
-          </button>
+            <FileText aria-hidden="true" className="size-3.5" />
+          </Button>
 
-          <a
-            href={result.url}
+          <LinkButton
+            to={result.url}
             target="_blank"
             rel="noreferrer"
-            className="shrink-0 p-1 text-[var(--muted)] transition-colors hover:text-[var(--text-strong)]"
+            aria-label={"Open " + result.title}
             title="Open external link"
           >
-            <ExternalLink className="size-3.5" />
-          </a>
+            <ExternalLink aria-hidden="true" className="size-3.5" />
+          </LinkButton>
         </>
       }
     />

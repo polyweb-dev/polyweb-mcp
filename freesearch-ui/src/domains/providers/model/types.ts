@@ -1,4 +1,5 @@
 import type { UnitKind } from "@/shared/api/units";
+import type { ProviderPricing } from "./providerPricing";
 // Explicit acyclic type-only edge: providers references the dashboard-owned
 // QuotaConfidence (dashboard never imports providers types). See plan rule 3.
 import type { QuotaConfidence } from "@/domains/dashboard/model/quotaTypes";
@@ -40,7 +41,7 @@ export interface ProviderQuota {
   window: string | null;
 }
 
-export interface ProviderConfig {
+export interface ProviderConfig extends ProviderPricing {
   id: string;
   name: string;
   description: string;
@@ -54,8 +55,8 @@ export interface ProviderConfig {
   globalEnabled: boolean;
   searchEnabled: boolean;
   fetchEnabled: boolean;
-  priority: number;
   healthStatus: ProviderHealthStatus;
+  healthCheckedAt?: string | null;
   circuitBreaker: CircuitBreakerStatus;
   consecutiveFailures: number;
   latencyP95Ms: number | null;

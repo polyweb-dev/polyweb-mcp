@@ -7,15 +7,22 @@ import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { Header } from "@/components/layout/Header"
 import { PlaygroundHarness } from "@/test/renderPlayground"
 import { answerProjectProviders } from "@/test/projectPlayground"
-import { RoutingEngine } from "@/components/routing/RoutingEngine"
-import { SettingsView } from "@/components/settings/SettingsView"
+import { SettingsView } from "@/features/system-providers/ui/SettingsView"
 import { tabsListVariants } from "@/shared/ui/tabs"
+import { PillTabs } from "@/shared/ui/PillTabs"
+import { PillTabsList } from "@/shared/ui/PillTabsList"
+import { PillTabsPanel } from "@/shared/ui/PillTabsPanel"
 import { AuthContext } from "@/domains/auth/state/context"
 import { authenticatedContextValue } from "@/test/renderAuthenticated"
 import { installFetchStub, ok, err } from "@/test/fetchMock"
 import { ADMIN_ACCOUNT_ID, adminAccountFixture } from "@/test/authFixtures"
 import { ProjectsContext } from "@/domains/projects/state/context"
-import { projectsContextFixture } from "@/test/accessFixtures"
+import {
+  SETTINGS_READER_PERMISSIONS,
+  SYSTEM_ADMIN_PERMISSIONS,
+  projectsContextFixture,
+  systemAccessFixture,
+} from "@/test/accessFixtures"
 import { allProvidersFixture, routingConfigFixture, dashboardFixture, searchResponseFixture, fetchResponseFixture } from "@/test/backendFixtures"
 
 describe("PillTabs.c2r.test.tsx", () => {
@@ -63,10 +70,17 @@ function renderWithBackend(ui: React.ReactElement) {
   return render(<FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>{ui}</FreeSearchProvider>)
 }
 
-/** Nearest spread header row (`justify-between`: title left, pill right). */
-function headerRowFor(headingName: string): HTMLElement | null {
-  const heading = screen.getByRole("heading", { name: headingName })
-  return heading.closest('div[class*="justify-between"]') as HTMLElement | null
+/** Render the system provider catalog with a settings-reader descriptor. */
+function renderSettingsView() {
+  return renderWithBackend(
+    <MemoryRouter initialEntries={["/system/providers"]}>
+      <ProjectsContext.Provider
+        value={projectsContextFixture({ systemAccess: systemAccessFixture(SETTINGS_READER_PERMISSIONS) })}
+      >
+        <SettingsView />
+      </ProjectsContext.Provider>
+    </MemoryRouter>
+  )
 }
 
 function expectPillList(labels: string[]): HTMLElement {
@@ -77,49 +91,6 @@ function expectPillList(labels: string[]): HTMLElement {
   const tabs = within(pillList as HTMLElement).getAllByRole("tab")
   expect(tabs.map((t) => t.textContent)).toEqual(labels)
   return pillList as HTMLElement
-}
-
-function expectTopRight(headingName: string, pillList: HTMLElement) {
-  const row = headerRowFor(headingName)
-  expect(
-    row,
-    `${headingName} must have a justify-between header row (title left, pill right)`
-  ).not.toBeNull()
-  expect(
-    row!.contains(pillList),
-    "pill tablist must live inside the header row (header-right)"
-  ).toBe(true)
-  const heading = screen.getByRole("heading", { name: headingName })
-  expect(
-    (heading.compareDocumentPosition(pillList) &
-      Node.DOCUMENT_POSITION_FOLLOWING) !==
-      0,
-    "pill must follow the title in DOM order (right side of the row)"
-  ).toBe(true)
-  // Pill is the LAST visible element in the header row: no non-hidden
-  // trailing siblings allowed (status ribbons belong ahead of or below the
-  // pill, never after it). aria-hidden separators/paint are ignored, as are
-  // the pill's own tabs and its ancestor wrappers.
-  const trailing = Array.from(row!.querySelectorAll("*")).filter((el) => {
-    if (el === pillList || pillList.contains(el) || el.contains(pillList)) {
-      return false
-    }
-    if ((el as HTMLElement).closest('[aria-hidden="true"]')) return false
-    return (
-      (pillList.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !==
-      0
-    )
-  })
-  expect(
-    trailing.map((el) => el.textContent?.trim() || el.tagName),
-    "pill tablist must be the last visible element in the header row — reject trailing siblings"
-  ).toEqual([])
-  // Panels render below the header, never inside it.
-  for (const panel of screen.getAllByRole("tabpanel")) {
-    expect(row!.contains(panel), "tabpanel must not sit inside the header row").toBe(
-      false
-    )
-  }
 }
 
 describe("C2-REWORK AC-C2R-1: pill variant + reusable PillTabs", () => {
@@ -162,11 +133,16 @@ describe("C2-REWORK AC-C2R-1/2/3: SearchPlayground pill switcher", () => {
     expectPillList(["Search", "Fetch"])
   })
 
-  it("docks the pill tabs inside the composer island footer", async () => {
+  it("docks the pill tabs as the first control of the composer input row", async () => {
     await ready()
     const pill = expectPillList(["Search", "Fetch"])
+    const composer = screen.getByTestId("search-composer")
     const footer = screen.getByTestId("search-composer-footer")
-    expect(footer.contains(pill)).toBe(true)
+    const input = screen.getByPlaceholderText(/Search the web/i)
+    expect(composer.contains(pill)).toBe(true)
+    expect(footer.contains(pill)).toBe(false)
+    // Mode first, then the query: the pill precedes the input in DOM order.
+    expect(pill.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
   })
 
   it("keeps exclusive aria-selected with tab/panel linkage", async () => {
@@ -193,152 +169,90 @@ describe("C2-REWORK AC-C2R-1/2/3: SearchPlayground pill switcher", () => {
   })
 })
 
-describe("C2-REWORK AC-C2R-1/2/3: RoutingEngine pill switcher", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
-  async function ready() {
-    renderWithBackend(<RoutingEngine />)
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Routing" })).toBeInTheDocument()
-    })
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "Simulator" })).toBeInTheDocument()
-    })
-  }
-
-  it("exposes the two routing views as pill tabs, docked top-right", async () => {
-    await ready()
-    const pillList = expectPillList([
-      "Strategy",
-      "Simulator",
-    ])
-    expectTopRight("Routing", pillList)
-    expect(screen.getByRole("tab", { name: "Strategy" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    )
-  })
-
-  it("switching pill tabs swaps panels (Simulator, then back to Strategy)", async () => {
-    const user = userEvent.setup()
-    await ready()
-
-    await user.click(screen.getByRole("tab", { name: "Simulator" }))
-    expect(screen.getByRole("tab", { name: "Simulator" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    )
-    expect(
-      screen.getByPlaceholderText("Type simulated query...", { exact: true })
-    ).toBeInTheDocument()
-
-    await user.click(screen.getByRole("tab", { name: "Strategy" }))
-    expect(screen.getByRole("tab", { name: "Strategy" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    )
-    expect(
-      screen.getByRole("button", { name: /^Latency optimized/ })
-    ).toBeInTheDocument()
-    expect(
-      screen.queryByPlaceholderText("Type simulated query...", { exact: true })
-    ).not.toBeInTheDocument()
-  })
-
-  it("arrow keys move focus between pill tabs; Enter activates selection", async () => {
-    const user = userEvent.setup()
-    await ready()
-
-    const strategyTab = screen.getByRole("tab", { name: "Strategy" })
-    const simulatorTab = screen.getByRole("tab", { name: "Simulator" })
-    strategyTab.focus()
-    expect(strategyTab).toHaveFocus()
-
-    // Manual activation: arrows move focus, not selection.
-    await user.keyboard("{ArrowRight}")
-    await waitFor(() => {
-      expect(simulatorTab).toHaveFocus()
-    })
-    expect(strategyTab).toHaveAttribute("aria-selected", "true")
-    expect(simulatorTab).toHaveAttribute("aria-selected", "false")
-
-    await user.keyboard("{Enter}")
-    await waitFor(() => {
-      expect(simulatorTab).toHaveAttribute("aria-selected", "true")
-    })
-    expect(strategyTab).toHaveAttribute("aria-selected", "false")
-  })
-})
-
 describe("C2-REWORK AC-C2R-1/2/3: SettingsView pill switcher", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
+  /** Even a key manager sees only the provider catalog on this page. */
+  function renderWithKeyManagement() {
+    return renderWithBackend(
+      <MemoryRouter initialEntries={["/system/providers"]}>
+        <ProjectsContext.Provider
+          value={projectsContextFixture({
+            systemAccess: systemAccessFixture([...SETTINGS_READER_PERMISSIONS, "system.credentials.manage"]),
+          })}
+        >
+          <SettingsView />
+        </ProjectsContext.Provider>
+      </MemoryRouter>
+    )
+  }
+
   async function ready() {
-    renderWithBackend(<SettingsView />)
+    renderWithKeyManagement()
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
-    })
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "Failover" })).toBeInTheDocument()
+      expect(screen.getByRole("heading", { level: 2, name: "Providers" })).toBeInTheDocument()
     })
   }
 
-  // U3: the Keys tab is gone (provider secrets live on credential
-  // instances), so the switcher has exactly two views.
-  it("exposes the two settings views as pill tabs, docked top-right", async () => {
+  it("exposes Providers and Keys as pill tabs, docked top-right (now a single catalog without tabs)", async () => {
     await ready()
-    const pillList = expectPillList(["Providers", "Failover"])
-    expectTopRight("Settings", pillList)
-    expect(screen.getByText("Provider registry")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "When a provider fails" })).toBeInTheDocument()
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument()
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument()
   })
 
-  it("switching pill tabs swaps panels (Failover, then back to Providers)", async () => {
+  function renderTwoTabs() {
+    return render(
+      <PillTabs
+        options={[{ value: "first", label: "First" }, { value: "second", label: "Second" }]}
+        ariaLabel="Example views"
+        idPrefix="example"
+        defaultValue="first"
+      >
+        <PillTabsList />
+        <PillTabsPanel value="first">First panel</PillTabsPanel>
+        <PillTabsPanel value="second">Second panel</PillTabsPanel>
+      </PillTabs>
+    )
+  }
+
+  it("switching pill tabs swaps panels (Keys, then back to Providers) (two-tab fixture)", async () => {
     const user = userEvent.setup()
-    await ready()
-
-    await user.click(screen.getByRole("tab", { name: "Failover" }))
-    expect(screen.getByRole("tab", { name: "Failover" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    )
-    expect(screen.getByText("Failover policy")).toBeInTheDocument()
-    expect(screen.queryByText("Provider registry")).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole("tab", { name: "Providers" }))
-    expect(screen.getByRole("tab", { name: "Providers" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    )
-    expect(screen.getByText("Provider registry")).toBeInTheDocument()
-    expect(screen.queryByText("Failover policy")).not.toBeInTheDocument()
+    renderTwoTabs()
+    expectPillList(["First", "Second"])
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("First panel")
+    await user.click(screen.getByRole("tab", { name: "Second" }))
+    expect(screen.getByRole("tab", { name: "Second" })).toHaveAttribute("aria-selected", "true")
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("Second panel")
+    await user.click(screen.getByRole("tab", { name: "First" }))
+    expect(screen.getByRole("tab", { name: "First" })).toHaveAttribute("aria-selected", "true")
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("First panel")
   })
 
-  it("arrow keys move focus between pill tabs; Enter activates selection", async () => {
+  it("arrow keys move focus between pill tabs; Enter activates selection (two-tab fixture)", async () => {
     const user = userEvent.setup()
-    await ready()
+    renderTwoTabs()
 
-    const providersTab = screen.getByRole("tab", { name: "Providers" })
-    const failoverTab = screen.getByRole("tab", { name: "Failover" })
-    providersTab.focus()
-    expect(providersTab).toHaveFocus()
+    const firstTab = screen.getByRole("tab", { name: "First" })
+    const secondTab = screen.getByRole("tab", { name: "Second" })
+    await user.tab()
+    expect(firstTab).toHaveFocus()
 
     await user.keyboard("{ArrowRight}")
     await waitFor(() => {
-      expect(failoverTab).toHaveFocus()
+      expect(secondTab).toHaveFocus()
     })
-    expect(providersTab).toHaveAttribute("aria-selected", "true")
-    expect(failoverTab).toHaveAttribute("aria-selected", "false")
+    expect(firstTab).toHaveAttribute("aria-selected", "true")
+    expect(secondTab).toHaveAttribute("aria-selected", "false")
 
     await user.keyboard("{Enter}")
     await waitFor(() => {
-      expect(failoverTab).toHaveAttribute("aria-selected", "true")
+      expect(secondTab).toHaveAttribute("aria-selected", "true")
     })
-    expect(providersTab).toHaveAttribute("aria-selected", "false")
-    expect(screen.getByText("Failover policy")).toBeInTheDocument()
+    expect(firstTab).toHaveAttribute("aria-selected", "false")
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("Second panel")
   })
 })
 
@@ -356,15 +270,9 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
     })
     cleanup()
 
-    renderWithBackend(<RoutingEngine />)
+    renderSettingsView()
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Routing" })).toBeInTheDocument()
-    })
-    cleanup()
-
-    renderWithBackend(<SettingsView />)
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+      expect(screen.getByRole("heading", { name: "Providers" })).toBeInTheDocument()
     })
 
     // Every page re-rendered above leaves its tablist mounted; none may be line.
@@ -379,7 +287,7 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
   // filter-preservation case is RETIRED. Filter narrowing is covered by the
   // merged Settings registry suite (SettingsProviders.p1-final.test.tsx).
 
-  it("Header compatibility shim exposes eight router links and zero tab roles", async () => {
+  it("Header compatibility shim exposes seven router links and zero tab roles (now five links)", async () => {
     const user = userEvent.setup()
 
     function LocationProbe() {
@@ -390,7 +298,9 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
       <MemoryRouter initialEntries={["/account"]}>
         <AuthContext.Provider value={authenticatedContextValue(adminAccountFixture())}>
           {/* U1: the navigation filters on the live system access, not a role. */}
-          <ProjectsContext.Provider value={projectsContextFixture()}>
+          <ProjectsContext.Provider value={projectsContextFixture({
+            systemAccess: systemAccessFixture([...SYSTEM_ADMIN_PERMISSIONS, "vault.manage"]),
+          })}>
             <Header />
             <LocationProbe />
           </ProjectsContext.Provider>
@@ -398,36 +308,25 @@ describe("C2-REWORK AC-C2R-4: no filter/Header regression", () => {
       </MemoryRouter>
     )
 
-    // P1-FINAL: standalone Providers page retired — five workspace links.
-    // R-UI: Account and Admin screens entered scope; U1 adds Projects, so the
-    // system administrator sees eight. U2 moves Playground and Activity under
-    // projects, so six global links remain. U3 adds System credentials and
-    // Capacity and renames Settings to Provider settings: eight links.
+    // Global navigation exposes the catalog, quotas and account-scoped vault.
     const headerNav = screen.getByRole("navigation", { name: "Primary" })
-    expect(within(headerNav).getAllByRole("link")).toHaveLength(8)
+    const links = within(headerNav).getAllByRole("link")
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
+      "Providers", "Quotas", "Projects", "Keys and pools", "Account",
+    ])
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "/system/providers", "/system/quotas", "/projects", "/account/keys", "/account",
+    ])
+    expect(headerNav.querySelector('a[href="/providers"]')).toBeNull()
     expect(
-      within(headerNav).queryByRole("link", { name: "Providers", exact: true })
+      within(headerNav).queryByRole("link", { name: "System credentials", exact: true })
     ).not.toBeInTheDocument()
-    for (const label of [
-      "Routing",
-      "Provider usage",
-      "System credentials",
-      "Capacity",
-      "Provider settings",
-      "Projects",
-      "Account",
-      "Admin",
-    ]) {
-      expect(screen.getByRole("link", { name: label, exact: true })).toBeInTheDocument()
-    }
     expect(screen.queryByRole("tab")).not.toBeInTheDocument()
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument()
     expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole("link", { name: "Routing" }))
-    expect(screen.getByTestId("header-route")).toHaveTextContent("/routing")
-    await user.click(screen.getByRole("link", { name: "Provider settings" }))
-    expect(screen.getByTestId("header-route")).toHaveTextContent("/settings")
+    await user.click(screen.getByRole("link", { name: "Providers" }))
+    expect(screen.getByTestId("header-route")).toHaveTextContent("/system/providers")
   })
 })
 })

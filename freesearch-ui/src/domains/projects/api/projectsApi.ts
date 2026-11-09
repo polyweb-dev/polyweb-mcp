@@ -111,6 +111,18 @@ export async function listProjects(signal: AbortSignal): Promise<Project[]> {
   )
 }
 
+/**
+ * Return every project of the installation, archived included. System pages
+ * that grant credentials or allocate pools use it, because those target any
+ * project, not only the caller's memberships. Needs a system credential, pool
+ * or allocation management permission.
+ */
+export async function listSystemProjects(signal: AbortSignal): Promise<Project[]> {
+  return decodeProjectList(
+    await requestJson<unknown>(`${BASE}/system/projects?include_archived=true`, { signal })
+  )
+}
+
 /** Create one project naming its first administrator by email. */
 export async function createProject(input: {
   name: string
@@ -175,6 +187,28 @@ export async function setProjectMemberStatus(
       body: JSON.stringify({ status }),
     })
   )
+}
+
+/** Change a member's role or developer permissions using the new contract. */
+export async function updateProjectMember(
+  projectId: string,
+  userId: string,
+  input: { role?: "admin" | "developer" | "project_admin" | "project_member"; permissions?: number }
+): Promise<ProjectMember> {
+  return decodeProjectMember(await requestJson<unknown>(
+    `${BASE}/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+    { method: "PATCH", body: JSON.stringify(input) }
+  ))
+}
+
+export async function bulkUpdateProjectMembers(
+  projectId: string,
+  changes: { user_id: string; status?: MembershipStatus; role?: "admin" | "developer" | "project_admin" | "project_member"; permissions?: number }[]
+): Promise<ProjectMember[]> {
+  return decodeProjectMemberList(await requestJson<unknown>(
+    `${BASE}/projects/${encodeURIComponent(projectId)}/members/bulk`,
+    { method: "PATCH", body: JSON.stringify({ changes }) }
+  ))
 }
 
 /** Remove one membership and its project roles. */

@@ -30,7 +30,6 @@ const LOGIN_PATH = "/auth/jwt/login"
 const REGISTER_PATH = "/auth/register"
 const REFRESH_PATH = "/auth/jwt/refresh"
 const ME_PATH = "/users/me"
-const ACCOUNT_PATH = "/api/v1/users"
 
 const FORM_CONTENT_TYPE = { "Content-Type": "application/x-www-form-urlencoded" }
 
@@ -182,23 +181,6 @@ export async function registerAccount(input: RegistrationCredentials): Promise<U
     body: JSON.stringify({ email: input.email, password: input.password }),
   })
   return decodeAccount(body)
-}
-
-/**
- * Create one standalone account through the authenticated provisioning route.
- *
- * The call uses the caller's own access credential, so only a caller holding
- * `system.settings.write` reaches the route. The body holds the email and the
- * password only. The response is the safe projection of the new account, and
- * it holds no credential: the caller's session stays unchanged.
- */
-export async function provisionAccount(input: RegistrationCredentials): Promise<UserAccount> {
-  return decodeAccount(
-    await requestJson<unknown>(ACCOUNT_PATH, {
-      method: "POST",
-      body: JSON.stringify({ email: input.email, password: input.password }),
-    })
-  )
 }
 
 /** Rotate the refresh cookie into one access credential. */

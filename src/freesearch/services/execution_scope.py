@@ -42,7 +42,6 @@ from freesearch.models.projects import (
     ProjectStatus,
     ProjectTracePolicy,
     TraceDetailPolicy,
-    TraceRedactionPolicy,
 )
 from freesearch.persistence.api_keys import ProjectApiKeyRepository, StoredApiKey
 from freesearch.persistence.scoped import ProjectScopedRepository
@@ -63,13 +62,9 @@ from freesearch.services.settings import (
 
 logger = logging.getLogger(__name__)
 
-#: Fail-closed capture when durable trace settings cannot be read. Optional
-#: traces are sampled out; execution and mandatory audit events are unaffected.
+#: Fail-closed payload capture when durable trace settings cannot be read.
 UNRESOLVED_TRACE_POLICY: Final[ProjectTracePolicy] = ProjectTracePolicy(
-    sampling_rate=0.0,
     detail=TraceDetailPolicy.METADATA,
-    payload_redaction=TraceRedactionPolicy.STRICT,
-    retention_days=1,
 )
 
 
@@ -292,7 +287,7 @@ async def _policy_in_session(session: AsyncSession, context: ProjectContext) -> 
     try:
         return await project_trace_policy_in_session(session, context)
     except Exception:
-        logger.warning("trace policy could not be read; optional trace capture is suppressed")
+        logger.warning("trace policy could not be read; payload capture is suppressed")
         return UNRESOLVED_TRACE_POLICY
 
 
@@ -313,10 +308,9 @@ async def resolve_trace_capture(
     """Resolve the project's immutable trace policy at the execution boundary.
 
     Called once per provider-executing request, next to the ownership bind, so
-    sampling and detail are decided before any span exists and propagated to
-    every child. A read failure is not a request failure, but it also must not
-    become permissive capture: the fail-closed policy samples every optional
-    trace out while execution and mandatory audit events continue.
+    detail is decided before any span exists and propagated to every child.
+    On read failure, metadata-only capture applies while execution and
+    mandatory audit events continue.
     """
 
     try:

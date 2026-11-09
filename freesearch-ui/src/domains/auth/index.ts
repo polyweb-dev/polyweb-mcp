@@ -1,4 +1,4 @@
-export { provisionAccount, registerAccount } from "./api/authApi"
+export { registerAccount } from "./api/authApi"
 export { authErrorText } from "./model/authErrorText"
 export { AuthProvider } from "./state/AuthProvider"
 export { useAuth } from "./state/useAuth"

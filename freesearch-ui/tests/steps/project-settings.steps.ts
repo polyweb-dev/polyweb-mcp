@@ -37,8 +37,8 @@ const copyEvidence: {
   settingsReadsBeforeReload: number
 } = { preview: null, checkedBindings: null, settingsReadsBeforeReload: 0 }
 
-Given("the system requires strict redaction", async () => {
-  setSystemTraceDefault("payload_redaction", "strict")
+Given("the system limits traces to metadata", async () => {
+  setSystemTraceDefault("detail", "metadata")
 })
 
 Then(
@@ -48,8 +48,18 @@ Then(
   }
 )
 
-Then("the trace policy summary reads {string}", async ({ page }, text: string) => {
-  await expect(page.getByTestId("trace-policy-summary")).toHaveText(text, { timeout: 15_000 })
+Then(
+  "the settings field {string} does not show {string}",
+  async ({ page }, fieldId: string, text: string) => {
+    const row = fieldRow(page, fieldId)
+    await expect(row).toBeVisible({ timeout: 15_000 })
+    await expect(row).not.toContainText(text)
+  }
+)
+
+Then("the settings page shows no field {string}", async ({ page }, fieldId: string) => {
+  await expect(page.getByTestId(/^settings-field-/).first()).toBeVisible({ timeout: 15_000 })
+  await expect(fieldRow(page, fieldId)).toHaveCount(0)
 })
 
 Then(
@@ -57,14 +67,13 @@ Then(
   async ({ page }, fieldLabel: string, option: string, reason: string) => {
     const fieldIds: Record<string, string> = {
       "Payload detail": "trace.detail",
-      Redaction: "trace.payload_redaction",
     }
     const row = fieldRow(page, fieldIds[fieldLabel] ?? fieldLabel)
-    const control = row
-      .getByRole("radio", { name: option, exact: true })
-      .or(row.getByRole("option", { name: option, exact: true }))
-    await expect(control.first()).toBeDisabled({ timeout: 15_000 })
+    await row.getByRole("combobox", { name: fieldLabel, exact: true }).click({ timeout: 15_000 })
+    const control = row.getByRole("option", { name: new RegExp(`^${option}`) })
+    await expect(control.first()).toHaveAttribute("aria-disabled", "true")
     await expect(row).toContainText(reason)
+    await page.keyboard.press("Escape")
   }
 )
 
@@ -76,11 +85,29 @@ When(
 )
 
 When("I inherit the settings field {string}", async ({ page }, label: string) => {
-  await page.getByRole("button", { name: `Inherit ${label}`, exact: true }).click()
+  await page.getByRole("button", { name: `Reset ${label}`, exact: true }).click()
 })
 
-When("I save the {string} settings section", async ({ page }, section: string) => {
-  await page.getByRole("button", { name: `Save ${section}`, exact: true }).click()
+When("I turn off trace deletion", async ({ page }) => {
+  await page.getByRole("switch", { name: "Delete old traces" }).click()
+})
+
+Then("trace deletion is off", async ({ page }) => {
+  await expect(page.getByRole("switch", { name: "Delete old traces" })).not.toBeChecked()
+  await expect(page.getByRole("spinbutton", { name: "Days" })).toHaveCount(0)
+})
+
+Then("trace deletion is on with {int} days", async ({ page }, days: number) => {
+  await expect(page.getByRole("switch", { name: "Delete old traces" })).toBeChecked()
+  await expect(page.getByRole("spinbutton", { name: "Days" })).toHaveValue(String(days))
+})
+
+Then("the payload detail choice is unavailable", async ({ page }) => {
+  await expect(page.getByRole("combobox", { name: "Payload detail" })).toHaveCount(0)
+})
+
+When("I save the settings", async ({ page }) => {
+  await page.getByRole("button", { name: "Save changes", exact: true }).click()
 })
 
 Then("the last settings save sent exactly:", async ({}, doc: string) => {
@@ -117,8 +144,8 @@ Then("the settings were read again", async () => {
 
 Then("the settings page offers no editing controls", async ({ page }) => {
   await expect(page.getByTestId(/^settings-field-/).first()).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByRole("button", { name: /^Save / })).toHaveCount(0)
-  await expect(page.getByRole("button", { name: /^Inherit / })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Save changes", exact: true })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: /^Reset / })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Copy from another project", exact: true })).toHaveCount(0)
   const rows = page.getByTestId(/^settings-field-/)
   const editable = rows.locator(
@@ -136,10 +163,12 @@ When("I open the copy settings dialog", async ({ page }) => {
   await expect(copyDialog(page)).toBeVisible()
 })
 
-Then("the copy Apply button is {word}", async ({ page }, stateWord: string) => {
-  const apply = copyDialog(page).getByRole("button", { name: "Apply copy", exact: true })
-  if (stateWord === "disabled") await expect(apply).toBeDisabled()
-  else await expect(apply).toBeEnabled()
+Then("the copy dialog offers {string}", async ({ page }, action: string) => {
+  const dialog = copyDialog(page)
+  const other = action === "Apply changes" ? "Preview changes" : "Apply changes"
+  await expect(dialog.getByRole("button", { name: action, exact: true })).toBeVisible()
+  await expect(dialog.getByRole("button", { name: other, exact: true })).toHaveCount(0)
+  if (action === "Apply changes") await expect(dialog.getByRole("button", { name: action, exact: true })).toBeEnabled()
 })
 
 When("I choose {string} as the copy source", async ({ page }, project: string) => {
@@ -147,16 +176,16 @@ When("I choose {string} as the copy source", async ({ page }, project: string) =
 })
 
 When("I choose the copy mode {string}", async ({ page }, mode: string) => {
-  await copyDialog(page).getByRole("radio", { name: mode, exact: true }).check()
+  await copyDialog(page).getByRole("group", { name: "Copy mode", exact: true }).getByRole("button", { name: mode, exact: true }).click()
 })
 
 When("I preview the copy", async ({ page }) => {
   const dialog = copyDialog(page)
-  await expect(dialog.getByRole("radio", { name: "Overrides only", exact: true })).toBeVisible()
+  await expect(dialog.getByRole("button", { name: "Changed values", exact: true })).toBeVisible()
   const response = page.waitForResponse(
     (res) => PREVIEW_PATH.test(new URL(res.url()).pathname) && res.request().method() === "POST"
   )
-  await dialog.getByRole("button", { name: "Preview", exact: true }).click()
+  await dialog.getByRole("button", { name: "Preview changes", exact: true }).click()
   const answered = await response
   if (answered.status() === 200) copyEvidence.preview = (await answered.json()) as Record<string, unknown>
   await expect(page.getByTestId("copy-preview")).toBeVisible()
@@ -172,7 +201,7 @@ Then(
 )
 
 Then("the copy preview offers the binding {string}", async ({ page }, routeLabel: string) => {
-  const box = page.getByTestId("copy-preview").getByRole("checkbox", { name: `Copy binding ${routeLabel}`, exact: true })
+  const box = page.getByTestId("copy-preview").getByRole("checkbox", { name: routeLabel, exact: true })
   await expect(box).toBeEnabled()
 })
 
@@ -180,7 +209,7 @@ Then(
   "the copy preview refuses the binding {string} with {string}",
   async ({ page }, routeLabel: string, reason: string) => {
     const preview = page.getByTestId("copy-preview")
-    await expect(preview.getByRole("checkbox", { name: `Copy binding ${routeLabel}`, exact: true })).toBeDisabled()
+    await expect(preview.getByRole("checkbox", { name: new RegExp(`^${routeLabel}`) })).toBeDisabled()
     await expect(preview).toContainText(reason)
   }
 )
@@ -195,18 +224,18 @@ Then("the copy preview wrote nothing to project {word}", async ({}, name: string
 
 When("I apply the copy", async ({ page }) => {
   const dialog = copyDialog(page)
-  const boxes = page.getByTestId("copy-preview").getByRole("checkbox", { name: /^Copy binding / })
+  const boxes = page.getByTestId("copy-preview").getByRole("checkbox")
   const checked: string[] = []
   const count = await boxes.count()
   for (let index = 0; index < count; index += 1) {
     const box = boxes.nth(index)
     if ((await box.isEnabled()) && (await box.isChecked())) {
-      const name = (await box.getAttribute("aria-label")) ?? (await box.evaluate((el) => (el as HTMLInputElement).labels?.[0]?.textContent ?? ""))
-      checked.push(name.replace(/^Copy binding /, "").trim())
+      const name = await box.evaluate((el) => (el as HTMLButtonElement).labels?.[0]?.textContent ?? "")
+      checked.push(name.trim())
     }
   }
   copyEvidence.checkedBindings = checked
-  await dialog.getByRole("button", { name: "Apply copy", exact: true }).click()
+  await dialog.getByRole("button", { name: "Apply changes", exact: true }).click()
 })
 
 Then("the apply request echoed the preview revisions and the selected bindings", async () => {

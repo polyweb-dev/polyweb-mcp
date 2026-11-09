@@ -1,19 +1,17 @@
 @pg-s1 @stub
 Feature: Playground search empty state (PG-S1)
-  Before search the page is empty and looks weird; like Google it should be
-  centered when empty, move to the top when used with results below, with a
-  smooth animation. The request form is the same element — only its wrapper
-  toggles centered-hero vs top-docked.
+  The full-width composer stays docked at the top from the first render.
+  Results appear below it and submissions preserve the form value.
 
   Background:
     Given the stubbed session works in project Alpha
 
-  Scenario: PG-S1-1 idle search is centered like Google
+  Scenario: PG-S1-1 idle search starts docked at full width
     When I open the "playground" section of project Alpha
-    Then the search request zone should be in hero state
+    Then the search request zone should be in docked state
     And the search form should be present with no search results
 
-  Scenario: PG-S1-2 submitting a search docks the form with results below
+  Scenario: PG-S1-2 submitting a search keeps the form docked with results below
     When I open the "playground" section of project Alpha
     And I submit the playground search query "hannover weather today"
     Then the search request zone should be in docked state
@@ -26,9 +24,9 @@ Feature: Playground search empty state (PG-S1)
     Then the search request zone should be in docked state
     And the search form should be present with no search results
 
-  Scenario: PG-S1-4 hero-to-docked transition is smooth and keeps the same form
+  Scenario: PG-S1-4 the fixed composer keeps its form value after submission
     When I open the "playground" section of project Alpha
-    Then the search request zone should animate smoothly
+    Then the search request zone should stay full width without a layout transition
     When I submit the playground search query "focus retention query"
     Then the search form should keep its value "focus retention query"
     And the search request zone should be in docked state

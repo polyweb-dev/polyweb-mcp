@@ -38,19 +38,16 @@ import type { UserAccount } from "@/domains/auth"
  * "quotas"), AC-SB-3 (single aria-current), AC-SB-4 (focus ring +
  * reduced-motion), AC-SB-5 (collapsed rail), AC-SB-6 (collapse toggle),
  * AC-SB-7 (drawer + scrim + Esc + focus return), AC-SB-8 (token purity),
- * AC-SB-9 (persistence). "TabId unchanged" — quotas still renders at /usage.
+ * AC-SB-9 (persistence). "TabId unchanged" — quotas renders at /system/quotas.
  *
  * P1-FINAL (blessed inversion, NOT a regression): the standalone Providers
- * page is retired into the Settings Providers tab. The sidebar exposes FIVE
- * workspace links (Playground/Routing/Usage/Activity/Settings); the
- * "providers" TabId, nav item, TAB_PATHS entry, and /providers href are gone;
- * /providers redirects to /settings (pinned in UrlRouting.test.tsx,
- * UrlRoutingContract.test.ts, AppSidebarShell.test.tsx, and
- * SettingsProviders.p1-final.test.tsx).
- *
- * Route table (App.tsx): / -> /playground, /playground,
- * /routing, /usage (quotas), /activity, /settings, /providers -> /settings
- * redirect, * -> /playground.
+ * page is retired into the System Providers page. The System group lists
+ * Providers, Quotas and Capacity, then Projects and
+ * Account; System credentials is the Credentials tab of System Providers,
+ * not a nav link. The "providers" TabId, nav item, TAB_PATHS entry, and
+ * /providers href are gone; /providers, /settings and /usage redirect through
+ * routes.ts LEGACY_GLOBAL_REDIRECTS (pinned in UrlRouting.test.tsx,
+ * UrlRoutingContract.test.ts and AppSidebarShell.test.tsx).
  */
 
 const testDir = import.meta.dirname
@@ -96,31 +93,24 @@ const packageJson = JSON.parse(packageJsonRaw) as {
 const norm = (value: string): string => value.toLowerCase().replace(/\s+/g, "")
 
 const EXPECTED_NAV: Array<{ label: string; id: TabId; href: string }> = [
-  { label: "Routing", id: "routing", href: "/routing" },
-  { label: "Provider usage", id: "quotas", href: "/usage" },
-  { label: "System credentials", id: "systemCredentials", href: "/system/credentials" },
-  { label: "Capacity", id: "systemCapacity", href: "/system/capacity" },
-  { label: "Provider settings", id: "settings", href: "/settings" },
-  { label: "Admin", id: "adminUsers", href: "/admin/users" },
+  { label: "Providers", id: "settings", href: "/system/providers" },
+  { label: "Quotas", id: "quotas", href: "/system/quotas" },
   { label: "Projects", id: "projects", href: "/projects" },
+  { label: "Keys and pools", id: "accountKeys", href: "/account/keys" },
   { label: "Account", id: "account", href: "/account" },
 ]
 
 const ADMIN_LINK_LABELS = [
-  "Routing",
-  "Provider usage",
-  "System credentials",
-  "Capacity",
-  "Provider settings",
-  "Admin",
+  "Providers",
+  "Quotas",
   "Projects",
+  "Keys and pools",
   "Account",
 ]
 
 const DEVELOPER_LINK_LABELS = [
-  "Routing",
-  "Provider usage",
-  "Provider settings",
+  "Providers",
+  "Quotas",
   "Projects",
   "Account",
 ]
@@ -135,7 +125,9 @@ const STORAGE_KEY = "freesearch.sidebar.collapsed"
  */
 function PersonaAuth({ value, children }: { value: AuthContextValue; children: React.ReactNode }) {
   const projects = projectsContextFixture({
-    systemAccess: systemAccessFixture(personaSystemPermissions(value.account)),
+    systemAccess: systemAccessFixture(value.account?.id === adminAccountFixture().id
+      ? [...personaSystemPermissions(value.account), "vault.manage"]
+      : personaSystemPermissions(value.account)),
   })
   return (
     <AuthContext.Provider value={value}>
@@ -214,11 +206,9 @@ describe("AC-SB-1: Sidebar module contract", () => {
   it("exports TabId verbatim including 'quotas'", () => {
     expect(routesSource).toMatch(/export\s+(type|interface)\s+TabId/)
     for (const id of [
-      "routing",
       "quotas",
       "settings",
       "account",
-      "adminUsers",
     ]) {
       expect(routesSource).toContain(`"${id}"`)
     }
@@ -227,11 +217,12 @@ describe("AC-SB-1: Sidebar module contract", () => {
     expect(sidebarSource).toMatch(/from\s+["']@\/app\/routes["']/)
   })
 
-  it("declares navItems with all six tab ids (P1-FINAL: no providers; R-UI: Account + Admin in scope; U1: Projects)", () => {
+  it("declares navItems with all seven nav tab ids (P1-FINAL: no providers; R-UI: Account + Admin in scope; U1: Projects; System credentials is a tab)", () => {
     expect(sidebarNavSource).toMatch(/systemItems|workspaceItems/)
     for (const { id } of EXPECTED_NAV) {
       expect(sidebarNavSource).toContain(`"${id}"`)
     }
+    expect(sidebarNavSource).not.toContain('"systemCredentials"')
     // The shell renders the extracted NavList; the shim re-exports the shell.
     expect(sidebarOwnerSource).toContain("NavList")
     expect(sidebarSource).toMatch(/from\s+["']@\/app\/layout\/Sidebar["']/)
@@ -246,7 +237,15 @@ describe("AC-SB-1: Sidebar module contract", () => {
     )
     const globalShellSource = [globalRouteBlock, sidebarOwnerSource, sidebarNavSource, sidebarStateSource, sidebarBrandSource].join("\n")
     expect(globalShellSource).not.toContain('"providers"')
-    expect(sidebarFeatureSource).not.toContain('"/providers"')
+    // "/providers" remains a legacy redirect, never a sidebar target.
+    const navShellSource = [sidebarOwnerSource, sidebarNavSource, sidebarStateSource, sidebarBrandSource].join("\n")
+    expect(navShellSource).not.toContain('"/providers"')
+    const tabPathsBlock = routesSource.slice(
+      routesSource.indexOf("export const TAB_PATHS"),
+      routesSource.indexOf("export const LEGACY_GLOBAL_REDIRECTS")
+    )
+    expect(tabPathsBlock).not.toContain('"/providers"')
+    expect(routesSource).toContain('"/providers": TAB_PATHS.settings')
     expect(sidebarSource).not.toContain('"providers"')
     expect(sidebarSource).not.toContain('"/providers"')
   })
@@ -289,8 +288,11 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1, U2): landmark + six router links, URL
     renderSidebar()
     const aside = asideEl()
     expect(aside.tagName).toBe("ASIDE")
-    expect(aside.className).toMatch(/sticky/)
+    // The rail surface stretches with the page; its content column stays pinned.
     expect(aside.className).toMatch(/h-screen|min-h-screen|h-full/)
+    const rail = aside.firstElementChild as HTMLElement
+    expect(rail.className).toMatch(/sticky/)
+    expect(rail.className).toMatch(/h-screen/)
   })
 
   it("exposes one Primary nav inside the aside", () => {
@@ -302,7 +304,7 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1, U2): landmark + six router links, URL
     ).toHaveLength(1)
   })
 
-  it("renders exactly eight nav links in order with exact accessible names", () => {
+  it("renders exactly seven nav links in order with exact accessible names", () => {
     renderSidebar()
     const links = within(primaryNav()).getAllByRole("link")
     expect(links).toHaveLength(EXPECTED_NAV.length)
@@ -315,16 +317,18 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1, U2): landmark + six router links, URL
     }
   })
 
-  it("every nav link carries its exact route href (quotas maps to /usage)", () => {
+  it("every nav link carries its exact route href (quotas maps to /system/quotas)", () => {
     renderSidebar()
     for (const { label, href } of EXPECTED_NAV) {
       expect(
         within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).toHaveAttribute("href", href)
     }
-    // No legacy /quotas or retired /providers route leaks into the sidebar.
-    expect(asideEl().querySelector('a[href="/quotas"]')).toBeNull()
-    expect(asideEl().querySelector('a[href="/providers"]')).toBeNull()
+    // No legacy /quotas, /usage, /settings, /system/credentials or retired
+    // /providers route leaks into the sidebar.
+    for (const legacy of ["/quotas", "/usage", "/settings", "/system/credentials", "/providers"]) {
+      expect(asideEl().querySelector(`a[href="${legacy}"]`)).toBeNull()
+    }
   })
 
   it("every nav link is reachable by accessible name (never icon-only query)", () => {
@@ -347,6 +351,35 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1, U2): landmark + six router links, URL
       expect(testPath()).toBe(href)
     }
   )
+
+  it("clicking Providers with system.credentials.manage alone navigates to /system/providers (System credentials is a tab, not a link)", async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter initialEntries={["/projects"]}>
+        <AuthContext.Provider value={authenticatedContextValue(agentAccountFixture())}>
+          <ProjectsContext.Provider
+            value={projectsContextFixture({
+              systemAccess: systemAccessFixture(["system.credentials.manage"]),
+            })}
+          >
+            <Sidebar />
+          </ProjectsContext.Provider>
+        </AuthContext.Provider>
+        <LocationProbe />
+      </MemoryRouter>
+    )
+    const links = within(primaryNav()).getAllByRole("link")
+    expect(
+      links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
+    ).toEqual(["Providers", "Projects", "Account"])
+    expect(
+      within(primaryNav()).queryByRole("link", { name: "System credentials", exact: true })
+    ).not.toBeInTheDocument()
+    await user.click(
+      within(primaryNav()).getByRole("link", { name: "Providers", exact: true })
+    )
+    expect(testPath()).toBe("/system/providers")
+  })
 
   it("exposes zero tab roles — sidebar nav stays plain links", () => {
     renderSidebar()
@@ -379,13 +412,10 @@ describe("AC-SB-2 (C4, P1-FINAL, R-UI, U1, U2): landmark + six router links, URL
       seen.push(href)
     }
     expect(seen).toEqual([
-      "/routing",
-      "/usage",
-      "/system/credentials",
-      "/system/capacity",
-      "/settings",
-      "/admin/users",
+      "/system/providers",
+      "/system/quotas",
       "/projects",
+      "/account/keys",
       "/account",
     ])
   })
@@ -410,7 +440,7 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
         exact: true,
       })
     ).toHaveAttribute("aria-current", "page")
-    for (const label of ["Routing", "Provider usage", "System credentials", "Capacity", "Provider settings", "Account", "Admin"]) {
+    for (const label of ["Providers", "Quotas", "Keys and pools", "Account"]) {
       expect(
         within(primaryNav()).getByRole("link", { name: label, exact: true })
       ).not.toHaveAttribute("aria-current")
@@ -420,7 +450,7 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
     ).toHaveLength(1)
   })
 
-  it("aria-current moves when the route changes, including /usage", async () => {
+  it("aria-current moves when the route changes, including /system/quotas", async () => {
     const user = userEvent.setup()
     renderSidebar()
     expect(
@@ -431,11 +461,11 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
     ).toHaveAttribute("aria-current", "page")
 
     await user.click(
-      within(primaryNav()).getByRole("link", { name: "Provider usage", exact: true })
+      within(primaryNav()).getByRole("link", { name: "Quotas", exact: true })
     )
 
     expect(
-      within(primaryNav()).getByRole("link", { name: "Provider usage", exact: true })
+      within(primaryNav()).getByRole("link", { name: "Quotas", exact: true })
     ).toHaveAttribute("aria-current", "page")
     expect(
       within(primaryNav()).getByRole("link", {
@@ -449,9 +479,9 @@ describe("AC-SB-3: single active indicator tracks the router", () => {
   })
 
   it("active link carries the signal wash/spine token", () => {
-    renderSidebar({}, "/routing")
+    renderSidebar({}, "/system/quotas")
     const active = within(primaryNav()).getByRole("link", {
-      name: "Routing",
+      name: "Quotas",
       exact: true,
     })
     const hay = `${active.className} ${active.innerHTML} ${
@@ -528,24 +558,21 @@ describe("AC-SB-5: collapsed w-16 icon rail", () => {
       seen.push(label)
     }
     expect(seen).toEqual([
-      "Routing",
-      "Provider usage",
-      "System credentials",
-      "Capacity",
-      "Provider settings",
-      "Admin",
+      "Providers",
+      "Quotas",
       "Projects",
+      "Keys and pools",
       "Account",
     ])
   })
 
-  it("collapsed nav selection still navigates to the usage route", async () => {
+  it("collapsed nav selection still navigates to the quotas route", async () => {
     const user = userEvent.setup()
     renderSidebar({ collapsed: true, onCollapsedChange: () => {} })
     await user.click(
-      within(primaryNav()).getByRole("link", { name: "Provider usage", exact: true })
+      within(primaryNav()).getByRole("link", { name: "Quotas", exact: true })
     )
-    expect(testPath()).toBe("/usage")
+    expect(testPath()).toBe("/system/quotas")
   })
 })
 
@@ -668,9 +695,9 @@ describe("AC-SB-7: responsive <md overlay drawer + scrim + Esc + focus return", 
     )
     const dialog = screen.getByRole("dialog")
     await user.click(
-      within(dialog).getByRole("link", { name: "Routing", exact: true })
+      within(dialog).getByRole("link", { name: "Quotas", exact: true })
     )
-    expect(testPath()).toBe("/routing")
+    expect(testPath()).toBe("/system/quotas")
     expect(screen.queryByTestId("sidebar-scrim")).not.toBeInTheDocument()
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
@@ -884,7 +911,7 @@ describe("AC-SB-9: persistence in freesearch.sidebar.collapsed", () => {
 })
 
 describe("AC5 (R-UI, U1): nav filters by effective system permissions via canAccessRoute", () => {
-  it("the system administrator sees all eight links in order including Account and Admin", () => {
+  it("the system administrator sees six links in order without Accounts", () => {
     renderSidebarAs(adminAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
     expect(links).toHaveLength(EXPECTED_NAV.length)
@@ -892,11 +919,11 @@ describe("AC5 (R-UI, U1): nav filters by effective system permissions via canAcc
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
     ).toEqual(ADMIN_LINK_LABELS)
     expect(
-      within(primaryNav()).getByRole("link", { name: "Admin", exact: true })
-    ).toHaveAttribute("href", "/admin/users")
+      within(primaryNav()).queryByRole("link", { name: "Accounts", exact: true })
+    ).not.toBeInTheDocument()
   })
 
-  it("system.settings.read sees five links and no Admin link", () => {
+  it("system.settings.read sees five links and no Accounts link", () => {
     renderSidebarAs(developerAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
     expect(links).toHaveLength(DEVELOPER_LINK_LABELS.length)
@@ -904,11 +931,11 @@ describe("AC5 (R-UI, U1): nav filters by effective system permissions via canAcc
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
     ).toEqual(DEVELOPER_LINK_LABELS)
     expect(
-      within(primaryNav()).queryByRole("link", { name: "Admin", exact: true })
+      within(primaryNav()).queryByRole("link", { name: "Accounts", exact: true })
     ).not.toBeInTheDocument()
   })
 
-  it("no system permission sees exactly Projects, Account and no Admin link", () => {
+  it("no system permission sees exactly Projects, Account and no Accounts link", () => {
     renderSidebarAs(agentAccountFixture())
     const links = within(primaryNav()).getAllByRole("link")
     expect(links).toHaveLength(2)
@@ -916,7 +943,7 @@ describe("AC5 (R-UI, U1): nav filters by effective system permissions via canAcc
       links.map((l) => l.getAttribute("aria-label") ?? l.textContent?.trim())
     ).toEqual(AGENT_LINK_LABELS)
     expect(
-      within(primaryNav()).queryByRole("link", { name: "Admin", exact: true })
+      within(primaryNav()).queryByRole("link", { name: "Accounts", exact: true })
     ).not.toBeInTheDocument()
     expect(
       within(primaryNav()).queryByRole("link", { name: "Routing", exact: true })

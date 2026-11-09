@@ -1,44 +1,26 @@
-import type { ReactNode } from "react"
 import { SECTION_TITLES } from "@/domains/settings"
 import type { SettingsField, SettingsSectionId } from "@/domains/settings"
-import { Button } from "@/shared/ui/button"
 import type { ProjectSettingsController } from "../model/useProjectSettingsController"
 import { SettingsFieldRow } from "./SettingsFieldRow"
 
 interface SettingsSectionProps {
   section: SettingsSectionId
   fields: readonly SettingsField[]
-  revision: number
   editable: boolean
   controller: ProjectSettingsController
-  /** Extra content under the heading (the trace policy summary). */
-  children?: ReactNode
 }
 
-/** One settings section with its rows and its own Save button. */
+/** One settings section: its title, then one full-width panel of field rows. */
 export function SettingsSection(props: SettingsSectionProps) {
-  const { section, fields, revision, editable, controller, children } = props
-  const title = SECTION_TITLES[section]
+  const { section, fields, editable, controller } = props
   const rows = fields.filter((field) => field.section === section)
   const headingId = `settings-section-${section}`
   return (
-    <section aria-labelledby={headingId} className="space-y-2">
-      <div className="flex items-center justify-between">
-        <h2 id={headingId} className="text-[var(--text-strong)]">
-          {title}
-        </h2>
-        {editable && (
-          <Button
-            size="form"
-            disabled={controller.pending || !controller.hasChanges(section)}
-            onClick={() => void controller.save(section)}
-          >
-            Save {title}
-          </Button>
-        )}
-      </div>
-      {children}
-      <div>
+    <section aria-labelledby={headingId} className="space-y-3">
+      <h3 id={headingId} className="fs-section-title">
+        {SECTION_TITLES[section]}
+      </h3>
+      <div className="fs-panel divide-y divide-[var(--hairline)]">
         {rows.map((field) => (
           <SettingsFieldRow
             key={field.id}
@@ -46,9 +28,10 @@ export function SettingsSection(props: SettingsSectionProps) {
             draft={controller.draft}
             editable={editable}
             pending={controller.pending}
-            revision={revision}
+            generation={controller.generation}
             onChange={controller.setValue}
             onInherit={controller.inherit}
+            onValidity={controller.setValidity}
           />
         ))}
       </div>

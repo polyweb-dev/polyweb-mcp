@@ -38,12 +38,13 @@ async function fillCredentials(user: UserEvent, email: string, password: string)
 }
 
 describe("LoginPage", () => {
-  it("renders the Email and Password labels", () => {
+  it("renders the two sign-in fields without redundant helper copy", () => {
     renderLogin("/login", null)
 
     expect(screen.getByLabelText("Email")).toBeInTheDocument()
     expect(screen.getByLabelText("Password")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument()
+    expect(screen.queryByText("Use your FreeSearch account.")).toBeNull()
   })
 
   it("submits the typed email and password to login", async () => {
@@ -67,7 +68,7 @@ describe("LoginPage", () => {
     const submit = screen.getByRole("button", { name: "Sign in" })
     await user.click(submit)
 
-    const pending = await screen.findByRole("button", { name: "Signing in" })
+    const pending = await screen.findByRole("button", { name: "Signing in…" })
     expect(pending).toBeDisabled()
     await user.click(pending)
     expect(login).toHaveBeenCalledTimes(1)

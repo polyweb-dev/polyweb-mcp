@@ -1,25 +1,29 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
 import { Button } from "@/shared/ui/button"
+import { Field } from "@/shared/ui/Field"
+import { FormActions } from "@/shared/ui/FormActions"
+import { Select } from "@/shared/ui/select"
 import type { ProjectApiKey } from "@/domains/projects"
 import { toApiKeyExpiry, type ExpiryChoice } from "../model/expiryChoice"
 import type { ProjectApiKeysController } from "../model/useProjectApiKeysController"
-import { ExpirationRadioGroup } from "./ExpirationRadioGroup"
+import { ExpirationField } from "./ExpirationField"
 
 /** Overlap options: how long the old key stays valid after the rotation. */
-const OVERLAP_OPTIONS: { seconds: number; label: string }[] = [
-  { seconds: 0, label: "Revoke old key now" },
-  { seconds: 3600, label: "1 hour" },
-  { seconds: 86_400, label: "24 hours" },
-  { seconds: 604_800, label: "7 days" },
+const OVERLAP_OPTIONS = [
+  { value: "0", label: "Revoke old key now" },
+  { value: "3600", label: "1 hour" },
+  { value: "86400", label: "24 hours" },
+  { value: "604800", label: "7 days" },
 ]
 const DEFAULT_OVERLAP_SECONDS = 86_400
 
 /**
  * Rotate form of one key; the dialog mounts it fresh for every opened key.
  *
- * The overlap defaults to 24 hours and "Keep current lifetime" omits
- * `expires_at`. A failure of the rotation shows here, inside the dialog.
+ * The overlap defaults to 24 hours and "Keep current" omits `expires_at`.
+ * A past custom date shows under the date field; a failure of the rotation
+ * shows at the top of the form, inside the dialog.
  */
 export function RotateApiKeyForm({
   apiKey,
@@ -31,14 +35,16 @@ export function RotateApiKeyForm({
   const [overlap, setOverlap] = useState(DEFAULT_OVERLAP_SECONDS)
   const [choice, setChoice] = useState<ExpiryChoice>("default")
   const [customDate, setCustomDate] = useState("")
+  const [dateError, setDateError] = useState<string | null>(null)
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const expiry = toApiKeyExpiry(choice, customDate)
     if (!expiry.ok) {
-      controller.showMessage(expiry.message)
+      setDateError(expiry.message)
       return
     }
+    setDateError(null)
     void controller.rotate(apiKey, { overlapSeconds: overlap, expiry: expiry.expiry })
   }
 
@@ -49,41 +55,34 @@ export function RotateApiKeyForm({
           {controller.message}
         </p>
       )}
-      <div>
-        <label htmlFor="rotate-overlap" className="mb-1 block text-[12px] text-[var(--muted)]">
-          Old key stays valid for
-        </label>
-        <select
+      <Field id="rotate-overlap" label="Old key stays valid for">
+        <Select
           id="rotate-overlap"
-          value={overlap}
+          value={String(overlap)}
+          options={OVERLAP_OPTIONS}
           disabled={controller.pending}
-          onChange={(event) => setOverlap(Number(event.target.value))}
-          className="rounded border border-[var(--border-subtle)] bg-[var(--surface)] px-2 py-1.5 text-[13px] text-[var(--text)] outline-none focus-visible:border-[var(--signal)] disabled:opacity-60"
-        >
-          {OVERLAP_OPTIONS.map((option) => (
-            <option key={option.seconds} value={option.seconds}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      <ExpirationRadioGroup
+          onValueChange={(value) => setOverlap(Number(value))}
+        />
+      </Field>
+      <ExpirationField
         idPrefix="rotate"
-        defaultLabel="Keep current lifetime"
+        defaultLabel="Keep current"
+        defaultHint="The new key keeps the old key's expiry date"
         choice={choice}
         customDate={customDate}
         disabled={controller.pending}
+        error={dateError}
         onChoiceChange={setChoice}
         onCustomDateChange={setCustomDate}
       />
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="outline" onClick={() => controller.openRotate(null)}>
+      <FormActions>
+        <Button type="button" size="form" variant="outline" onClick={() => controller.openRotate(null)}>
           Cancel
         </Button>
         <Button type="submit" size="form" disabled={controller.pending}>
           Rotate key
         </Button>
-      </div>
+      </FormActions>
     </form>
   )
 }

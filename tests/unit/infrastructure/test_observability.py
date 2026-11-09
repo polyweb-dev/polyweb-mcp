@@ -6,7 +6,9 @@ network, no database, no process-global provider registration.
 """
 
 import asyncio
+import json
 import re
+from datetime import UTC, datetime
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -32,13 +34,23 @@ from freesearch.infrastructure.observability import (
     use_observability,
 )
 from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import ProviderError
+from freesearch.infrastructure.trace_payloads import _annotate_fetch_root, _annotate_search_root
+from freesearch.models.contracts import (
+    FetchedDocument,
+    FetchRequest,
+    FetchResponse,
+    ProviderError,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+)
 from freesearch.models.observability import (
     ActorType,
     ExecutionAttribution,
     TraceAttribute,
 )
 from freesearch.models.projects import ProjectTracePolicy, TraceDetailPolicy
+from freesearch.services.execution import _provider_response_event
 
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -201,6 +213,64 @@ def test_trace_content_attributes_filters_nested_mappings() -> None:
 
     assert attributes["outer"] == {"query": "kept"}
     assert attributes["results"] == [{"title": "t", "url": "https://example.com"}]
+
+
+def test_full_capture_scrubs_json_documents_and_preserves_provider_results() -> None:
+    runtime, exporter = _memory_runtime()
+    document = (
+        '{"public":[{"API_Key":"sentinel-key","nested":{"PassWord":"sentinel-pass",'
+        '"ok":"visible"}},null,{}],"empty":{},"none":null,"Cookie":"sentinel-cookie"}'
+    )
+    fetch = FetchResponse(
+        provider="test",
+        document=FetchedDocument(
+            url="https://example.com", content=document, fetched_at=datetime.now(UTC)
+        ),
+    )
+    search = SearchResponse(
+        query="query",
+        provider="test",
+        results=[
+            SearchResult(
+                title="visible result",
+                url="https://example.com",
+                snippet='{"Authorization":"sentinel-auth","safe":"visible snippet"}',
+            )
+        ],
+    )
+    with use_observability(runtime):
+        bind_trace_capture(ProjectTracePolicy(detail=TraceDetailPolicy.FULL))
+        with runtime.span("fetch", kind=SpanKindName.SERVER):
+            _annotate_fetch_root(runtime, FetchRequest(url="https://example.com"), fetch)
+            with runtime.span("provider") as span:
+                span.add_event(
+                    "freesearch.provider.response",
+                    {"payload": document, **_provider_response_event(search)},
+                )
+        with runtime.span("search", kind=SpanKindName.SERVER):
+            _annotate_search_root(runtime, SearchRequest(query="query"), search)
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    output = json.loads(spans["fetch"].attributes[TraceAttribute.RESPONSE_OUTPUT_JSON])
+    cleaned = {"public": [{"nested": {"ok": "visible"}}, None, {}], "empty": {}, "none": None}
+    assert json.loads(output["content"]) == cleaned
+    event = spans["provider"].events[0]
+    assert json.loads(event.attributes["payload"]) == cleaned
+    assert json.loads(event.attributes["results"])[0]["title"] == "visible result"
+    assert json.loads(json.loads(event.attributes["results"])[0]["snippet"]) == {
+        "safe": "visible snippet"
+    }
+    search_output = json.loads(spans["search"].attributes[TraceAttribute.RESPONSE_OUTPUT_JSON])
+    assert search_output["results"][0]["title"] == "visible result"
+    assert json.loads(search_output["results"][0]["snippet"]) == {"safe": "visible snippet"}
+    assert "sentinel-" not in str(spans)
+
+
+def test_json_text_scrubbing_preserves_non_json_and_bounds_large_json() -> None:
+    raw = "{not json"
+    attributes = trace_content_attributes({"raw": raw, "large": '{"x":"' + "x" * 4_000_000 + '"}'})
+    assert attributes["raw"] == raw
+    assert "x" * 100 not in str(attributes["large"])
 
 
 @pytest.mark.parametrize(
@@ -429,7 +499,7 @@ def test_bind_without_an_attribution_cell_is_a_noop() -> None:
 
 @pytest.mark.parametrize(
     "policy",
-    [None, ProjectTracePolicy(), ProjectTracePolicy(detail="full", payload_redaction="strict")],
+    [None, ProjectTracePolicy(detail="metadata")],
 )
 def test_metadata_provider_events_never_buffer_query_url_or_results(policy) -> None:
     """Inspect finished memory spans before any exporter can sanitize them."""
@@ -487,12 +557,12 @@ def test_full_capture_redacts_nested_credentials_and_exception_messages_in_memor
 def test_capture_policy_cannot_be_rebound_mid_trace_and_children_keep_decision() -> None:
     runtime, exporter = _attributed_memory_runtime()
     with use_observability(runtime):
-        bind_trace_capture(ProjectTracePolicy(sampling_rate=0.0))
+        bind_trace_capture(ProjectTracePolicy(detail="metadata"))
         with runtime.span("POST /search", kind=SpanKindName.SERVER):
             with pytest.raises(ValueError):
-                bind_trace_capture(ProjectTracePolicy(sampling_rate=1.0, detail="full"))
+                bind_trace_capture(ProjectTracePolicy(detail="full"))
             with runtime.span("freesearch.provider"):
                 pass
     for span in exporter.get_finished_spans():
-        assert span.attributes[TraceAttribute.SAMPLED] is False
+        assert TraceAttribute.SAMPLED not in span.attributes
         assert span.attributes[TraceAttribute.CAPTURE_PAYLOAD] is False

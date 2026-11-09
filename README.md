@@ -105,7 +105,7 @@ uv run freesearch-users revoke-system-admin --user-id <account-uuid>
 uv run freesearch-users deactivate --user-id <account-uuid>
 ```
 
-`create-admin` reads the password from a masked terminal prompt, refuses a password argument, and prints only the account UUID and the system role outcome. The commands require a database file that is present, so run `freesearch-db upgrade` first. A failed grant leaves an ordinary account, and the command reports that state. `revoke-system-admin` and `deactivate` refuse to remove the last active system administrator, and `deactivate` (CLI and `POST /api/v1/users/{id}/deactivate`, which answers `409 LAST_SYSTEM_ADMIN`) refuses to leave any project (archived ones included) without an active project administrator. Every system role change and deactivation writes a system audit event.
+`create-admin` reads the password from a masked terminal prompt, refuses a password argument, and prints only the account UUID and the system role outcome. The commands require a database file that is present, so run `freesearch-db upgrade` first. A failed grant leaves an ordinary account, and the command reports that state. `revoke-system-admin` and `deactivate` refuse to remove the last active system administrator. The CLI `deactivate` command also refuses to leave any project, including archived projects, without an active project administrator. Every system role change and deactivation writes a system audit event.
 
 ---
 

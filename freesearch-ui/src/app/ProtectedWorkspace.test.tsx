@@ -185,4 +185,40 @@ describe("ProtectedWorkspace", () => {
     })
     expect(screen.queryByText("Workspace ready")).toBeNull()
   })
+
+  it("preserves the former project keys destination through login", async () => {
+    const projectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    render(
+      <MemoryRouter initialEntries={[`/p/${projectId}/settings?tab=keys`]}>
+        <AuthContext.Provider value={authenticatedContextValue(null)}>
+          <Routes>
+            <Route path="/login" element={<LocationProbe />} />
+            <Route path="*" element={<ProtectedWorkspace><div>Workspace ready</div></ProtectedWorkspace>} />
+          </Routes>
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(
+      `/login?returnTo=${encodeURIComponent(`/p/${projectId}/providers`)}`,
+    ))
+  })
+
+  it.each(["/settings?tab=keys", "/system/providers?tab=credentials"])(
+    "preserves the destination of anonymous legacy keys link %s",
+    async (route) => {
+      render(
+        <MemoryRouter initialEntries={[route]}>
+          <AuthContext.Provider value={authenticatedContextValue(null)}>
+            <Routes>
+              <Route path="/login" element={<LocationProbe />} />
+              <Route path="*" element={<ProtectedWorkspace><div>Workspace ready</div></ProtectedWorkspace>} />
+            </Routes>
+          </AuthContext.Provider>
+        </MemoryRouter>,
+      )
+      await waitFor(() => {
+        expect(screen.getByTestId("location")).toHaveTextContent("/login?returnTo=%2Faccount%2Fkeys")
+      })
+    },
+  )
 })

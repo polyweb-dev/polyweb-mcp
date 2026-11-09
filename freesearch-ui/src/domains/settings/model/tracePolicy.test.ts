@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest"
 import type { SettingsField } from "./settings"
 import {
   METADATA_ONLY_REASON,
-  STRICT_REDACTION_REASON,
   disabledOptionReason,
   numericMax,
-  tracePolicySummary,
 } from "./tracePolicy"
 
 function field(id: string, overrides: Partial<SettingsField> = {}): SettingsField {
@@ -24,36 +22,6 @@ function field(id: string, overrides: Partial<SettingsField> = {}): SettingsFiel
   }
 }
 
-const TRACE = [
-  field("trace.sampling_rate", { effectiveValue: 0.25 }),
-  field("trace.detail", { effectiveValue: "metadata" }),
-  field("trace.payload_redaction", { effectiveValue: "strict" }),
-  field("trace.retention_days", { effectiveValue: 30 }),
-]
-
-describe("tracePolicySummary", () => {
-  it("summarizes the effective trace policy", () => {
-    expect(tracePolicySummary(TRACE)).toBe(
-      "New traces: 25% sampled, Metadata only, Strict redaction, kept 30 days."
-    )
-  })
-
-  it("reads full payloads and standard redaction", () => {
-    const fields = TRACE.map((entry) =>
-      entry.id === "trace.detail"
-        ? { ...entry, effectiveValue: "full" }
-        : entry.id === "trace.payload_redaction"
-          ? { ...entry, effectiveValue: "standard" }
-          : entry
-    )
-    expect(tracePolicySummary(fields)).toBe("New traces: 25% sampled, Full payloads, Standard redaction, kept 30 days.")
-  })
-
-  it("is null when a trace field is missing", () => {
-    expect(tracePolicySummary([])).toBeNull()
-  })
-})
-
 describe("disabledOptionReason", () => {
   it("disables full payloads when the system allows metadata only", () => {
     const detail = field("trace.detail", { systemDefault: "metadata", systemLimit: "metadata" })
@@ -62,10 +30,8 @@ describe("disabledOptionReason", () => {
     expect(disabledOptionReason({ ...detail, systemLimit: "full", systemDefault: "full" }, "full")).toBeNull()
   })
 
-  it("disables standard redaction when the system is strict", () => {
-    const redaction = field("trace.payload_redaction", { systemLimit: "strict" })
-    expect(disabledOptionReason(redaction, "standard")).toBe(STRICT_REDACTION_REASON)
-    expect(disabledOptionReason(redaction, "strict")).toBeNull()
+  it("leaves unrelated settings unconstrained", () => {
+    expect(disabledOptionReason(field("execution.cache_enabled"), "full")).toBeNull()
   })
 })
 

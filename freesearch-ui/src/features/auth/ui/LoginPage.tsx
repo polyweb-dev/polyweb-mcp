@@ -55,26 +55,28 @@ export function LoginPage() {
   }
 
   return (
-    <AuthPanel title="Sign in" subtitle="Use your FreeSearch account.">
-      <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)} noValidate>
-        <TextField
-          id="login-email"
-          label="Email"
-          type="email"
-          value={email}
-          onChange={setEmail}
-          disabled={pending}
-          autoComplete="email"
-        />
-        <TextField
-          id="login-password"
-          label="Password"
-          type="password"
-          value={password}
-          onChange={setPassword}
-          disabled={pending}
-          autoComplete="current-password"
-        />
+    <AuthPanel title="Sign in">
+      <form className="space-y-6" onSubmit={(event) => void handleSubmit(event)} noValidate>
+        <div className="space-y-4">
+          <TextField
+            id="login-email"
+            label="Email"
+            type="email"
+            value={email}
+            onChange={setEmail}
+            disabled={pending}
+            autoComplete="email"
+          />
+          <TextField
+            id="login-password"
+            label="Password"
+            type="password"
+            value={password}
+            onChange={setPassword}
+            disabled={pending}
+            autoComplete="current-password"
+          />
+        </div>
         {error !== null && (
           <p
             role="alert"
@@ -84,8 +86,8 @@ export function LoginPage() {
             {error}
           </p>
         )}
-        <Button type="submit" disabled={pending} className={AUTH_SUBMIT_CLASSES}>
-          {pending ? "Signing in" : "Sign in"}
+        <Button type="submit" size="form" pending={pending} pendingLabel="Signing in…" className={AUTH_SUBMIT_CLASSES}>
+          Sign in
         </Button>
       </form>
       <div className={AUTH_FOOTER_CLASSES}>

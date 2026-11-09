@@ -24,7 +24,7 @@ describe("WaterfallPanel", () => {
     expect(screen.queryByText(/trace (is )?unavailable|waterfall unavailable/i)).not.toBeInTheDocument()
     expect(screen.queryByText("Live execution trace")).not.toBeInTheDocument()
     expect(screen.getByText("Tavily")).toBeInTheDocument()
-    expect(screen.getByText("250ms")).toBeInTheDocument()
+    expect(screen.getByText(/^250 ?ms$/)).toBeInTheDocument()
   })
 
   it("renders 'Live execution trace' and individual provider bars for multi-provider responses", () => {
@@ -62,13 +62,13 @@ describe("WaterfallPanel", () => {
     expect(screen.queryByText("Trace unavailable from backend")).not.toBeInTheDocument()
 
     expect(screen.getByText("Brave Search")).toBeInTheDocument()
-    expect(screen.getByText("150ms")).toBeInTheDocument()
+    expect(screen.getByText(/^150 ?ms$/)).toBeInTheDocument()
 
     expect(screen.getByText("Exa")).toBeInTheDocument()
-    expect(screen.getByText("450ms")).toBeInTheDocument()
+    expect(screen.getByText(/^450 ?ms$/)).toBeInTheDocument()
 
     expect(screen.getByText("Tavily")).toBeInTheDocument()
-    expect(screen.getByText("300ms")).toBeInTheDocument()
+    expect(screen.getByText(/^300 ?ms$/)).toBeInTheDocument()
   })
 
   it("renders execution lanes through the shared latency waterfall", () => {

@@ -1,11 +1,4 @@
-"""Alpha baseline lifecycle: create, validate, reject-and-never-modify (TASK-000040).
-
-The alpha keeps no compatibility with older databases. A missing or empty file
-is created at the current head revision; a database at the head is
-validated and opened; anything else (an older revision, an unknown revision, or
-an unversioned database with tables) is rejected with an actionable reset
-message *before* anything touches the file.
-"""
+"""Database lifecycle: create, validate, upgrade known revisions, reject unknown ones."""
 
 from __future__ import annotations
 
@@ -20,6 +13,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +36,12 @@ from freesearch.persistence.database_migrations import (
 from freesearch.persistence.storage import SQLiteRepository
 
 _BASELINE = "0001_alpha_baseline"
-_HEAD = "0002_capacity_actor"
+_CAPACITY = "0002_capacity_actor"
+_VAULT = "0003_vault_rbac"
+_POOL_LIMITS = "0004_pool_limits"
+_POOL_BUDGET = "0005_pool_budget"
+_KEYLESS = "0006_keyless_credentials"
+_HEAD = "0007_provider_budget_period"
 _OLDER_REVISION = "0009_provider_credentials"
 _UNKNOWN_REVISION = "ffffffffffff_not_a_freesearch_revision"
 
@@ -184,7 +183,6 @@ _REJECTED_CASES: dict[str, tuple[Callable[[Path], None], str | None]] = {
     "unversioned-baseline-tables": (lambda db: _create_baseline_then_restamp(db, None), None),
     "unrelated-tables-only": (lambda db: _create_unrelated(db, None), None),
     "empty-version-table-with-tables": (lambda db: _create_unrelated(db, "empty"), None),
-    "prior-alpha-baseline": (lambda db: _create_prior_baseline(db), _BASELINE),
 }
 
 
@@ -195,6 +193,10 @@ def _assert_reset_message(
     assert str(absolute_database_path(database)) in message, message
     if found is not None:
         assert found in message, message
+        assert "unknown or newer revision" in lowered
+        assert "not changed" in lowered
+        assert migration_head() in message
+        return
     elif not not_sqlite:
         # rework_1 nit: an unversioned file "has no schema revision", not "at revision ...".
         assert "has no schema revision (unversioned)" in message, message
@@ -230,13 +232,30 @@ def test_exactly_one_migration_revision_is_the_alpha_baseline() -> None:
     revision_files = sorted(
         path.name for path in _versions_directory().glob("*.py") if path.name != "__init__.py"
     )
-    assert revision_files == ["0001_alpha_baseline.py", "0002_capacity_actor.py"]
+    assert revision_files == [
+        "0001_alpha_baseline.py",
+        "0002_capacity_actor.py",
+        "0003_vault_rbac.py",
+        "0004_pool_limits.py",
+        "0005_pool_budget.py",
+        "0006_keyless_credentials.py",
+        "0007_provider_budget_period.py",
+    ]
 
     script = ScriptDirectory.from_config(_config_for(Path("unused.db")))
     revisions = list(script.walk_revisions())
-    assert [revision.revision for revision in revisions] == [_HEAD, _BASELINE]
-    assert revisions[0].down_revision == _BASELINE
-    assert revisions[1].down_revision is None
+    assert [revision.revision for revision in revisions] == [
+        _HEAD,
+        _KEYLESS,
+        _POOL_BUDGET,
+        _POOL_LIMITS,
+        _VAULT,
+        _CAPACITY,
+        _BASELINE,
+    ]
+    for current, previous in pairwise(revisions):
+        assert current.down_revision == previous.revision
+    assert revisions[-1].down_revision is None
     assert script.get_heads() == [_HEAD]
     assert migration_head() == _HEAD
 
@@ -326,7 +345,7 @@ def test_sqlite_file_without_tables_or_revision_is_created_at_baseline(tmp_path:
 
 def test_downgrade_drops_everything_and_an_emptied_file_is_recreated(tmp_path: Path) -> None:
     database = tmp_path / "round-trip.db"
-    upgrade_database(database)
+    migration_module.command.upgrade(_config_for(database), _CAPACITY)
 
     migration_module.command.downgrade(_config_for(database), "base")
 
@@ -502,14 +521,27 @@ async def test_repository_open_rejects_older_database(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_repository_open_rejects_prior_alpha_baseline(tmp_path: Path) -> None:
+async def test_repository_open_upgrades_prior_alpha_baseline(tmp_path: Path) -> None:
     database = tmp_path / "prior-alpha.db"
     _create_prior_baseline(database)
-    digest_before = _sha256(database)
-    with pytest.raises(DatabaseResetRequired) as raised:
-        await SQLiteRepository.open(database)
-    _assert_reset_message(str(raised.value), database=database, found=_BASELINE)
-    assert _sha256(database) == digest_before
+    repository = await SQLiteRepository.open(database)
+    await repository.close()
+    assert _revision(database) == [_HEAD]
+    backups = list(tmp_path.glob(f"{database.name}.backup-*"))
+    assert len(backups) == 1
+    assert _revision(backups[0]) == [_BASELINE]
+
+
+def test_pool_budget_upgrade_backs_up_pool_limits_revision(tmp_path: Path) -> None:
+    database = tmp_path / "pool-limits.db"
+    migration_module.command.upgrade(_config_for(database), _POOL_LIMITS)
+    result = upgrade_database(database)
+    assert result.previous_revision == _POOL_LIMITS
+    assert _revision(database) == [_HEAD]
+    backups = list(tmp_path.glob(f"{database.name}.backup-*"))
+    assert len(backups) == 1
+    assert _revision(backups[0]) == [_POOL_LIMITS]
+    validate_database_schema(database)
 
 
 @pytest.mark.parametrize("rejected_database", _REJECTED_IDS[:1] + _REJECTED_IDS[3:4], indirect=True)

@@ -39,7 +39,7 @@ function installKeysStub(options: StubOptions = {}) {
       return ok({ project_id: PROJECT_ALPHA_ID, permissions, roles: [], policy_revision: 1 })
     }
     if (req.url === `${base}/members`) {
-      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", status: "active", roles: ["project_admin"], version: 1 }])
+      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", status: "active", roles: ["project_admin"], role: "admin", permissions: 15, provider_owner: false, account_active: true, version: 1 }])
     }
     if (req.url === `${base}/api-keys` && req.method === "GET") return ok(keys)
     const override = options.onMutation?.(req)
@@ -91,6 +91,16 @@ async function issueKey(user: ReturnType<typeof userEvent.setup>, label: string)
   await user.click(screen.getByRole("button", { name: "Issue key" }))
 }
 
+/** Opens the `…` row menu of one key, then chooses one of its actions. */
+async function chooseRowAction(
+  user: ReturnType<typeof userEvent.setup>,
+  keyLabel: string,
+  action: "Rotate" | "Revoke"
+) {
+  await user.click(await screen.findByRole("button", { name: `Actions for ${keyLabel}` }))
+  await user.click(screen.getByRole("button", { name: `${action} key` }))
+}
+
 beforeEach(() => {
   window.localStorage.clear()
   window.sessionStorage.clear()
@@ -105,12 +115,12 @@ describe("ProjectApiKeysPage issue and reveal", () => {
     installKeysStub()
     renderPage()
     expect(await screen.findByRole("heading", { name: "API keys" })).toBeInTheDocument()
-    const form = screen.getByRole("region", { name: "Issue an API key" })
+    const form = screen.getByRole("region", { name: "New API key" })
     expect(within(form).getByRole("checkbox", { name: "Search" })).toBeChecked()
     expect(within(form).getByRole("checkbox", { name: "Fetch" })).toBeChecked()
-    const expiration = within(form).getByRole("radiogroup", { name: "Expiration" })
-    expect(within(expiration).getByRole("radio", { name: "90 days (default)" })).toBeChecked()
-    expect(within(expiration).getByRole("radio", { name: "No expiration" })).not.toBeChecked()
+    const expiration = within(form).getByRole("group", { name: "Expiration" })
+    expect(within(expiration).getByRole("button", { name: "90 days" })).toHaveAttribute("aria-pressed", "true")
+    expect(within(expiration).getByRole("button", { name: "No expiration" })).toHaveAttribute("aria-pressed", "false")
     expect(await screen.findByRole("table", { name: "API keys" })).toBeInTheDocument()
   })
 
@@ -120,7 +130,7 @@ describe("ProjectApiKeysPage issue and reveal", () => {
     renderPage()
 
     await user.type(await screen.findByLabelText("Label"), "Nightly")
-    await user.click(screen.getByRole("radio", { name: "No expiration" }))
+    await user.click(screen.getByRole("button", { name: "No expiration" }))
     await user.click(screen.getByRole("button", { name: "Issue key" }))
 
     const dialog = await screen.findByRole("dialog", { name: "Copy your new API key" })
@@ -156,7 +166,7 @@ describe("ProjectApiKeysPage issue and reveal", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Copy key" }))
     expect(writeText).toHaveBeenCalledWith(ONE_TIME_VALUE)
-    expect(await within(dialog).findByText("Copied to the clipboard.")).toBeInTheDocument()
+    expect(await within(dialog).findByRole("status")).toHaveTextContent(/Copied to the clipboard/)
   })
 
   it("disables a scope the caller lacks and issues only the held scope", async () => {
@@ -178,12 +188,12 @@ describe("ProjectApiKeysPage issue and reveal", () => {
     renderPage()
 
     await user.click(await screen.findByRole("button", { name: "Issue key" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent("Enter a label for the key.")
+    expect(await screen.findByRole("alert")).toHaveTextContent("Enter a label for the key")
     await user.type(screen.getByLabelText("Label"), "x")
     await user.click(screen.getByRole("checkbox", { name: "Search" }))
     await user.click(screen.getByRole("checkbox", { name: "Fetch" }))
     await user.click(screen.getByRole("button", { name: "Issue key" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent("Choose at least one scope.")
+    expect(await screen.findByRole("alert")).toHaveTextContent("Choose at least one scope")
     expect(stub.requests.filter((req) => req.method === "POST")).toHaveLength(0)
   })
 
@@ -193,11 +203,11 @@ describe("ProjectApiKeysPage issue and reveal", () => {
     renderPage()
 
     await user.type(await screen.findByLabelText("Label"), "Dated")
-    await user.click(screen.getByRole("radio", { name: "Custom date" }))
+    await user.click(screen.getByRole("button", { name: "Custom date" }))
     const date = screen.getByLabelText("Expiration date")
     await user.type(date, "2000-01-01")
     await user.click(screen.getByRole("button", { name: "Issue key" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent("Choose an expiration date in the future.")
+    expect(await screen.findByRole("alert")).toHaveTextContent("Choose an expiration date in the future")
 
     await user.clear(date)
     await user.type(date, "2099-06-30")
@@ -220,7 +230,7 @@ describe("ProjectApiKeysPage list", () => {
 
     const table = await screen.findByRole("table", { name: "API keys" })
     const headers = within(table).getAllByRole("columnheader").map((cell) => cell.textContent)
-    expect(headers.slice(0, 8)).toEqual(["Label", "Prefix", "Scopes", "Created by", "Created", "Expires", "Last used", "Status"])
+    expect(headers.slice(0, 6)).toEqual(["Key", "Scopes", "Created", "Expires", "Last used", "Status"])
     const rows = await within(table).findAllByRole("row")
     expect(rows[1]).toHaveTextContent("New")
     expect(rows[2]).toHaveTextContent("Old")
@@ -228,8 +238,8 @@ describe("ProjectApiKeysPage list", () => {
     expect(rows[1]).toHaveTextContent("Never")
     expect(rows[1]).toHaveTextContent("Active")
     expect(rows[2]).toHaveTextContent("Revoked")
-    expect(within(table).queryByRole("button", { name: "Revoke Old" })).toBeNull()
-    expect(within(table).getByRole("button", { name: "Revoke New" })).toBeInTheDocument()
+    expect(within(table).queryByRole("button", { name: "Actions for Old" })).toBeNull()
+    expect(within(table).getByRole("button", { name: "Actions for New" })).toBeInTheDocument()
   })
 
   it("shows a short creator id when members are not readable", async () => {
@@ -250,11 +260,11 @@ describe("ProjectApiKeysPage rotate and revoke", () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Rotate CI runner" }))
+    await chooseRowAction(user, "CI runner", "Rotate")
     const dialog = await screen.findByRole("dialog", { name: "Rotate CI runner" })
     const overlap = within(dialog).getByLabelText("Old key stays valid for")
-    expect(overlap).toHaveDisplayValue("24 hours")
-    expect(within(dialog).getByRole("radio", { name: "Keep current lifetime" })).toBeChecked()
+    expect(overlap).toHaveTextContent("24 hours")
+    expect(within(dialog).getByRole("button", { name: "Keep current" })).toHaveAttribute("aria-pressed", "true")
     await user.click(within(dialog).getByRole("button", { name: "Rotate key" }))
 
     const reveal = await screen.findByRole("dialog", { name: "Copy your new API key" })
@@ -269,10 +279,11 @@ describe("ProjectApiKeysPage rotate and revoke", () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Rotate CI runner" }))
+    await chooseRowAction(user, "CI runner", "Rotate")
     const dialog = await screen.findByRole("dialog", { name: "Rotate CI runner" })
-    await user.selectOptions(within(dialog).getByLabelText("Old key stays valid for"), "Revoke old key now")
-    await user.click(within(dialog).getByRole("radio", { name: "No expiration" }))
+    await user.click(within(dialog).getByLabelText("Old key stays valid for"))
+    await user.click(within(dialog).getByRole("option", { name: "Revoke old key now" }))
+    await user.click(within(dialog).getByRole("button", { name: "No expiration" }))
     await user.click(within(dialog).getByRole("button", { name: "Rotate key" }))
     await screen.findByRole("dialog", { name: "Copy your new API key" })
     expect(stub.requests.find((req) => req.url.endsWith("/rotate"))?.body).toEqual({
@@ -290,26 +301,28 @@ describe("ProjectApiKeysPage rotate and revoke", () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Rotate CI runner" }))
+    await chooseRowAction(user, "CI runner", "Rotate")
     const dialog = await screen.findByRole("dialog", { name: "Rotate CI runner" })
     await user.click(within(dialog).getByRole("button", { name: "Rotate key" }))
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("This key is no longer active.")
     expect(screen.queryByRole("dialog", { name: "Copy your new API key" })).toBeNull()
   })
 
-  it("revokes only after the inline confirmation", async () => {
+  it("revokes only after the confirmation dialog", async () => {
     const stub = installKeysStub({ keys: [apiKeyFixture({ id: "k1", label: "CI runner" })] })
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Revoke CI runner" }))
+    await chooseRowAction(user, "CI runner", "Revoke")
     expect(stub.requests.filter((req) => req.method === "DELETE")).toHaveLength(0)
-    await user.click(screen.getByRole("button", { name: "Cancel" }))
-    expect(screen.queryByRole("button", { name: "Confirm revoke" })).toBeNull()
+    const dialog = await screen.findByRole("dialog", { name: "Revoke CI runner" })
+    expect(dialog).toHaveTextContent("Programs that use this key stop working at once. You cannot undo this change")
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Revoke key" })).toBeNull())
 
-    await user.click(screen.getByRole("button", { name: "Revoke CI runner" }))
-    await user.click(screen.getByRole("button", { name: "Confirm revoke" }))
-    const table = screen.getByRole("table", { name: "API keys" })
+    await chooseRowAction(user, "CI runner", "Revoke")
+    await user.click(await screen.findByRole("button", { name: "Revoke key" }))
+    const table = await screen.findByRole("table", { name: "API keys" })
     await waitFor(() => expect(within(table).getByText("Revoked")).toBeInTheDocument())
     expect(stub.requests.filter((req) => req.method === "DELETE").map((req) => req.url)).toEqual([
       `/api/v1/projects/${PROJECT_ALPHA_ID}/api-keys/k1`,
@@ -324,9 +337,9 @@ describe("ProjectApiKeysPage rotate and revoke", () => {
     const user = userEvent.setup()
     renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Revoke CI runner" }))
+    await chooseRowAction(user, "CI runner", "Revoke")
     const accessReads = stub.requestsTo(`/api/v1/projects/${PROJECT_ALPHA_ID}/access`).length
-    await user.click(screen.getByRole("button", { name: "Confirm revoke" }))
+    await user.click(await screen.findByRole("button", { name: "Revoke key" }))
     expect(await screen.findByRole("alert")).toHaveTextContent("You no longer have permission for this action.")
     await waitFor(() =>
       expect(stub.requestsTo(`/api/v1/projects/${PROJECT_ALPHA_ID}/access`).length).toBeGreaterThan(accessReads)
@@ -347,14 +360,18 @@ describe("ProjectApiKeysPage rotate and revoke", () => {
 
 describe("ProjectApiKeysPage archived project", () => {
   it("hides issue and rotate, keeps revoke, and explains why", async () => {
+    const user = userEvent.setup()
     installKeysStub({ status: "archived", keys: [apiKeyFixture({ id: "k1", label: "CI runner" })] })
     renderPage()
 
     expect(
       await screen.findByText("This project is archived. Its keys can be revoked but not issued or rotated.")
     ).toBeInTheDocument()
-    expect(screen.queryByRole("region", { name: "Issue an API key" })).toBeNull()
-    expect(await screen.findByRole("button", { name: "Revoke CI runner" })).toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: "Rotate CI runner" })).toBeNull()
+    expect(screen.queryByRole("region", { name: "New API key" })).toBeNull()
+
+    const trigger = await screen.findByRole("button", { name: "Actions for CI runner" })
+    await user.click(trigger)
+    expect(screen.queryByRole("button", { name: "Rotate key" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Revoke key" })).toBeInTheDocument()
   })
 })

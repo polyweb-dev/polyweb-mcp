@@ -38,6 +38,11 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
+from freesearch.models.project_permissions import (
+    DEVELOPER_BITS,
+    PROVIDER_OWNER_BIT,
+    effective_project_permissions,
+)
 from freesearch.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
@@ -53,14 +58,18 @@ from freesearch.models.projects import (
     ProjectRead,
     ProjectRolloutState,
     ProjectStatus,
+    ProviderOwnerRead,
+    ProviderOwnerTransferRead,
     RoleAssignmentRead,
     ScopeType,
     SystemAccessRead,
+    UnassignedPoolRead,
 )
 from freesearch.models.schema_enums import AuditActorType, AuditCategory, AuditOutcome
 from freesearch.models.users import UserAccount, UserPrincipal
 from freesearch.persistence.audit import AuditRepository
 from freesearch.persistence.auth_sessions import AuthSessionRepository
+from freesearch.persistence.key_pools import StoredKeyPool
 from freesearch.persistence.projects import (
     ProjectMembershipRow,
     ProjectRepository,
@@ -96,6 +105,46 @@ ROLE_REMOVED: str = "role.removed"
 ACCOUNT_DEACTIVATED: str = "account.deactivated"
 
 _T = TypeVar("_T")
+
+
+def _member_expands_access(
+    member: ProjectMemberRead, bits: int, change: ProjectMemberUpdate | ProjectMemberChange
+) -> bool:
+    roles = member.roles
+    if change.role is not None:
+        roles = [
+            BuiltinRole.PROJECT_ADMIN
+            if change.role in {"admin", "project_admin"}
+            else BuiltinRole.PROJECT_MEMBER
+        ]
+    new_bits = bits if change.permissions is None else (bits & ~DEVELOPER_BITS) | change.permissions
+    return bool(
+        effective_project_permissions(roles, new_bits)
+        - effective_project_permissions(member.roles, bits)
+    )
+
+
+def _admin_after_change(role: str | None, previous_roles: list[str]) -> bool:
+    if role is None:
+        return BuiltinRole.PROJECT_ADMIN in previous_roles
+    return role in {"admin", "project_admin"}
+
+
+async def _guard_provider_owner(
+    repository: ProjectRepository, project_id: UUID, user_id: UUID, removing: bool
+) -> None:
+    if removing and await repository.get_provider_owner(project_id) == user_id:
+        raise ProjectConflict("PROVIDER_OWNER_REQUIRED", "Transfer provider ownership first.")
+
+
+#: System permissions whose holders target any project and may list them all.
+_SYSTEM_PROJECT_LISTERS: frozenset[PermissionAction] = frozenset(
+    {
+        PermissionAction.SYSTEM_CREDENTIALS_MANAGE,
+        PermissionAction.SYSTEM_POOLS_MANAGE,
+        PermissionAction.SYSTEM_ALLOCATIONS_MANAGE,
+    }
+)
 
 
 class ProjectServiceError(RuntimeError):
@@ -206,21 +255,67 @@ class ProjectService:
         except OperationalError as error:
             raise ProjectStorageUnavailable("the project store is unavailable") from error
 
+    async def list_system_projects(
+        self,
+        actor: UserPrincipal,
+        *,
+        include_archived: bool = True,
+    ) -> list[ProjectRead]:
+        """List every project of the installation for a system administrator.
+
+        Granting a system credential or allocating a shared pool targets any
+        project, not only the caller's memberships, so the caller needs one of
+        ``system.credentials.manage``, ``system.pools.manage`` or
+        ``system.allocations.manage``. Anyone else gets the generic denial.
+        """
+
+        self._rollout.require_management()
+        try:
+            async with self._repository.session() as session:
+                permissions = await self._authorization.effective_permissions_in_session(
+                    session,
+                    human_principal(actor),
+                    scope_type=ScopeType.SYSTEM,
+                    scope_id=self._account_id,
+                )
+                if not permissions & _SYSTEM_PROJECT_LISTERS:
+                    await self._authorization.require_in_session(
+                        session,
+                        system_query(
+                            actor,
+                            PermissionAction.SYSTEM_CREDENTIALS_MANAGE,
+                            account_id=self._account_id,
+                        ),
+                    )
+                projects = await ProjectRepository(session).list_projects(
+                    account_id=self._account_id
+                )
+        except OperationalError as error:
+            raise ProjectStorageUnavailable("the project store is unavailable") from error
+        if include_archived:
+            return projects
+        return [project for project in projects if project.status is not ProjectStatus.ARCHIVED]
+
     async def system_access(self, actor: UserPrincipal) -> SystemAccessRead:
         """Return the caller's live system-scope effective permissions."""
 
         self._rollout.require_management()
         try:
-            permissions = await self._authorization.effective_permissions(
-                human_principal(actor),
-                scope_type=ScopeType.SYSTEM,
-                scope_id=self._account_id,
-            )
+            async with self._repository.session() as session:
+                permissions = await self._authorization.effective_permissions_in_session(
+                    session,
+                    human_principal(actor),
+                    scope_type=ScopeType.SYSTEM,
+                    scope_id=self._account_id,
+                )
+                vault = await ProjectRepository(session).user_can_use_vault(actor.id)
         except OperationalError as error:
             raise ProjectStorageUnavailable("the project store is unavailable") from error
         return SystemAccessRead(
             rollout_state=self._rollout.state,
-            permissions=sorted(action.value for action in permissions),
+            permissions=sorted(
+                [*(action.value for action in permissions), *(["vault.manage"] if vault else [])]
+            ),
         )
 
     async def project_access(
@@ -291,6 +386,9 @@ class ProjectService:
                 )
             except ValueError as error:
                 raise ProjectValidationError(str(error)) from error
+            from freesearch.services.pool_materializer import materialize_pools
+
+            await materialize_pools(session, project_id=project.id)
             await _project_event(
                 session,
                 project.id,
@@ -330,6 +428,7 @@ class ProjectService:
                 project_id=project_id,
                 status=ProjectStatus.ARCHIVED,
             )
+            await self._end_unauthorized_flows(session, actor, project_id=project_id)
             await _project_event(
                 session,
                 project_id,
@@ -359,9 +458,119 @@ class ProjectService:
                     session,
                     project_query(actor, PermissionAction.MEMBERS_READ, project_id=project_id),
                 )
-                return await repository.list_project_members(project_id=project_id)
+                members = await repository.list_project_members(project_id=project_id)
+                return [await self._member_view(session, repository, member) for member in members]
         except OperationalError as error:
             raise ProjectStorageUnavailable("the project store is unavailable") from error
+
+    async def provider_owner(
+        self, actor: UserPrincipal, project_id: UUID
+    ) -> ProviderOwnerRead | None:
+        async with self._repository.session() as session:
+            repository = ProjectRepository(session)
+            await self._require_project(session, repository, actor, project_id)
+            await self._authorization.require_in_session(
+                session,
+                project_query(actor, PermissionAction.PROVIDERS_READ, project_id=project_id),
+            )
+            owner = await repository.get_provider_owner(project_id)
+            member = (
+                None
+                if owner is None
+                else await repository.get_member(project_id=project_id, user_id=owner)
+            )
+            user = None if owner is None else await session.get(UserRow, owner)
+            if (
+                member is None
+                or member.status is not MembershipStatus.ACTIVE
+                or BuiltinRole.PROJECT_ADMIN not in member.roles
+                or user is None
+                or not user.is_active
+            ):
+                return None
+            return ProviderOwnerRead(user_id=member.user_id, email=member.email)
+
+    async def transfer_provider_owner(
+        self, actor: UserPrincipal, project_id: UUID, target_id: UUID
+    ) -> ProviderOwnerTransferRead:
+        from freesearch.services.key_pools import sync_pool_changes, unassign_owner_pools
+
+        removed_pools: list[StoredKeyPool] = []
+
+        async def operation(session: AsyncSession) -> ProviderOwnerTransferRead:
+            removed_pools.clear()
+            repository = ProjectRepository(session)
+            project = await self._require_project(session, repository, actor, project_id)
+            await self._authorization.require_in_session(
+                session, project_query(actor, PermissionAction.ROLES_ASSIGN, project_id=project_id)
+            )
+            owner = await repository.get_provider_owner(project_id)
+            self._reject_archived_expansion(project, expanding=owner != target_id)
+            if owner is not None and owner != actor.id:
+                owner_member = await repository.get_member(project_id=project_id, user_id=owner)
+                owner_user = await session.get(UserRow, owner)
+                if (
+                    owner_member is not None
+                    and owner_member.status is MembershipStatus.ACTIVE
+                    and BuiltinRole.PROJECT_ADMIN in owner_member.roles
+                    and owner_user is not None
+                    and owner_user.is_active
+                ):
+                    await self._authorization.require_in_session(
+                        session,
+                        project_query(
+                            actor, PermissionAction.PROVIDERS_SUPPLY, project_id=project_id
+                        ),
+                    )
+            target = await repository.get_member(project_id=project_id, user_id=target_id)
+            if target is None:
+                raise ProjectValidationError(
+                    "The new provider owner must be an active project admin."
+                )
+            if owner == target_id:
+                user = await session.get(UserRow, target_id, populate_existing=True)
+                if (
+                    target.status is not MembershipStatus.ACTIVE
+                    or BuiltinRole.PROJECT_ADMIN not in target.roles
+                    or user is None
+                    or not user.is_active
+                ):
+                    raise ProjectConflict(
+                        "PROVIDER_OWNER_CONFLICT",
+                        "The provider owner changed or the target is not an active admin.",
+                    )
+                return ProviderOwnerTransferRead(
+                    user_id=target_id, email=target.email, unassigned_pools=[]
+                )
+            if not await repository.transfer_provider_owner(project_id, owner, target_id):
+                raise ProjectConflict(
+                    "PROVIDER_OWNER_CONFLICT",
+                    "The provider owner changed or the target is not an active admin.",
+                )
+            if owner is not None:
+                removed_pools.extend(await unassign_owner_pools(session, project_id, owner))
+            await _member_event(
+                session,
+                project_id,
+                "project.provider_owner_transferred",
+                actor,
+                target_id,
+                {
+                    "previous_owner": str(owner) if owner else None,
+                    "unassigned_pools": [str(pool.id) for pool in removed_pools],
+                },
+            )
+            return ProviderOwnerTransferRead(
+                user_id=target_id,
+                email=target.email,
+                unassigned_pools=[
+                    UnassignedPoolRead(pool_id=pool.id, label=pool.label) for pool in removed_pools
+                ],
+            )
+
+        result = await self._write(operation)
+        await sync_pool_changes(self._repository, [(pool, None) for pool in removed_pools])
+        return result
 
     async def add_member(
         self,
@@ -402,10 +611,11 @@ class ProjectService:
                 )
             except ValueError as error:
                 raise ProjectValidationError(str(error)) from error
+            await repository.set_member_permissions(project_id, user_id, member_add.permissions)
             await _member_event(
                 session, project_id, MEMBER_ADDED, actor, user_id, {"role_key": initial_role}
             )
-            return member
+            return await self._member_view(session, repository, member)
 
         return await self._write(operation)
 
@@ -431,6 +641,13 @@ class ProjectService:
             member = await repository.get_member(project_id=project_id, user_id=user_id)
             if membership is None or member is None:
                 raise ProjectNotFound(f"User {user_id} is not a member of project {project_id}")
+            await _guard_provider_owner(
+                repository,
+                project_id,
+                user_id,
+                member_update.status is MembershipStatus.SUSPENDED
+                or member_update.role in {"developer", "project_member"},
+            )
             reactivating = (
                 member_update.status is MembershipStatus.ACTIVE
                 and membership.status != MembershipStatus.ACTIVE.value
@@ -445,16 +662,65 @@ class ProjectService:
                 )
                 for role_key in member.roles:
                     await self._authorize_delegation(session, actor, project_id, role_key)
-            self._reject_archived_expansion(project, expanding=reactivating)
-            previous_status = membership.status
-            updated = await repository.update_membership_status(
-                project_id=project_id,
-                user_id=user_id,
-                status=member_update.status,
+            old_permissions = await repository.get_member_permissions(project_id, user_id) or 0
+            self._reject_archived_expansion(
+                project,
+                expanding=reactivating
+                or _member_expands_access(member, old_permissions, member_update),
             )
+            previous_status = membership.status
+            if member_update.role is not None:
+                await self._authorization.require_in_session(
+                    session,
+                    project_query(actor, PermissionAction.ROLES_ASSIGN, project_id=project_id),
+                )
+                role = (
+                    BuiltinRole.PROJECT_ADMIN
+                    if member_update.role in {"admin", "project_admin"}
+                    else BuiltinRole.PROJECT_MEMBER
+                )
+                if role not in member.roles:
+                    await repository.assign_project_role(
+                        project_id=project_id, user_id=user_id, role_key=role, granted_by=actor.id
+                    )
+                    for old_role in member.roles:
+                        await repository.delete_role_assignment(
+                            project_id=project_id, user_id=user_id, role_key=old_role
+                        )
+                    await _member_event(
+                        session,
+                        project_id,
+                        "member.role_changed",
+                        actor,
+                        user_id,
+                        {"role": role.value, "previous_roles": member.roles},
+                    )
+            if member_update.permissions is not None:
+                if _admin_after_change(member_update.role, member.roles):
+                    raise ProjectValidationError("Only developer permissions can be changed.")
+                old_bits = await repository.get_member_permissions(project_id, user_id)
+                await repository.set_member_permissions(
+                    project_id, user_id, member_update.permissions
+                )
+                if (old_bits or 0) & DEVELOPER_BITS != member_update.permissions:
+                    await _member_event(
+                        session,
+                        project_id,
+                        "member.permissions_changed",
+                        actor,
+                        user_id,
+                        {
+                            "permissions": member_update.permissions,
+                            "previous_permissions": (old_bits or 0) & DEVELOPER_BITS,
+                        },
+                    )
+            if member_update.status is not None:
+                await repository.update_membership_status(
+                    project_id=project_id, user_id=user_id, status=member_update.status
+                )
             await self._require_active_admin(session, repository, {project_id})
             await self._end_unauthorized_flows(session, actor, project_id=project_id)
-            if previous_status != member_update.status.value:
+            if member_update.status is not None and previous_status != member_update.status.value:
                 await _member_event(
                     session,
                     project_id,
@@ -463,7 +729,10 @@ class ProjectService:
                     user_id,
                     {"status": member_update.status.value, "previous_status": previous_status},
                 )
-            return updated
+            updated = await repository.get_member(project_id=project_id, user_id=user_id)
+            if updated is None:
+                raise ProjectNotFound("member not found")
+            return await self._member_view(session, repository, updated)
 
         return await self._write(operation)
 
@@ -485,6 +754,10 @@ class ProjectService:
                 project_query(actor, PermissionAction.MEMBERS_MANAGE, project_id=project_id),
             )
             existing = await repository.get_member(project_id=project_id, user_id=user_id)
+            if await repository.get_provider_owner(project_id) == user_id:
+                raise ProjectConflict(
+                    "PROVIDER_OWNER_REQUIRED", "Transfer provider ownership first."
+                )
             if existing is None or not await repository.delete_membership(
                 project_id=project_id, user_id=user_id
             ):
@@ -496,6 +769,21 @@ class ProjectService:
             )
 
         await self._write(operation)
+
+    @staticmethod
+    async def _member_view(
+        session: AsyncSession, repository: ProjectRepository, member: ProjectMemberRead
+    ) -> ProjectMemberRead:
+        bits = await repository.get_member_permissions(member.project_id, member.user_id) or 0
+        user = await session.get(UserRow, member.user_id, populate_existing=True)
+        return member.model_copy(
+            update={
+                "role": "admin" if BuiltinRole.PROJECT_ADMIN in member.roles else "developer",
+                "permissions": bits,
+                "provider_owner": bool(bits & PROVIDER_OWNER_BIT),
+                "account_active": user is not None and user.is_active,
+            }
+        )
 
     async def assign_role(
         self,
@@ -517,8 +805,10 @@ class ProjectService:
             )
             await self._require_active_member(session, repository, project_id, user_id)
             await self._authorize_delegation(session, actor, project_id, role_key)
-            self._reject_archived_expansion(project, expanding=True)
             before = await repository.get_member(project_id=project_id, user_id=user_id)
+            self._reject_archived_expansion(
+                project, expanding=before is None or role_key not in before.roles
+            )
             try:
                 assignment = await repository.assign_project_role(
                     project_id=project_id,
@@ -557,6 +847,13 @@ class ProjectService:
             membership = await repository.get_membership(project_id=project_id, user_id=user_id)
             if membership is None:
                 raise ProjectNotFound(f"User {user_id} is not a member of project {project_id}")
+            if (
+                role_key == BuiltinRole.PROJECT_ADMIN
+                and await repository.get_provider_owner(project_id) == user_id
+            ):
+                raise ProjectConflict(
+                    "PROVIDER_OWNER_REQUIRED", "Transfer provider ownership first."
+                )
             await self._authorize_delegation(session, actor, project_id, role_key)
             if not await repository.delete_role_assignment(
                 project_id=project_id,
@@ -593,6 +890,13 @@ class ProjectService:
             reactivated_roles: set[str] = set()
             expands_access = False
             for change in bulk_update.changes:
+                if (
+                    change.status is MembershipStatus.SUSPENDED
+                    or change.role in {"developer", "project_member"}
+                ) and await repository.get_provider_owner(project_id) == change.user_id:
+                    raise ProjectConflict(
+                        "PROVIDER_OWNER_REQUIRED", "Transfer provider ownership first."
+                    )
                 membership = await repository.get_membership(
                     project_id=project_id, user_id=change.user_id
                 )
@@ -607,19 +911,29 @@ class ProjectService:
                     change.status is MembershipStatus.ACTIVE
                     and membership.status != MembershipStatus.ACTIVE.value
                 )
-                if change.add_roles or reactivating:
+                if change.role is not None or reactivating:
                     user = await session.get(UserRow, change.user_id)
                     if user is None or not user.is_active:
                         raise ProjectValidationError(
                             f"User {change.user_id} is not an active human account"
                         )
-                    if change.add_roles and membership.status != MembershipStatus.ACTIVE.value:
+                    if (
+                        change.role is not None
+                        and membership.status != MembershipStatus.ACTIVE.value
+                    ):
                         raise ProjectValidationError(
                             f"User {change.user_id} is not an active member of project {project_id}"
                         )
-                    expands_access = True
-                delegated_roles.update(change.add_roles)
-                delegated_roles.update(change.remove_roles)
+                bits = await repository.get_member_permissions(project_id, change.user_id) or 0
+                expands_access |= reactivating or _member_expands_access(
+                    existing_member, bits, change
+                )
+                if change.role is not None:
+                    delegated_roles.add(
+                        BuiltinRole.PROJECT_ADMIN
+                        if change.role in {"admin", "project_admin"}
+                        else BuiltinRole.PROJECT_MEMBER
+                    )
                 if reactivating:
                     reactivated_roles.update(existing_member.roles)
             authorizes_roles = bool(delegated_roles or reactivated_roles)
@@ -670,25 +984,49 @@ class ProjectService:
                     user_id,
                     {"status": change.status.value, "previous_status": before.status.value},
                 )
-        for role_key in sorted(change.add_roles):
-            await repository.assign_project_role(
-                project_id=project_id, user_id=user_id, role_key=role_key, granted_by=actor.id
+        if change.role is not None:
+            role = (
+                BuiltinRole.PROJECT_ADMIN
+                if change.role in {"admin", "project_admin"}
+                else BuiltinRole.PROJECT_MEMBER
             )
-            if role_key not in before.roles:
-                await _member_event(
-                    session, project_id, ROLE_ASSIGNED, actor, user_id, {"role_key": role_key}
+            if role not in before.roles:
+                await repository.assign_project_role(
+                    project_id=project_id, user_id=user_id, role_key=role, granted_by=actor.id
                 )
-        for role_key in sorted(change.remove_roles):
-            if await repository.delete_role_assignment(
-                project_id=project_id, user_id=user_id, role_key=role_key
-            ):
+                for old_role in before.roles:
+                    await repository.delete_role_assignment(
+                        project_id=project_id, user_id=user_id, role_key=old_role
+                    )
                 await _member_event(
-                    session, project_id, ROLE_REMOVED, actor, user_id, {"role_key": role_key}
+                    session,
+                    project_id,
+                    "member.role_changed",
+                    actor,
+                    user_id,
+                    {"role": role.value, "previous_roles": before.roles},
+                )
+        if change.permissions is not None:
+            if _admin_after_change(change.role, before.roles):
+                raise ProjectValidationError("Only developer permissions can be changed.")
+            old_bits = await repository.get_member_permissions(project_id, user_id) or 0
+            await repository.set_member_permissions(project_id, user_id, change.permissions)
+            if old_bits & DEVELOPER_BITS != change.permissions:
+                await _member_event(
+                    session,
+                    project_id,
+                    "member.permissions_changed",
+                    actor,
+                    user_id,
+                    {
+                        "permissions": change.permissions,
+                        "previous_permissions": old_bits & DEVELOPER_BITS,
+                    },
                 )
         member = await repository.get_member(project_id=project_id, user_id=user_id)
         if member is None:
             raise ProjectNotFound(f"User {user_id} is not a member of project {project_id}")
-        return member
+        return await self._member_view(session, repository, member)
 
     async def deactivate_accounts(
         self,
@@ -714,7 +1052,12 @@ class ProjectService:
         if not trusted and actor is None:
             raise ProjectValidationError("an authenticated system administrator is required")
 
+        from freesearch.services.key_pools import sync_pool_changes, unassign_owner_pools
+
+        removed_pools: list[StoredKeyPool] = []
+
         async def operation(session: AsyncSession) -> list[UserAccount]:
+            removed_pools.clear()
             if not trusted and actor is not None:
                 await self._authorization.require_in_session(
                     session,
@@ -744,6 +1087,9 @@ class ProjectService:
             await session.flush()
             await self._require_active_admin(session, repository, admin_project_ids)
             await self._require_active_system_admin(repository, changed)
+            for user_id in changed:
+                for project_id in await repository.clear_provider_owner_for_user(user_id):
+                    removed_pools.extend(await unassign_owner_pools(session, project_id, user_id))
             await end_unauthorized_oauth_flows(
                 session,
                 authorization=self._authorization,
@@ -767,12 +1113,14 @@ class ProjectService:
                 )
             return [UserAccount.model_validate(user) for user in users]
 
-        return await self._write(operation)
+        result = await self._write(operation)
+        await sync_pool_changes(self._repository, [(pool, None) for pool in removed_pools])
+        return result
 
     async def _end_unauthorized_flows(
         self, session: AsyncSession, actor: UserPrincipal, *, project_id: UUID
     ) -> None:
-        """End this project's pending OAuth flows whose initiator just lost permission."""
+        """End unauthorized project and vault flows after a project access change."""
 
         await end_unauthorized_oauth_flows(
             session,

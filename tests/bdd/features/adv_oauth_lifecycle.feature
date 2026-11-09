@@ -11,6 +11,7 @@ Feature: Parallel OAuth lifecycle and resilience
     Given a connected Parallel OAuth session
     When I disconnect OAuth for "parallel"
     Then the disconnect should be accepted with revoke before vault delete
+    When I delete the disconnected OAuth vault key after revocation
 
   Scenario: Disconnect stays idempotent
     Given a connected Parallel OAuth session

@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
@@ -34,6 +34,7 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from freesearch.models.project_permissions import ProjectPermission
 from freesearch.models.users import AuthProvider, normalize_email
 from freesearch.persistence.database_migrations import (
     DatabaseResetRequired,
@@ -45,8 +46,9 @@ from freesearch.persistence.database_migrations import (
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserDatabase, UserRow, local_password_hash
 from freesearch.routers.api import create_app
-from tests.fixtures.auth import configure_bdd_secret
-from tests.fixtures.execution import bdd_project_id
+from tests.fixtures.auth import account_id_from_pair, configure_bdd_secret
+from tests.fixtures.execution import _install_bdd_adapters, bdd_project_id
+from tests.fixtures.project_order import seed_order_pools
 
 _TEST_PASSWORD = "StrongPass123!x-UsersBDD"
 
@@ -916,6 +918,53 @@ def step_then_matrix_agent_search(context: Any) -> None:
         assert bypass.status_code == 404
 
 
+@given("a Brave stub for the scoped authority scenario")
+def step_given_authority_brave_stub(context: Any) -> None:
+    context.adapters = [_UsersStubAdapter("brave")]
+    context.app = create_app(context.adapters, repository=context.repository)
+
+
+@when("the member has search permission and the project has a Brave pool")
+def step_when_authority_pool_and_permission(context: Any) -> None:
+    member_id = account_id_from_pair(context.role_pairs["agent"])
+    owner_id = account_id_from_pair(context.role_pairs["developer"])
+    with _auth_client(context) as client:
+        updated = client.patch(
+            f"/api/v1/projects/{context.matrix_project_id}/members/{member_id}",
+            json={"permissions": int(ProjectPermission.SEARCH)},
+            headers=_role_headers(context, "developer"),
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["permissions"] == int(ProjectPermission.SEARCH)
+        secrets: dict[str, str] = {}
+        context.loop.run_until_complete(
+            seed_order_pools(
+                context.repository,
+                project_id=UUID(context.matrix_project_id),
+                actor_id=owner_id,
+                store=context.app.state.secret_store,
+                providers=("brave",),
+                secrets=secrets,
+            )
+        )
+    _install_bdd_adapters(context, context.adapters, secrets)
+
+
+@then("the member should search the pooled project but the system admin should not")
+def step_then_authority_pooled_search(context: Any) -> None:
+    with _auth_client(context) as client:
+        body = {
+            "project_id": context.matrix_project_id,
+            "query": "matrix probe",
+            "routing": {"mode": "require", "providers": ["brave"]},
+        }
+        response = client.post("/search", json=body, headers=_role_headers(context, "agent"))
+        assert response.status_code == 200, response.text
+        assert response.json()["provider"] == "brave"
+        bypass = client.post("/search", json=body, headers=_role_headers(context, "admin"))
+        assert bypass.status_code == 404, bypass.text
+
+
 _BROWSER_ORIGIN = "http://localhost:5177"
 _BROWSER_MARKER = {"Origin": _BROWSER_ORIGIN, "X-FreeSearch-Client": "browser"}
 
@@ -1119,13 +1168,6 @@ def step_then_browser_logout_ok(context: Any) -> None:
         )
 
 
-def _role_account_id(context: Any, role: str) -> str:
-    with _auth_client(context) as client:
-        me = client.get("/users/me", headers=_role_headers(context, role))
-        assert me.status_code == 200
-        return str(me.json()["id"])
-
-
 @when('I register with role "{role}" as "{email}"')
 def step_when_register_with_role(context: Any, role: str, email: str) -> None:
     context.auth_email = email
@@ -1147,238 +1189,3 @@ def step_then_role_signup_refused(context: Any) -> None:
             "/auth/jwt/login", data={"username": context.auth_email, "password": _AUTH_PASSWORD}
         )
         assert login.status_code == 400
-
-
-@when("the system admin provisions an account")
-def step_when_admin_provisions(context: Any) -> None:
-    email = f"provision-{uuid4().hex[:6]}@example.com"
-    context.provision_email = email
-    with _auth_client(context) as client:
-        context.provision_response = client.post(
-            "/api/v1/users",
-            json={"email": email, "password": _AUTH_PASSWORD},
-            headers=_role_headers(context, "admin"),
-        )
-
-
-@then("the provisioning should create an ordinary account without credentials")
-def step_then_provision_ok(context: Any) -> None:
-    response = context.provision_response
-    assert response.status_code == 201
-    body = response.json()
-    assert body["email"] == context.provision_email.lower()
-    assert "role" not in body
-    assert "is_superuser" not in body
-    assert "access_token" not in body
-    assert "refresh_token" not in body
-    assert "hashed_password" not in body
-    assert "set-cookie" not in response.headers
-    with _auth_client(context) as client:
-        assert client.get("/users/me", headers=_role_headers(context, "admin")).status_code == 200
-        logged_in = client.post(
-            "/auth/jwt/login",
-            data={"username": context.provision_email, "password": _AUTH_PASSWORD},
-        )
-        assert logged_in.status_code == 200
-        headers = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
-        assert client.get("/users/me", headers=headers).status_code == 200
-        assert client.get("/api/v1/providers", headers=headers).status_code == 403
-
-
-@then("a project admin provisioning should fail with HTTP 403")
-def step_then_developer_provision_403(context: Any) -> None:
-    with _auth_client(context) as client:
-        denied = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"blocked-dev-{uuid4().hex[:6]}@example.com",
-                "password": _AUTH_PASSWORD,
-            },
-            headers=_role_headers(context, "developer"),
-        )
-        assert denied.status_code == 403
-        assert (
-            client.get("/users/me", headers=_role_headers(context, "developer")).status_code == 200
-        )
-
-
-@then("a member provisioning should fail with HTTP 403")
-def step_then_agent_provision_403(context: Any) -> None:
-    with _auth_client(context) as client:
-        denied = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"blocked-agent-{uuid4().hex[:6]}@example.com",
-                "password": _AUTH_PASSWORD,
-            },
-            headers=_role_headers(context, "agent"),
-        )
-        assert denied.status_code == 403
-        assert client.get("/users/me", headers=_role_headers(context, "agent")).status_code == 200
-
-
-@then("an anonymous provisioning should fail with HTTP 401")
-def step_then_anonymous_provision_401(context: Any) -> None:
-    with _auth_client(context) as client:
-        assert (
-            client.post(
-                "/api/v1/users",
-                json={
-                    "email": f"blocked-anon-{uuid4().hex[:6]}@example.com",
-                    "password": _AUTH_PASSWORD,
-                },
-            ).status_code
-            == 401
-        )
-
-
-@then("legacy account routes should deny every role with HTTP 403 and keep sessions live")
-def step_then_legacy_deny_all(context: Any) -> None:
-    denied_detail = "account management is not available before project association"
-    with _auth_client(context) as client:
-        me = client.get("/users/me", headers=_role_headers(context, "agent"))
-        assert me.status_code == 200
-        target = str(me.json()["id"])
-        unknown = str(uuid4())
-        for role in ("admin", "developer", "agent"):
-            headers = _role_headers(context, role)
-            for path in (
-                f"/api/v1/users/{target}",
-                f"/api/v1/users/{unknown}",
-                "/api/v1/users/not-a-uuid",
-            ):
-                denied = client.get(path, headers=headers)
-                assert denied.status_code == 403
-                assert denied.json() == {"detail": denied_detail}
-            # A1: the legacy role-change route is removed and never succeeds.
-            for path in (f"/api/v1/users/{target}/role", f"/api/v1/users/{unknown}/role"):
-                removed = client.patch(path, json={"role": "admin"}, headers=headers)
-                assert removed.status_code in {403, 404, 405}
-        # No request changed authority and no denial revoked a family.
-        check = client.get("/api/v1/providers", headers=_role_headers(context, "agent"))
-        assert check.status_code == 403
-        for role in ("admin", "developer", "agent"):
-            assert client.get("/users/me", headers=_role_headers(context, role)).status_code == 200
-
-
-@when("I prepare one system admin account")
-def step_when_prepare_one_admin(context: Any) -> None:
-    from tests.fixtures.auth import promote_to_system_admin
-
-    context.role_pairs = {}
-    email = f"matrix-admin-{uuid4().hex[:6]}@example.com"
-    with _auth_client(context) as client:
-        registered = client.post(
-            "/auth/register", json={"email": email, "password": _AUTH_PASSWORD}
-        )
-        assert registered.status_code == 201
-        context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
-        logged_in = client.post(
-            "/auth/jwt/login", data={"username": email, "password": _AUTH_PASSWORD}
-        )
-        assert logged_in.status_code == 200
-        context.role_pairs["admin"] = logged_in.json()
-
-
-@when("I consume the shared creation limit")
-def step_when_consume_shared_limit(context: Any) -> None:
-    with _auth_client(context) as client:
-        for index in range(4):
-            email = f"limit-share-{index}-{uuid4().hex[:4]}@example.com"
-            if index < 2:
-                response = client.post(
-                    "/auth/register", json={"email": email, "password": _AUTH_PASSWORD}
-                )
-            else:
-                response = client.post(
-                    "/api/v1/users",
-                    json={"email": email, "password": _AUTH_PASSWORD},
-                    headers=_role_headers(context, "admin"),
-                )
-            assert response.status_code == 201
-        context.limit_email = f"limit-share-5-{uuid4().hex[:4]}@example.com"
-        context.limit_response = client.post(
-            "/api/v1/users",
-            json={"email": context.limit_email, "password": _AUTH_PASSWORD},
-            headers=_role_headers(context, "admin"),
-        )
-
-
-@then("the sixth creation should fail with HTTP 429 and a retry delay")
-def step_then_shared_limit_429(context: Any) -> None:
-    response = context.limit_response
-    assert response.status_code == 429
-    assert response.headers.get("retry-after")
-    assert _AUTH_PASSWORD not in response.text
-
-
-@then("invalid creation roles should fail with safe HTTP 422")
-def step_then_invalid_creation_roles_422(context: Any) -> None:
-    with _auth_client(context) as client:
-        for bad in ("superadmin", "ADMIN", None):
-            rejected = client.post(
-                "/api/v1/users",
-                json={
-                    "email": f"bad-{uuid4().hex[:4]}@example.com",
-                    "password": _AUTH_PASSWORD,
-                    "role": bad,
-                },
-                headers=_role_headers(context, "admin"),
-            )
-            assert rejected.status_code == 422
-            assert rejected.json() == {"detail": "invalid authentication request"}
-
-
-@then("privileged creation fields should fail with safe HTTP 422")
-def step_then_privileged_fields_422(context: Any) -> None:
-    with _auth_client(context) as client:
-        rejected = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"widen-{uuid4().hex[:4]}@example.com",
-                "password": _AUTH_PASSWORD,
-                "extra": "agent",
-            },
-            headers=_role_headers(context, "admin"),
-        )
-        assert rejected.status_code == 422
-        assert rejected.json() == {"detail": "invalid authentication request"}
-        flagged = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"flag-{uuid4().hex[:4]}@example.com",
-                "password": _AUTH_PASSWORD,
-                "is_superuser": True,
-            },
-            headers=_role_headers(context, "admin"),
-        )
-        # A1: a privilege flag is refused, not silently ignored.
-        assert flagged.status_code == 422
-
-
-@then("weak provisioned passwords and duplicate email should fail safely")
-def step_then_weak_and_duplicate_safe(context: Any) -> None:
-    with _auth_client(context) as client:
-        weak = client.post(
-            "/api/v1/users",
-            json={
-                "email": f"weak-{uuid4().hex[:4]}@example.com",
-                "password": "short",
-            },
-            headers=_role_headers(context, "admin"),
-        )
-        assert weak.status_code == 400
-        assert "short" not in weak.text
-        email = f"dup-bdd-{uuid4().hex[:6]}@example.com"
-        first = client.post(
-            "/api/v1/users",
-            json={"email": email, "password": _AUTH_PASSWORD},
-            headers=_role_headers(context, "admin"),
-        )
-        assert first.status_code == 201
-        second = client.post(
-            "/api/v1/users",
-            json={"email": email, "password": _AUTH_PASSWORD},
-            headers=_role_headers(context, "admin"),
-        )
-        assert second.status_code == 400

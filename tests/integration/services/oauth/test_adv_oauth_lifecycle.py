@@ -7,25 +7,40 @@ polls make at most one vendor attempt. Monitoring never polls OAuth implicitly.
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 
 import pytest
 
 from freesearch.models.schema_enums import OAuthGrantStatus
 from freesearch.persistence.oauth_grants import oauth_secret_slot
+from freesearch.services.control_errors import UpstreamUnavailable
 from freesearch.services.monitoring import refresh_quotas
-from freesearch.services.parallel_oauth import OAuthUnpaired
+from freesearch.services.parallel_oauth import (
+    OAuthUnpaired,
+    ParallelOAuthClient,
+    ParallelOAuthError,
+)
+from tests.fixtures.vault_oauth import vault_oauth_case as vault_oauth_case
 from tests.integration.services.oauth.oauth_stubs import (
     ROTATED_ACCESS_TOKEN_VALUE,
 )
 
 
-async def test_revoke_before_delete_ordering(oauth_case):
+async def test_revoke_before_delete_ordering(vault_oauth_case, monkeypatch):
     """Origin test_adv_oauth_lifecycle.py::test_revoke_before_delete_ordering."""
-    case = oauth_case
+    case = vault_oauth_case
     await case.connect()
     old = await case.grant()
+    revoke = ParallelOAuthClient.revoke_token_required
+
+    async def checked_revoke(client, token):
+        assert (await case.status()).status is OAuthGrantStatus.CONNECTED
+        assert await case.token("access") is not None
+        assert await case.token("refresh") == token.get_secret_value()
+        await revoke(client, token)
+
+    monkeypatch.setattr(ParallelOAuthClient, "revoke_token_required", checked_revoke)
     await case.disconnect()
-    # A4 atomically tombstones before best-effort revoke; stale tokens cannot return.
     assert case.stub.revoke_calls == 1
     for kind in ("access", "refresh", "client", "device"):
         assert (
@@ -36,9 +51,30 @@ async def test_revoke_before_delete_ordering(oauth_case):
     await case.assert_no_leaks()
 
 
-async def test_disconnect_idempotent(oauth_case):
+async def test_failed_vault_revoke_retains_grant_for_retry(vault_oauth_case, monkeypatch):
+    case = vault_oauth_case
+    await case.connect()
+    before = await case.slots()
+
+    async def failed_revoke(client, token):
+        raise ParallelOAuthError("vendor unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ParallelOAuthClient, "revoke_token_required", failed_revoke)
+        with pytest.raises(UpstreamUnavailable):
+            await case.disconnect()
+    assert (await case.status()).status is OAuthGrantStatus.CONNECTED
+    assert await case.slots() == before
+    await case.disconnect()
+    assert case.stub.revoke_calls == 1
+    assert (await case.status()).status is OAuthGrantStatus.DISCONNECTED
+    assert not any((await case.slots()).values())
+    await case.assert_no_leaks()
+
+
+async def test_disconnect_idempotent(vault_oauth_case):
     """Origin test_adv_oauth_lifecycle.py::test_disconnect_idempotent."""
-    case = oauth_case
+    case = vault_oauth_case
     await case.connect()
     await case.balance()
     assert case.client.delete(case.path, headers=case.headers).status_code == 204
@@ -91,12 +127,18 @@ async def test_device_interval_and_slow_down_honored(oauth_case):
     start = await case.start()
     assert start.interval == case.stub.device_interval
     assert (await case.poll()).status is OAuthGrantStatus.PENDING
+    assert (await case.poll()).status is OAuthGrantStatus.PENDING
+    assert case.stub.poll_calls == 1
+    case.clock[0] += timedelta(seconds=start.interval)
     slow = await case.poll()
     assert slow.status is OAuthGrantStatus.PENDING
     assert slow.interval == start.interval + 5
     for _ in range(4):
         await case.status()
     assert case.stub.poll_calls == 2
+    assert (await case.poll()).status is OAuthGrantStatus.PENDING
+    assert case.stub.poll_calls == 2
+    case.clock[0] += timedelta(seconds=slow.interval)
     assert (await case.poll()).status is OAuthGrantStatus.CONNECTED
     assert case.stub.poll_calls == 3
 
@@ -130,9 +172,9 @@ async def test_refresh_single_flight_and_skew(oauth_case):
     assert not any((await case.slots()).values())
 
 
-async def test_restart_while_paired_returns_409_without_touching_pairing(oauth_case):
+async def test_restart_while_paired_returns_409_without_touching_pairing(vault_oauth_case):
     """Origin singleton restart-conflict case: pairing survives a denied restart."""
-    case = oauth_case
+    case = vault_oauth_case
     await case.connect()
     old = await case.token()
     response = case.client.post(case.path + "/device", headers=case.headers)

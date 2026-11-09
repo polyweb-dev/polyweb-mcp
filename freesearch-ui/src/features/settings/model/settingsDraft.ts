@@ -16,17 +16,22 @@ function sameValue(left: SettingsValue, right: SettingsValue): boolean {
   return left === right
 }
 
-/** Changed fields of one section, keyed by field id, ready for the write body. */
-export function sectionChanges(
-  draft: SettingsDraft,
-  fields: readonly SettingsField[],
-  section: string
-): SettingsChanges {
+/**
+ * Whether a draft value leaves the stored state as it is: the same override,
+ * or an inherited field edited back to the value it already shows.
+ */
+function unchanged(value: SettingsValue, field: SettingsField): boolean {
+  if (sameValue(value, field.projectOverride)) return true
+  return field.projectOverride === null && sameValue(value, field.effectiveValue)
+}
+
+/** Changed fields of the whole draft, keyed by field id, ready for the write body. */
+export function draftChanges(draft: SettingsDraft, fields: readonly SettingsField[]): SettingsChanges {
   const changes: Record<string, SettingsValue> = {}
   for (const field of fields) {
-    if (field.section !== section || !(field.id in draft)) continue
+    if (!(field.id in draft)) continue
     const value = draft[field.id] ?? null
-    if (!sameValue(value, field.projectOverride)) changes[field.id] = value
+    if (!unchanged(value, field)) changes[field.id] = value
   }
   return changes
 }
@@ -41,22 +46,4 @@ export function controlValue(draft: SettingsDraft, field: SettingsField): Settin
   if (!(field.id in draft)) return field.effectiveValue
   const value = draft[field.id] ?? null
   return value === null ? field.systemDefault : value
-}
-
-/** Draft without the entries of one section. */
-export function withoutSection(
-  draft: SettingsDraft,
-  fields: readonly SettingsField[],
-  section: string
-): SettingsDraft {
-  const ids = new Set(fields.filter((field) => field.section === section).map((field) => field.id))
-  return Object.fromEntries(Object.entries(draft).filter(([id]) => !ids.has(id)))
-}
-
-/** Parse the comma-separated provider list of the preferred providers field. */
-export function parseList(text: string): string[] {
-  return text
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item !== "")
 }

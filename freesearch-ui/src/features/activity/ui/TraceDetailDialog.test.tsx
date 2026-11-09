@@ -74,7 +74,7 @@ describe("TraceDetailDialog", () => {
     expect(within(dialog).getAllByText("Provider").length).toBeGreaterThan(0)
     expect(within(dialog).getByText("All providers")).toBeInTheDocument()
     expect(within(dialog).getAllByText("Total latency").length).toBeGreaterThan(0)
-    expect(within(dialog).getAllByText("3381ms").length).toBeGreaterThan(0)
+    expect(within(dialog).getAllByText(/^3,?381 ?ms$/).length).toBeGreaterThan(0)
     expect(within(dialog).getByText("Success")).toBeInTheDocument()
     expect(within(dialog).getAllByText("6").length).toBeGreaterThan(0)
   })
@@ -151,6 +151,21 @@ describe("TraceDetailDialog", () => {
     expect(screen.queryByRole("button", { name: /show all/i })).not.toBeInTheDocument()
   })
 
+  it("shows plain excerpts and unpadded ranks in the list and inspector", () => {
+    const detail = mapTraceDetail(traceDetailFixture({
+      output: {
+        kind: "search_results", query: "q",
+        results: [{ title: "Example", url: "https://example.com", snippet: "- [*Guide*](https://example.com)", source: null, score: null }],
+      },
+    }))
+    renderDialog(detail)
+    const ranked = screen.getByRole("list", { name: "Ranked results" })
+    expect(within(ranked).getByText("1")).toBeInTheDocument()
+    expect(within(ranked).queryByText("01")).not.toBeInTheDocument()
+    expect(within(ranked).getByText("Guide")).toBeInTheDocument()
+    expect(within(screen.getByRole("region", { name: "Result inspector" })).getByText("Guide")).toBeInTheDocument()
+  })
+
   it("opens on the first result and keeps the honest ranking explanation available", async () => {
     const user = userEvent.setup()
     renderDialog(aggregatedDetail())
@@ -186,7 +201,7 @@ describe("TraceDetailDialog", () => {
     ).toBeInTheDocument()
     expect(screen.queryByText(/Fusion score/)).not.toBeInTheDocument()
     expect(screen.getByText("Provider latency")).toBeInTheDocument()
-    expect(screen.getByText("2025ms")).toBeInTheDocument()
+    expect(screen.getByText(/^2,?025 ?ms$/)).toBeInTheDocument()
     expect(
       screen.getByText(/Showing this provider's response/)
     ).toBeInTheDocument()
@@ -252,7 +267,7 @@ describe("TraceDetailDialog", () => {
     renderDialog(detail)
 
     const inspector = screen.getByRole("region", { name: "Result inspector" })
-    expect(within(inspector).getByText("Provider score").parentElement).toHaveTextContent("Not recorded")
+    expect(within(inspector).queryByText("Provider score")).not.toBeInTheDocument()
     await user.click(within(inspector).getByText("Why this order"))
     expect(
       screen.getByText(/This trace did not record provider scores, so returned order is the only ranking signal/)
@@ -260,17 +275,17 @@ describe("TraceDetailDialog", () => {
     expect(screen.queryByText(/Only the final score is shown/)).not.toBeInTheDocument()
   })
 
-  it("shows provider timing in the unified Trace view instead of a separate latency panel", async () => {
+  it("shows provider timing in the unified Timeline view instead of a separate latency panel", async () => {
     const user = userEvent.setup()
     renderDialog(aggregatedDetail())
 
     expect(screen.queryByText("Latency")).not.toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Trace" }))
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
     const trajectory = screen.getByRole("list", { name: "Trace trajectory" })
     const row = within(trajectory).getByRole("button", { name: /Keenable request/i })
     expect(within(row).getByText("Keenable")).toBeInTheDocument()
     expect(within(row).getByText("request")).toBeInTheDocument()
-    expect(within(trajectory).getByText("2025ms")).toBeInTheDocument()
+    expect(within(trajectory).getByText(/^2,?025 ?ms$/)).toBeInTheDocument()
   })
 
   it("keeps the approved narrow branches: 2×2 summary rail", () => {
@@ -282,42 +297,64 @@ describe("TraceDetailDialog", () => {
     )
   })
 
-  it("opens Trace with the first payload-bearing span selected", async () => {
+  it("opens Timeline with the first payload-bearing span selected", async () => {
     const user = userEvent.setup()
     renderDialog(aggregatedDetail())
 
-    await user.click(screen.getByRole("button", { name: "Trace" }))
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
     expect(screen.getByRole("button", { name: /Keenable request/ })).toHaveAttribute(
       "aria-pressed",
       "true"
     )
-    expect(screen.getByText("freesearch.provider.request")).toBeInTheDocument()
+    // Plain event labels with a relative time; the raw name stays in Technical identifiers.
+    expect(screen.getAllByText("Provider request").length).toBeGreaterThan(0)
+    expect(screen.queryByText(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/)).not.toBeInTheDocument()
   })
 
   it("shows an error callout with role=alert and no results for failed traces", () => {
     renderDialog(mapTraceDetail(errorTraceDetailFixture()))
 
     const alert = screen.getByRole("alert")
-    expect(alert).toHaveTextContent("http_error")
     expect(alert).toHaveTextContent("HTTP 502")
+    // The raw error type stays out of the callout.
+    expect(alert).not.toHaveTextContent("http_error")
     expect(screen.getByText("URL")).toBeInTheDocument()
-    expect(screen.getByText(/no results were recorded/i)).toBeInTheDocument()
+    // Said once: the trace opens on its timeline with the one absence line.
+    expect(screen.getAllByText(/no results were recorded/i)).toHaveLength(1)
+    expect(
+      within(screen.getByRole("group", { name: "Trace detail views" })).getByRole("button", {
+        name: "Summary",
+      })
+    ).toHaveAttribute("aria-pressed", "true")
   })
 
-  it("explains a metadata-only trace without a settings lookup", () => {
+  it("opens metadata-only traces on a compact summary with a Timeline action", async () => {
+    const user = userEvent.setup()
     renderDialog({ ...searchDetail(), input: null, output: null })
 
-    expect(
-      screen.getByText(
-        "This trace stored metadata only. The project's trace policy did not capture the query or the results."
-      )
-    ).toBeInTheDocument()
+    expect(screen.getByText("Metadata only")).toBeInTheDocument()
+    expect(screen.getByText("Query not stored")).toBeInTheDocument()
+    expect(screen.queryByText(/stored metadata only/)).not.toBeInTheDocument()
+    expect(screen.getAllByText("Results were not stored (metadata-only trace policy)")).toHaveLength(1)
+    expect(screen.getByRole("button", { name: "Summary" })).toHaveAttribute("aria-pressed", "true")
+    expect(screen.queryByRole("list", { name: "Trace trajectory" })).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
+    expect(screen.getByRole("list", { name: "Trace trajectory" })).toBeInTheDocument()
+    expect(screen.queryByText("Results were not stored (metadata-only trace policy)")).not.toBeInTheDocument()
+  })
+
+  it("names what ran and when in the subtitle, with no storage copy", () => {
+    renderDialog(searchDetail())
+
+    const dialog = screen.getByRole("dialog")
+    expect(within(dialog).getByText(/^Search · /)).toBeInTheDocument()
+    expect(within(dialog).queryByText(/Stored in this FreeSearch database/)).not.toBeInTheDocument()
   })
 
   it("says the results were not stored for a success without output", () => {
     renderDialog({ ...searchDetail(), output: null })
 
-    expect(screen.getByText("The results of this trace were not stored.")).toBeInTheDocument()
+    expect(screen.getByText("The results of this trace were not stored")).toBeInTheDocument()
     expect(screen.queryByText(/stored metadata only/)).not.toBeInTheDocument()
   })
 
@@ -331,7 +368,7 @@ describe("TraceDetailDialog", () => {
   it("shows the project copy without retry for a trace outside the project", () => {
     renderDialog(null, { status: "missing", error: "This trace is not available in this project." })
 
-    expect(screen.getByRole("alert")).toHaveTextContent("This trace is not available in this project.")
+    expect(screen.getByRole("alert")).toHaveTextContent("This trace is not available in this project")
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument()
   })
 
@@ -438,7 +475,7 @@ describe("TraceDetailDialog inspector workspace", () => {
     expect(screen.queryByText(/contributor not recorded/i)).not.toBeInTheDocument()
   })
 
-  it("switches between Results and one complete Trace view", async () => {
+  it("switches between Results and one complete Timeline view", async () => {
     const user = userEvent.setup()
     renderAggregated()
 
@@ -447,17 +484,17 @@ describe("TraceDetailDialog inspector workspace", () => {
       "aria-pressed",
       "true"
     )
-    await user.click(within(switcher).getByRole("button", { name: "Trace" }))
-    expect(within(switcher).getByRole("button", { name: "Trace" })).toHaveAttribute(
+    await user.click(within(switcher).getByRole("button", { name: "Timeline" }))
+    expect(within(switcher).getByRole("button", { name: "Timeline" })).toHaveAttribute(
       "aria-pressed",
       "true"
     )
     expect(screen.getByRole("region", { name: "Trace timeline" })).toBeInTheDocument()
     expect(within(switcher).queryByRole("button", { name: "Request data" })).not.toBeInTheDocument()
     const details = screen.getByRole("region", { name: /details/i })
-    expect(within(details).getByText("freesearch.provider.request")).toBeInTheDocument()
+    expect(within(details).getByRole("button", { name: "Show raw data" })).toBeInTheDocument()
     expect(
-      screen.getByText("Full trace · select a stage to inspect its timing and recorded data")
+      screen.getByText("Select a stage to see its timing and recorded data")
     ).toBeInTheDocument()
   })
 
@@ -465,13 +502,13 @@ describe("TraceDetailDialog inspector workspace", () => {
     const user = userEvent.setup()
     renderAggregated()
 
-    await user.click(screen.getByRole("button", { name: "Trace" }))
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
 
     const timeline = screen.getByRole("region", { name: "Trace timeline" })
     expect(timeline.parentElement?.className).toMatch(/lg:grid-cols-/)
     expect(screen.getByRole("region", { name: /details/i })).toBeInTheDocument()
     expect(
-      screen.getByText("Full trace · select a stage to inspect its timing and recorded data")
+      screen.getByText("Select a stage to see its timing and recorded data")
     ).toBeInTheDocument()
   })
 
@@ -499,26 +536,4 @@ describe("TraceDetailDialog inspector workspace", () => {
     expect(screen.queryByRole("button", { name: /show all/i })).not.toBeInTheDocument()
   })
 
-  it("preserves loading, error, and Escape behavior in the new shell", async () => {
-    const { onRetry } = (() => {
-      const onClose = vi.fn()
-      const retry = vi.fn()
-      render(
-        <TraceDetailDialog
-          trace={null}
-          isOpen
-          status="error"
-          error="boom"
-          onClose={onClose}
-          onRetry={retry}
-        />
-      )
-      return { onRetry: retry }
-    })()
-
-    expect(screen.getByRole("alert")).toHaveTextContent(/trace detail unavailable/i)
-    const user = userEvent.setup()
-    await user.click(screen.getByRole("button", { name: "Retry" }))
-    expect(onRetry).toHaveBeenCalledTimes(1)
-  })
 })

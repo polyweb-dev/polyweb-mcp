@@ -1,38 +1,52 @@
-import { useProjectScope, useProjects } from "@/domains/projects"
+import { useCallback } from "react"
+import { hasPermission, PROJECT_PERMISSIONS, useProjectScope, useProjects } from "@/domains/projects"
+import { getProjectOrder } from "@/domains/routing"
 import { errorMessage } from "@/shared/api/http"
+import { useScopedResource } from "@/shared/lib/useScopedResource"
 import { Button } from "@/shared/ui/button"
+import { LinkButton } from "@/shared/ui/LinkButton"
 import { PageHeader } from "@/shared/ui/PageHeader"
+import { Section } from "@/shared/ui/Section"
 import { useProjectUsage } from "../model/useProjectUsage"
-import { RecentUsageTable } from "./RecentUsageTable"
 import { UsageTotalsTable } from "./UsageTotalsTable"
 
 /**
- * Usage page of the URL project: units and events per provider and
- * operation, plus the recent ledger. It shows this project's own usage only,
- * never the shared provider quota or health.
+ * Usage page of the URL project: calls and metered units per provider and
+ * operation since the ledger began. Individual calls live in Activity, so
+ * the page links there instead of repeating a second call ledger.
  */
 export function ProjectUsagePage() {
   const { accountId } = useProjects()
-  const { projectId } = useProjectScope()
+  const { projectId, accessState } = useProjectScope()
   const usage = useProjectUsage(accountId, projectId)
+  const canReadProviders = hasPermission(accessState.status === "ready" ? accessState.data : null, PROJECT_PERMISSIONS.providersRead)
+  const loadOrder = useCallback((signal: AbortSignal) => getProjectOrder(projectId, signal), [projectId])
+  const order = useScopedResource({ scopeKey: `usage:${accountId}:${projectId}`, load: loadOrder, enabled: canReadProviders })
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
       <PageHeader
         title="Usage"
-        description="This project's usage only. Shared provider quota and health are not shown here."
+        description="What this project's calls used, per provider"
+        actions={
+          <LinkButton
+            to={`/p/${projectId}/activity`}
+          >
+            See every call in Activity
+          </LinkButton>
+        }
       />
 
       {usage.status === "loading" && (
         <p role="status" className="text-[13px] text-[var(--muted)]">
-          Loading usage...
+          Loading usage…
         </p>
       )}
 
       {usage.status === "error" && (
         <div className="space-y-3">
           <p role="alert" className="text-[13px]" style={{ color: "var(--status-danger)" }}>
-            Usage unavailable — {errorMessage(usage.error, "Usage unavailable")}
+            Usage is unavailable: {errorMessage(usage.error, "Usage unavailable")}
           </p>
           <Button variant="outline" size="form" onClick={() => void usage.reload()}>
             Retry
@@ -41,16 +55,9 @@ export function ProjectUsagePage() {
       )}
 
       {usage.status === "ready" && (
-        <>
-          <div className="space-y-2">
-            <h3 className="text-[13px] font-medium text-[var(--text-strong)]">Totals</h3>
-            <UsageTotalsTable totals={usage.data.totals} />
-          </div>
-          <div className="space-y-2">
-            <h3 className="text-[13px] font-medium text-[var(--text-strong)]">Recent usage</h3>
-            <RecentUsageTable entries={usage.data.recent} />
-          </div>
-        </>
+        <Section title="Totals by provider" description="All time">
+          <UsageTotalsTable totals={usage.data.totals} order={order.status === "ready" ? order.data : undefined} />
+        </Section>
       )}
     </section>
   )

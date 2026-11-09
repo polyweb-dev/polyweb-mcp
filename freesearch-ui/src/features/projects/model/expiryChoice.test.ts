@@ -24,7 +24,7 @@ describe("toApiKeyExpiry", () => {
     expect(toApiKeyExpiry("custom", "2026-10-31", NOW).ok).toBe(true)
   })
 
-  it.each([["2026-10-30"], [""], ["31/10/2026"]])("rejects the custom date %j", (value) => {
+  it.each([["2026-10-30"], [""], ["31/10/2026"], ["2027-02-30"], ["2027-13-01"]])("rejects the custom date %j", (value) => {
     expect(toApiKeyExpiry("custom", value, NOW)).toEqual({ ok: false, message: PAST_EXPIRY_MESSAGE })
   })
 })

@@ -8,6 +8,7 @@ import { mapTraceDetail, mapTraceList } from "@/domains/activity"
 import type { TraceSummary } from "@/domains/activity"
 import { ActivityList } from "./ActivityList"
 import { ActivityPage } from "./ActivityPage"
+import { formatDateTime } from "@/shared/lib/formatTime"
 import { deferred, err, installFetchStub, ok } from "@/test/fetchMock"
 import {
   AGGREGATED_TRACE_ID,
@@ -43,8 +44,8 @@ function renderActivityPage(search = "") {
 }
 
 /**
- * The Activity list is a scannable, payload-free table: seven visible headers
- * ending in Actions, one shared outline "View details" button per row, and
+ * The Activity list is a scannable, payload-free table: seven headers ending
+ * in Actions, one shared "View details" chevron button per row, and
  * never the query or result URLs in the list document. An aggregated fanout
  * row discloses one nested provider attempt per recorded call. Page-level
  * loading, error, empty, and filter states live in ActivityPage and are locked
@@ -52,6 +53,14 @@ function renderActivityPage(search = "") {
  */
 function summaries(): TraceSummary[] {
   return mapTraceList(traceListFixture())
+}
+
+/**
+ * One latency cell in the shared format: `3,381 ms` (thousands separator and
+ * a space before the unit), also accepting the older `3381ms`.
+ */
+function ms(value: number): RegExp {
+  return new RegExp(`^${value.toLocaleString("en-US").replace(",", ",?")} ?ms$`)
 }
 
 function listProps(overrides = {}) {
@@ -101,25 +110,43 @@ describe("ActivityList", () => {
     expect(body).not.toContain("Raft, Paxos")
   })
 
-  it("renders an actual shared outline button per row", () => {
+  it("renders one shared icon button per row instead of repeated text buttons", () => {
     render(<ActivityList {...listProps()} />)
 
     const buttons = screen.getAllByRole("button", { name: "View details" })
     expect(buttons).toHaveLength(3)
     for (const button of buttons) {
       expect(button.tagName.toLowerCase()).toBe("button")
-      expect(button.className).toContain("outline")
+      expect(button).toHaveAttribute("data-slot", "button")
+      // The chevron carries the name; no visible "View details" text repeats per row.
+      expect(button.textContent?.trim()).toBe("")
     }
+  })
+
+  it("renders on the shared fs-table instead of the table primitive", () => {
+    render(<ActivityList {...listProps()} />)
+
+    const table = screen.getByRole("table", { name: "Activity" })
+    expect(table).toHaveClass("fs-table")
+    expect(document.querySelector('[data-slot="table"]')).toBeNull()
   })
 
   it("shows latency and result counts without inventing values", () => {
     render(<ActivityList {...listProps()} />)
 
-    expect(screen.getByText("3381ms")).toBeInTheDocument()
-    expect(screen.getByText("248ms")).toBeInTheDocument()
-    expect(screen.getByText("512ms")).toBeInTheDocument()
+    expect(screen.getByText(ms(3381))).toBeInTheDocument()
+    expect(screen.getByText(ms(248))).toBeInTheDocument()
+    expect(screen.getByText(ms(512))).toBeInTheDocument()
     expect(screen.getByText("6")).toBeInTheDocument()
     expect(screen.getByText("2")).toBeInTheDocument()
+  })
+
+  it("shows relative times with the exact timestamp on hover", () => {
+    const now = Date.now()
+    const startedAt = new Date(now - 86_400_000).toISOString()
+    render(<ActivityList {...listProps({ summaries: [{ ...summaries()[0]!, startedAt }] })} />)
+
+    expect(screen.getByText("1 d ago")).toHaveAttribute("title", formatDateTime(startedAt))
   })
 
   it("labels the aggregated row All providers with an accessible expander", () => {
@@ -161,16 +188,16 @@ describe("ActivityList", () => {
 
     // R6 unifies the action text: 3 parent rows plus 7 nested provider rows.
     expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(10)
-    const inspectButtons = ["2025ms", "3223ms", "1450ms", "1780ms", "2050ms", "2310ms", "830ms"].map(
-      (latency) => within(screen.getByText(latency).closest("tr")!).getByRole("button", { name: "View details" })
+    const inspectButtons = [2025, 3223, 1450, 1780, 2050, 2310, 830].map(
+      (latency) => within(screen.getByText(ms(latency)).closest("tr")!).getByRole("button", { name: "View details" })
     )
     expect(inspectButtons).toHaveLength(7)
     // Scope by the attempt latency: the parent list has other Keenable rows.
-    const keenableRow = screen.getByText("2025ms").closest("tr")!
+    const keenableRow = screen.getByText(ms(2025)).closest("tr")!
     expect(within(keenableRow).getByText("Keenable")).toBeInTheDocument()
     expect(within(keenableRow).getByText("3")).toBeInTheDocument()
     expect(within(keenableRow).getByText("Success")).toBeInTheDocument()
-    const tavilyRow = screen.getByText("3223ms").closest("tr")!
+    const tavilyRow = screen.getByText(ms(3223)).closest("tr")!
     expect(within(tavilyRow).getByText("Tavily")).toBeInTheDocument()
   })
 
@@ -190,7 +217,7 @@ describe("ActivityList", () => {
       />
     )
 
-    const keenableRow = screen.getByText("2025ms").closest("tr")!
+    const keenableRow = screen.getByText(ms(2025)).closest("tr")!
     await user.click(within(keenableRow).getByRole("button", { name: "View details" }))
 
     expect(onInspect).toHaveBeenCalledTimes(1)
@@ -449,6 +476,8 @@ describe("ActivityPage list states", () => {
       expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(4)
     })
     expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument()
+    // The footer states how many traces are loaded, with no "more" once the cursor ends.
+    expect(screen.getByText("Showing 4 traces")).toBeInTheDocument()
     expect(stub.requestsTo(`${TRACES}?limit=50&cursor=page-2`)).toHaveLength(1)
 
     await user.click(screen.getAllByRole("button", { name: "View details" })[1]!)
@@ -487,17 +516,17 @@ describe("ActivityList seven-provider direct identity", () => {
     expect(screen.getAllByRole("button", { name: "View details" })).toHaveLength(10)
     // Scope each name by its attempt latency: the parent list has other
     // provider rows (e.g. the single-provider Keenable trace).
-    const expected: Array<[string, string]> = [
-      ["Brave Search", "1450ms"],
-      ["Keenable", "2025ms"],
-      ["Tavily", "3223ms"],
-      ["Exa", "1780ms"],
-      ["Firecrawl", "2050ms"],
-      ["You.com", "2310ms"],
-      ["Parallel", "830ms"],
+    const expected: Array<[string, number]> = [
+      ["Brave Search", 1450],
+      ["Keenable", 2025],
+      ["Tavily", 3223],
+      ["Exa", 1780],
+      ["Firecrawl", 2050],
+      ["You.com", 2310],
+      ["Parallel", 830],
     ]
     for (const [name, latency] of expected) {
-      const row = screen.getByText(latency).closest("tr")!
+      const row = screen.getByText(ms(latency)).closest("tr")!
       expect(within(row).getByText(name)).toBeInTheDocument()
     }
     expect(screen.queryByText(/Provider attempt/)).not.toBeInTheDocument()
@@ -507,7 +536,7 @@ describe("ActivityList seven-provider direct identity", () => {
   it("names the failed parallel attempt instead of leaving it unnamed", () => {
     expandedSeven()
 
-    const parallelRow = screen.getByText("830ms").closest("tr")!
+    const parallelRow = screen.getByText(ms(830)).closest("tr")!
     expect(within(parallelRow).getByText("Parallel")).toBeInTheDocument()
     expect(within(parallelRow).getByText("Error")).toBeInTheDocument()
   })
@@ -515,19 +544,19 @@ describe("ActivityList seven-provider direct identity", () => {
   it("names the empty exa/youcom responses that still carry provider", () => {
     expandedSeven()
 
-    const exaRow = screen.getByText("1780ms").closest("tr")!
+    const exaRow = screen.getByText(ms(1780)).closest("tr")!
     expect(within(exaRow).getByText("Exa")).toBeInTheDocument()
-    const youcomRow = screen.getByText("2310ms").closest("tr")!
+    const youcomRow = screen.getByText(ms(2310)).closest("tr")!
     expect(within(youcomRow).getByText("You.com")).toBeInTheDocument()
   })
 
   it("shows a logo followed by the catalog name in every provider row", () => {
     expandedSeven()
 
-    const braveRow = screen.getByText("1450ms").closest("tr")!
+    const braveRow = screen.getByText(ms(1450)).closest("tr")!
     expect(within(braveRow).getByText("Brave Search")).toBeInTheDocument()
     expect(within(braveRow).getByTestId("provider-logo-brave")).toBeInTheDocument()
-    const youcomRow = screen.getByText("2310ms").closest("tr")!
+    const youcomRow = screen.getByText(ms(2310)).closest("tr")!
     expect(within(youcomRow).getByText("You.com")).toBeInTheDocument()
     expect(within(youcomRow).getByTestId("provider-logo-youcom")).toBeInTheDocument()
   })

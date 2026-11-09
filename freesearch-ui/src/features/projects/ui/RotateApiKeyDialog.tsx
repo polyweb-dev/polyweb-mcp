@@ -5,8 +5,8 @@ import { RotateApiKeyForm } from "./RotateApiKeyForm"
 /**
  * Rotate dialog of one active key.
  *
- * The default overlap keeps the old key valid for 24 hours; "Keep current
- * lifetime" omits `expires_at`. A success closes this dialog and opens the
+ * The default overlap keeps the old key valid for 24 hours; "Keep current"
+ * omits `expires_at`. A success closes this dialog and opens the
  * one-time reveal of the new key; a failure shows inside the dialog.
  */
 export function RotateApiKeyDialog({ controller }: { controller: ProjectApiKeysController }) {

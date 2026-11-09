@@ -57,11 +57,17 @@ from freesearch.models.projects import (
 )
 from freesearch.models.schema_enums import OAuthGrantStatus
 from freesearch.models.users import UserPrincipal
+from freesearch.models.vault import KeyPoolCreate, VaultKeyCreate, VaultKeyDetails
+from freesearch.persistence.oauth_grants import CredentialOAuthGrantRow
+from freesearch.persistence.projects import ProjectRepository
 from freesearch.persistence.storage import RuntimeSettingRow
+from freesearch.services.authorization import AuthorizationDenied
 from freesearch.services.control_errors import ResourceNotFound
 from freesearch.services.credential_oauth import CredentialOAuthService, OAuthTarget
 from freesearch.services.credentials import CredentialService
+from freesearch.services.key_pools import KeyPoolService
 from freesearch.services.projects import ProjectService
+from freesearch.services.vault_keys import VaultKeyService, VaultOAuthService
 from tests.fixtures.alpha_fixtures import AlphaBootstrapResult, bootstrap_fresh_alpha
 from tests.fixtures.api_keys import audit_rows, database_dump
 from tests.fixtures.auth import auth_service_for, create_temp_user, temp_email, temp_principal
@@ -101,6 +107,13 @@ class _World:
 
     def credentials(self) -> CredentialService:
         return CredentialService(self.boot.repository, self.store)
+
+    def vault_oauth(self) -> VaultOAuthService:
+        service = VaultOAuthService(
+            self.repository, self.store, self.initiator.id, http_client=self.http
+        )
+        service._clock = lambda: self.clock[0]
+        return service
 
     def projects(self) -> ProjectService:
         return ProjectService(self.boot.repository, secret_store=self.store)
@@ -177,18 +190,32 @@ async def _system_oauth_credential(world: _World, label: str) -> CredentialInsta
     return credential
 
 
-async def _private_oauth_credential(world: _World, label: str) -> CredentialInstanceRead:
-    return await world.credentials().create_project_credential(
+async def _private_oauth_credential(world: _World, label: str) -> VaultKeyDetails:
+    key = await VaultKeyService(world.repository, world.store).create(
         world.initiator,
-        world.project.id,
-        CredentialCreate(provider_type="parallel", label=label, auth_mode=CredentialAuthMode.OAUTH),
+        VaultKeyCreate(provider_type="parallel", label=label, auth_mode=CredentialAuthMode.OAUTH),
     )
+    async with world.repository.session() as session:
+        projects = ProjectRepository(session)
+        owner = await projects.get_provider_owner(world.project.id)
+        assert owner is not None
+        assert await projects.transfer_provider_owner(world.project.id, owner, world.initiator.id)
+        await session.commit()
+    await KeyPoolService(world.repository).create(
+        world.initiator, key.id, KeyPoolCreate(label=label, project_id=world.project.id)
+    )
+    async with world.repository.session() as session:
+        assert await ProjectRepository(session).transfer_provider_owner(
+            world.project.id, world.initiator.id, owner
+        )
+        await session.commit()
+    return key
 
 
 async def _connect(
     world: _World, actor: UserPrincipal, target: OAuthTarget, credential_id: UUID
 ) -> None:
-    oauth = world.oauth()
+    oauth = world.vault_oauth() if actor.id == world.initiator.id else world.oauth()
     await oauth.start(actor, target, credential_id)
     world.vendor.approve_all()
     status = await oauth.poll(actor, target, credential_id)
@@ -213,6 +240,13 @@ async def _live_oauth_slots(world: _World, credential_id: UUID) -> dict[str, str
         if value is not None:
             live[name] = value
     return live
+
+
+async def _vault_grant(world: _World, credential_id: UUID) -> CredentialOAuthGrantRow:
+    async with world.repository.session() as session:
+        grant = await session.get(CredentialOAuthGrantRow, str(credential_id))
+        assert grant is not None
+        return grant
 
 
 async def _token(world: _World, credential_id: UUID) -> str | None:
@@ -304,9 +338,9 @@ async def test_stale_refresh_loses_the_generation_cas_and_writes_nothing(world: 
 @pytest.mark.asyncio
 async def test_refresh_racing_disconnect_never_reconnects_or_stores(world: _World) -> None:
     credential = await _private_oauth_credential(world, "parallel-private")
-    target = OAuthTarget(project_id=world.project.id)
+    target = _SYSTEM
     await _connect(world, world.initiator, target, credential.id)
-    oauth = world.oauth()
+    oauth = world.vault_oauth()
 
     entered, release = world.vendor.hold("refresh")
     late = asyncio.create_task(oauth.refresh(target, credential.id))
@@ -378,8 +412,7 @@ async def _bulk_demote(world: _World) -> None:
             changes=[
                 ProjectMemberChange(
                     user_id=world.initiator.id,
-                    add_roles=frozenset({"project_member"}),
-                    remove_roles=frozenset({"project_admin"}),
+                    role="developer",
                 )
             ]
         ),
@@ -431,8 +464,8 @@ async def test_initiator_permission_removal_ends_private_flow_atomically(
     world: _World, mutation: str
 ) -> None:
     credential = await _private_oauth_credential(world, f"parallel-{mutation}")
-    target = OAuthTarget(project_id=world.project.id)
-    await world.oauth().start(world.initiator, target, credential.id)
+    target = _SYSTEM
+    await world.vault_oauth().start(world.initiator, target, credential.id)
     assert set(await _live_oauth_slots(world, credential.id)) == {
         f"credential.{credential.id}.oauth.device.t1",
         f"credential.{credential.id}.oauth.client.t1",
@@ -440,9 +473,19 @@ async def test_initiator_permission_removal_ends_private_flow_atomically(
 
     await _PROJECT_MUTATIONS[mutation](world)
 
-    await _assert_flow_ended(
-        world, credential.id, scope="project", reader=world.co_admin, target=target
-    )
+    status = await _vault_grant(world, credential.id)
+    assert status.status == OAuthGrantStatus.DISCONNECTED.value
+    assert status.last_error_code == "initiator_permission_revoked"
+    assert await _live_oauth_slots(world, credential.id) == {}
+    rows = await audit_rows(world.repository, scope="system", action="credential.oauth_flow_ended")
+    ended = [row for row in rows if row["target_id"] == str(credential.id)]
+    assert len(ended) == 1
+    assert ended[0]["detail_json"]["reason_code"] == "initiator_permission_revoked"
+    world.vendor.approve_all()
+    with pytest.raises(AuthorizationDenied):
+        await world.vault_oauth().poll(world.initiator, target, credential.id)
+    assert await _live_oauth_slots(world, credential.id) == {}
+    assert world.vendor.access_tokens == []
 
 
 @pytest.mark.asyncio
@@ -469,32 +512,30 @@ async def test_system_admin_revoke_ends_system_flow_atomically(world: _World) ->
 @pytest.mark.asyncio
 async def test_unrelated_membership_change_leaves_a_pending_flow_alone(world: _World) -> None:
     credential = await _private_oauth_credential(world, "parallel-unrelated")
-    target = OAuthTarget(project_id=world.project.id)
-    await world.oauth().start(world.initiator, target, credential.id)
+    target = _SYSTEM
+    await world.vault_oauth().start(world.initiator, target, credential.id)
 
     await world.projects().remove_member(world.initiator, world.project.id, world.member.id)
 
-    status = await world.oauth().status(world.initiator, target, credential.id)
+    status = await world.vault_oauth().status(world.initiator, target, credential.id)
     assert status.status is OAuthGrantStatus.PENDING
     assert f"credential.{credential.id}.oauth.device.t1" in await _live_oauth_slots(
         world, credential.id
     )
     world.vendor.approve_all()
-    connected = await world.oauth().poll(world.initiator, target, credential.id)
+    connected = await world.vault_oauth().poll(world.initiator, target, credential.id)
     assert connected.status is OAuthGrantStatus.CONNECTED
     assert await _token(world, credential.id) == world.vendor.access_tokens[-1]
 
 
 @pytest.mark.asyncio
 async def test_poll_time_initiator_check_refuses_tokens_when_no_hook_ran(world: _World) -> None:
-    """Defense in depth: a co-admin's poll cannot complete the ex-admin's flow."""
+    """Defense in depth: a former vault owner cannot complete the flow."""
 
     credential = await _private_oauth_credential(world, "parallel-poll-check")
-    target = OAuthTarget(project_id=world.project.id)
-    await world.oauth().start(world.initiator, target, credential.id)
+    target = _SYSTEM
+    await world.vault_oauth().start(world.initiator, target, credential.id)
     # Remove the role through storage only, so no F1 hook runs.
-    from freesearch.persistence.projects import ProjectRepository
-
     async with world.repository.session() as session:
         assert await ProjectRepository(session).delete_role_assignment(
             project_id=world.project.id, user_id=world.initiator.id, role_key="project_admin"
@@ -502,8 +543,11 @@ async def test_poll_time_initiator_check_refuses_tokens_when_no_hook_ran(world: 
         await session.commit()
 
     world.vendor.approve_all()
-    result = await world.oauth().poll(world.co_admin, target, credential.id)
-    assert result.status is OAuthGrantStatus.DISCONNECTED
+    with pytest.raises(AuthorizationDenied):
+        await world.vault_oauth().poll(world.initiator, target, credential.id)
+    assert world.vendor.access_tokens == []
+    result = await _vault_grant(world, credential.id)
+    assert result.status == OAuthGrantStatus.DISCONNECTED.value
     assert result.last_error_code == "initiator_permission_revoked"
     assert await _live_oauth_slots(world, credential.id) == {}
     assert await _token(world, credential.id) is None
@@ -523,12 +567,13 @@ async def test_device_code_client_secret_and_tokens_never_leak(
     oauth = world.oauth()
     system = await _system_oauth_credential(world, "parallel-leak-sys")
     private = await _private_oauth_credential(world, "parallel-leak-prv")
-    target = OAuthTarget(project_id=world.project.id)
+    target = _SYSTEM
 
     for actor, scope, credential_id in (
         (world.system_admin, _SYSTEM, system.id),
         (world.initiator, target, private.id),
     ):
+        oauth = world.vault_oauth() if actor.id == world.initiator.id else world.oauth()
         device = await oauth.start(actor, scope, credential_id)
         assert set(device.model_dump()) == {
             "user_code",
@@ -539,6 +584,7 @@ async def test_device_code_client_secret_and_tokens_never_leak(
         returned.append(device.model_dump_json())
         returned.append((await oauth.poll(actor, scope, credential_id)).model_dump_json())
         world.vendor.approve_all()
+        world.clock[0] += timedelta(seconds=device.interval)
         returned.append((await oauth.poll(actor, scope, credential_id)).model_dump_json())
         returned.append((await oauth.refresh(scope, credential_id)).model_dump_json())
         returned.append((await oauth.status(actor, scope, credential_id)).model_dump_json())
@@ -606,12 +652,12 @@ async def test_deactivating_a_system_flow_initiator_ends_that_flow(world: _World
 @pytest.mark.asyncio
 async def test_deleting_an_oauth_credential_retires_its_tokens(world: _World) -> None:
     credential = await _private_oauth_credential(world, "parallel-delete")
-    target = OAuthTarget(project_id=world.project.id)
+    target = _SYSTEM
     await _connect(world, world.initiator, target, credential.id)
     assert await _token(world, credential.id) == world.vendor.access_tokens[-1]
 
-    await world.credentials().delete_project_credential(
-        world.initiator, world.project.id, credential.id
+    await VaultKeyService(world.repository, world.store, http_client=world.http).delete(
+        world.initiator, credential.id
     )
 
     assert await _live_oauth_slots(world, credential.id) == {}
@@ -619,7 +665,7 @@ async def test_deleting_an_oauth_credential_retires_its_tokens(world: _World) ->
     # A refresh after the delete cannot resurrect anything.
     calls = list(world.vendor.token_calls)
     with pytest.raises(ResourceNotFound):
-        await world.oauth().refresh(target, credential.id)
+        await world.vault_oauth().refresh(target, credential.id)
     assert world.vendor.token_calls == calls
     assert await _live_oauth_slots(world, credential.id) == {}
 
@@ -628,11 +674,11 @@ async def test_deleting_an_oauth_credential_retires_its_tokens(world: _World) ->
 async def test_oauth_audit_lands_in_the_credential_owner_scope(world: _World) -> None:
     system = await _system_oauth_credential(world, "parallel-audit-sys")
     private = await _private_oauth_credential(world, "parallel-audit-prv")
-    target = OAuthTarget(project_id=world.project.id)
+    target = _SYSTEM
     await _connect(world, world.system_admin, _SYSTEM, system.id)
     await _connect(world, world.initiator, target, private.id)
     await world.oauth().disconnect(world.system_admin, _SYSTEM, system.id)
-    await world.oauth().disconnect(world.initiator, target, private.id)
+    await world.vault_oauth().disconnect(world.initiator, target, private.id)
 
     expected = [
         "credential.oauth_started",
@@ -652,9 +698,8 @@ async def test_oauth_audit_lands_in_the_credential_owner_scope(world: _World) ->
 
     assert actions(system_rows, system.id) == expected
     assert actions(project_rows, system.id) == []
-    assert actions(project_rows, private.id) == expected
-    assert actions(system_rows, private.id) == []
-    for row in project_rows:
+    assert actions(system_rows, private.id) == expected
+    assert actions(project_rows, private.id) == []
+    for row in system_rows:
         if row["target_id"] == str(private.id):
-            assert str(row["project_id"]) == str(world.project.id)
             assert str(row["actor_id"]) == str(world.initiator.id)

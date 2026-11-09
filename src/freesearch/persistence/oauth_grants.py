@@ -167,6 +167,7 @@ class PendingOAuthGrant:
     grant: StoredOAuthGrant
     owner_scope: CredentialOwnerScope
     owner_project_id: UUID | None
+    owner_user_id: UUID | None = None
 
 
 class CredentialOAuthGrantRepository:
@@ -196,13 +197,20 @@ class CredentialOAuthGrantRepository:
         )
 
     async def list_pending_for_account(self, *, account_id: UUID) -> list[PendingOAuthGrant]:
-        """List every pending grant of the account, system and project owned.
+        """List every pending grant of the account, including vault credentials.
 
         The only account-wide scan; it serves account deactivation, which must
         find every flow the account started wherever it lives.
         """
 
         return await self._pending(account_id=account_id, owner=())
+
+    async def list_pending_for_vaults(self, *, account_id: UUID) -> list[PendingOAuthGrant]:
+        """List pending flows on account-owned vault credentials."""
+
+        return await self._pending(
+            account_id=account_id, owner=(ProviderCredentialRow.owner_user_id.is_not(None),)
+        )
 
     async def _pending(
         self, *, account_id: UUID, owner: tuple[Any, ...]
@@ -212,6 +220,7 @@ class CredentialOAuthGrantRepository:
                 CredentialOAuthGrantRow,
                 ProviderCredentialRow.owner_scope,
                 ProviderCredentialRow.owner_project_id,
+                ProviderCredentialRow.owner_user_id,
             )
             .join(
                 ProviderCredentialRow,
@@ -231,8 +240,9 @@ class CredentialOAuthGrantRepository:
                 grant=_stored(row),
                 owner_scope=CredentialOwnerScope(scope),
                 owner_project_id=UUID(project) if project else None,
+                owner_user_id=UUID(user) if user else None,
             )
-            for row, scope, project in rows.all()
+            for row, scope, project, user in rows.all()
         ]
 
     async def get(

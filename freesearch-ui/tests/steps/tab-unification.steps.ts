@@ -279,27 +279,6 @@ Then(
 )
 
 Then(
-  "the routing tabs should remain canonical pill tabs {string}, {string}, {string} and {string}",
-  async (
-    { page },
-    a: string,
-    b: string,
-    c: string,
-    d: string
-  ) => {
-    const pillList = main(page).locator(
-      '[data-slot="tabs-list"][data-variant="pill"]'
-    )
-    await expect(pillList).toBeVisible()
-    for (const label of [a, b, c, d]) {
-      await expect(
-        pillList.getByRole("tab", { name: label, exact: true })
-      ).toHaveCount(1)
-    }
-  }
-)
-
-Then(
   "the settings tabs should remain canonical pill tabs {string} and {string}",
   async ({ page }, a: string, b: string) => {
     const pillList = main(page).locator(
@@ -311,7 +290,6 @@ Then(
         pillList.getByRole("tab", { name: label, exact: true })
       ).toHaveCount(1)
     }
-    // U3: the Keys tab is gone; provider secrets are credential instances.
     await expect(pillList.getByRole("tab")).toHaveCount(2)
   }
 )
@@ -345,11 +323,7 @@ Then("the header navigation should expose zero tab roles", async ({ page }) => {
   const navigation = page.getByRole("navigation", { name: "Primary" })
   await expect(navigation.getByRole("tab")).toHaveCount(0)
   await expect(navigation.getByRole("tablist")).toHaveCount(0)
-  // P1-FINAL retired the Providers page; U1: the default stubbed session is a
-  // system administrator, so every permitted workspace link shows; U2 moved
-  // Playground and Activity to the Project navigation; U3 added System
-  // credentials and Capacity (eight).
-  await expect(navigation.getByRole("link")).toHaveCount(8)
+  await expect(navigation.getByRole("link")).toHaveCount(5)
   const projectNavigation = page.getByRole("navigation", { name: "Project" })
   await expect(projectNavigation.getByRole("tab")).toHaveCount(0)
   await expect(projectNavigation.getByRole("tablist")).toHaveCount(0)
