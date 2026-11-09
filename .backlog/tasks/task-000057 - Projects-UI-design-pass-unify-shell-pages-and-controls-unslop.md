@@ -1,11 +1,11 @@
 ---
 id: TASK-000057
 title: 'Projects UI design pass: unify shell, pages and controls (unslop)'
-status: Testing
+status: Done
 assignee:
   - '@devin'
 created_date: '2026-11-07T01:00:00Z'
-updated_date: '2026-11-09T05:13:00Z'
+updated_date: '2026-11-09T11:38:00Z'
 labels:
   - frontend
   - ui
@@ -58,6 +58,8 @@ Round 4 (owner feedback 2026-11-08/09), orchestrated with independent reviewers.
 - Code reviews: six per-feature reviews found 1 blocker, 8 major, 19 minor; all fixed (security: fetched-JSON secret scrubbing in Full traces, owner-scoped per-key quotas, archived-project access expansion; budgets: request-specific pricing, free keyless $0, exact manual USD; contracts: migrated per-op limits, legacy trace defaults). Pedantic tests removed per owner rule.
 - Verification: Vitest 2,473 pass; typecheck, lint, depcruise, knip (baseline only), build, BDD generation pass; backend unit 2,191 pass; offline Behave 258 pass / 0 fail; CI (Woodpecker) api-integration #47 1,655/0, api-bdd #45 288/0, api-latency #46 pass (p95 93.8 ms). Commits f2e3ff2..f4b0479 on feature/ui-quality-r4 (pushed).
 - Open items: merge separate Search/Fetch provider budgets on Quotas into one (deferred); key-wide contention splitting (deferred); vault API lacks key last-used; possibly dead provider-view backend fields; Exa usage API needs a service-account key; STE scan findings in two operator docs; build chunk > 500 kB warning; duplicate backlog id TASK-50 noticed (not changed).
+
+Owner confirmed 2026-11-09: merged via PR #64 (into chore/local-e2e-provider-seed), PR #61 (into feature/project) and on to main; branches cleaned up to main only.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
