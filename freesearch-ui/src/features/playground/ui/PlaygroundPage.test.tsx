@@ -1,19 +1,33 @@
 import React from "react"
 import { describe, it, expect, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react"
-import { FreeSearchProvider } from "@/context/FreeSearchContext"
-import { PlaygroundPage as SearchPlayground } from "@/features/playground/ui/PlaygroundPage"
+import { PlaygroundHarness } from "@/test/renderPlayground"
+import { PLAYGROUND_PROJECT_ID, answerProjectProviders as answerProviderView } from "@/test/projectPlayground"
 import { installFetchStub, ok, err, deferred } from "@/test/fetchMock"
 import type { FetchStub } from "@/test/fetchMock"
 import { allProvidersFixture, routingConfigFixture, dashboardFixture, searchResponseFixture, fetchResponseFixture } from "@/test/backendFixtures"
 import userEvent from "@testing-library/user-event"
 import { readFileSync, existsSync, readdirSync } from "node:fs"
 import path from "node:path"
-import { PlaygroundPage } from "./PlaygroundPage"
-import { playgroundPersistKey } from "@/store/playgroundPersistence"
+import { PLAYGROUND_PERSIST_VERSION, playgroundPersistKey } from "@/store/playgroundPersistence"
 import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import { initialPlaygroundState } from "@/store/playgroundSlice"
 import type { SearchResponse } from "@/domains/execution"
+
+function answerProjectProviders(req: Parameters<typeof answerProviderView>[0]): Response | null {
+  if (req.method === "GET" && req.url === `/api/v1/projects/${PLAYGROUND_PROJECT_ID}/routing/order`) {
+    const provider = (id: string) => ({ provider: id, name: id, call_cost_usd: null, keyless: false })
+    const operation = (ids: string[]) => ({
+      strategy: "custom", providers: ids.map(provider), has_saved_custom: true, not_allowed: [],
+    })
+    return ok({
+      revision: 1,
+      search: operation(["brave", "keenable", "tavily", "exa", "firecrawl", "you", "parallel", "tinyfish"]),
+      fetch: operation(["keenable", "tavily", "exa", "firecrawl", "you", "parallel", "tinyfish"]),
+    })
+  }
+  return answerProviderView(req)
+}
 
 /**
  * Open the shared provider picker and choose one row by its visible name.
@@ -41,6 +55,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -57,16 +73,14 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
 
 async function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -80,7 +94,7 @@ describe("SearchPlayground (live backend)", () => {
   it("renders mode toggles and search form", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
     expect(screen.getAllByText("Search").length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText("Fetch")).toBeInTheDocument()
@@ -89,7 +103,7 @@ describe("SearchPlayground (live backend)", () => {
   it("executes search and displays the real mapped results", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -105,7 +119,7 @@ describe("SearchPlayground (live backend)", () => {
   it("renders exactly ONE waterfall entry with no trace-unavailable note", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -143,13 +157,13 @@ describe("SearchPlayground (live backend)", () => {
   it("shows an error banner on search failure", async () => {
     renderWithBackend(() => err(503, { detail: "no provider is configured" }))
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
 
     await waitFor(() => {
-      expect(screen.getByText(/no provider is configured/i)).toBeInTheDocument()
+      expect(screen.getByText(/No provider is set up for this project/)).toBeInTheDocument()
     })
     expect(screen.queryByText("Live backend result one")).not.toBeInTheDocument()
   })
@@ -160,7 +174,7 @@ describe("SearchPlayground (live backend)", () => {
       shouldFail ? err(503, { detail: "backend went away" }) : ok(searchResponseFixture())
     )
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("first query")
@@ -180,7 +194,7 @@ describe("SearchPlayground (live backend)", () => {
   it("resets an ineligible search-only provider when switching to Fetch", async () => {
     const { stub } = renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     // Brave is search-only: pick it in the search provider filter. The
@@ -193,10 +207,10 @@ describe("SearchPlayground (live backend)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
     const fetchTrigger = screen.getByTestId("playground-fetch-provider")
-    expect(fetchTrigger.textContent).toContain("Auto arbitration")
+    expect(fetchTrigger.textContent).toContain("Auto")
 
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -205,16 +219,17 @@ describe("SearchPlayground (live backend)", () => {
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/doc",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
     })
   })
 
-  it("labels telemetry in Credits, never Cost", async () => {
+  it("labels telemetry as cost, not native credits", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -222,8 +237,9 @@ describe("SearchPlayground (live backend)", () => {
     await waitFor(() => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
-    expect(screen.getByText(/Credits/i)).toBeInTheDocument()
-    expect(document.body.textContent).not.toMatch(/Cost/i)
+    expect(screen.getByText("Cost")).toBeInTheDocument()
+    expect(screen.queryByText("Credits")).not.toBeInTheDocument()
+    expect(screen.queryByText("Units")).not.toBeInTheDocument()
   })
 
   it("renders fetch content length as UTF-8 bytes, not JS chars", async () => {
@@ -249,13 +265,13 @@ describe("SearchPlayground (live backend)", () => {
         )
     )
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -293,14 +309,14 @@ describe("SearchPlayground (live backend)", () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     const searchTrigger = await pinProvider(
       "playground-search-provider",
-      "All Providers (Ranked Fusion)"
+      "All providers"
     )
-    expect(searchTrigger.textContent).toContain("All Providers")
+    expect(searchTrigger.textContent).toContain("All providers")
 
     await submitQuery("fanout test")
 
@@ -334,7 +350,7 @@ describe("SearchPlayground inspector contract (characterization)", () => {
   it("shows the empty inspector prompt before a result is selected", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -343,16 +359,18 @@ describe("SearchPlayground inspector contract (characterization)", () => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
     expect(screen.getByText("Returned results (2)")).toBeInTheDocument()
-    expect(screen.getByText("Select item to inspect")).toBeInTheDocument()
+    expect(screen.queryByText("Results 2")).not.toBeInTheDocument()
+    // One prompt only: the side inspector asks for a selection, the list does not repeat it.
+    expect(screen.queryByText("Select item to inspect")).not.toBeInTheDocument()
     // The side inspector is always present: either the empty prompt or the
     // auto-selected first result, depending on controller defaults.
-    expect(screen.getByText(/Result Inspector|Select a search result/i)).toBeInTheDocument()
+    expect(screen.getByText(/Result details|Select a result to see its details/)).toBeInTheDocument()
   })
 
   it("selects a result into the side inspector on click", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -363,7 +381,7 @@ describe("SearchPlayground inspector contract (characterization)", () => {
     fireEvent.click(screen.getByText("Live backend result one"))
 
     await waitFor(() => {
-      expect(screen.getByText("Result Inspector")).toBeInTheDocument()
+      expect(screen.getByText("Result details")).toBeInTheDocument()
     })
     expect(screen.getByText("Target URL")).toBeInTheDocument()
     expect(screen.getAllByText("https://example.com/one").length).toBeGreaterThanOrEqual(1)
@@ -373,7 +391,7 @@ describe("SearchPlayground inspector contract (characterization)", () => {
   it("toggles the raw JSON inspector without losing results", async () => {
     renderWithBackend()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/Search across all providers/i)).toBeInTheDocument()
+      expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
     })
 
     await submitQuery("live backend query")
@@ -418,6 +436,8 @@ describe("SearchPlayground.c2.test.tsx", () => {
  */
 function renderPlayground() {
   installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -434,16 +454,14 @@ function renderPlayground() {
     return err(404, { detail: "unhandled test route" })
   })
   return render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
 }
 
 async function ready() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
@@ -525,7 +543,7 @@ describe("C2-REWORK AC-C2R-1/AC-C2R-3: SearchPlayground view-switcher is canonic
       "false"
     )
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: "Fetch", exact: true })
@@ -551,7 +569,7 @@ describe("C2-REWORK AC-C2R-1/AC-C2R-3: SearchPlayground view-switcher is canonic
     // Swap back: the Search panel remounts, the Fetch panel unmounts.
     await user.click(screen.getByRole("tab", { name: "Search" }))
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
     const searchPanels = screen.getAllByRole("tabpanel")
     expect(searchPanels).toHaveLength(1)
@@ -618,10 +636,12 @@ describe("C2 PG-S5: Results count replaces the Depth SegmentedControl", () => {
     }) as HTMLInputElement
     expect(spin.getAttribute("type")).toBe("number")
     expect(spin).toHaveAttribute("min", "1")
-    expect(spin).toHaveAttribute("max", "100")
+    fireEvent.change(spin, { target: { value: "101" } })
+    expect(spin).toHaveValue(100)
+    fireEvent.change(spin, { target: { value: "6" } })
     expect(spin).toHaveAttribute("step", "1")
     expect(spin).toHaveValue(6)
-    expect(footer.textContent).toMatch(/Results:/)
+    expect(footer.textContent).toMatch(/Results/)
   })
 
   it("editing the count updates the field value (user-typed 25)", async () => {
@@ -746,11 +766,7 @@ describe("SearchPlayground.pg-f1.test.tsx", () => {
  */
 
 const testDir = import.meta.dirname
-// Slice 5 ownership: the SearchPlayground compat shell was removed (CLEANUP
-// 1.1) — DashboardShell renders features/playground directly; RouteSimulator.tsx
-// stays a compatibility shell over features/routing. Read the joined owner
-// sources (same strength as the monolith reads) plus DashboardShell and the
-// routing shell for the shim-compat asserts below.
+// Read the joined playground owner sources and the shell for compatibility assertions.
 const playgroundOwnerFiles = [
   "../model/usePlaygroundController.ts",
   "../model/playgroundFetchAction.ts",
@@ -772,7 +788,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const contextSource = readFileSync(
@@ -786,23 +802,6 @@ const executionRunnerFiles = [
 const executionSource = executionRunnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
-const simulatorOwnerFiles = [
-  "../../routing/model/useSimulatorController.ts",
-  "../../routing/ui/RouteSimulator.tsx",
-  "../../routing/ui/SimulatorInputRow.tsx",
-  "../../routing/ui/SimulatorFooter.tsx",
-  "../../routing/ui/SimulatorPipeline.tsx",
-  "../../routing/ui/PipelineStep.tsx",
-  "../../routing/ui/ProviderStep.tsx",
-  "../../routing/ui/FallbackCascade.tsx",
-]
-const simulatorSource = simulatorOwnerFiles
-  .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
-  .join("\n")
-const simulatorShim = readFileSync(
-  path.resolve(testDir, "../../../components/routing/RouteSimulator.tsx"),
-  "utf8"
-)
 // PLAN FR-1: content derivation lives in the persisted slice as selectors,
 // never as stored fields or inline controller expressions.
 const sliceSource = readFileSync(
@@ -822,6 +821,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -838,9 +839,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -848,7 +847,7 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
@@ -857,7 +856,7 @@ async function gotoFetch() {
   fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
   })
 }
@@ -869,7 +868,7 @@ async function readyForFetch() {
 
 function submitFetchUrl(url: string) {
   const input = screen.getByPlaceholderText(
-    /Enter a URL to fetch/i
+    /URL to fetch/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: url } })
   fireEvent.submit(input.closest("form")!)
@@ -880,16 +879,14 @@ const tokens = (className: string): string[] =>
   className.split(/\s+/).filter(Boolean)
 
 function expectTransitionClasses(wrapper: HTMLElement) {
-  expect(wrapper.className).toContain("transition-all")
-  expect(wrapper.className).toContain("duration-300")
-  expect(wrapper.className).toContain("ease-out")
-  expect(wrapper.className).toContain("motion-reduce:transition-none")
+  expect(wrapper).toHaveClass("top-docked", "w-full")
+  expect(wrapper.className).not.toMatch(/min-h|max-w|justify-center|transition-all/)
 }
 
 function expectHeroGeometry(wrapper: HTMLElement) {
-  expect(wrapper.className).toMatch(/min-h-\[(55|60)vh\]/)
-  expect(wrapper.className).toContain("max-w-3xl")
-  expect(wrapper.className).not.toContain("top-docked")
+  expect(wrapper.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+  expect(wrapper.className).toContain("w-full")
+  expect(wrapper.className).toContain("top-docked")
 }
 
 function expectComposerBoxClasses(composer: HTMLElement) {
@@ -901,8 +898,7 @@ function expectComposerBoxClasses(composer: HTMLElement) {
   expect(names).toContain("rounded-xl")
   expect(names.some((t) => /^p-\d+$/.test(t))).toBe(true)
   expect(cls).toContain("shadow")
-  expect(cls).toContain("focus-within:")
-  expect(cls).toContain("signal")
+  expect(within(composer).getByRole("textbox").className).toContain("focus-visible:ring-2")
 }
 
 describe("PG-F1 AC-PG-F1-1: idle Fetch is a centered hero (Fetch analogue of PG-S1)", () => {
@@ -915,19 +911,19 @@ describe("PG-F1 AC-PG-F1-1: idle Fetch is a centered hero (Fetch analogue of PG-
     await readyForFetch()
 
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(screen.queryByText(/Fetched markdown body/i)).not.toBeInTheDocument()
 
     const wrapper = screen.getByTestId("fetch-layout")
-    expect(wrapper).toHaveAttribute("data-state", "hero")
+    expect(wrapper).toHaveAttribute("data-state", "docked")
     expectHeroGeometry(wrapper)
     expectTransitionClasses(wrapper)
     expect(
-      wrapper.querySelector('input[placeholder*="Enter a URL to fetch"]')
+      wrapper.querySelector('input[placeholder*="URL to fetch"]')
     ).not.toBeNull()
-    expect(wrapper.className).not.toContain("top-docked")
+    expect(wrapper.className).toContain("top-docked")
   })
 
   it("uses the SAME hero/transition tokens as search-layout", async () => {
@@ -935,30 +931,23 @@ describe("PG-F1 AC-PG-F1-1: idle Fetch is a centered hero (Fetch analogue of PG-
     await readyForSearch()
 
     const searchHero = screen.getByTestId("search-layout")
-    expect(searchHero).toHaveAttribute("data-state", "hero")
+    expect(searchHero).toHaveAttribute("data-state", "docked")
     const searchClasses = new Set(tokens(searchHero.className))
 
     await gotoFetch()
 
     const fetchHero = screen.getByTestId("fetch-layout")
-    expect(fetchHero).toHaveAttribute("data-state", "hero")
+    expect(fetchHero).toHaveAttribute("data-state", "docked")
     // Shared contract: identical transition + hero-geometry tokens.
     for (const token of [
-      "transition-all",
-      "duration-300",
-      "ease-out",
-      "motion-reduce:transition-none",
-      "max-w-3xl",
-      "mx-auto",
-      "flex",
-      "flex-col",
-      "justify-center",
+      "top-docked",
+      "w-full",
     ]) {
       expect(tokens(fetchHero.className)).toContain(token)
       expect(searchClasses.has(token)).toBe(true)
     }
-    expect(fetchHero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(searchHero.className).toMatch(/min-h-\[(55|60)vh\]/)
+    expect(fetchHero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(searchHero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
   })
 })
 
@@ -974,7 +963,7 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
 
     expect(screen.getByTestId("fetch-layout")).toHaveAttribute(
       "data-state",
-      "hero"
+      "docked"
     )
 
     submitFetchUrl("https://example.com/doc")
@@ -992,7 +981,7 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
     expect(
       screen.getByRole("button", { name: /Executing/i })
     ).toBeInTheDocument()
-    expect(screen.getByPlaceholderText(/Enter a URL to fetch/i)).toHaveValue(
+    expect(screen.getByPlaceholderText(/URL to fetch/i)).toHaveValue(
       "https://example.com/doc"
     )
 
@@ -1008,7 +997,7 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
     expectTransitionClasses(dockedWrapper)
 
     const form = screen
-      .getByPlaceholderText(/Enter a URL to fetch/i)
+      .getByPlaceholderText(/URL to fetch/i)
       .closest("form")!
     const docTitle = screen.getByText("Live document title")
      
@@ -1025,7 +1014,7 @@ describe("PG-F1 AC-PG-F1-2: submit docks Fetch and keeps it docked while loading
     expect(sliceSource).not.toMatch(/hasFetchContent[?]?:\s*boolean/)
     expect(playgroundSource).toContain("hasFetchContent")
     expect(playgroundSource).toMatch(
-      /hasFetchContent\s*\?\s*["']docked["']\s*:\s*["']hero["']|data-state\s*=\s*\{hasFetchContent/
+      /data-state="docked"/
     )
   })
 })
@@ -1048,6 +1037,7 @@ describe("PG-F1 AC-PG-F1-3: Fetch errors pin docked-top; start-clear wipes stale
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/doc",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
@@ -1061,10 +1051,10 @@ describe("PG-F1 AC-PG-F1-3: Fetch errors pin docked-top; start-clear wipes stale
     expect(wrapper.className).toContain("top-docked")
     expectTransitionClasses(wrapper)
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/doc")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -1107,7 +1097,7 @@ describe("PG-F1 AC-PG-F1-3: Fetch errors pin docked-top; start-clear wipes stale
     // Start-clear: prior doc A is GONE while B pends (production clears
     // activeFetch at runFetch START — covers pending + terminal).
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/other")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -1127,7 +1117,7 @@ describe("PG-F1 AC-PG-F1-3: Fetch errors pin docked-top; start-clear wipes stale
       "true"
     )
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/other")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -1150,7 +1140,7 @@ describe("PG-F1 AC-PG-F1-4: smooth same-element Fetch transition retains focus a
     await readyForFetch()
 
     const inputBefore = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     const wrapperBefore = screen.getByTestId("fetch-layout")
@@ -1168,7 +1158,7 @@ describe("PG-F1 AC-PG-F1-4: smooth same-element Fetch transition retains focus a
     })
 
     const inputAfter = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     const formAfter = inputAfter.closest("form")!
     expect(formAfter).toBe(formBefore)
@@ -1198,10 +1188,10 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(composer.className).toContain("bg-[var(--elevated)]")
     expect(composer.className).toContain("border-[var(--border-subtle)]")
     expect(composer.className).toContain("shadow-lg")
-    expect(composer.className).toContain("focus-within:border-[var(--signal)]/60")
-    expect(composer.className).toContain("motion-reduce:transition-none")
+    // The card border stays neutral; only the focused control shows a ring.
+    expect(composer.className).not.toContain("focus-within:")
 
-    const input = screen.getByPlaceholderText(/Enter a URL to fetch/i)
+    const input = screen.getByPlaceholderText(/URL to fetch/i)
     expect(composer.contains(input)).toBe(true)
     const inputEl = input as HTMLInputElement
     expect(inputEl.getAttribute("type")).toBe("url")
@@ -1231,13 +1221,13 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(footer.className).toContain("text-[13px]")
     expect(footer.className).toContain("text-[var(--muted)]")
     // Footer owns the Provider row (exact Search footer token strings).
-    expect(footer.textContent).toMatch(/Provider:/)
+    expect(footer.textContent).toMatch(/Provider/)
     const trigger = within(footer).getByTestId("playground-fetch-provider")
-    expect(trigger).toHaveAccessibleName("Provider:")
-    expect(trigger.textContent).toContain("Auto arbitration")
+    expect(trigger).toHaveAccessibleName("Provider")
+    expect(trigger.textContent).toContain("Auto")
     fireEvent.click(trigger)
     expect(
-      await within(footer).findByRole("option", { name: "Auto arbitration" })
+      await within(footer).findByRole("option", { name: "Auto" })
     ).toBeInTheDocument()
     // Fetch footer carries no Search-only controls.
     expect(
@@ -1246,8 +1236,8 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(
       within(footer).queryByRole("group", { name: /search depth/i })
     ).toBeNull()
-    expect(footer.textContent).not.toMatch(/Suggestions:/)
-    expect(footer.textContent).not.toMatch(/Results:/)
+    expect(footer.textContent).not.toMatch(/Suggestions/)
+    expect(footer.textContent).not.toMatch(/Results/)
   })
 
   it("keeps the Fetch submit button text-only inside the composer (FileText never inside the button)", async () => {
@@ -1264,7 +1254,7 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     expect(tokens(button.className)).toContain("py-2")
     expect(tokens(button.className)).toContain("inline-flex")
     const input = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     expect(tokens(input.className).some((t) => t === "pr-32" || t === "pr-36")).toBe(
       true
@@ -1287,8 +1277,7 @@ describe("PG-F1 AC-PG-F1-5: Fetch composer via shared ComposerShell (Fetch ONLY)
     // Exact Search token strings live in the shared shell.
     expect(shellSource).toContain("bg-[var(--elevated)]")
     expect(shellSource).toContain("rounded-xl")
-    expect(shellSource).toContain("focus-within:")
-    expect(shellSource).toContain("motion-reduce:transition-none")
+    expect(shellSource).not.toContain("focus-within:")
     expect(shellSource).toContain("text-[13px]")
     expect(shellSource).toContain("text-[var(--muted)]")
     // Compat shell removed (CLEANUP 1.1): features import the shared owner directly.
@@ -1329,21 +1318,19 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     await readyForSearch()
 
     const hero = screen.getByTestId("search-layout")
-    expect(hero).toHaveAttribute("data-state", "hero")
-    expect(hero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(hero.className).toContain("max-w-3xl")
-    expect(hero.className).not.toContain("top-docked")
+    expect(hero).toHaveAttribute("data-state", "docked")
+    expect(hero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(hero.className).toContain("w-full")
+    expect(hero.className).toContain("top-docked")
     for (const token of [
-      "transition-all",
-      "duration-300",
-      "ease-out",
-      "motion-reduce:transition-none",
+      "top-docked",
+      "w-full",
     ]) {
       expect(hero.className).toContain(token)
     }
 
     const inputBefore = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     fireEvent.change(inputBefore, { target: { value: "s1 lock query" } })
@@ -1360,12 +1347,12 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       "top-docked"
     )
     const inputAfter = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     expect(inputAfter.closest("form")).toBe(formBefore)
     expect(inputAfter).toHaveValue("s1 lock query")
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
   })
 
@@ -1383,13 +1370,14 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       svg!.closest('[aria-hidden="true"]') !== null
     expect(hidden).toBe(true)
     const names = tokens(button.className)
-    expect(names).toContain("px-5")
-    expect(names).toContain("py-2")
-    expect(names).not.toContain("px-4")
-    expect(names).not.toContain("py-1.5")
+    expect(names).toContain("h-8")
+    expect(names).toContain("px-4")
+    expect(names).toContain("gap-2")
+    expect(names).not.toContain("px-5")
+    expect(names).not.toContain("py-2")
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     expect(tokens(input.className).some((t) => t === "pr-32" || t === "pr-36")).toBe(
       true
@@ -1411,9 +1399,9 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     const composer = screen.getByTestId("search-composer")
     expect(composer.className).toContain("bg-[var(--elevated)]")
     expect(tokens(composer.className)).toContain("rounded-xl")
-    expect(composer.className).toContain("focus-within:")
+    expect(composer.className).not.toContain("focus-within:")
     expect(
-      composer.contains(screen.getByPlaceholderText(/Search across all providers/i))
+      composer.contains(screen.getByPlaceholderText(/Search the web/i))
     ).toBe(true)
     const footer = screen.getByTestId("search-composer-footer")
     expect(composer.contains(footer)).toBe(true)
@@ -1438,7 +1426,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     await readyForSearch()
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     fireEvent.change(input, { target: { value: "per-result fetch query" } })
     fireEvent.submit(input.closest("form")!)
@@ -1464,13 +1452,14 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       )
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
 
     await waitFor(() => {
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
@@ -1492,14 +1481,16 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     }) as HTMLInputElement
     expect(spin.getAttribute("type")).toBe("number")
     expect(spin).toHaveAttribute("min", "1")
-    expect(spin).toHaveAttribute("max", "100")
+    fireEvent.change(spin, { target: { value: "101" } })
+    expect(spin).toHaveValue(100)
+    fireEvent.change(spin, { target: { value: "6" } })
     expect(spin).toHaveAttribute("step", "1")
     expect(spin).toHaveValue(6)
-    expect(footer.textContent).toMatch(/Results:/)
+    expect(footer.textContent).toMatch(/Results/)
     expect(screen.queryByRole("group", { name: /search depth/i })).toBeNull()
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     fireEvent.change(input, { target: { value: "pg-s5 guard query" } })
     fireEvent.click(screen.getByRole("button", { name: "Search", exact: true }))
@@ -1508,6 +1499,7 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
       expect(stub.requestsTo("/search")).toHaveLength(1)
     })
     expect(stub.requestsTo("/search")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       query: "pg-s5 guard query",
       limit: 6,
       language: null,
@@ -1521,24 +1513,13 @@ describe("PG-F1 AC-PG-F1-6 regressions: PG-S1..S5 + header + Simulator + logic u
     renderWithBackend()
     await readyForSearch()
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
     await gotoFetch()
     // Header persists across the Fetch hero/docked states.
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
-
-    // R-Strategy + R-Sim (blessed churn, NOT a regression): the Simulator
-    // now composes via the shared ComposerShell inside a simulator-layout
-    // hero/dock wrapper (Search/Fetch Tab pattern).
-    expect(simulatorSource).toContain("SegmentedControl")
-    expect(simulatorSource).toContain("Simulate route")
-    expect(simulatorSource).toContain("ComposerShell")
-    expect(simulatorSource).toContain("simulator-layout")
-    expect(simulatorSource).not.toContain("fetch-layout")
-    expect(simulatorSource).not.toContain("fetch-composer")
-    expect(simulatorSource).not.toContain("search-composer")
 
     // Fetching logic ownership (PLAN §3.5): the execution runners publish the
     // start/success/failure lifecycle through the slice (start still clears
@@ -1576,14 +1557,10 @@ describe("Slice 5 shim compatibility: shells re-export the feature owners", () =
 
   it("DashboardShell imports PlaygroundPage directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 
-  it("RouteSimulator shell re-exports the routing feature without forking UI", () => {
-    expect(simulatorShim).toContain("RouteSimulator")
-    expect(simulatorShim).toContain("features/routing/ui/RouteSimulator")
-  })
 })
 })
 
@@ -1615,6 +1592,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -1631,9 +1610,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -1641,14 +1618,14 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
 
 function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -1656,11 +1633,9 @@ function submitQuery(query: string) {
 }
 
 function expectTransitionClasses(wrapper: HTMLElement) {
-  // Exact animation contract from the plan — all four tokens required.
-  expect(wrapper.className).toContain("transition-all")
-  expect(wrapper.className).toContain("duration-300")
-  expect(wrapper.className).toContain("ease-out")
-  expect(wrapper.className).toContain("motion-reduce:transition-none")
+  // Composer position and width stay fixed across request states.
+  expect(wrapper).toHaveClass("top-docked", "w-full")
+  expect(wrapper.className).not.toMatch(/min-h|max-w|justify-center|transition-all/)
 }
 
 describe("PG-S1 AC-PG-S1-1: idle search is a centered hero", () => {
@@ -1674,23 +1649,23 @@ describe("PG-S1 AC-PG-S1-1: idle search is a centered hero", () => {
 
     // Form is present and empty-state shows no results or error.
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
     expect(screen.queryByText("Live backend result one")).not.toBeInTheDocument()
     expect(screen.queryByText(/no provider is configured/i)).not.toBeInTheDocument()
 
     const wrapper = screen.getByTestId("search-layout")
-    expect(wrapper).toHaveAttribute("data-state", "hero")
+    expect(wrapper).toHaveAttribute("data-state", "docked")
     // Hero geometry: tall centered column, constrained width.
-    expect(wrapper.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(wrapper.className).toContain("max-w-3xl")
+    expect(wrapper.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(wrapper.className).toContain("w-full")
     expectTransitionClasses(wrapper)
     // The request form is the wrapped content — same element, not a copy.
     expect(
-      wrapper.querySelector('input[placeholder*="Search across all providers"]')
+      wrapper.querySelector('input[placeholder*="Search the web"]')
     ).not.toBeNull()
     // Hero must not carry the docked marker.
-    expect(wrapper.className).not.toContain("top-docked")
+    expect(wrapper.className).toContain("top-docked")
   })
 })
 
@@ -1705,7 +1680,7 @@ describe("PG-S1 AC-PG-S1-2: submit docks the form and keeps it docked while load
     await readyForSearch()
 
     const wrapperBefore = screen.getByTestId("search-layout")
-    expect(wrapperBefore).toHaveAttribute("data-state", "hero")
+    expect(wrapperBefore).toHaveAttribute("data-state", "docked")
 
     submitQuery("docking query")
 
@@ -1726,7 +1701,7 @@ describe("PG-S1 AC-PG-S1-2: submit docks the form and keeps it docked while load
       screen.getByRole("button", { name: /Executing/i })
     ).toBeInTheDocument()
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toHaveValue("docking query")
 
     gate.resolve(ok(searchResponseFixture()))
@@ -1741,7 +1716,7 @@ describe("PG-S1 AC-PG-S1-2: submit docks the form and keeps it docked while load
 
     // Results render BELOW the docked form in document order.
     const form = screen
-      .getByPlaceholderText(/Search across all providers/i)
+      .getByPlaceholderText(/Search the web/i)
       .closest("form")!
     const firstResult = screen.getByText("Live backend result one")
     expect(
@@ -1764,7 +1739,7 @@ describe("PG-S1 AC-PG-S1-3: errors pin docked-top; last-good results survive fai
     submitQuery("doomed query")
 
     await waitFor(() => {
-      expect(screen.getByText(/no provider is configured/i)).toBeInTheDocument()
+      expect(screen.getByText(/No provider is set up for this project/)).toBeInTheDocument()
     })
     // Error counts as content: the hero must be gone.
     const wrapper = screen.getByTestId("search-layout")
@@ -1773,7 +1748,7 @@ describe("PG-S1 AC-PG-S1-3: errors pin docked-top; last-good results survive fai
     expectTransitionClasses(wrapper)
     // Form survives the failure; results stay absent.
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
     expect(screen.queryByText("Live backend result one")).not.toBeInTheDocument()
   })
@@ -1822,7 +1797,7 @@ describe("PG-S1 AC-PG-S1-4: smooth same-element transition retains focus and val
     await readyForSearch()
 
     const inputBefore = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     const wrapperBefore = screen.getByTestId("search-layout")
@@ -1838,7 +1813,7 @@ describe("PG-S1 AC-PG-S1-4: smooth same-element transition retains focus and val
     })
 
     const inputAfter = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formAfter = inputAfter.closest("form")!
     // No remount: the form node identity is stable across the transition.
@@ -1865,7 +1840,7 @@ describe("PG-S1 Fetch regression: header, button, and fetching flow are untouche
 
     // Header untouched.
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
     // Search submit button untouched (idle label).
     expect(
@@ -1875,7 +1850,7 @@ describe("PG-S1 Fetch regression: header, button, and fetching flow are untouche
     // Fetching flow untouched end-to-end.
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -1903,7 +1878,7 @@ describe("SearchPlayground.pg-s2.test.tsx", () => {
  *
  * Plan under test (ORCHESTRATOR RULING, freesearch-ui/ ONLY):
  *   - submit Button gets a LEADING lucide Search icon (size-3.5, aria-hidden)
- *     + inline-flex gap + px-5 py-2 (was px-4 py-1.5);
+ *     + inline-flex gap + the shared form size (h-8 px-4 gap-2);
  *   - input right-padding floor raised pr-28 -> pr-32/36 (no overlap with the
  *     wider button);
  *   - icon gated on mode === "search" ONLY; Fetch button stays text-only;
@@ -1918,7 +1893,7 @@ describe("SearchPlayground.pg-s2.test.tsx", () => {
  *   AC-PG-S2-2  Icon is gated on mode === "search": svg present in Search
  *               mode, ZERO svg inside the Fetch submit button (Fetch text-only),
  *               and the icon returns when switching back to Search.
- *   AC-PG-S2-3  Button spacing bumped: px-5 + py-2 (+ inline-flex gap);
+ *   AC-PG-S2-3  Button spacing: shared form size h-8 + px-4 + gap-2;
  *               the old px-4 / py-1.5 tokens are gone.
  *   AC-PG-S2-4  Input right-padding floor raised to pr-32 minimum (pr-32 or
  *               pr-36 accepted); pr-28 gone; structural no-overlap contract
@@ -1963,7 +1938,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const packageJson = JSON.parse(
@@ -1978,6 +1953,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -1994,9 +1971,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -2004,14 +1979,14 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
 
 function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -2097,21 +2072,22 @@ describe("PG-S2 AC-PG-S2-2: icon gated on mode === search; Fetch stays text-only
   })
 })
 
-describe("PG-S2 AC-PG-S2-3: submit button spacing bumped px-5 py-2 + inline-flex gap", () => {
+describe("PG-S2 AC-PG-S2-3: submit uses the shared form button h-8 px-4 gap-2", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it("carries px-5 + py-2 with inline-flex gap; px-4 / py-1.5 are gone", async () => {
+  it("carries the shared form size h-8 + px-4 + gap-2; px-5 / py-2 are gone", async () => {
     renderWithBackend()
     await readyForSearch()
 
     const button = screen.getByRole("button", { name: "Search", exact: true })
     const names = tokens(button.className)
-    expect(names).toContain("px-5")
-    expect(names).toContain("py-2")
-    expect(names).not.toContain("px-4")
-    expect(names).not.toContain("py-1.5")
+    expect(names).toContain("h-8")
+    expect(names).toContain("px-4")
+    expect(names).toContain("gap-2")
+    expect(names).not.toContain("px-5")
+    expect(names).not.toContain("py-2")
     // Horizontal breathing room pairs with an inline-flex + gap layout.
     expect(names).toContain("inline-flex")
     expect(names.some((t) => /^gap-/.test(t))).toBe(true)
@@ -2128,7 +2104,7 @@ describe("PG-S2 AC-PG-S2-4: input floor raised pr-32/36 with a no-overlap struct
     await readyForSearch()
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const names = tokens(input.className)
     expect(names.some((t) => t === "pr-32" || t === "pr-36")).toBe(true)
@@ -2140,7 +2116,7 @@ describe("PG-S2 AC-PG-S2-4: input floor raised pr-32/36 with a no-overlap struct
     await readyForSearch()
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     // Full-bleed input inside a positioning context ...
     expect(tokens(input.className)).toContain("w-full")
@@ -2152,7 +2128,7 @@ describe("PG-S2 AC-PG-S2-4: input floor raised pr-32/36 with a no-overlap struct
     const absolute = button.closest("div.absolute")
     expect(absolute).not.toBeNull()
     expect(tokens(absolute!.className)).toContain("right-0")
-    // ... and the raised floor clearing the wider px-5 button.
+    // ... and the raised floor clearing the wider form button.
     const names = tokens(input.className)
     expect(names.some((t) => t === "pr-32" || t === "pr-36")).toBe(true)
   })
@@ -2206,10 +2182,10 @@ describe("PG-S2 AC-PG-S2-6 regressions: PG-S1 hero/dock, header, Fetch flow, dis
     await readyForSearch()
 
     const hero = screen.getByTestId("search-layout")
-    expect(hero).toHaveAttribute("data-state", "hero")
-    expect(hero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(hero.className).toContain("max-w-3xl")
-    expect(hero.className).not.toContain("top-docked")
+    expect(hero).toHaveAttribute("data-state", "docked")
+    expect(hero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(hero.className).toContain("w-full")
+    expect(hero.className).toContain("top-docked")
 
     submitQuery("regression dock query")
 
@@ -2226,7 +2202,7 @@ describe("PG-S2 AC-PG-S2-6 regressions: PG-S1 hero/dock, header, Fetch flow, dis
     })
     // Header copy untouched.
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
   })
 
@@ -2236,7 +2212,7 @@ describe("PG-S2 AC-PG-S2-6 regressions: PG-S1 hero/dock, header, Fetch flow, dis
 
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -2292,7 +2268,7 @@ describe("Slice 5 shim compatibility: DashboardShell renders the canonical featu
 
   it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })
@@ -2357,7 +2333,7 @@ describe("SearchPlayground.pg-s3.test.tsx", () => {
  *               across the transition, header copy, Fetch end-to-end flow.
  *   AC-PG-S3-6  Regressions GREEN before/after: PG-S2 button lock (Search
  *               button exact name + leading size-3.5 aria-hidden svg gated on
- *               Search ONLY, px-5 py-2 inline-flex gap, input pr-32/36 floor,
+ *               Search ONLY, h-8 px-4 gap-2 shared form button, input pr-32/36 floor,
  *               labels Search/Fetch/Executing... unchanged).
  *
  * RED expectation: AC-PG-S3-1..S3-4 FAIL cleanly against the current
@@ -2395,7 +2371,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const searchDir = path.resolve(testDir, "../../../components/search")
@@ -2405,6 +2381,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -2421,9 +2399,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -2431,14 +2407,14 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
 
 function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -2463,8 +2439,8 @@ function expectComposerBoxClasses(composer: HTMLElement) {
   // Shadow depth.
   expect(cls).toContain("shadow")
   // Focus-within signal: keyboard focus lights the box border/ring.
-  expect(cls).toContain("focus-within:")
-  expect(cls).toContain("signal")
+  expect(cls).not.toContain("focus-within:")
+  expect(screen.getByRole("textbox", { name: "Search query" }).className).toContain("focus-visible:ring-2")
 }
 
 describe("PG-S3 AC-PG-S3-1: Search-mode composer box, Fetch stays bare, seams named with no shared file", () => {
@@ -2480,7 +2456,7 @@ describe("PG-S3 AC-PG-S3-1: Search-mode composer box, Fetch stays bare, seams na
     expect(composer).not.toBeNull()
     expectComposerBoxClasses(composer!)
     // The search input lives INSIDE the box (division aesthetic).
-    const input = screen.getByPlaceholderText(/Search across all providers/i)
+    const input = screen.getByPlaceholderText(/Search the web/i)
     expect(composer!.contains(input)).toBe(true)
     // Inside the box the input is borderless -- the box owns the border.
     // Current bare code styles the input itself with a bottom border.
@@ -2497,7 +2473,7 @@ describe("PG-S3 AC-PG-S3-1: Search-mode composer box, Fetch stays bare, seams na
 
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
-    const fetchInput = screen.getByPlaceholderText(/Enter a URL to fetch/i)
+    const fetchInput = screen.getByPlaceholderText(/URL to fetch/i)
     expect(fetchInput).toBeInTheDocument()
     // Fetch does NOT adopt the search box (reusable pattern later, bare now).
     expect(screen.queryByTestId("search-composer")).toBeNull()
@@ -2546,7 +2522,7 @@ describe("PG-S3 AC-PG-S3-2: clear division idle + docked, results after the comp
     // Ours stays centered when idle (PG-S1 hero preserved under the box).
     expect(screen.getByTestId("search-layout")).toHaveAttribute(
       "data-state",
-      "hero"
+      "docked"
     )
   })
 
@@ -2608,7 +2584,7 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
 
     // All three controls live INSIDE the footer (ChatGPT tray aesthetic).
     // PG-S5: Depth SegmentedControl replaced by the Results number input.
-    const suggestions = within(footer!).getByText(/Suggestions:/i)
+    const suggestions = within(footer!).getByText(/^Suggestions$/i)
     expect(suggestions).toBeInTheDocument()
     const suggestionBtn = within(footer!).getByRole("button", {
       name: /python async search aggregator/i,
@@ -2621,10 +2597,12 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
     }) as HTMLInputElement
     expect(count.getAttribute("type")).toBe("number")
     expect(count).toHaveAttribute("min", "1")
-    expect(count).toHaveAttribute("max", "100")
+    fireEvent.change(count, { target: { value: "101" } })
+    expect(count).toHaveValue(100)
+    fireEvent.change(count, { target: { value: "6" } })
     expect(count).toHaveAttribute("step", "1")
     expect(count).toHaveValue(6)
-    expect(footer!.textContent).toMatch(/Results:/)
+    expect(footer!.textContent).toMatch(/Results/)
     expect(
       within(footer!).queryByRole("group", { name: /search depth/i })
     ).toBeNull()
@@ -2635,15 +2613,15 @@ describe("PG-S3 AC-PG-S3-3: internal divider + footer tray owns suggestions/prov
 
     // Nothing leaks outside: the composer owns every instance.
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i).closest("form")
+      screen.getByPlaceholderText(/Search the web/i).closest("form")
     ).not.toBeNull()
     const outsideSuggestions = Array.from(
       document.querySelectorAll("body *")
     ).filter(
       (el) =>
-        el.textContent?.includes("Suggestions:") &&
+        el.textContent?.includes("Suggestions") &&
         !footer!.contains(el) &&
-        el.textContent!.trim().startsWith("Suggestions:")
+        el.textContent!.trim().startsWith("Suggestions")
     )
     expect(outsideSuggestions).toHaveLength(0)
   })
@@ -2662,11 +2640,11 @@ describe("PG-S3 AC-PG-S3-4: focus-within signal + motion-reduce on the composer"
     expect(composer).not.toBeNull()
     const cls = composer!.className
     // Focus signal fires from :focus-within, never a bare :focus on the box.
-    expect(cls).toContain("focus-within:")
-    expect(cls).toContain("signal")
+    expect(cls).not.toContain("focus-within:")
+    expect(screen.getByRole("textbox", { name: "Search query" }).className).toContain("focus-visible:ring-2")
     expect(cls).not.toMatch(/(^|\s)focus:/)
     // Motion hygiene mirrors the PG-S1 layout wrapper.
-    expect(tokens(cls)).toContain("transition-all")
+    expect(tokens(cls)).toContain("transition-colors")
     expect(cls).toContain("motion-reduce:transition-none")
   })
 })
@@ -2681,15 +2659,13 @@ describe("PG-S3 AC-PG-S3-5 regressions: docked-top + same-form + PG-S1 contract 
     await readyForSearch()
 
     const hero = screen.getByTestId("search-layout")
-    expect(hero).toHaveAttribute("data-state", "hero")
-    expect(hero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(hero.className).toContain("max-w-3xl")
-    expect(hero.className).not.toContain("top-docked")
+    expect(hero).toHaveAttribute("data-state", "docked")
+    expect(hero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(hero.className).toContain("w-full")
+    expect(hero.className).toContain("top-docked")
     for (const token of [
-      "transition-all",
-      "duration-300",
-      "ease-out",
-      "motion-reduce:transition-none",
+      "top-docked",
+      "w-full",
     ]) {
       expect(hero.className).toContain(token)
     }
@@ -2697,7 +2673,7 @@ describe("PG-S3 AC-PG-S3-5 regressions: docked-top + same-form + PG-S1 contract 
     expect(composerBefore).not.toBeNull()
 
     const inputBefore = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     fireEvent.change(inputBefore, { target: { value: "s1 lock query" } })
@@ -2712,7 +2688,7 @@ describe("PG-S3 AC-PG-S3-5 regressions: docked-top + same-form + PG-S1 contract 
     expect(docked.className).toContain("top-docked")
     // Same form element, value + focus survive (no remount for the box).
     const inputAfter = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     expect(inputAfter.closest("form")).toBe(formBefore)
     expect(inputAfter).toHaveValue("s1 lock query")
@@ -2725,12 +2701,12 @@ describe("PG-S3 AC-PG-S3-5 regressions: docked-top + same-form + PG-S1 contract 
     await readyForSearch()
 
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -2767,14 +2743,15 @@ describe("PG-S3 AC-PG-S3-6 regressions: PG-S2 button lock intact inside the box"
     expect(hidden).toBe(true)
 
     const names = tokens(button.className)
-    expect(names).toContain("px-5")
-    expect(names).toContain("py-2")
-    expect(names).not.toContain("px-4")
-    expect(names).not.toContain("py-1.5")
+    expect(names).toContain("h-8")
+    expect(names).toContain("px-4")
+    expect(names).toContain("gap-2")
+    expect(names).not.toContain("px-5")
+    expect(names).not.toContain("py-2")
     expect(names).toContain("inline-flex")
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const inputNames = tokens(input.className)
     expect(inputNames.some((t) => t === "pr-32" || t === "pr-36")).toBe(true)
@@ -2820,7 +2797,7 @@ describe("Slice 5 shim compatibility: DashboardShell renders the canonical featu
 
   it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })
@@ -2910,7 +2887,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const searchDir = path.resolve(testDir, "../../../components/search")
@@ -2927,6 +2904,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -2943,9 +2922,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -2953,14 +2930,14 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
 
 function submitQuery(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
@@ -3096,7 +3073,7 @@ describe("PG-S4 AC-PG-S4-2: click navigates to Fetch tab + prefills URL (exact m
     // Input prefilled with the result URL exact modulo surrounding-whitespace
     // strip (consistent manual+context trim; clean fixture URLs stay identical).
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     expect(urlInput).toHaveValue("https://example.com/one")
 
@@ -3113,7 +3090,7 @@ describe("PG-S4 AC-PG-S4-2: click navigates to Fetch tab + prefills URL (exact m
       )
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/two")
   })
 })
@@ -3135,6 +3112,7 @@ describe("PG-S4 AC-PG-S4-3: auto-fetch POST + Executing + result render", () => 
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
@@ -3147,7 +3125,7 @@ describe("PG-S4 AC-PG-S4-3: auto-fetch POST + Executing + result render", () => 
     expect(screen.getByText(/Fetched markdown body/i)).toBeInTheDocument()
     // URL retained in the input after success.
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
   })
 
@@ -3172,7 +3150,7 @@ describe("PG-S4 AC-PG-S4-3: auto-fetch POST + Executing + result render", () => 
       screen.getByRole("button", { name: "Executing...", exact: true })
     ).toBeDisabled()
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
 
     gate.resolve(ok(fetchResponseFixture()))
@@ -3217,7 +3195,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       "true"
     )
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/two")
     // No stale document renders.
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
@@ -3244,7 +3222,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       expect(screen.getByText("Live document title")).toBeInTheDocument()
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
 
     // Back to Search, then per-card fetch B (deferred failure).
@@ -3268,7 +3246,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       ).toBeInTheDocument()
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/two")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -3287,7 +3265,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       "true"
     )
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/two")
     expect(screen.queryByText("Live document title")).not.toBeInTheDocument()
     expect(
@@ -3346,7 +3324,7 @@ describe("PG-S4 AC-PG-S4-4: error banner + URL retained, no stale doc (+ clearin
       url: trimmedUrl,
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue(trimmedUrl)
 
     await waitFor(() => {
@@ -3366,7 +3344,7 @@ describe("PG-S4 AC-PG-S4-5: stopPropagation + disabled while executing", () => {
     await searchAndWait()
 
     // Precondition: first result is the selected preview after search.
-    expect(screen.getByText("Selected result")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Result details" })).toBeInTheDocument()
 
     // Click the SECOND card's fetch button: navigates + fetches, must NOT
     // bubble to the card's onClick (which would select the second result).
@@ -3382,12 +3360,8 @@ describe("PG-S4 AC-PG-S4-5: stopPropagation + disabled while executing", () => {
     await waitFor(() => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
-    expect(
-      screen.getByText(
-        /Select a search result from the list to inspect/i
-      )
-    ).toBeInTheDocument()
-    expect(screen.queryByText("Selected result")).not.toBeInTheDocument()
+    expect(screen.getByText("Select a result to see its details")).toBeInTheDocument()
+    expect(screen.queryByRole("heading", { name: "Result details" })).not.toBeInTheDocument()
   })
 
   it("disables per-card fetch buttons while the next search is in flight (last-good results stay)", async () => {
@@ -3447,6 +3421,7 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "require", providers: ["firecrawl"], allow_fallback: true },
@@ -3473,13 +3448,14 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
     })
     expect(
       screen.getByTestId("playground-fetch-provider").textContent
-    ).toContain("Auto arbitration")
+    ).toContain("Auto")
   })
 
   it("calls runFetch directly with markdown + 15000ms inside handleFetchResult", () => {
@@ -3487,7 +3463,7 @@ describe("PG-S4 AC-PG-S4-6: eligible-inherit else auto + markdown/4000ms contrac
     expect(idx).toBeGreaterThanOrEqual(0)
     const tail = playgroundSource.slice(idx, idx + 8000)
     // Eligible-inherit else auto: consults fetch eligibility before runFetch.
-    expect(tail).toMatch(/isEligibleForOperation|fetchEnabled|capabilities/)
+    expect(tail).toMatch(/effectiveOperations\.includes\("fetch"\)/)
     // Direct runFetch with the Fetch-tab contract.
     expect(tail).toContain("setFetchUrl")
     expect(tail).toContain("runFetch")
@@ -3508,21 +3484,19 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     await readyForSearch()
 
     const hero = screen.getByTestId("search-layout")
-    expect(hero).toHaveAttribute("data-state", "hero")
-    expect(hero.className).toMatch(/min-h-\[(55|60)vh\]/)
-    expect(hero.className).toContain("max-w-3xl")
-    expect(hero.className).not.toContain("top-docked")
+    expect(hero).toHaveAttribute("data-state", "docked")
+    expect(hero.className).not.toMatch(/min-h-\[(55|60)vh\]/)
+    expect(hero.className).toContain("w-full")
+    expect(hero.className).toContain("top-docked")
     for (const token of [
-      "transition-all",
-      "duration-300",
-      "ease-out",
-      "motion-reduce:transition-none",
+      "top-docked",
+      "w-full",
     ]) {
       expect(hero.className).toContain(token)
     }
 
     const inputBefore = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const formBefore = inputBefore.closest("form")!
     fireEvent.change(inputBefore, { target: { value: "s1 lock query" } })
@@ -3539,16 +3513,16 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
       "top-docked"
     )
     const inputAfter = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     expect(inputAfter.closest("form")).toBe(formBefore)
     expect(inputAfter).toHaveValue("s1 lock query")
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
   })
 
-  it("PG-S2 Search icon-button lock intact (exact name, leading svg, px-5/py-2, pr-32 floor, labels)", async () => {
+  it("PG-S2 Search icon-button lock intact (exact name, leading svg, h-8/px-4/gap-2, pr-32 floor, labels)", async () => {
     const gate = deferred<Response>()
     renderWithBackend(() => gate.promise)
     await readyForSearch()
@@ -3564,14 +3538,15 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     expect(hidden).toBe(true)
 
     const names = tokens(button.className)
-    expect(names).toContain("px-5")
-    expect(names).toContain("py-2")
-    expect(names).not.toContain("px-4")
-    expect(names).not.toContain("py-1.5")
+    expect(names).toContain("h-8")
+    expect(names).toContain("px-4")
+    expect(names).toContain("gap-2")
+    expect(names).not.toContain("px-5")
+    expect(names).not.toContain("py-2")
     expect(names).toContain("inline-flex")
 
     const input = screen.getByPlaceholderText(
-      /Search across all providers/i
+      /Search the web/i
     ) as HTMLInputElement
     const inputNames = tokens(input.className)
     expect(inputNames.some((t) => t === "pr-32" || t === "pr-36")).toBe(true)
@@ -3607,8 +3582,8 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     expect(composer).not.toBeNull()
     expect(composer!.className).toContain("bg-[var(--elevated)]")
     expect(tokens(composer!.className)).toContain("rounded-xl")
-    expect(composer!.className).toContain("focus-within:")
-    const input = screen.getByPlaceholderText(/Search across all providers/i)
+    expect(composer!.className).not.toContain("focus-within:")
+    const input = screen.getByPlaceholderText(/Search the web/i)
     expect(composer!.contains(input)).toBe(true)
     const footer = screen.queryByTestId("search-composer-footer")
     expect(footer).not.toBeNull()
@@ -3625,10 +3600,12 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     }) as HTMLInputElement
     expect(count.getAttribute("type")).toBe("number")
     expect(count).toHaveAttribute("min", "1")
-    expect(count).toHaveAttribute("max", "100")
+    fireEvent.change(count, { target: { value: "101" } })
+    expect(count).toHaveValue(100)
+    fireEvent.change(count, { target: { value: "6" } })
     expect(count).toHaveAttribute("step", "1")
     expect(count).toHaveValue(6)
-    expect(footer!.textContent).toMatch(/Results:/)
+    expect(footer!.textContent).toMatch(/Results/)
     expect(
       within(footer!).queryByRole("group", { name: /search depth/i })
     ).toBeNull()
@@ -3636,7 +3613,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
 
     // Fetch mode stays bare (reusable pattern later, no composer now).
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
-    expect(screen.getByPlaceholderText(/Enter a URL to fetch/i)).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/URL to fetch/i)).toBeInTheDocument()
     expect(screen.queryByTestId("search-composer")).toBeNull()
     expect(screen.queryByTestId("search-composer-footer")).toBeNull()
   })
@@ -3660,7 +3637,7 @@ describe("PG-S4 AC-PG-S4-7 regressions: PG-S1/S2/S3 guards + composer gating + f
     await readyForSearch()
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
     const urlInput = screen.getByPlaceholderText(
-      /Enter a URL to fetch/i
+      /URL to fetch/i
     ) as HTMLInputElement
     fireEvent.change(urlInput, { target: { value: "https://example.com/doc" } })
     fireEvent.submit(urlInput.closest("form")!)
@@ -3712,7 +3689,7 @@ describe("Slice 5 shim compatibility: DashboardShell renders the canonical featu
 
   it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })
@@ -3811,7 +3788,7 @@ const playgroundSource = playgroundOwnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
   .join("\n")
 const dashboardShellSource = readFileSync(
-  path.resolve(testDir, "../../../app/DashboardShell.tsx"),
+  path.resolve(testDir, "../../../app/ProjectWorkspace.tsx"),
   "utf8"
 )
 const typesSource = readFileSync(
@@ -3826,6 +3803,7 @@ const requestUtilsSource = readFileSync(path.resolve(testDir, "../../../domains/
 const executionRunnerFiles = [
   "../../../domains/execution/state/useSearchRunner.ts",
   "../../../domains/execution/state/useFetchRunner.ts",
+  "../../../domains/execution/state/ProjectExecutionProvider.tsx",
 ];
 const executionStateSource = executionRunnerFiles
   .map((file) => readFileSync(path.resolve(testDir, file), "utf8"))
@@ -3844,6 +3822,8 @@ function renderWithBackend(
   fetchHandler?: (req: { url: string }) => Response | Promise<Response>
 ) {
   const stub = installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -3860,9 +3840,7 @@ function renderWithBackend(
     return err(404, { detail: "unhandled test route" })
   })
   const view = render(
-    <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-      <SearchPlayground />
-    </FreeSearchProvider>
+    <PlaygroundHarness />
   )
   return { stub, ...view }
 }
@@ -3870,7 +3848,7 @@ function renderWithBackend(
 async function readyForSearch() {
   await waitFor(() => {
     expect(
-      screen.getByPlaceholderText(/Search across all providers/i)
+      screen.getByPlaceholderText(/Search the web/i)
     ).toBeInTheDocument()
   })
 }
@@ -3882,7 +3860,7 @@ async function clickSearchButton(): Promise<void> {
 
 async function submitQueryViaClick(query: string) {
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   fireEvent.change(input, { target: { value: query } })
   await clickSearchButton()
@@ -3892,7 +3870,7 @@ async function submitQueryViaClick(query: string) {
 async function submitQueryViaEnter(query: string) {
   const user = userEvent.setup()
   const input = screen.getByPlaceholderText(
-    /Search across all providers/i
+    /Search the web/i
   ) as HTMLInputElement
   await user.clear(input)
   await user.type(input, `${query}{Enter}`)
@@ -3924,12 +3902,14 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     expect(composer.contains(spin)).toBe(true)
     expect(spin.getAttribute("type")).toBe("number")
     expect(spin).toHaveAttribute("min", "1")
-    expect(spin).toHaveAttribute("max", "100")
+    fireEvent.change(spin, { target: { value: "101" } })
+    expect(spin).toHaveValue(100)
+    fireEvent.change(spin, { target: { value: "6" } })
     expect(spin).toHaveAttribute("step", "1")
     expect(spin).toHaveValue(6)
 
-    // Visible "Results:" label lives in the same footer row.
-    expect(footer.textContent).toMatch(/Results:/)
+    // Visible "Results" label lives in the same footer row.
+    expect(footer.textContent).toMatch(/Results/)
   })
 
   it("removes the Depth SegmentedControl group (no search-depth group, no Fast/Balanced/Deep)", async () => {
@@ -3966,13 +3946,13 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     const footer = screen.getByTestId("search-composer-footer")
     const trigger = within(footer).getByTestId("playground-search-provider")
     expect(trigger).toBeInTheDocument()
-    expect(trigger).toHaveAccessibleName("Provider:")
-    expect(trigger.textContent).toContain("Auto arbitration")
+    expect(trigger).toHaveAccessibleName("Provider")
+    expect(trigger.textContent).toContain("Auto")
     fireEvent.click(trigger)
     expect(
-      await within(footer).findByRole("option", { name: "Auto arbitration" })
+      await within(footer).findByRole("option", { name: "Auto" })
     ).toBeInTheDocument()
-    expect(footer.textContent).toMatch(/Provider:/)
+    expect(footer.textContent).toMatch(/Provider/)
   })
 
   it("keeps Fetch mode bare with no Results spinbutton and no composer", async () => {
@@ -3982,7 +3962,7 @@ describe("PG-S5 AC-PG-S5-1: footer Results number input replaces Depth", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
 
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i)
+      screen.getByPlaceholderText(/URL to fetch/i)
     ).toBeInTheDocument()
     expect(screen.queryByTestId("search-composer")).toBeNull()
     expect(screen.queryByTestId("search-composer-footer")).toBeNull()
@@ -4009,6 +3989,7 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
       expect(stub.requestsTo("/search")).toHaveLength(1)
     })
     expect(stub.requestsTo("/search")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       query: "default count query",
       limit: 6,
       language: null,
@@ -4033,6 +4014,7 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
       expect(stub.requestsTo("/search")).toHaveLength(1)
     })
     expect(stub.requestsTo("/search")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       query: "pinned default query",
       limit: 6,
       language: null,
@@ -4056,6 +4038,7 @@ describe("PG-S5 AC-PG-S5-2: /search limit + routing wiring", () => {
       expect(stub.requestsTo("/search")).toHaveLength(1)
     })
     expect(stub.requestsTo("/search")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       query: "edited count query",
       limit: 25,
       language: null,
@@ -4166,8 +4149,9 @@ describe("PG-S5 AC-PG-S5-3: source number contract (playground/types/context)", 
     // Number contract tokens (all missing before PG-S5).
     expect(playgroundSource).toContain("resultCount")
     expect(playgroundSource).toContain("Number of results")
-    expect(playgroundSource).toContain("Results:")
-    expect(playgroundSource).toMatch(/type\s*=\s*["']number["']/)
+    expect(playgroundSource).toContain("<span>Results</span>")
+    const numericFieldSource = readFileSync(path.resolve(testDir, "../../../shared/ui/NumericField.tsx"), "utf8")
+    expect(numericFieldSource).toMatch(/type\s*=\s*["']number["']/)
     expect(playgroundSource).toMatch(/maxResults\s*:\s*resultCount/)
 
     // Depth contract fully deleted from the playground.
@@ -4267,13 +4251,14 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
       )
     })
     expect(
-      screen.getByPlaceholderText(/Enter a URL to fetch/i) as HTMLInputElement
+      screen.getByPlaceholderText(/URL to fetch/i) as HTMLInputElement
     ).toHaveValue("https://example.com/one")
 
     await waitFor(() => {
       expect(stub.requestsTo("/fetch")).toHaveLength(1)
     })
     expect(stub.requestsTo("/fetch")[0].body).toEqual({
+      project_id: PLAYGROUND_PROJECT_ID,
       url: "https://example.com/one",
       max_chars: null,
       routing: { mode: "auto", providers: [], allow_fallback: true },
@@ -4292,7 +4277,7 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
     const composer = screen.getByTestId("search-composer")
     expect(composer.className).toContain("bg-[var(--elevated)]")
     expect(composer.className).toContain("rounded-xl")
-    expect(composer.className).toContain("focus-within:")
+    expect(composer.className).not.toContain("focus-within:")
 
     const divider = screen.getByTestId("search-composer-divider")
     expect(composer.contains(divider)).toBe(true)
@@ -4309,7 +4294,7 @@ describe("PG-S5 AC-PG-S5-4 regressions: per-card fetch + composer + 422", () => 
     expect(within(footer).getByRole("combobox")).toBeInTheDocument()
 
     expect(
-      screen.getByRole("heading", { name: "Search Playground" })
+      screen.getByRole("heading", { name: "Playground" })
     ).toBeInTheDocument()
   })
 
@@ -4354,7 +4339,7 @@ describe("Slice 5 shim compatibility: DashboardShell renders the canonical featu
 
   it("imports PlaygroundPage from features/playground directly (SearchPlayground shim removed)", () => {
     expect(dashboardShellSource).toContain("PlaygroundPage")
-    expect(dashboardShellSource).toContain("features/playground/ui/PlaygroundPage")
+    expect(dashboardShellSource).toContain("features/playground/ui/ProjectPlaygroundPage")
     expect(dashboardShellSource).not.toContain("components/search/SearchPlayground")
   })
 })
@@ -4413,11 +4398,11 @@ function seedStorage(state: Record<string, unknown>): void {
   for (const [field, value] of Object.entries({
     ...initialPlaygroundState,
     ...state,
-    _persist: { version: 1, rehydrated: false },
+    _persist: { version: PLAYGROUND_PERSIST_VERSION, rehydrated: false },
   })) {
     encoded[field] = JSON.stringify(value)
   }
-  window.localStorage.setItem(playgroundPersistKey(ADMIN_ACCOUNT_ID), JSON.stringify(encoded))
+  window.localStorage.setItem(playgroundPersistKey(ADMIN_ACCOUNT_ID, PLAYGROUND_PROJECT_ID), JSON.stringify(encoded))
 }
 
 function stubBackend(
@@ -4425,6 +4410,8 @@ function stubBackend(
   fetchHandler?: (req: { url: string }) => Response
 ): FetchStub {
   return installFetchStub((req) => {
+    const projectView = answerProjectProviders(req)
+    if (projectView !== null) return projectView
     if (req.url === "/api/v1/providers" && req.method === "GET") {
       return ok(allProvidersFixture())
     }
@@ -4450,18 +4437,18 @@ function refuseNetwork(): FetchStub {
 }
 
 async function submitSearch(query: string): Promise<void> {
-  const input = await screen.findByPlaceholderText(/Search across all providers/i)
+  const input = await screen.findByPlaceholderText(/Search the web/i)
   fireEvent.change(input, { target: { value: query } })
   fireEvent.submit(input.closest("form")!)
 }
 
 async function openFetchTab(): Promise<void> {
   fireEvent.click(screen.getByRole("tab", { name: "Fetch", exact: true }))
-  await screen.findByPlaceholderText(/Enter a URL to fetch/i)
+  await screen.findByPlaceholderText(/URL to fetch/i)
 }
 
 async function submitFetch(url: string): Promise<void> {
-  const input = await screen.findByPlaceholderText(/Enter a URL to fetch/i)
+  const input = await screen.findByPlaceholderText(/URL to fetch/i)
   fireEvent.change(input, { target: { value: url } })
   fireEvent.submit(input.closest("form")!)
 }
@@ -4487,13 +4474,11 @@ describe("PlaygroundPage persistence", () => {
     })
     const stub = refuseNetwork()
     render(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
 
     // Search tab: rehydrated draft, options, and mapped result.
-    expect(await screen.findByPlaceholderText(/Search across all providers/i)).toHaveValue(
+    expect(await screen.findByPlaceholderText(/Search the web/i)).toHaveValue(
       "seeded query"
     )
     expect(screen.getByRole("spinbutton", { name: "Number of results" })).toHaveValue(25)
@@ -4511,7 +4496,7 @@ describe("PlaygroundPage persistence", () => {
 
     // Fetch tab: rehydrated URL draft and the persisted error banner.
     await openFetchTab()
-    expect(screen.getByPlaceholderText(/Enter a URL to fetch/i)).toHaveValue(
+    expect(screen.getByPlaceholderText(/URL to fetch/i)).toHaveValue(
       "https://example.com/seeded-doc"
     )
     expect(await screen.findByText("seeded fetch boom")).toBeInTheDocument()
@@ -4524,39 +4509,33 @@ describe("PlaygroundPage persistence", () => {
   it("keeps executed search and fetch state across a page remount with the same root store", async () => {
     const stub = stubBackend()
     const { rerender } = render(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
 
     await submitSearch("remount probe")
     await screen.findByText("Live backend result one")
     await openFetchTab()
     await submitFetch("https://example.com/remount-doc")
-    await screen.findByText("Parsed Markdown Document")
+    await screen.findByText("Parsed markdown")
 
     // Remount the page while the root provider (and its store) stays mounted.
     rerender(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <span data-testid="interstitial" />
-      </FreeSearchProvider>
+      <span data-testid="interstitial" />
     )
     expect(await screen.findByTestId("interstitial")).toBeInTheDocument()
     rerender(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
 
     // Fetch tab state survived (mode persisted as fetch).
-    expect(await screen.findByPlaceholderText(/Enter a URL to fetch/i)).toHaveValue(
+    expect(await screen.findByPlaceholderText(/URL to fetch/i)).toHaveValue(
       "https://example.com/remount-doc"
     )
-    expect(await screen.findByText("Parsed Markdown Document")).toBeInTheDocument()
+    expect(await screen.findByText("Parsed markdown")).toBeInTheDocument()
 
     // Search tab state survived too.
     fireEvent.click(screen.getByRole("tab", { name: "Search", exact: true }))
-    expect(await screen.findByPlaceholderText(/Search across all providers/i)).toHaveValue(
+    expect(await screen.findByPlaceholderText(/Search the web/i)).toHaveValue(
       "remount probe"
     )
     expect(await screen.findByText("Live backend result one")).toBeInTheDocument()
@@ -4569,9 +4548,7 @@ describe("PlaygroundPage persistence", () => {
   it("reloads executed state in a recreated provider from localStorage without refetching", async () => {
     const liveStub = stubBackend()
     const first = render(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
 
     await submitSearch("reload probe")
@@ -4580,7 +4557,7 @@ describe("PlaygroundPage persistence", () => {
     // Wait for the bounded storage adapter to flush the completed run to disk.
     await waitFor(
       () => {
-        expect(window.localStorage.getItem(playgroundPersistKey(ADMIN_ACCOUNT_ID)) ?? "").toContain(
+        expect(window.localStorage.getItem(playgroundPersistKey(ADMIN_ACCOUNT_ID, PLAYGROUND_PROJECT_ID)) ?? "").toContain(
           "reload probe"
         )
       },
@@ -4592,11 +4569,9 @@ describe("PlaygroundPage persistence", () => {
     // through PersistGate with no /search or /fetch request.
     const stub = refuseNetwork()
     render(
-      <FreeSearchProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
-        <PlaygroundPage />
-      </FreeSearchProvider>
+      <PlaygroundHarness />
     )
-    expect(await screen.findByPlaceholderText(/Search across all providers/i)).toHaveValue(
+    expect(await screen.findByPlaceholderText(/Search the web/i)).toHaveValue(
       "reload probe"
     )
     expect(await screen.findByText("Live backend result one")).toBeInTheDocument()

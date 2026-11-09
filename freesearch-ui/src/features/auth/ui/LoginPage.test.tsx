@@ -38,12 +38,13 @@ async function fillCredentials(user: UserEvent, email: string, password: string)
 }
 
 describe("LoginPage", () => {
-  it("renders the Email and Password labels", () => {
+  it("renders the two sign-in fields without redundant helper copy", () => {
     renderLogin("/login", null)
 
     expect(screen.getByLabelText("Email")).toBeInTheDocument()
     expect(screen.getByLabelText("Password")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument()
+    expect(screen.queryByText("Use your FreeSearch account.")).toBeNull()
   })
 
   it("submits the typed email and password to login", async () => {
@@ -53,7 +54,7 @@ describe("LoginPage", () => {
     await fillCredentials(user, EMAIL, PASSWORD)
     await user.click(screen.getByRole("button", { name: "Sign in" }))
 
-    await screen.findByText("/playground")
+    await screen.findByText("/", { selector: '[data-testid="location-probe"]' })
     expect(login).toHaveBeenCalledTimes(1)
     expect(login).toHaveBeenCalledWith({ email: EMAIL, password: PASSWORD })
   })
@@ -67,7 +68,7 @@ describe("LoginPage", () => {
     const submit = screen.getByRole("button", { name: "Sign in" })
     await user.click(submit)
 
-    const pending = await screen.findByRole("button", { name: "Signing in" })
+    const pending = await screen.findByRole("button", { name: "Signing in…" })
     expect(pending).toBeDisabled()
     await user.click(pending)
     expect(login).toHaveBeenCalledTimes(1)
@@ -86,16 +87,16 @@ describe("LoginPage", () => {
     expect(screen.getByLabelText("Email")).toBeInTheDocument()
   })
 
-  it("clears the password field and navigates to the playground on success", async () => {
+  it("clears the password field and navigates to the workspace entry on success", async () => {
     const user = userEvent.setup()
     const { login } = renderLogin("/login", null)
 
     await fillCredentials(user, EMAIL, PASSWORD)
     await user.click(screen.getByRole("button", { name: "Sign in" }))
 
-    await screen.findByText("/playground")
+    await screen.findByText("/", { selector: '[data-testid="location-probe"]' })
     expect(login).toHaveBeenCalledTimes(1)
-    expect(screen.getByTestId("location-probe")).toHaveTextContent("/playground")
+    expect(screen.getByTestId("location-probe")).toHaveTextContent(/^\/$/)
     expect(screen.getByLabelText("Password")).toHaveValue("")
   })
 
@@ -108,18 +109,18 @@ describe("LoginPage", () => {
 
     await screen.findByText("/activity")
     expect(screen.getByTestId("location-probe")).toHaveTextContent("/activity")
-    expect(screen.queryByText("/playground")).toBeNull()
+    expect(screen.queryByText("/", { selector: '[data-testid="location-probe"]' })).toBeNull()
   })
 
-  it("falls back to the playground for a foreign returnTo value", async () => {
+  it("falls back to the workspace entry for a foreign returnTo value", async () => {
     const user = userEvent.setup()
     renderLogin("/login?returnTo=https://evil.example.com", null)
 
     await fillCredentials(user, EMAIL, PASSWORD)
     await user.click(screen.getByRole("button", { name: "Sign in" }))
 
-    await screen.findByText("/playground")
-    expect(screen.getByTestId("location-probe")).toHaveTextContent("/playground")
+    await screen.findByText("/", { selector: '[data-testid="location-probe"]' })
+    expect(screen.getByTestId("location-probe")).toHaveTextContent(/^\/$/)
     expect(screen.queryByText("https://evil.example.com")).toBeNull()
   })
 
@@ -202,8 +203,8 @@ describe("LoginPage", () => {
   it("redirects a pre-authenticated account away from the login form", async () => {
     renderLogin("/login", adminAccountFixture())
 
-    await screen.findByText("/playground")
-    expect(screen.getByTestId("location-probe")).toHaveTextContent("/playground")
+    await screen.findByText("/", { selector: '[data-testid="location-probe"]' })
+    expect(screen.getByTestId("location-probe")).toHaveTextContent(/^\/$/)
     expect(screen.queryByLabelText("Email")).toBeNull()
   })
 })

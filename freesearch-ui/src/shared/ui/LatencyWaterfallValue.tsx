@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { formatLatency } from "@/shared/lib/formatTime"
 
 export interface LatencyWaterfallValueProps {
   durationMs: number
@@ -22,7 +23,7 @@ export function LatencyWaterfallValue({
 }: LatencyWaterfallValueProps): ReactNode {
   return (
     <span className="tnum inline-flex items-baseline gap-x-2">
-      <span className="text-[var(--text-strong)]">{durationMs}ms</span>
+      <span className="text-[var(--text-strong)]">{formatLatency(durationMs)}</span>
       {resultCount !== null && (
         <>
           {" "}

@@ -1,61 +1,38 @@
 import { describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { ProviderCardActions, type ProviderCardActionsProps } from "./ProviderCardActions"
+import { formatDateTime } from "@/shared/lib/formatTime"
 
 /**
- * Polish locking suite: named card controls with stable test ids and
- * accessible meanings for the two credit controls.
+ * Card footer controls: one Refresh button with a stable accessible name, the
+ * plain result of the last refresh beside it, and the composed OAuth control.
  */
 
 function renderActions(overrides: Partial<ProviderCardActionsProps> = {}) {
   return render(
     <ProviderCardActions
-      providerId="brave"
       providerName="Brave"
-      manualEligible
       syncing={false}
-      expanded={false}
-      panelId="brave-detail"
       onSync={() => {}}
-      onOpenModal={() => {}}
-      onToggleExpanded={() => {}}
       {...overrides}
     />,
   )
 }
 
 describe("ProviderCardActions", () => {
-  it("names the provider balance control with its exact meaning", () => {
+  it("exposes one sentence-case Refresh control with a stable name", () => {
     renderActions()
-    const manual = screen.getByRole("button", {
-      name: "Provider Balance for Brave. Records the balance the vendor dashboard shows, as an estimate.",
-    })
-    expect(manual.getAttribute("data-testid")).toBe("manual-quota-open-brave")
-    expect(manual).toHaveTextContent("Provider Balance")
+    const sync = screen.getByRole("button", { name: "Refresh limits for Brave" })
+    expect(sync.textContent).toBe("Refresh")
+    expect(screen.getAllByRole("button")).toHaveLength(1)
   })
 
-  it("names the budget limit control with its exact meaning", () => {
-    renderActions()
-    const grant = screen.getByRole("button", {
-      name: "Budget Limit for Brave. Sets a local credit-unit ceiling that adds no vendor funds.",
-    })
-    expect(grant.getAttribute("data-testid")).toBe("crd-grant-open-brave")
-    expect(grant).toHaveTextContent("Budget Limit")
-  })
-
-  it("exposes history and sync controls with stable names", () => {
-    renderActions()
-    expect(
-      screen.getByRole("button", { name: "Balance history for Brave" }).getAttribute("data-testid"),
-    ).toBe("limit-history-open-brave")
-    expect(screen.getByRole("button", { name: "Refresh limits for Brave" })).not.toBeNull()
-  })
-
-  it("hides the manual control when the provider is not eligible", () => {
-    renderActions({ manualEligible: false })
-    expect(screen.queryByTestId("manual-quota-open-brave")).toBeNull()
-    expect(screen.getByTestId("crd-grant-open-brave")).not.toBeNull()
-    expect(screen.getByTestId("limit-history-open-brave")).not.toBeNull()
+  it("calls onSync on click", async () => {
+    const onSync = vi.fn()
+    renderActions({ onSync })
+    await userEvent.setup().click(screen.getByRole("button", { name: "Refresh limits for Brave" }))
+    expect(onSync).toHaveBeenCalledTimes(1)
   })
 
   it("disables sync and shows syncing text while syncing", () => {
@@ -65,49 +42,30 @@ describe("ProviderCardActions", () => {
     expect(sync.textContent).toBe("Refreshing…")
   })
 
-  it("mounts no detail disclosure; the info popover owns detail (CARD-3)", () => {
-    const { rerender } = renderActions()
-    expect(screen.queryByRole("button", { name: "Show detail" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Hide detail" })).toBeNull()
-    expect(screen.getByTestId("manual-quota-open-brave")).not.toBeNull()
-    expect(screen.getByTestId("crd-grant-open-brave")).not.toBeNull()
-    expect(screen.getByTestId("limit-history-open-brave")).not.toBeNull()
-    expect(screen.getByRole("button", { name: "Refresh limits for Brave" })).not.toBeNull()
-
-    rerender(
-      <ProviderCardActions
-        providerId="brave"
-        providerName="Brave"
-        manualEligible
-        syncing={false}
-        expanded
-        panelId="brave-detail"
-        onSync={vi.fn()}
-        onOpenModal={vi.fn()}
-        onToggleExpanded={vi.fn()}
-      />,
-    )
-    expect(screen.queryByRole("button", { name: "Show detail" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Hide detail" })).toBeNull()
-    expect(screen.getByTestId("manual-quota-open-brave")).not.toBeNull()
-    expect(screen.getByTestId("crd-grant-open-brave")).not.toBeNull()
-    expect(screen.getByTestId("limit-history-open-brave")).not.toBeNull()
+  it("hides Refresh when the provider reports no usage", () => {
+    renderActions({ refreshSkipped: true, syncNote: "This provider does not report usage" })
+    expect(screen.queryByRole("button", { name: "Refresh limits for Brave" })).toBeNull()
+    expect(screen.getByRole("status").textContent).toBe("This provider does not report usage")
   })
 
-  it("locks action order Refresh Limits, Provider Balance, Budget Limit, History (CARD-3)", () => {
+  it("shows the refresh result next to the Refresh control", () => {
+    const updatedAt = Date.parse("2026-11-08T10:00:00Z")
+    renderActions({ syncNote: "Updated just now", updatedAt })
+    const note = screen.getByRole("status")
+    expect(note.textContent).toBe("Updated just now")
+    expect(note.title).toBe(formatDateTime("2026-11-08T10:00:00Z"))
+    const sync = screen.getByRole("button", { name: "Refresh limits for Brave" })
+    expect(sync.parentElement).toBe(note.parentElement)
+  })
+
+  it("shows no status line before the first refresh", () => {
     renderActions()
-    const labels = screen.getAllByRole("button").map((button) => button.textContent)
-    expect(labels).toEqual(["Refresh Limits", "Provider Balance", "Budget Limit", "History"])
+    expect(screen.queryByRole("status")).toBeNull()
   })
 
-  it("renders the composed OAuth control inline at the trailing edge of the same row", () => {
-    // Parallel never carries Provider Balance in production (manualEligible
-    // false via quotaEligibility); the row holds Refresh, Budget, History,
-    // then Connect inline.
+  it("renders the composed OAuth control inline after Refresh", () => {
     renderActions({
-      providerId: "parallel",
       providerName: "Parallel",
-      manualEligible: false,
       oauthActions: (
         <button type="button" data-testid="oauth-device-open-parallel">
           Connect
@@ -116,10 +74,8 @@ describe("ProviderCardActions", () => {
     })
     const connect = screen.getByTestId("oauth-device-open-parallel")
     const row = connect.closest("div.flex.flex-wrap")
-    expect(row?.textContent).toContain("Budget Limit")
-    expect(row?.textContent).toContain("History")
-    expect(row?.textContent).toContain("Connect")
+    expect(row?.textContent).toContain("Refresh")
     const labels = screen.getAllByRole("button").map((button) => button.textContent)
-    expect(labels[labels.length - 1]).toBe("Connect")
+    expect(labels).toEqual(["Refresh", "Connect"])
   })
 })

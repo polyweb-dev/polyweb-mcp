@@ -1,77 +1,99 @@
+import { useMemo } from "react"
 import type { ReactNode } from "react"
-import { Navigate, Route, Routes } from "react-router"
+import { Navigate, Route, Routes, useLocation } from "react-router"
 import { Sidebar } from "@/app/layout/Sidebar"
 import { ProjectWorkspace } from "./ProjectWorkspace"
 import { ProjectsPage } from "@/features/projects/ui/ProjectsPage"
-import { PROJECTS_PATH } from "./routes"
-import { PlaygroundPage } from "@/features/playground/ui/PlaygroundPage"
-import { RoutingEngine } from "@/components/routing/RoutingEngine"
-import { QuotaAnalytics } from "@/components/quota/QuotaAnalytics"
-import { ActivityPage } from "@/features/activity/ui/ActivityPage"
-import { SettingsView } from "@/components/settings/SettingsView"
+import { QuotaAnalytics } from "@/features/quota/ui/QuotaAnalytics"
+import { SettingsView } from "@/features/system-providers/ui/SettingsView"
 import { AccountPage } from "@/features/auth/ui/AccountPage"
-import { AdminUsersPage } from "@/features/users/ui/AdminUsersPage"
+import { KeysPoolsPage } from "@/features/vault/ui/KeysPoolsPage"
 import { ToastContainer } from "@/components/common/ToastContainer"
 import { useAuth } from "@/domains/auth"
-import type { UserRole } from "@/domains/auth"
-import { TAB_PATHS, canAccessRoute, workspaceRoutes, type TabId } from "./routes"
+import { ProjectScopeProvider } from "@/domains/projects"
+import {
+  LEGACY_GLOBAL_REDIRECTS,
+  LEGACY_SECTION_PATHS,
+  legacyKeysDestination,
+  projectIdFromPath,
+  workspaceRoutes,
+  type TabId,
+} from "./routes"
+import { WorkspaceAccessGate } from "./WorkspaceAccessGate"
+import { WorkspaceLanding } from "./WorkspaceLanding"
+import { WorkspaceRouteGate } from "./WorkspaceRouteGate"
 
-const routeElements: Record<TabId, ReactNode> = {
-  playground: <PlaygroundPage />,
-  routing: <RoutingEngine />,
-  quotas: <QuotaAnalytics />,
-  activity: <ActivityPage />,
-  settings: <SettingsView />,
-  account: <AccountPage />,
-  adminUsers: <AdminUsersPage />,
+function routeElements(adminEmail: string, accountId: string): Record<TabId, ReactNode> {
+  return {
+    quotas: <QuotaAnalytics />,
+    settings: <SettingsView />,
+    projects: (
+      <WorkspaceAccessGate>
+        <ProjectsPage defaultAdminEmail={adminEmail} />
+      </WorkspaceAccessGate>
+    ),
+    account: <AccountPage />,
+    accountKeys: <KeysPoolsPage key={accountId} />,
+  }
 }
 
 /**
- * Route gate of the workspace.
+ * Route gate and project scope of the workspace.
  *
- * One permission helper serves the navigation filter and this gate, so a hidden
- * link and a rejected direct URL can never disagree. An unauthorized path
- * redirects to the workspace entry route instead of rendering the page. The
- * legacy root, `/providers`, and unknown-path redirects stay verbatim.
+ * Every gate reads effective permissions: global routes the system access
+ * descriptor, project sections the project access descriptor. The project
+ * scope sits above the sidebar and the page, keyed by `accountId:projectId`
+ * from the URL, so both read one access state. `/` and unknown paths land on
+ * the last valid project, else the project list; the former global
+ * section paths land on that project's section. Retired global pages and
+ * provider credentials tabs redirect to their replacement pages.
  */
 export function DashboardShell() {
   const { account } = useAuth()
-  const role: UserRole = account?.role ?? "agent"
+  const { pathname, search } = useLocation()
+  const keysDestination = legacyKeysDestination(pathname, search)
+  const accountId = account?.id ?? ""
+  const adminEmail = account?.email ?? ""
+  const elements = useMemo(() => routeElements(adminEmail, accountId), [adminEmail, accountId])
 
   return (
     <div
       className="flex min-h-screen flex-row font-sans"
       style={{ background: "var(--surface)", color: "var(--text)" }}
     >
-      <Sidebar />
+      <ProjectScopeProvider accountId={accountId} projectId={projectIdFromPath(pathname)}>
+        <Sidebar />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <main className="min-w-0 flex-1 px-6 py-8 pt-16 sm:px-8 md:pt-8 lg:px-12 flex flex-col">
-          <Routes>
-            <Route path="/" element={<Navigate to="/playground" replace />} />
-            <Route path="/providers" element={<Navigate to="/settings" replace />} />
-            <Route
-              path={PROJECTS_PATH}
-              element={<ProjectsPage defaultAdminEmail={account?.email ?? ""} />}
-            />
-            <Route path="/p/:projectId/*" element={<ProjectWorkspace />} />
-            {workspaceRoutes.map(({ id, path }) => (
+        <div className="flex min-w-0 flex-1 flex-col">
+          <main className="mx-auto flex w-full min-w-0 max-w-[1400px] flex-1 flex-col px-6 py-6 pt-16 sm:px-8 md:pt-6 lg:px-10">
+            {keysDestination !== null ? <Navigate to={keysDestination} replace /> : <Routes>
+              <Route path="/" element={<WorkspaceLanding />} />
+              {Object.entries(LEGACY_GLOBAL_REDIRECTS).map(([path, target]) => (
+                <Route key={path} path={path} element={<Navigate to={target} replace />} />
+              ))}
+              {Object.entries(LEGACY_SECTION_PATHS).map(([path, section]) => (
+                <Route key={path} path={path} element={<WorkspaceLanding section={section} />} />
+              ))}
               <Route
-                key={id}
-                path={path}
+                path="/p/:projectId/*"
                 element={
-                  canAccessRoute(id, role) ? (
-                    routeElements[id]
-                  ) : (
-                    <Navigate to={TAB_PATHS.playground} replace />
-                  )
+                  <WorkspaceAccessGate>
+                    <ProjectWorkspace accountId={accountId} />
+                  </WorkspaceAccessGate>
                 }
               />
-            ))}
-            <Route path="*" element={<Navigate to="/playground" replace />} />
-          </Routes>
-        </main>
-      </div>
+              {workspaceRoutes.map(({ id, path }) => (
+                <Route
+                  key={id}
+                  path={path}
+                  element={<WorkspaceRouteGate id={id}>{elements[id]}</WorkspaceRouteGate>}
+                />
+              ))}
+              <Route path="*" element={<WorkspaceLanding />} />
+            </Routes>}
+          </main>
+        </div>
+      </ProjectScopeProvider>
 
       <ToastContainer />
     </div>

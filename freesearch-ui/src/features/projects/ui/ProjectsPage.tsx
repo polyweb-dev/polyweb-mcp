@@ -1,18 +1,28 @@
-import { Link } from "react-router"
-import { hasPermission, resolveLastProject, useProjects } from "@/domains/projects"
+import { useEffect } from "react"
+import { Button } from "@/shared/ui/button"
+import { EmptyState } from "@/shared/ui/EmptyState"
+import { PageHeader } from "@/shared/ui/PageHeader"
+import { canCreateProjects, resolveLastProject, useProjects } from "@/domains/projects"
 import { ProjectCreateForm } from "./ProjectCreateForm"
+import { ProjectsTable } from "./ProjectsTable"
 
 /**
  * Projects overview of the workspace.
  *
  * The list shows every project the caller can read. The create form appears
- * only when the live system access grants `project.create`; it is never
- * inferred from the account role.
+ * only when the live system access grants `project.create`, the permission the
+ * backend enforces; it is never inferred from an account role. The shell
+ * mounts it behind the workspace access gate; rendered on its own, a failed
+ * load still shows an error with Retry instead of hiding the page.
  */
 export function ProjectsPage({ defaultAdminEmail }: { defaultAdminEmail: string }) {
-  const { accountId, availability, systemAccess, projects } = useProjects()
+  const { accountId, availability, systemAccess, projects, reloadProjects } = useProjects()
   const lastProjectId = resolveLastProject(accountId, projects)
-  const lastProject = projects.find((project) => project.id === lastProjectId) ?? null
+
+  // Refresh the list on entry so membership changes made elsewhere appear.
+  useEffect(() => {
+    void reloadProjects()
+  }, [reloadProjects])
 
   if (availability === "loading") {
     return (
@@ -21,53 +31,36 @@ export function ProjectsPage({ defaultAdminEmail }: { defaultAdminEmail: string 
       </p>
     )
   }
-  if (availability === "unavailable") return null
+  if (availability === "unavailable") {
+    return (
+      <div role="alert" className="space-y-3 text-[13px] text-[var(--status-danger)]">
+        <p>The project list could not be loaded.</p>
+        <Button type="button" size="form" variant="outline" onClick={() => void reloadProjects()}>
+          Retry
+        </Button>
+      </div>
+    )
+  }
 
+  const canCreate = canCreateProjects(systemAccess)
   return (
-    <section className="flex flex-1 flex-col space-y-6">
-      <header className="border-b border-[var(--border-subtle)] pb-2">
-        <h2 className="text-[var(--text-strong)]">Projects</h2>
-      </header>
+    <section className="flex flex-1 flex-col">
+      <PageHeader
+        title="Projects"
+        description="Each project has its own providers, members and API keys"
+      />
 
-      {lastProject !== null && (
-        <p className="text-[13px]">
-          <Link
-            to={`/p/${lastProject.id}`}
-            className="text-[var(--signal)] hover:underline"
-          >
-            Continue with {lastProject.name}
-          </Link>
-        </p>
-      )}
-
-      {projects.length === 0 ? (
-        <div className="space-y-1 text-[13px] text-[var(--muted)]">
-          <p>You are not a member of any project.</p>
-          <p>Ask a system administrator to add you.</p>
-        </div>
-      ) : (
-        <ul className="space-y-1">
-          {projects.map((project) => (
-            <li key={project.id}>
-              <Link
-                to={`/p/${project.id}`}
-                className="flex items-center justify-between rounded px-2 py-1.5 text-[13px] text-[var(--text)] hover:bg-[var(--secondary)]"
-              >
-                <span className="min-w-0 truncate">{project.name}</span>
-                {project.status === "archived" && (
-                  <span className="text-[10px] uppercase tracking-wide text-[var(--muted)]">
-                    Archived
-                  </span>
-                )}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {hasPermission(systemAccess, "project.create") && (
-        <ProjectCreateForm defaultAdminEmail={defaultAdminEmail} />
-      )}
+      <div className={canCreate ? "grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]" : undefined}>
+        {projects.length === 0 ? (
+          <EmptyState
+            title="You are not a member of any project"
+            description="Ask a system administrator to add you"
+          />
+        ) : (
+          <ProjectsTable projects={projects} lastProjectId={lastProjectId} />
+        )}
+        {canCreate && <ProjectCreateForm defaultAdminEmail={defaultAdminEmail} />}
+      </div>
     </section>
   )
 }

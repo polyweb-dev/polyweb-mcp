@@ -72,6 +72,20 @@ Then("the connection test dialog should show an endpoint", async ({ page }) => {
   await expect(dialog).toContainText(/api\./)
 })
 
+Then("the connection test dialog shows {string}", async ({ page }, label: string) => {
+  await expect(page.getByRole("dialog").getByText(label, { exact: true })).toBeVisible()
+})
+
+When("I run the connection test", async ({ page }) => {
+  await page.getByRole("dialog").getByRole("button", { name: "Test", exact: true }).click()
+})
+
+Then("the connection test result shows its age", async ({ page }) => {
+  const dialog = page.getByRole("dialog")
+  await expect(dialog.locator("dd").last()).toContainText(/Healthy|Failing/)
+  await expect(dialog.locator("dd").last()).toContainText(/ago|just now/i)
+})
+
 When("I dismiss the dialog with Escape", async ({ page }) => {
   await page.keyboard.press("Escape")
 })

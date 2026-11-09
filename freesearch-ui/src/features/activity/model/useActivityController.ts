@@ -1,19 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  mapTraceDetail,
-  mapTraceList,
+  TRACE_NOT_IN_PROJECT_MESSAGE,
+  getProjectTrace,
+  isTraceNotFound,
   type TraceDetail,
-  type TraceOperation,
   type TraceSummary,
 } from "@/domains/activity"
-import { errorMessage, isAbortOrTimeout } from "@/shared/api/http"
-import { apiService } from "@/services/api/freesearchApi"
+import { errorMessage } from "@/shared/api/http"
+import type { ActivityFilters } from "./activityFilters"
+import { useTraceList } from "./useTraceList"
+import type { LoadStatus, MoreStatus } from "./useTraceList"
 
-/** Activity list filter: everything, or one provider-querying operation. */
-export type ActivityFilter = "all" | TraceOperation
-
-export type LoadStatus = "loading" | "ready" | "error"
-export type DetailStatus = "idle" | LoadStatus
+export type { LoadStatus, MoreStatus }
+export type DetailStatus = "idle" | LoadStatus | "missing"
 
 /** Per-trace detail state; the list expansion and the dialog share one cache. */
 export interface TraceLoadState {
@@ -29,11 +28,13 @@ export interface TraceSelection {
 }
 
 export interface ActivityController {
-  filter: ActivityFilter
-  setFilter: (filter: ActivityFilter) => void
   summaries: TraceSummary[]
   listStatus: LoadStatus
   listError: string | null
+  hasMore: boolean
+  moreStatus: MoreStatus
+  moreError: string | null
+  loadMore: () => void
   refresh: () => void
   detailsById: Readonly<Record<string, TraceLoadState>>
   expandedTraceId: string | null
@@ -44,54 +45,7 @@ export interface ActivityController {
   closeTrace: () => void
 }
 
-const LIST_LIMIT = 50
 const IDLE_DETAIL: TraceLoadState = { status: "idle", detail: null, error: null }
-
-interface TraceListState {
-  summaries: TraceSummary[]
-  listStatus: LoadStatus
-  listError: string | null
-}
-
-/**
- * The summary list: loads on mount and whenever the filter or the explicit
- * refresh token changes. Abort semantics belong to this hook, not to the
- * transport: a client that resolves after an abort (stub, custom transport, or
- * a resolve-then-abort race) must not publish a stale list.
- */
-function useTraceList(filter: ActivityFilter, reloadToken: number): TraceListState {
-  const [summaries, setSummaries] = useState<TraceSummary[]>([])
-  const [listStatus, setListStatus] = useState<LoadStatus>("loading")
-  const [listError, setListError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const controller = new AbortController()
-    const load = async () => {
-      setListStatus("loading")
-      setListError(null)
-      try {
-        const payload = await apiService.listTraces(
-          {
-            limit: LIST_LIMIT,
-            ...(filter === "all" ? {} : { operation: filter }),
-          },
-          controller.signal
-        )
-        if (controller.signal.aborted) return
-        setSummaries(mapTraceList(payload))
-        setListStatus("ready")
-      } catch (error) {
-        if (controller.signal.aborted || isAbortOrTimeout(error)) return
-        setListError(errorMessage(error, "Traces unavailable"))
-        setListStatus("error")
-      }
-    }
-    void load()
-    return () => controller.abort()
-  }, [filter, reloadToken])
-
-  return { summaries, listStatus, listError }
-}
 
 /**
  * Detail state for the current selection. Opening a trace publishes a loading
@@ -106,19 +60,50 @@ export function selectedTraceState(controller: ActivityController): TraceLoadSta
   }
 }
 
+/** Cache key of one trace detail: the project is part of the identity. */
+function detailKey(projectId: string, traceId: string): string {
+  return `${projectId}:${traceId}`
+}
+
+/** The cached details of one project, keyed by trace id for the views. */
+function detailsOfProject(
+  cache: Readonly<Record<string, TraceLoadState>>,
+  projectId: string
+): Record<string, TraceLoadState> {
+  const prefix = `${projectId}:`
+  const details: Record<string, TraceLoadState> = {}
+  for (const [key, state] of Object.entries(cache)) {
+    if (key.startsWith(prefix)) details[key.slice(prefix.length)] = state
+  }
+  return details
+}
+
+function failedDetail(error: unknown): TraceLoadState {
+  if (isTraceNotFound(error)) {
+    return { status: "missing", detail: null, error: TRACE_NOT_IN_PROJECT_MESSAGE }
+  }
+  return { status: "error", detail: null, error: errorMessage(error, "Trace detail unavailable") }
+}
+
 /**
- * Activity list/detail coordination. The list loads on mount and whenever the
- * filter changes; a detail loads lazily the first time it is needed — either by
+ * Activity list/detail coordination of one project. The list loads page one
+ * whenever the project or a filter changes and appends cursor pages on "Load
+ * more"; a detail loads lazily the first time it is needed — either by
  * expanding a fanout row or by opening the dialog — and is then cached, so
- * inspecting a provider reuses the parent's already-decoded detail instead of
- * refetching it. Concurrent requests for one id are deduped, every request is
- * abortable, and a stale response can only ever write to its own id.
+ * inspecting a provider reuses the parent's already-decoded detail. Closing
+ * the dialog only clears the selection, so the filters and every loaded row
+ * stay. The cache is keyed by `projectId:traceId`, so one project's detail can
+ * never answer another's, even without the project remount. Concurrent
+ * requests for one id are deduped, every request is abortable, and a stale
+ * response can only ever write to its own id.
  */
-export function useActivityController(): ActivityController {
-  const [filter, setFilter] = useState<ActivityFilter>("all")
+export function useActivityController(
+  projectId: string,
+  filters: ActivityFilters
+): ActivityController {
   const [reloadToken, setReloadToken] = useState(0)
-  const { summaries, listStatus, listError } = useTraceList(filter, reloadToken)
-  const [detailsById, setDetailsById] = useState<Record<string, TraceLoadState>>({})
+  const list = useTraceList(projectId, filters, reloadToken)
+  const [detailCache, setDetailCache] = useState<Record<string, TraceLoadState>>({})
   const [expandedTraceId, setExpandedTraceId] = useState<string | null>(null)
   const [selection, setSelection] = useState<TraceSelection | null>(null)
 
@@ -128,38 +113,38 @@ export function useActivityController(): ActivityController {
   const expandedRef = useRef<string | null>(null)
   const requestsRef = useRef(new Map<string, AbortController>())
 
-  const publish = useCallback((traceId: string, state: TraceLoadState) => {
-    detailsRef.current = { ...detailsRef.current, [traceId]: state }
-    setDetailsById(detailsRef.current)
+  const publish = useCallback((key: string, state: TraceLoadState) => {
+    detailsRef.current = { ...detailsRef.current, [key]: state }
+    setDetailCache(detailsRef.current)
   }, [])
 
   const loadDetail = useCallback(
     (traceId: string, force = false) => {
-      if (requestsRef.current.has(traceId)) return
-      const cached = detailsRef.current[traceId]
+      const key = detailKey(projectId, traceId)
+      if (requestsRef.current.has(key)) return
+      const cached = detailsRef.current[key]
       if (!force && cached?.status === "ready") return
       const controller = new AbortController()
-      requestsRef.current.set(traceId, controller)
-      publish(traceId, { status: "loading", detail: cached?.detail ?? null, error: null })
+      requestsRef.current.set(key, controller)
+      publish(key, { status: "loading", detail: cached?.detail ?? null, error: null })
       void (async () => {
         try {
-          const payload = await apiService.getTrace(traceId, controller.signal)
+          const detail = await getProjectTrace(projectId, traceId, controller.signal)
           if (controller.signal.aborted) return
-          publish(traceId, { status: "ready", detail: mapTraceDetail(payload), error: null })
+          publish(key, { status: "ready", detail, error: null })
         } catch (error) {
-          if (controller.signal.aborted || isAbortOrTimeout(error)) return
-          publish(traceId, {
-            status: "error",
-            detail: null,
-            error: errorMessage(error, "Trace detail unavailable"),
-          })
+          // Only this request's own abort is silent; a timeout shows Retry.
+          if (controller.signal.aborted) return
+          publish(key, failedDetail(error))
         } finally {
-          if (requestsRef.current.get(traceId) === controller) requestsRef.current.delete(traceId)
+          if (requestsRef.current.get(key) === controller) requestsRef.current.delete(key)
         }
       })()
     },
-    [publish]
+    [projectId, publish]
   )
+
+  const detailsById = useMemo(() => detailsOfProject(detailCache, projectId), [detailCache, projectId])
 
   useEffect(() => {
     const requests = requestsRef.current
@@ -174,7 +159,7 @@ export function useActivityController(): ActivityController {
     requestsRef.current.clear()
     detailsRef.current = {}
     expandedRef.current = null
-    setDetailsById({})
+    setDetailCache({})
     setExpandedTraceId(null)
     setSelection(null)
     setReloadToken((token) => token + 1)
@@ -207,11 +192,7 @@ export function useActivityController(): ActivityController {
   const closeTrace = useCallback(() => setSelection(null), [])
 
   return {
-    filter,
-    setFilter,
-    summaries,
-    listStatus,
-    listError,
+    ...list,
     refresh,
     detailsById,
     expandedTraceId,

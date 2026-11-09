@@ -5,11 +5,11 @@ import { providerIdentity } from "@/domains/providers"
 export type RankingMode = "fusion" | "provider"
 
 const FUSION_SCORED =
-  "Results are shown in FreeSearch's final fused order. Higher recorded fusion scores appear first."
+  "Results are shown in FreeSearch's final fused order. Higher recorded fusion scores appear first"
 const FUSION_UNSCORED =
-  "Results are shown in the order stored by FreeSearch. This trace did not record fusion scores or raw rank inputs, so the exact calculation is unavailable."
+  "Results are shown in the order stored by FreeSearch. This trace did not record fusion scores or raw rank inputs, so the exact calculation is unavailable"
 const RRF_ABSENT =
-  "Raw reciprocal-rank inputs and per-provider ranks are not recorded, so exact RRF arithmetic is unavailable."
+  "Raw reciprocal-rank inputs and per-provider ranks are not recorded, so exact RRF arithmetic is unavailable"
 
 /** One sentence per mode, split around the provider identity it names. */
 function providerCopy(scored: boolean): { before: string; after: string } {
@@ -18,13 +18,13 @@ function providerCopy(scored: boolean): { before: string; after: string } {
     return {
       before,
       after:
-        ". Recorded provider scores are shown as metadata; FreeSearch did not reorder this response.",
+        ". Recorded provider scores are shown as metadata; FreeSearch did not reorder this response",
     }
   }
   return {
     before,
     after:
-      ". This trace did not record provider scores, so returned order is the only ranking signal.",
+      ". This trace did not record provider scores, so returned order is the only ranking signal",
   }
 }
 

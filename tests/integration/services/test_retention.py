@@ -13,6 +13,7 @@ from freesearch.models.observability import (
     TraceSpanKind,
     TraceSpanRecord,
 )
+from freesearch.models.projects import TraceSettings
 from freesearch.models.retention import RetentionRunRequest
 from freesearch.models.schema_enums import (
     AuditActorType,
@@ -20,9 +21,11 @@ from freesearch.models.schema_enums import (
     AuditOutcome,
     RetentionDataClass,
 )
+from freesearch.models.settings import ProjectSettingsUpdate
 from freesearch.persistence.audit import AuditRepository
 from freesearch.persistence.otel_exporter import write_trace_spans
 from freesearch.services.retention import ProjectRetentionService
+from freesearch.services.settings import SettingsService
 from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
 from tests.fixtures.auth import temp_principal
 from tests.fixtures.execution import seed_execution_project
@@ -40,6 +43,11 @@ async def test_project_retention_isolates_other_project_system_audit_and_other_d
         admin = temp_principal(boot.admin_user)
         a = boot.default_project.id
         b = (await seed_execution_project(boot.repository, user_id=admin.id, name="B")).project_id
+        await SettingsService(boot.repository).update_project_settings(
+            admin,
+            a,
+            ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(retention_days=30)),
+        )
         now = datetime.now(UTC)
         old = now - timedelta(days=60)
         cutoff = now - timedelta(days=1)

@@ -1,5 +1,6 @@
 import { cn } from "cn"
 import type { TraceOutcome } from "@/domains/activity"
+import { StatusDot, type StatusTone } from "@/shared/ui/StatusDot"
 
 const LABELS: Record<TraceOutcome, string> = {
   success: "Success",
@@ -7,10 +8,10 @@ const LABELS: Record<TraceOutcome, string> = {
   error: "Error",
 }
 
-function outcomeColor(outcome: TraceOutcome): string {
-  if (outcome === "success") return "var(--status-healthy)"
-  if (outcome === "partial") return "var(--status-warning)"
-  return "var(--status-danger)"
+const TONES: Record<TraceOutcome, StatusTone> = {
+  success: "positive",
+  partial: "warning",
+  error: "negative",
 }
 
 /** Outcome label shared by the Activity list, dialog summary, and timeline. */
@@ -22,11 +23,8 @@ export function TraceStatusPill({
   className?: string
 }) {
   return (
-    <span
-      className={cn("whitespace-nowrap text-[12px] font-medium", className)}
-      style={{ color: outcomeColor(outcome) }}
-    >
-      {LABELS[outcome]}
+    <span className={cn("text-[13px]", className)}>
+      <StatusDot tone={TONES[outcome]} label={LABELS[outcome]} />
     </span>
   )
 }

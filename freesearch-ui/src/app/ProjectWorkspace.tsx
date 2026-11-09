@@ -1,58 +1,65 @@
-import { Navigate, Route, Routes, useParams } from "react-router"
-import { useAuth } from "@/domains/auth"
-import { ProjectScopeProvider, useProjects } from "@/domains/projects"
+import type { ReactNode } from "react"
+import { Navigate, Route, Routes } from "react-router"
+import { useProjectScope } from "@/domains/projects"
+import { ActivityPage } from "@/features/activity/ui/ActivityPage"
+import { ProjectPlaygroundPage } from "@/features/playground/ui/ProjectPlaygroundPage"
+import { ProjectPlaygroundScope } from "@/features/playground/ui/ProjectPlaygroundScope"
+import { ProjectUsagePage } from "@/features/usage/ui/ProjectUsagePage"
+import { ProjectApiKeysPage } from "@/features/projects/ui/ProjectApiKeysPage"
 import { ProjectScopeGate } from "@/features/projects/ui/ProjectScopeGate"
 import { ProjectMembersPage } from "@/features/projects/ui/ProjectMembersPage"
 import { ProjectOverviewPage } from "@/features/projects/ui/ProjectOverviewPage"
-import { PROJECTS_PATH, TAB_PATHS, projectPath } from "./routes"
+import { ProjectProvidersPage } from "@/features/providers/ui/ProjectProvidersPage"
+import { ProjectSettingsPage } from "@/features/settings/ui/ProjectSettingsPage"
+import { ProjectSectionGate } from "./ProjectSectionGate"
+import { PROJECT_SECTIONS, projectPath, type ProjectSectionId } from "./routes"
+
+/** Page of each registered project section. A new section adds its page here. */
+const SECTION_PAGES: Record<ProjectSectionId, (accountId: string) => ReactNode> = {
+  overview: () => <ProjectOverviewPage />,
+  playground: (accountId) => <ProjectPlaygroundPage accountId={accountId} />,
+  activity: () => <ActivityPage />,
+  usage: () => <ProjectUsagePage />,
+  providers: (accountId) => <ProjectProvidersPage accountId={accountId} />,
+  settings: (accountId) => <ProjectSettingsPage accountId={accountId} />,
+  members: (accountId) => <ProjectMembersPage accountId={accountId} />,
+  apiKeys: (accountId) => <ProjectApiKeysPage accountId={accountId} />,
+}
 
 /**
  * Project-scoped subtree of the workspace.
  *
- * The provider mounts with `key={accountId:projectId}`, so a project switch
- * remounts the entire subtree — forms, results, and drafts of the previous
- * project can never bleed into the next. The catch-all redirect keeps every
- * account-scoped surface (`/p/x/usage`, `/p/x/activity`, …) on the overview,
- * so no account-scoped data renders under a project URL.
+ * The shell's `ProjectScopeProvider` owns the access state of the URL
+ * project, so the sidebar and the page share one descriptor. The project
+ * playground scope (store and execution) wraps every section, so a section
+ * switch keeps an in-flight playground request. The scope and the routes
+ * mount with `key={accountId:projectId}`, so a project switch aborts that
+ * request and remounts every page — forms, results, drafts and one-time keys
+ * of the previous project can never bleed into the next. Each section comes
+ * from the registry, behind the access gate and its own permission gate. Unknown sections redirect to the
+ * overview, so no account-scoped data renders under a project URL.
  */
-export function ProjectWorkspace() {
-  const { account } = useAuth()
-  const { availability } = useProjects()
-  const { projectId } = useParams()
+export function ProjectWorkspace({ accountId }: { accountId: string }) {
+  const { projectId } = useProjectScope()
+  const scopeKey = `${accountId}:${projectId}`
 
-  if (account === null || projectId === undefined) {
-    return <Navigate to={PROJECTS_PATH} replace />
-  }
-  if (availability === "unavailable") {
-    return <Navigate to={TAB_PATHS.playground} replace />
-  }
-
-  const scopeKey = `${account.id}:${projectId}`
   return (
-    <ProjectScopeProvider
-      key={scopeKey}
-      accountId={account.id}
-      projectId={projectId}
-    >
-      <Routes>
-        <Route
-          index
-          element={
+    <ProjectPlaygroundScope key={scopeKey} accountId={accountId} projectId={projectId}>
+      <Routes key={scopeKey}>
+        {PROJECT_SECTIONS.map(({ id, segment }) => {
+          const element = (
             <ProjectScopeGate>
-              <ProjectOverviewPage />
+              <ProjectSectionGate section={id}>{SECTION_PAGES[id](accountId)}</ProjectSectionGate>
             </ProjectScopeGate>
-          }
-        />
-        <Route
-          path="members"
-          element={
-            <ProjectScopeGate>
-              <ProjectMembersPage accountId={account.id} />
-            </ProjectScopeGate>
-          }
-        />
+          )
+          return segment === "" ? (
+            <Route key={id} index element={element} />
+          ) : (
+            <Route key={id} path={segment} element={element} />
+          )
+        })}
         <Route path="*" element={<Navigate to={projectPath(projectId)} replace />} />
       </Routes>
-    </ProjectScopeProvider>
+    </ProjectPlaygroundScope>
   )
 }

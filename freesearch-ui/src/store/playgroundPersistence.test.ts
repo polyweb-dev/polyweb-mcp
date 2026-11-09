@@ -3,14 +3,17 @@ import type { FetchResponse, SearchResponse } from "@/domains/execution"
 import {
   INTERRUPTED_REQUEST_ERROR,
   MAX_PERSISTED_PLAYGROUND_BYTES,
+  LEGACY_PLAYGROUND_PERSIST_KEY,
   PLAYGROUND_PERSIST_KEY,
   PLAYGROUND_PERSIST_VERSION,
   createPlaygroundPersistConfig,
+  discardLegacyPlaygroundSnapshot,
   createPlaygroundStorage,
   playgroundPersistKey,
   sanitizePersistedPlayground,
 } from "./playgroundPersistence"
 import { ADMIN_ACCOUNT_ID, AGENT_ACCOUNT_ID } from "@/test/authFixtures"
+import { PROJECT_ALPHA_ID, PROJECT_BETA_ID } from "@/test/accessFixtures"
 import { initialPlaygroundState } from "./playgroundSlice"
 import type { PlaygroundState } from "./playgroundSlice"
 
@@ -90,7 +93,7 @@ function versioned(state: Partial<PlaygroundState> & Record<string, unknown>): s
   return encodeEnvelope({
     ...initialPlaygroundState,
     ...state,
-    _persist: { version: 1, rehydrated: false },
+    _persist: { version: PLAYGROUND_PERSIST_VERSION, rehydrated: false },
   })
 }
 
@@ -101,14 +104,14 @@ afterEach(() => {
 })
 
 describe("playgroundPersistence identity", () => {
-  it("uses the exact namespaced key, empty prefix, and version 1", () => {
-    expect(PLAYGROUND_PERSIST_KEY).toBe("freesearch:playground:v1")
-    expect(PLAYGROUND_PERSIST_VERSION).toBe(1)
-    const config = createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID)
-    expect(config.key).toBe(`freesearch:playground:v1:${ADMIN_ACCOUNT_ID}`)
-    expect(config.key).toBe(playgroundPersistKey(ADMIN_ACCOUNT_ID))
+  it("uses the exact project key, empty prefix, and version 2", () => {
+    expect(PLAYGROUND_PERSIST_KEY).toBe("freesearch:playground:v2")
+    expect(PLAYGROUND_PERSIST_VERSION).toBe(2)
+    const config = createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID, PROJECT_ALPHA_ID)
+    expect(config.key).toBe(`freesearch:playground:v2:${ADMIN_ACCOUNT_ID}:${PROJECT_ALPHA_ID}`)
+    expect(config.key).toBe(playgroundPersistKey(ADMIN_ACCOUNT_ID, PROJECT_ALPHA_ID))
     expect(config.keyPrefix).toBe("")
-    expect(config.version).toBe(1)
+    expect(config.version).toBe(2)
   })
 
   it("caps persisted snapshots at 2 MiB and names the interrupted-request error", () => {
@@ -116,31 +119,37 @@ describe("playgroundPersistence identity", () => {
     expect(INTERRUPTED_REQUEST_ERROR).toBe("Previous request was interrupted by reload.")
   })
 
-  it("produces different keys for different account IDs", () => {
-    const adminKey = playgroundPersistKey(ADMIN_ACCOUNT_ID)
-    const agentKey = playgroundPersistKey(AGENT_ACCOUNT_ID)
-    expect(adminKey).not.toBe(agentKey)
-    expect(createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID).key).toBe(adminKey)
-    expect(createPlaygroundPersistConfig(AGENT_ACCOUNT_ID).key).toBe(agentKey)
-    expect(createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID).key).not.toBe(
-      createPlaygroundPersistConfig(AGENT_ACCOUNT_ID).key
-    )
+  it("produces different keys for different accounts and different projects", () => {
+    const adminKey = playgroundPersistKey(ADMIN_ACCOUNT_ID, PROJECT_ALPHA_ID)
+    const agentKey = playgroundPersistKey(AGENT_ACCOUNT_ID, PROJECT_ALPHA_ID)
+    const betaKey = playgroundPersistKey(ADMIN_ACCOUNT_ID, PROJECT_BETA_ID)
+    expect(new Set([adminKey, agentKey, betaKey]).size).toBe(3)
+    expect(createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID, PROJECT_ALPHA_ID).key).toBe(adminKey)
+    expect(createPlaygroundPersistConfig(AGENT_ACCOUNT_ID, PROJECT_ALPHA_ID).key).toBe(agentKey)
+    expect(createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID, PROJECT_BETA_ID).key).toBe(betaKey)
   })
 
-  it("removes the legacy PLAYGROUND_PERSIST_KEY snapshot from storage while keeping account snapshots", () => {
-    const adminKey = playgroundPersistKey(ADMIN_ACCOUNT_ID)
-    window.localStorage.setItem(PLAYGROUND_PERSIST_KEY, '{"stale":true}')
-    window.localStorage.setItem(adminKey, '{"kept":true}')
-    createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID)
-    expect(window.localStorage.getItem(PLAYGROUND_PERSIST_KEY)).toBeNull()
-    expect(window.localStorage.getItem(adminKey)).toBe('{"kept":true}')
+  it("discards every legacy v1 snapshot (unowned and account keys) while keeping project snapshots", () => {
+    const projectKey = playgroundPersistKey(ADMIN_ACCOUNT_ID, PROJECT_ALPHA_ID)
+    const legacyAccountKey = `${LEGACY_PLAYGROUND_PERSIST_KEY}:${ADMIN_ACCOUNT_ID}`
+    window.localStorage.setItem(LEGACY_PLAYGROUND_PERSIST_KEY, '{"stale":true}')
+    window.localStorage.setItem(legacyAccountKey, '{"stale":true}')
+    window.localStorage.setItem(projectKey, '{"kept":true}')
+    createPlaygroundPersistConfig(ADMIN_ACCOUNT_ID, PROJECT_ALPHA_ID)
+    // The config itself never writes storage; the provider's mount effect discards.
+    expect(window.localStorage.getItem(LEGACY_PLAYGROUND_PERSIST_KEY)).toBe('{"stale":true}')
+    discardLegacyPlaygroundSnapshot()
+    expect(window.localStorage.getItem(LEGACY_PLAYGROUND_PERSIST_KEY)).toBeNull()
+    expect(window.localStorage.getItem(legacyAccountKey)).toBeNull()
+    expect(window.localStorage.getItem(projectKey)).toBe('{"kept":true}')
   })
 
-  it("never reads the legacy key for an account config", async () => {
+  it("never migrates the legacy account key into a project config", async () => {
     const storage = createPlaygroundStorage()
-    await storage.setItem(PLAYGROUND_PERSIST_KEY, versioned({ query: "legacy query" }))
-    const adminKey = playgroundPersistKey(ADMIN_ACCOUNT_ID)
-    await expect(storage.getItem(adminKey)).resolves.toBeNull()
+    const legacyAccountKey = `${LEGACY_PLAYGROUND_PERSIST_KEY}:${ADMIN_ACCOUNT_ID}`
+    await storage.setItem(legacyAccountKey, versioned({ query: "legacy query" }))
+    const projectKey = playgroundPersistKey(ADMIN_ACCOUNT_ID, PROJECT_ALPHA_ID)
+    await expect(storage.getItem(projectKey)).resolves.toBeNull()
   })
 })
 
@@ -193,7 +202,7 @@ describe("sanitizePersistedPlayground untrusted input", () => {
     expect(sanitizePersistedPlayground([])).toEqual(initialPlaygroundState)
     expect(sanitizePersistedPlayground({ query: "x" })).toEqual(initialPlaygroundState)
     expect(
-      sanitizePersistedPlayground({ ...initialPlaygroundState, _persist: { version: 2 } })
+      sanitizePersistedPlayground({ ...initialPlaygroundState, _persist: { version: 1 } })
     ).toEqual(initialPlaygroundState)
     expect(
       sanitizePersistedPlayground({ ...initialPlaygroundState, _persist: { rehydrated: true } })
@@ -203,7 +212,7 @@ describe("sanitizePersistedPlayground untrusted input", () => {
   it("keeps recognized fields while falling back for unknown values", () => {
     const sanitized = sanitizePersistedPlayground({
       ...initialPlaygroundState,
-      _persist: { version: 1, rehydrated: true },
+      _persist: { version: PLAYGROUND_PERSIST_VERSION, rehydrated: true },
       mode: "copilot",
       query: 42,
       fetchUrl: null,
@@ -229,7 +238,7 @@ describe("sanitizePersistedPlayground untrusted input", () => {
   })
 
   it("clamps malformed persisted result counts through the shared 1..100 contract", () => {
-    const base = { ...initialPlaygroundState, _persist: { version: 1 } }
+    const base = { ...initialPlaygroundState, _persist: { version: PLAYGROUND_PERSIST_VERSION } }
     expect(sanitizePersistedPlayground({ ...base, resultCount: 0 }).resultCount).toBe(1)
     expect(sanitizePersistedPlayground({ ...base, resultCount: "25" }).resultCount).toBe(6)
     expect(sanitizePersistedPlayground({ ...base, resultCount: NaN }).resultCount).toBe(1)

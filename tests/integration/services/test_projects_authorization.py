@@ -14,6 +14,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy import select
 
+from freesearch.models.project_permissions import ProjectPermission
 from freesearch.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
@@ -24,6 +25,7 @@ from freesearch.models.projects import (
     ProjectMemberChange,
     ProjectMembersBulkUpdate,
     ProjectMemberUpdate,
+    ProjectRead,
     ProjectStatus,
     ScopeType,
 )
@@ -76,6 +78,22 @@ async def _seed_installation_admin(
     return temp_principal(user)
 
 
+async def _create_ownerless_project(
+    repository: SQLiteRepository, system: UserPrincipal, project_create: ProjectCreate
+) -> ProjectRead:
+    """Deactivate the creator to exercise last-admin guards without an owner guard."""
+
+    creator = temp_principal(
+        await create_temp_user(repository, temp_email("p02-creator"), system_admin=True)
+    )
+    service = ProjectService(repository)
+    project = await service.create_project(creator, project_create)
+    await service.deactivate_accounts([creator.id], actor=system)
+    async with repository.session() as session:
+        assert await ProjectRepository(session).get_provider_owner(project.id) is None
+    return project
+
+
 async def _count_admins(repository: SQLiteRepository, project_id: UUID) -> int:
     async with repository.session() as session:
         return await ProjectRepository(session).count_active_project_admins(project_id=project_id)
@@ -103,6 +121,9 @@ async def test_project_lifecycle_scope_and_system_admin_non_membership(
     repository = await create_alpha_test_db(tmp_path / "p02-lifecycle.db")
     try:
         system = await _seed_installation_admin(repository)
+        nonmember_system = temp_principal(
+            await create_temp_user(repository, temp_email("p02-other-sys"), system_admin=True)
+        )
         admin_row = await create_temp_user(repository, temp_email("p02-admin"))
         member_row = await create_temp_user(repository, temp_email("p02-member"))
         admin = temp_principal(admin_row)
@@ -114,8 +135,11 @@ async def test_project_lifecycle_scope_and_system_admin_non_membership(
             ProjectCreate(name="Alpha", slug="alpha", initial_admin_user_id=admin.id),
         )
 
-        # A system administrator creates the project but receives no membership.
-        assert await service.list_projects(system) == []
+        # The creator is an admin and provider owner, but system authority alone
+        # does not make another system administrator a project member.
+        assert [item.id for item in await service.list_projects(system)] == [project.id]
+        assert (await service.provider_owner(system, project.id)).user_id == system.id
+        assert await service.list_projects(nonmember_system) == []
         assert [item.id for item in await service.list_projects(admin)] == [project.id]
         authorization = ScopedAuthorizationService(repository)
         project_permissions = await authorization.effective_permissions(
@@ -125,32 +149,32 @@ async def test_project_lifecycle_scope_and_system_admin_non_membership(
         )
         assert PermissionAction.PROJECT_ARCHIVE in project_permissions
         system_project_permissions = await authorization.effective_permissions(
-            human_principal(system),
+            human_principal(nonmember_system),
             scope_type=ScopeType.PROJECT,
             scope_id=project.id,
         )
         assert system_project_permissions == frozenset()
         # R5: a non-member gets the inaccessible-project not-found, not 403.
         with pytest.raises(ProjectNotFound):
-            await service.list_members(system, project.id)
+            await service.list_members(nonmember_system, project.id)
 
-        # A project administrator can add a member and delegate a bounded role.
+        # A project administrator can add a developer and grant individual permissions.
         await service.add_member(
             admin,
             project.id,
             ProjectMemberAdd(user_id=member.id),
         )
         members = await service.list_members(admin, project.id)
-        assert {item.user_id for item in members} == {admin.id, member.id}
-        await service.assign_role(
+        assert {item.user_id for item in members} == {system.id, admin.id, member.id}
+        await service.update_member(
             admin,
             project.id,
             member.id,
-            BuiltinRole.ROUTING_EDITOR.value,
+            ProjectMemberUpdate(permissions=int(ProjectPermission.PROVIDERS_CONFIGURE)),
         )
         member_roles = await service.list_members(admin, project.id)
         member_record = next(item for item in member_roles if item.user_id == member.id)
-        assert BuiltinRole.ROUTING_EDITOR.value in member_record.roles
+        assert member_record.permissions == int(ProjectPermission.PROVIDERS_CONFIGURE)
         with pytest.raises(ProjectValidationError):
             await service.assign_role(
                 admin,
@@ -167,7 +191,7 @@ async def test_project_lifecycle_scope_and_system_admin_non_membership(
                 member,
                 project.id,
                 member.id,
-                BuiltinRole.TOKEN_MANAGER.value,
+                BuiltinRole.PROJECT_ADMIN.value,
             )
 
         # A project administrator cannot create another project (system scope).
@@ -181,6 +205,8 @@ async def test_project_lifecycle_scope_and_system_admin_non_membership(
                 ),
             )
 
+        await service.transfer_provider_owner(system, project.id, admin.id)
+        await service.remove_member(system, project.id, system.id)
         archived = await service.archive_project(admin, project.id)
         assert archived.status is ProjectStatus.ARCHIVED
         with pytest.raises(ProjectConflict) as archived_write:
@@ -190,9 +216,9 @@ async def test_project_lifecycle_scope_and_system_admin_non_membership(
                 ProjectMemberAdd(user_id=member.id),
             )
         assert archived_write.value.code == PROJECT_ARCHIVED
-        with pytest.raises(ProjectConflict) as last_admin:
+        with pytest.raises(ProjectConflict) as owner_guard:
             await service.remove_member(admin, project.id, admin.id)
-        assert last_admin.value.code == LAST_PROJECT_ADMIN
+        assert owner_guard.value.code == "PROVIDER_OWNER_REQUIRED"
         assert await _count_admins(repository, project.id) == 1
     finally:
         await repository.close()
@@ -312,13 +338,28 @@ async def test_legacy_admin_and_superuser_claims_do_not_grant_live_scope(
             ProjectCreate(
                 name="Explicit",
                 slug="explicit",
-                initial_admin_user_id=forged.id,
+                initial_admin_user_id=system.id,
             ),
+        )
+        assert await service.list_projects(forged) == []
+        assert (
+            await ScopedAuthorizationService(repository).effective_permissions(
+                human_principal(forged), scope_type=ScopeType.PROJECT, scope_id=project.id
+            )
+            == frozenset()
+        )
+        with pytest.raises(ProjectNotFound):
+            await service.list_members(forged, project.id)
+        await service.add_member(
+            system,
+            project.id,
+            ProjectMemberAdd(user_id=forged.id, initial_role=BuiltinRole.PROJECT_ADMIN.value),
         )
         # The same forged claims are irrelevant in project scope: the explicit
         # project_admin membership is the only reason the read succeeds.
         assert {item.user_id for item in await service.list_members(forged, project.id)} == {
-            forged.id
+            forged.id,
+            system.id,
         }
         with pytest.raises(AuthorizationDenied):
             await service.create_project(
@@ -347,7 +388,8 @@ async def test_last_admin_guards_self_removal_demotion_bulk_and_rollback(
         peer = temp_principal(peer_row)
         bystander = temp_principal(bystander_row)
         service = ProjectService(repository)
-        project = await service.create_project(
+        project = await _create_ownerless_project(
+            repository,
             system,
             ProjectCreate(name="Guarded", slug="guarded", initial_admin_user_id=admin.id),
         )
@@ -388,7 +430,7 @@ async def test_last_admin_guards_self_removal_demotion_bulk_and_rollback(
                         ),
                         ProjectMemberChange(
                             user_id=admin.id,
-                            remove_roles=frozenset({BuiltinRole.PROJECT_ADMIN.value}),
+                            role="developer",
                         ),
                     ]
                 ),
@@ -421,6 +463,77 @@ async def test_last_admin_guards_self_removal_demotion_bulk_and_rollback(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["remove", "suspend", "demote", "remove_role", "bulk"])
+async def test_provider_owner_cannot_lose_membership_or_admin_before_transfer(
+    tmp_path: Path, change: str
+) -> None:
+    repository = await create_alpha_test_db(tmp_path / "owner-guard.db")
+    try:
+        owner = await _seed_installation_admin(repository)
+        peer = temp_principal(await create_temp_user(repository, temp_email("p02-owner-peer")))
+        bystander = temp_principal(
+            await create_temp_user(repository, temp_email("p02-owner-bystander"))
+        )
+        service = ProjectService(repository)
+        project = await service.create_project(
+            owner,
+            ProjectCreate(name="Owner guard", slug="owner-guard", initial_admin_user_id=peer.id),
+        )
+        await service.add_member(peer, project.id, ProjectMemberAdd(user_id=bystander.id))
+
+        async def mutate() -> None:
+            if change == "remove":
+                await service.remove_member(peer, project.id, owner.id)
+            elif change == "suspend":
+                await service.update_member(
+                    peer,
+                    project.id,
+                    owner.id,
+                    ProjectMemberUpdate(status=MembershipStatus.SUSPENDED),
+                )
+            elif change == "demote":
+                await service.update_member(
+                    peer, project.id, owner.id, ProjectMemberUpdate(role="developer")
+                )
+            elif change == "remove_role":
+                await service.remove_role(
+                    peer, project.id, owner.id, BuiltinRole.PROJECT_ADMIN.value
+                )
+            else:
+                await service.bulk_update_members(
+                    peer,
+                    project.id,
+                    ProjectMembersBulkUpdate(
+                        changes=[
+                            ProjectMemberChange(
+                                user_id=bystander.id, status=MembershipStatus.SUSPENDED
+                            ),
+                            ProjectMemberChange(user_id=owner.id, role="developer"),
+                        ]
+                    ),
+                )
+
+        with pytest.raises(ProjectConflict) as refused:
+            await mutate()
+        assert refused.value.code == "PROVIDER_OWNER_REQUIRED"
+        assert await _count_admins(repository, project.id) == 2
+        assert (await service.provider_owner(peer, project.id)).user_id == owner.id
+        members = await _members(repository, project.id)
+        assert {item.user_id: item.status for item in members} == {
+            str(owner.id): MembershipStatus.ACTIVE.value,
+            str(peer.id): MembershipStatus.ACTIVE.value,
+            str(bystander.id): MembershipStatus.ACTIVE.value,
+        }
+
+        await service.transfer_provider_owner(owner, project.id, peer.id)
+        await mutate()
+        assert (await service.provider_owner(peer, project.id)).user_id == peer.id
+        assert await _count_admins(repository, project.id) == 1
+    finally:
+        await repository.close()
+
+
+@pytest.mark.asyncio
 async def test_account_deactivation_guard_bulk_and_live_revocation(
     tmp_path: Path,
     auth_secret: str,
@@ -433,7 +546,8 @@ async def test_account_deactivation_guard_bulk_and_live_revocation(
         peer_row = await create_temp_user(repository, temp_email("p02-peer"))
         admin = temp_principal(admin_row)
         peer = temp_principal(peer_row)
-        project = await service.create_project(
+        project = await _create_ownerless_project(
+            repository,
             system,
             ProjectCreate(
                 name="Deactivation",
@@ -541,7 +655,8 @@ async def _prepare_race(
     peer_row = await create_temp_user(first, temp_email("p02-race-b"))
     admin = temp_principal(admin_row)
     peer = temp_principal(peer_row)
-    project = await ProjectService(first).create_project(
+    project = await _create_ownerless_project(
+        first,
         system,
         ProjectCreate(name=name, slug=name.replace(" ", "-"), initial_admin_user_id=admin.id),
     )
@@ -676,7 +791,7 @@ async def test_concurrent_bulk_demotion_and_removal_preserve_admin(
                         changes=[
                             ProjectMemberChange(
                                 user_id=admin.id,
-                                remove_roles=frozenset({BuiltinRole.PROJECT_ADMIN.value}),
+                                role="developer",
                             )
                         ]
                     ),
@@ -887,16 +1002,20 @@ async def test_deactivation_checks_every_affected_project_atomically(tmp_path: P
         shared = temp_principal(shared_row)
         peer = temp_principal(peer_row)
         service = ProjectService(repository)
-        co_admin = await service.create_project(
-            system, ProjectCreate(name="Co", slug="co-admin", initial_admin_user_id=shared.id)
+        co_admin = await _create_ownerless_project(
+            repository,
+            system,
+            ProjectCreate(name="Co", slug="co-admin", initial_admin_user_id=shared.id),
         )
         await service.add_member(
             shared,
             co_admin.id,
             ProjectMemberAdd(user_id=peer.id, initial_role=BuiltinRole.PROJECT_ADMIN.value),
         )
-        sole = await service.create_project(
-            system, ProjectCreate(name="Sole", slug="sole-admin", initial_admin_user_id=shared.id)
+        sole = await _create_ownerless_project(
+            repository,
+            system,
+            ProjectCreate(name="Sole", slug="sole-admin", initial_admin_user_id=shared.id),
         )
         await _archive(repository, sole.id)
 

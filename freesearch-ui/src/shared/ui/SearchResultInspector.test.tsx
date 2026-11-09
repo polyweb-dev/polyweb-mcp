@@ -55,11 +55,14 @@ describe("SearchResultInspector", () => {
   it("shows the default empty state when no result is selected", () => {
     render(<SearchResultInspector result={null} />)
 
-    expect(
-      screen.getByText(
-        "Select a search result from the list to inspect full metadata and snippet extraction."
-      )
-    ).toBeInTheDocument()
+    expect(screen.getByText("Select a result to see its details")).toBeInTheDocument()
+  })
+
+  it("titles a selected result Result details in sentence case", () => {
+    render(<SearchResultInspector result={inspectorResult()} />)
+
+    expect(screen.getByRole("heading", { name: "Result details" })).toBeInTheDocument()
+    expect(screen.queryByText("Result Inspector")).not.toBeInTheDocument()
   })
 
   it("shows a custom empty state when the caller provides one", () => {
@@ -68,11 +71,7 @@ describe("SearchResultInspector", () => {
     )
 
     expect(screen.getByText("No trace result chosen")).toBeInTheDocument()
-    expect(
-      screen.queryByText(
-        "Select a search result from the list to inspect full metadata and snippet extraction."
-      )
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText("Select a result to see its details")).not.toBeInTheDocument()
   })
 
   it("keeps the full snippet inside a bounded scroll region", () => {

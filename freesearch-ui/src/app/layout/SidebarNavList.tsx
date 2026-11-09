@@ -1,18 +1,9 @@
 import type { LucideIcon } from "lucide-react"
 import { NavLink } from "react-router"
-import {
-  Activity,
-  Gauge,
-  Route,
-  Search,
-  Settings,
-  ShieldCheck,
-  UserRound,
-} from "lucide-react"
-import { cn } from "cn"
-import { useAuth } from "@/domains/auth"
-import type { UserRole } from "@/domains/auth"
+import { ChartPie, FolderKanban, Library, Vault, UserRound } from "lucide-react"
+import { useProjectsOptional } from "@/domains/projects"
 import { TAB_PATHS, canAccessRoute, type TabId } from "../routes"
+import { NAV_ICON_CLASS, navLinkClass } from "./navLinkClass"
 
 interface NavItem {
   id: TabId
@@ -20,14 +11,15 @@ interface NavItem {
   icon: LucideIcon
 }
 
-const navItems: NavItem[] = [
-  { id: "playground", label: "Playground", icon: Search },
-  { id: "routing", label: "Routing", icon: Route },
-  { id: "quotas", label: "Usage", icon: Gauge },
-  { id: "activity", label: "Activity", icon: Activity },
-  { id: "settings", label: "Settings", icon: Settings },
+const systemItems: NavItem[] = [
+  { id: "settings", label: "Providers", icon: Library },
+  { id: "quotas", label: "Quotas", icon: ChartPie },
+]
+
+const workspaceItems: NavItem[] = [
+  { id: "projects", label: "Projects", icon: FolderKanban },
+  { id: "accountKeys", label: "Keys and pools", icon: Vault },
   { id: "account", label: "Account", icon: UserRound },
-  { id: "adminUsers", label: "Admin", icon: ShieldCheck },
 ]
 
 interface NavListProps {
@@ -36,40 +28,43 @@ interface NavListProps {
 }
 
 /**
- * Primary navigation. The list filters with the same permission helper as the
- * route gate, so a role never sees a link to a page it cannot open.
+ * Primary (global) navigation: the System group for installation
+ * administrators, then Projects and Account. The list filters with the same
+ * permission helper as the route gate, reading the live system access
+ * descriptor, so a caller never sees a link to a page it cannot open. A gated
+ * link stays hidden until the descriptor has loaded.
  */
 export function NavList({ collapsed, onNavigate }: NavListProps) {
-  const { account } = useAuth()
-  const role: UserRole = account?.role ?? "agent"
-  const visibleItems = navItems.filter((item) => canAccessRoute(item.id, role))
+  const { systemAccess } = useProjectsOptional()
+  const visibleSystem = systemItems.filter((item) => canAccessRoute(item.id, systemAccess))
+  const visibleWorkspace = workspaceItems.filter((item) => canAccessRoute(item.id, systemAccess))
+
+  const row = ({ id, label, icon: Icon }: NavItem) => (
+    <NavLink
+      key={id}
+      to={TAB_PATHS[id]}
+      end={id === "account"}
+      aria-label={label}
+      title={collapsed ? label : undefined}
+      onClick={onNavigate}
+      className={({ isActive }) => navLinkClass(collapsed, isActive)}
+    >
+      <Icon aria-hidden="true" className={NAV_ICON_CLASS} strokeWidth={1.75} />
+      {!collapsed && <span className="truncate">{label}</span>}
+    </NavLink>
+  )
 
   return (
-    <nav
-      aria-label="Primary"
-      className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-3"
-    >
-      {visibleItems.map(({ id, label, icon: Icon }) => (
-        <NavLink
-          key={id}
-          to={TAB_PATHS[id]}
-          aria-label={label}
-          title={collapsed ? label : undefined}
-          onClick={onNavigate}
-          className={({ isActive }) =>
-            cn(
-              "relative flex h-10 w-full items-center rounded-md text-[13px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] focus-visible:ring-inset motion-reduce:transition-none",
-              collapsed ? "justify-center px-0" : "gap-3 px-3",
-              isActive
-                ? "bg-[var(--signal-muted)] text-[var(--text-strong)] before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-r before:bg-[var(--signal)]"
-                : "text-[var(--muted)] hover:bg-[var(--secondary)] hover:text-[var(--text-strong)]"
-            )
-          }
-        >
-          <Icon aria-hidden="true" className="size-[18px] shrink-0" strokeWidth={1.8} />
-          {!collapsed && <span>{label}</span>}
-        </NavLink>
-      ))}
+    <nav aria-label="Primary" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
+      {visibleSystem.length > 0 &&
+        (collapsed ? (
+          <hr className="mx-2 my-2 border-[var(--border-subtle)]" />
+        ) : (
+          <p className="px-2.5 pt-5 pb-1.5 text-[12px] text-[var(--muted)]">System</p>
+        ))}
+      {visibleSystem.map(row)}
+      <div aria-hidden="true" className="min-h-4 flex-1" />
+      {visibleWorkspace.map(row)}
     </nav>
   )
 }

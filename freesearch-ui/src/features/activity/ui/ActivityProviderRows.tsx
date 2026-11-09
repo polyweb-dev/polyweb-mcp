@@ -1,15 +1,16 @@
 import type { ReactNode } from "react"
 import { deriveProviderAttempts, type TraceProviderAttempt } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
+import { formatLatency } from "@/shared/lib/formatTime"
 import { Button } from "@/shared/ui/button"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
-import { TableCell, TableRow } from "@/shared/ui/table"
 import type { TraceLoadState } from "../model/useActivityController"
+import { ActivityRowAction } from "./ActivityRowAction"
 import { TraceStatusPill } from "./TraceStatusPill"
 
-const CELL = "px-4 py-2"
 /** Nested rows sit one shade above the page so the hierarchy is visible. */
-const CHILD_ROW = { background: "color-mix(in srgb, var(--elevated) 55%, transparent)" }
+const CHILD_CELL = "bg-[color-mix(in_srgb,var(--elevated)_55%,transparent)]"
+const COLUMN_COUNT = 7
 
 export interface ActivityProviderRowsProps {
   /** Id the parent row's expander points at with `aria-controls`. */
@@ -31,9 +32,12 @@ function panelView(state: TraceLoadState | undefined): PanelView {
     return {
       kind: "message",
       tone: "error",
-      text: `Provider responses unavailable — ${state.error ?? "unknown error"}`,
+      text: `Provider responses unavailable: ${state.error ?? "unknown error"}`,
       showRetry: true,
     }
+  }
+  if (state.status === "missing") {
+    return { kind: "message", tone: "quiet", text: state.error ?? "", showRetry: false }
   }
   if (state.detail === null) {
     return { kind: "message", tone: "quiet", text: "Loading provider responses...", showRetry: false }
@@ -43,7 +47,7 @@ function panelView(state: TraceLoadState | undefined): PanelView {
     return {
       kind: "message",
       tone: "quiet",
-      text: "No provider attempt was recorded for this trace.",
+      text: "No provider attempt was recorded for this trace",
       showRetry: false,
     }
   }
@@ -75,9 +79,9 @@ function messageRow(
   onRetry: () => void
 ): ReactNode {
   return (
-    <TableRow key={rowId} id={rowId} className="border-b border-[var(--border-subtle)] last:border-b-0">
-      <TableCell colSpan={7} className={`${CELL} whitespace-normal`} style={CHILD_ROW}>
-        <span className="flex flex-wrap items-center gap-3 pl-4">
+    <tr key={rowId} id={rowId}>
+      <td colSpan={COLUMN_COUNT} className={`${CHILD_CELL} whitespace-normal`}>
+        <span className="flex flex-wrap items-center gap-3 pl-6">
           <span
             role={view.tone === "error" ? "alert" : "status"}
             className="text-[12px]"
@@ -91,8 +95,8 @@ function messageRow(
             </Button>
           )}
         </span>
-      </TableCell>
-    </TableRow>
+      </td>
+    </tr>
   )
 }
 
@@ -103,34 +107,28 @@ function attemptRow(
   onInspect: (providerSpanId: string) => void
 ): ReactNode {
   return (
-    <TableRow
+    <tr
       key={attempt.spanId}
       {...(first ? { id: rowId } : {})}
-      className="border-b border-[var(--border-subtle)] last:border-b-0"
-      style={CHILD_ROW}
+      onClick={() => onInspect(attempt.spanId)}
+      className="relative cursor-pointer"
     >
-      <TableCell className={`${CELL} pl-8 text-[var(--accent-cyan)]`} aria-hidden="true">
+      <td className={`${CHILD_CELL} pl-8 text-[var(--muted)]`} aria-hidden="true">
         ↳
-      </TableCell>
-      <TableCell className={`${CELL} text-[var(--muted)]`}>response</TableCell>
-      <TableCell className={`${CELL} text-[var(--text-strong)]`}>
-        {providerValue(attempt)}
-      </TableCell>
-      <TableCell className={`${CELL} text-center`}>
+      </td>
+      <td className={`${CHILD_CELL} text-[var(--muted)]`}>Response</td>
+      <td className={`${CHILD_CELL} fs-cell-strong`}>{providerValue(attempt)}</td>
+      <td className={CHILD_CELL}>
         <TraceStatusPill outcome={attempt.outcome} />
-      </TableCell>
-      <TableCell className={`${CELL} text-right text-[var(--text)] tnum`}>
-        {attempt.durationMs}ms
-      </TableCell>
-      <TableCell className={`${CELL} text-right text-[var(--muted)] tnum`}>
+      </td>
+      <td className={`${CHILD_CELL} tnum text-right`}>{formatLatency(attempt.durationMs)}</td>
+      <td className={`${CHILD_CELL} tnum text-right text-[var(--muted)]`}>
         {resultLabel(attempt)}
-      </TableCell>
-      <TableCell className={`${CELL} text-right`}>
-        <Button variant="outline" size="default" onClick={() => onInspect(attempt.spanId)}>
-          View details
-        </Button>
-      </TableCell>
-    </TableRow>
+      </td>
+      <td className={`${CHILD_CELL} fs-cell-actions`}>
+        <ActivityRowAction onOpen={() => onInspect(attempt.spanId)} />
+      </td>
+    </tr>
   )
 }
 

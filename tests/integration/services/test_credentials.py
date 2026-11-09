@@ -29,25 +29,21 @@ from freesearch.models.projects import (
     BuiltinRole,
     CredentialOwnerScope,
     HumanPrincipal,
-    PermissionAction,
     ProjectContext,
     ProjectCreate,
-    ProjectMemberAdd,
     ProjectRead,
-    ScopeType,
 )
 from freesearch.models.users import UserPrincipal
+from freesearch.models.vault import VaultKeyCreate
 from freesearch.persistence.credentials import (
     CredentialRepository,
-    ProviderCredentialRow,
 )
+from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
 from freesearch.persistence.storage import RuntimeSettingRow, SQLiteRepository
-from freesearch.services.authorization import AuthorizationDenied
+from freesearch.services.control_errors import ResourceConflict, ResourceNotFound
 from freesearch.services.credentials import (
     CREDENTIAL_CONFLICT,
     CREDENTIAL_GENERATION_CONFLICT,
-    CREDENTIAL_LABEL_CONFLICT,
-    PROJECT_ARCHIVED,
     CredentialConflict,
     CredentialNotFound,
     CredentialService,
@@ -55,7 +51,9 @@ from freesearch.services.credentials import (
     ResolvedCredential,
     credential_secret_slot,
 )
+from freesearch.services.pool_materializer import materialize_pools
 from freesearch.services.projects import ProjectService
+from freesearch.services.vault_keys import VaultKeyService
 from tests.fixtures.alpha_fixtures import AlphaBootstrapResult, bootstrap_fresh_alpha
 from tests.fixtures.auth import create_temp_user, temp_email, temp_principal
 
@@ -112,182 +110,147 @@ async def _project(
     )
 
 
-@pytest.mark.asyncio
-async def test_ac1_multiple_instances_distinct_secrets_and_label_conflicts(
-    tmp_path: Path,
-) -> None:
-    """AC1: distinct instances/secrets; label uniqueness; provider validation."""
+def _vault_services(
+    boot: AlphaBootstrapResult,
+) -> tuple[CredentialService, VaultKeyService, EncryptedDbSecretStore]:
+    store = EncryptedDbSecretStore(boot.repository, SecretCodec(MasterKey(os.urandom(32))))
+    return CredentialService(boot.repository, store), VaultKeyService(boot.repository, store), store
 
-    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac1.db")
-    try:
-        service = _service(boot)
-        admin = temp_principal(boot.admin_user)
-        project_id = boot.default_project.id
 
-        # A pasted key with surrounding whitespace is stored and resolved trimmed.
-        primary_secret = _secret("primary")
-        padded_primary = SecretStr(f"  {primary_secret.get_secret_value()}\n")
-        backup_secret = _secret("backup")
-        primary = await service.create_system_credential(
-            admin,
-            CredentialCreate(provider_type="tavily", label="primary", secret=padded_primary),
+async def _assign_vault_key(
+    boot: AlphaBootstrapResult,
+    actor: UserPrincipal,
+    credential_id: UUID,
+    project_id: UUID,
+    provider: str,
+    label: str,
+    operations: frozenset[str] = frozenset({"search", "fetch"}),
+) -> UUID:
+    async with boot.repository.session() as session:
+        pool = await KeyPoolRepository(session).create(
+            credential_id=credential_id,
+            project_id=project_id,
+            provider_type=provider,
+            created_by=actor.id,
+            values=KeyPoolValues(label=label, operations=operations),
         )
-        backup = await service.create_system_credential(
+        await materialize_pools(session, project_id=project_id)
+        await session.commit()
+    return pool.id
+
+
+@pytest.mark.asyncio
+async def test_ac1_multiple_instances_distinct_secrets_and_label_conflicts(tmp_path: Path) -> None:
+    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac1-vault.db")
+    try:
+        service, vault, _ = _vault_services(boot)
+        admin = temp_principal(boot.admin_user)
+        primary_secret, backup_secret = _secret("primary"), _secret("backup")
+        primary = await vault.create(
             admin,
-            CredentialCreate(provider_type="tavily", label="backup", secret=backup_secret),
+            VaultKeyCreate(
+                provider_type="tavily",
+                label="primary",
+                secret=SecretStr(f"  {primary_secret.get_secret_value()}\n"),
+            ),
+        )
+        backup = await vault.create(
+            admin, VaultKeyCreate(provider_type="tavily", label="backup", secret=backup_secret)
         )
         assert primary.id != backup.id
-        listed = await service.list_system_credentials(admin)
-        assert {credential.id for credential in listed} == {primary.id, backup.id}
-
-        await service.put_grant(admin, primary.id, project_id, _both_ops())
-        await service.put_grant(admin, backup.id, project_id, _both_ops())
-        context = _context(boot, project_id)
-        resolved_primary = await service.resolve_material(
-            context, primary.id, operation=CredentialOperation.SEARCH
-        )
-        resolved_backup = await service.resolve_material(
-            context, backup.id, operation=CredentialOperation.FETCH
-        )
-        assert resolved_primary is not None
-        assert resolved_primary.secret.get_secret_value() == primary_secret.get_secret_value()
-        assert resolved_backup is not None
-        assert resolved_backup.secret.get_secret_value() == backup_secret.get_secret_value()
-
-        private_one = await service.create_project_credential(
-            admin, project_id, _create("exa", "mine-1", "p1")
-        )
-        private_two = await service.create_project_credential(
-            admin, project_id, _create("exa", "mine-2", "p2")
-        )
-        assert private_one.id != private_two.id
-        assert private_one.owner_scope is CredentialOwnerScope.PROJECT
-        assert private_one.can_manage is True
-        assert private_one.generation == 1
-        assert "owner_project_id" not in private_one.model_dump()
-        assert private_two.permitted_operations == ALL_CREDENTIAL_OPERATIONS
-
-        with pytest.raises(CredentialConflict) as conflict:
-            await service.create_system_credential(admin, _create("tavily", "primary", "dup"))
-        assert conflict.value.code == CREDENTIAL_LABEL_CONFLICT
-        with pytest.raises(CredentialConflict) as private_conflict:
-            await service.create_project_credential(
-                admin, project_id, _create("exa", "mine-1", "dup")
+        assert {key.id for key in await vault.list_keys(admin)} == {primary.id, backup.id}
+        with pytest.raises(ResourceConflict) as conflict:
+            await vault.create(
+                admin,
+                VaultKeyCreate(
+                    provider_type="tavily", label="primary", secret=_secret("duplicate")
+                ),
             )
-        assert private_conflict.value.code == CREDENTIAL_LABEL_CONFLICT
-
-        with pytest.raises(CredentialValidationError):
-            await service.create_system_credential(
-                admin, _create("not-a-provider", "ghost", "ghost")
+        assert conflict.value.code == "VAULT_CONFLICT"
+        project_b = await _project(boot, admin, name="Project B", slug="b-ac1-vault")
+        for key, project_id in ((primary, boot.default_project.id), (backup, project_b.id)):
+            await _assign_vault_key(boot, admin, key.id, project_id, "tavily", key.label)
+        for key, secret, operation, project_id in (
+            (primary, primary_secret, CredentialOperation.SEARCH, boot.default_project.id),
+            (backup, backup_secret, CredentialOperation.FETCH, project_b.id),
+        ):
+            resolved = await service.resolve_material(
+                _context(boot, project_id), key.id, operation=operation
             )
+            assert resolved is not None
+            assert resolved.secret.get_secret_value() == secret.get_secret_value()
         with pytest.raises(CredentialValidationError):
-            await service.create_project_credential(
-                admin, project_id, _create("not-a-provider", "ghost", "ghost")
+            await vault.create(
+                admin,
+                VaultKeyCreate(
+                    provider_type="not-a-provider", label="ghost", secret=_secret("ghost")
+                ),
             )
     finally:
         await boot.repository.close()
 
 
 @pytest.mark.asyncio
-async def test_ac2_shared_system_credential_grants_and_revocation(
-    tmp_path: Path,
-) -> None:
-    """AC2: one instance, many grants; revocation and ungranted invisibility."""
-
-    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac2.db")
+async def test_ac2_shared_system_credential_grants_and_revocation(tmp_path: Path) -> None:
+    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac2-vault.db")
     try:
-        service = _service(boot)
+        service, vault, _ = _vault_services(boot)
         admin = temp_principal(boot.admin_user)
         project_a = boot.default_project.id
-        project_b = await _project(boot, admin, name="Project B", slug="b-ac2")
-        project_c = await _project(boot, admin, name="Project C", slug="c-ac2")
-
-        shared_secret = _secret("shared")
-        shared = await service.create_system_credential(
-            admin,
-            CredentialCreate(provider_type="tavily", label="shared", secret=shared_secret),
+        project_b = await _project(boot, admin, name="Project B", slug="b-ac2-vault")
+        project_c = await _project(boot, admin, name="Project C", slug="c-ac2-vault")
+        secret = _secret("shared")
+        shared = await vault.create(
+            admin, VaultKeyCreate(provider_type="tavily", label="shared", secret=secret)
         )
-        private = await service.create_project_credential(
-            admin, project_a, _create("exa", "own", "own")
+        await _assign_vault_key(boot, admin, shared.id, project_a, "tavily", "a")
+        pool_b = await _assign_vault_key(
+            boot, admin, shared.id, project_b.id, "tavily", "b", frozenset({"search"})
         )
-        assert private.owner_scope is CredentialOwnerScope.PROJECT
-        await service.put_grant(admin, shared.id, project_a, _both_ops())
-        await service.put_grant(
-            admin,
-            shared.id,
-            project_b.id,
-            CredentialGrantUpsert(permitted_operations=frozenset({CredentialOperation.SEARCH})),
-        )
-
-        context_a = _context(boot, project_a)
-        context_b = _context(boot, project_b.id)
-        context_c = _context(boot, project_c.id)
-
-        resolved_a = await service.resolve_material(
-            context_a, shared.id, operation=CredentialOperation.SEARCH
-        )
-        resolved_b = await service.resolve_material(
-            context_b, shared.id, operation=CredentialOperation.SEARCH
-        )
-        assert resolved_a is not None and resolved_b is not None
-        assert resolved_a.secret.get_secret_value() == shared_secret.get_secret_value()
-        assert resolved_b.secret.get_secret_value() == shared_secret.get_secret_value()
-        # B's grant covers search only; fetch resolves nothing.
+        context_a, context_b = _context(boot, project_a), _context(boot, project_b.id)
+        for context in (context_a, context_b):
+            resolved = await service.resolve_material(
+                context, shared.id, operation=CredentialOperation.SEARCH
+            )
+            assert resolved is not None
+            assert resolved.secret.get_secret_value() == secret.get_secret_value()
         assert (
             await service.resolve_material(
                 context_b, shared.id, operation=CredentialOperation.FETCH
             )
             is None
         )
-
-        # One ciphertext row per live credential generation, not per grant.
         async with boot.repository.session() as session:
-            slot_row = await session.get(
-                RuntimeSettingRow,
-                f"secret.enc:{credential_secret_slot(shared.id, 1)}",
-            )
-            assert slot_row is not None
-            enc_rows = int(
-                (
-                    await session.execute(
-                        select(func.count())
-                        .select_from(RuntimeSettingRow)
-                        .where(RuntimeSettingRow.key.like("secret.enc:credential.%"))
+            count = (
+                await session.execute(
+                    select(func.count()).where(
+                        RuntimeSettingRow.key
+                        == f"secret.enc:{credential_secret_slot(shared.id, 1)}"
                     )
-                ).scalar_one()
-            )
-            live_rows = int(
-                (
-                    await session.execute(
-                        select(func.count())
-                        .select_from(ProviderCredentialRow)
-                        .where(ProviderCredentialRow.status == "active")
-                    )
-                ).scalar_one()
-            )
-        assert enc_rows == live_rows == 2  # shared system + one private
-
-        # Revoking B's grant resolves None for B while A keeps working.
-        await service.delete_grant(admin, shared.id, project_b.id)
+                )
+            ).scalar_one()
+            await KeyPoolRepository(session).unassign(pool_b)
+            await materialize_pools(session, project_id=project_b.id)
+            await session.commit()
+        assert count == 1
         assert (
             await service.resolve_material(
                 context_b, shared.id, operation=CredentialOperation.SEARCH
             )
             is None
         )
-        still_a = await service.resolve_material(
-            context_a, shared.id, operation=CredentialOperation.SEARCH
-        )
-        assert still_a is not None
-
-        # Ungranted project C never sees the credential.
-        listed_c = await service.list_project_credentials(admin, project_c.id)
-        assert shared.id not in {credential.id for credential in listed_c}
-        with pytest.raises(CredentialNotFound):
-            await service.get_project_credential(admin, project_c.id, shared.id)
         assert (
             await service.resolve_material(
-                context_c, shared.id, operation=CredentialOperation.SEARCH
+                context_a, shared.id, operation=CredentialOperation.SEARCH
+            )
+            is not None
+        )
+        assert shared.id not in {
+            key.id for key in await service.list_project_credentials(admin, project_c.id)
+        }
+        assert (
+            await service.resolve_material(
+                _context(boot, project_c.id), shared.id, operation=CredentialOperation.SEARCH
             )
             is None
         )
@@ -296,87 +259,45 @@ async def test_ac2_shared_system_credential_grants_and_revocation(
 
 
 @pytest.mark.asyncio
-async def test_ac3_private_credentials_are_invisible_across_projects(
-    tmp_path: Path,
-) -> None:
-    """AC3: private credentials never cross project or system boundaries."""
-
-    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac3.db")
+async def test_ac3_private_credentials_are_invisible_across_projects(tmp_path: Path) -> None:
+    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac3-vault.db")
     try:
-        service = _service(boot)
+        service, vault, store = _vault_services(boot)
         admin = temp_principal(boot.admin_user)
-        project_a = boot.default_project.id
-
-        b_admin_row = await create_temp_user(boot.repository, temp_email("p08-b-admin"))
-        b_admin = temp_principal(b_admin_row)
+        b_row = await create_temp_user(boot.repository, temp_email("p08-vault-b"))
+        b_admin = temp_principal(b_row)
         project_b = await _project(
-            boot, admin, name="Project B", slug="b-ac3", admin_id=b_admin_row.id
+            boot, admin, name="Project B", slug="b-ac3-vault", admin_id=b_row.id
         )
-
-        private_a = await service.create_project_credential(
-            admin, project_a, _create("exa", "a-private", "pa")
+        secret = _secret("private")
+        key = await vault.create(
+            admin, VaultKeyCreate(provider_type="exa", label="private", secret=secret)
         )
-
-        # B's admin cannot see, get, rotate, or delete A's private credential.
-        listed_b = await service.list_project_credentials(b_admin, project_b.id)
-        assert private_a.id not in {credential.id for credential in listed_b}
-        with pytest.raises(CredentialNotFound):
-            await service.get_project_credential(b_admin, project_b.id, private_a.id)
-        with pytest.raises(CredentialNotFound):
-            await service.rotate_project_credential(
-                b_admin,
-                project_b.id,
-                private_a.id,
-                CredentialRotate(expected_generation=1, secret=_secret("x")),
+        await _assign_vault_key(boot, admin, key.id, boot.default_project.id, "exa", "private")
+        assert key.id not in {item.id for item in await vault.list_keys(b_admin)}
+        assert key.id not in {
+            item.id for item in await service.list_project_credentials(b_admin, project_b.id)
+        }
+        with pytest.raises(ResourceNotFound):
+            await vault.rotate(
+                b_admin, key.id, CredentialRotate(expected_generation=1, secret=_secret("steal"))
             )
-        with pytest.raises(CredentialNotFound):
-            await service.delete_project_credential(b_admin, project_b.id, private_a.id)
-
-        context_b = _context(boot, project_b.id, user_id=b_admin_row.id)
+        with pytest.raises(ResourceNotFound):
+            await vault.delete(b_admin, key.id)
+        assert await store.get(credential_secret_slot(key.id, 1)) == secret.get_secret_value()
         assert (
             await service.resolve_material(
-                context_b, private_a.id, operation=CredentialOperation.SEARCH
+                _context(boot, project_b.id, user_id=b_admin.id),
+                key.id,
+                operation=CredentialOperation.SEARCH,
             )
             is None
         )
-
-        # The system list and grant surface never touch private credentials.
-        system_listed = await service.list_system_credentials(admin)
-        assert private_a.id not in {credential.id for credential in system_listed}
-        with pytest.raises(CredentialNotFound):
-            await service.put_grant(admin, private_a.id, project_b.id, _both_ops())
-
-        # The project-facing rotate response hides internals too.
-        rotated_a = await service.rotate_project_credential(
-            admin,
-            project_a,
-            private_a.id,
-            CredentialRotate(expected_generation=1, secret=_secret("pa-rot")),
-        )
-        assert rotated_a.can_manage is True
-        assert rotated_a.generation == 2
-        assert "owner_project_id" not in rotated_a.model_dump()
-
-        # A non-member gets a non-revealing not-found even for list.
         outsider = temp_principal(
             await create_temp_user(boot.repository, temp_email("p08-outsider"))
         )
         with pytest.raises(CredentialNotFound):
-            await service.list_project_credentials(outsider, project_a)
-
-        # A project_member lists with can_manage False but cannot create.
-        member_row = await create_temp_user(boot.repository, temp_email("p08-member"))
-        member = temp_principal(member_row)
-        await ProjectService(boot.repository).add_member(
-            admin, project_a, ProjectMemberAdd(user_id=member.id)
-        )
-        listed = await service.list_project_credentials(member, project_a)
-        target = next(credential for credential in listed if credential.id == private_a.id)
-        assert target.can_manage is False
-        with pytest.raises(AuthorizationDenied):
-            await service.create_project_credential(
-                member, project_a, _create("exa", "forbidden", "f")
-            )
+            await service.list_project_credentials(outsider, boot.default_project.id)
     finally:
         await boot.repository.close()
 
@@ -385,24 +306,22 @@ async def test_ac3_private_credentials_are_invisible_across_projects(
 async def test_ac4_project_projection_hides_system_internals_and_scope_boundaries(
     tmp_path: Path,
 ) -> None:
-    """AC4: projections hide internals; scope boundaries deny cross-scope calls."""
-
-    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac4.db")
+    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac4-vault.db")
     try:
-        service = _service(boot)
+        service, vault, _ = _vault_services(boot)
         admin = temp_principal(boot.admin_user)
-        project_a = boot.default_project.id
-
-        system = await service.create_system_credential(admin, _create("tavily", "sys", "sys"))
-        await service.put_grant(admin, system.id, project_a, _both_ops())
-
-        listed = await service.list_project_credentials(admin, project_a)
-        grant_view = next(credential for credential in listed if credential.id == system.id)
-        assert grant_view.owner_scope is CredentialOwnerScope.SYSTEM
-        assert grant_view.generation is None
-        assert grant_view.can_manage is False
-        assert grant_view.permitted_operations == ALL_CREDENTIAL_OPERATIONS
-        assert set(grant_view.model_dump()) == {
+        secret = _secret("projection")
+        key = await vault.create(
+            admin, VaultKeyCreate(provider_type="tavily", label="key", secret=secret)
+        )
+        await _assign_vault_key(boot, admin, key.id, boot.default_project.id, "tavily", "pool")
+        listed = await service.list_project_credentials(admin, boot.default_project.id)
+        view = next(item for item in listed if item.id == key.id)
+        assert view.owner_scope is CredentialOwnerScope.SYSTEM
+        assert view.generation is None
+        assert view.can_manage is False
+        assert view.permitted_operations == ALL_CREDENTIAL_OPERATIONS
+        assert set(view.model_dump()) == {
             "id",
             "provider_type",
             "owner_scope",
@@ -413,49 +332,77 @@ async def test_ac4_project_projection_hides_system_internals_and_scope_boundarie
             "can_manage",
             "generation",
         }
-
-        # A project admin cannot rotate or delete a granted system credential.
-        with pytest.raises(AuthorizationDenied) as denied:
-            await service.rotate_project_credential(
-                admin,
-                project_a,
-                system.id,
-                CredentialRotate(expected_generation=1, secret=_secret("x")),
-            )
-        assert denied.value.decision.required_permission is (
-            PermissionAction.SYSTEM_CREDENTIALS_MANAGE
-        )
-        assert denied.value.decision.scope_type is ScopeType.SYSTEM
-        with pytest.raises(AuthorizationDenied):
-            await service.delete_project_credential(admin, project_a, system.id)
-
-        # A non-system project admin is denied every system credential call.
-        b_admin_row = await create_temp_user(boot.repository, temp_email("p08-b-admin"))
-        b_admin = temp_principal(b_admin_row)
-        project_b = await _project(
-            boot, admin, name="Project B", slug="b-ac4", admin_id=b_admin_row.id
-        )
-        for call in (
-            service.create_system_credential(b_admin, _create("tavily", "x", "x")),
-            service.rotate_system_credential(
-                b_admin,
-                system.id,
-                CredentialRotate(expected_generation=1, secret=_secret("x")),
-            ),
-            service.delete_system_credential(b_admin, system.id),
-            service.list_grants(b_admin, system.id),
-            service.put_grant(b_admin, system.id, project_b.id, _both_ops()),
-            service.delete_grant(b_admin, system.id, project_b.id),
-        ):
-            with pytest.raises(AuthorizationDenied):
-                await call
-
-        # System authority grants no implicit project access.
+        assert secret.get_secret_value() not in view.model_dump_json()
         system_only = temp_principal(
             await create_temp_user(boot.repository, temp_email("p08-sysonly"), system_admin=True)
         )
         with pytest.raises(CredentialNotFound):
-            await service.list_project_credentials(system_only, project_b.id)
+            await service.list_project_credentials(system_only, boot.default_project.id)
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_ac5_private_rotation_never_touches_other_credentials(tmp_path: Path) -> None:
+    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac5-vault.db")
+    try:
+        service, vault, store = _vault_services(boot)
+        admin = temp_principal(boot.admin_user)
+        project_a = boot.default_project.id
+        project_b = await _project(boot, admin, name="Project B", slug="b-ac5-vault")
+        first_secret, sibling_secret = _secret("first"), _secret("sibling")
+        first = await vault.create(
+            admin, VaultKeyCreate(provider_type="exa", label="a", secret=first_secret)
+        )
+        sibling = await vault.create(
+            admin, VaultKeyCreate(provider_type="exa", label="b", secret=sibling_secret)
+        )
+        await _assign_vault_key(boot, admin, first.id, project_a, "exa", "a")
+        await _assign_vault_key(boot, admin, sibling.id, project_b.id, "exa", "b")
+        replacement = _secret("replacement")
+        rotated = await vault.rotate(
+            admin, first.id, CredentialRotate(expected_generation=1, secret=replacement)
+        )
+        assert rotated.generation == 2
+        assert await store.get(credential_secret_slot(first.id, 1)) is None
+        assert (
+            await store.get(credential_secret_slot(first.id, 2)) == replacement.get_secret_value()
+        )
+        assert (
+            await store.get(credential_secret_slot(sibling.id, 1))
+            == sibling_secret.get_secret_value()
+        )
+        resolved = await service.resolve_material(
+            _context(boot, project_b.id), sibling.id, operation=CredentialOperation.SEARCH
+        )
+        assert resolved is not None
+        assert resolved.generation == 1
+        assert resolved.secret.get_secret_value() == sibling_secret.get_secret_value()
+    finally:
+        await boot.repository.close()
+
+
+@pytest.mark.asyncio
+async def test_ac5_archived_project_blocks_resolution(tmp_path: Path) -> None:
+    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac5-archived-vault.db")
+    try:
+        service, vault, _ = _vault_services(boot)
+        admin = temp_principal(boot.admin_user)
+        project = await _project(boot, admin, name="Project B", slug="b-archived-vault")
+        key = await vault.create(
+            admin, VaultKeyCreate(provider_type="tavily", label="key", secret=_secret("archived"))
+        )
+        await _assign_vault_key(boot, admin, key.id, project.id, "tavily", "pool")
+        context = _context(boot, project.id)
+        assert (
+            await service.resolve_material(context, key.id, operation=CredentialOperation.SEARCH)
+            is not None
+        )
+        await ProjectService(boot.repository).archive_project(admin, project.id)
+        assert (
+            await service.resolve_material(context, key.id, operation=CredentialOperation.SEARCH)
+            is None
+        )
     finally:
         await boot.repository.close()
 
@@ -570,65 +517,6 @@ async def test_ac5_concurrent_rotations_have_exactly_one_winner(tmp_path: Path) 
     finally:
         await boot.repository.close()
         await second_repository.close()
-
-
-@pytest.mark.asyncio
-async def test_ac5_private_rotation_never_touches_other_credentials(
-    tmp_path: Path,
-) -> None:
-    """AC5: rotating one private credential leaves every other credential intact."""
-
-    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac5-private.db")
-    try:
-        service = _service(boot)
-        admin = temp_principal(boot.admin_user)
-        project_a = boot.default_project.id
-        project_b = await _project(boot, admin, name="Project B", slug="b-ac5p")
-
-        private_a = await service.create_project_credential(
-            admin, project_a, _create("exa", "a", "pa")
-        )
-        b_secret = _secret("pb")
-        private_b = await service.create_project_credential(
-            admin,
-            project_b.id,
-            CredentialCreate(provider_type="exa", label="b", secret=b_secret),
-        )
-        system_secret = _secret("sys")
-        system = await service.create_system_credential(
-            admin,
-            CredentialCreate(provider_type="tavily", label="s", secret=system_secret),
-        )
-
-        rotated = await service.rotate_project_credential(
-            admin,
-            project_a,
-            private_a.id,
-            CredentialRotate(expected_generation=1, secret=_secret("pa2")),
-        )
-        assert rotated.generation == 2
-
-        view_b = await service.get_project_credential(admin, project_b.id, private_b.id)
-        assert view_b.generation == 1
-        resolved_b = await service.resolve_material(
-            _context(boot, project_b.id),
-            private_b.id,
-            operation=CredentialOperation.SEARCH,
-        )
-        assert resolved_b is not None
-        assert resolved_b.secret.get_secret_value() == b_secret.get_secret_value()
-
-        await service.put_grant(admin, system.id, project_a, _both_ops())
-        resolved_system = await service.resolve_material(
-            _context(boot, project_a),
-            system.id,
-            operation=CredentialOperation.SEARCH,
-        )
-        assert resolved_system is not None
-        assert resolved_system.generation == 1
-        assert resolved_system.secret.get_secret_value() == system_secret.get_secret_value()
-    finally:
-        await boot.repository.close()
 
 
 @pytest.mark.asyncio
@@ -751,40 +639,6 @@ async def test_ac5_no_secret_output_in_logs_or_dtos(tmp_path: Path, caplog) -> N
         for dto in listed:
             for secret in secrets:
                 assert secret.get_secret_value() not in dto.model_dump_json()
-    finally:
-        await boot.repository.close()
-
-
-@pytest.mark.asyncio
-async def test_ac5_archived_project_blocks_writes_and_resolution(
-    tmp_path: Path,
-) -> None:
-    """AC5: archived projects reject credential writes and resolve nothing."""
-
-    boot = await bootstrap_fresh_alpha(tmp_path / "p08-ac5-archived.db")
-    try:
-        service = _service(boot)
-        admin = temp_principal(boot.admin_user)
-        project_b = await _project(boot, admin, name="Project B", slug="b-ac5a")
-        system = await service.create_system_credential(admin, _create("tavily", "sys", "sys"))
-
-        await ProjectService(boot.repository).archive_project(admin, project_b.id)
-
-        with pytest.raises(CredentialConflict) as create_conflict:
-            await service.create_project_credential(admin, project_b.id, _create("exa", "x", "x"))
-        assert create_conflict.value.code == PROJECT_ARCHIVED
-
-        with pytest.raises(CredentialConflict) as grant_conflict:
-            await service.put_grant(admin, system.id, project_b.id, _both_ops())
-        assert grant_conflict.value.code == PROJECT_ARCHIVED
-
-        context_b = _context(boot, project_b.id)
-        assert (
-            await service.resolve_material(
-                context_b, system.id, operation=CredentialOperation.SEARCH
-            )
-            is None
-        )
     finally:
         await boot.repository.close()
 

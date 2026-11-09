@@ -25,6 +25,10 @@ const VALID_MEMBER = {
   status: "active",
   roles: ["project_admin"],
   version: 1,
+  role: "admin",
+  permissions: 33023,
+  provider_owner: true,
+  account_active: true,
 }
 
 describe("projects wire decoders", () => {
@@ -51,7 +55,8 @@ describe("projects wire decoders", () => {
   })
 
   it("decodes a member list payload", () => {
-    expect(decodeProjectMemberList([VALID_MEMBER])).toEqual([VALID_MEMBER])
+    const developer = { ...VALID_MEMBER, role: "developer", roles: ["project_member"], permissions: 15, provider_owner: false }
+    expect(decodeProjectMemberList([VALID_MEMBER, developer])).toEqual([VALID_MEMBER, developer])
   })
 
   it.each([
@@ -62,6 +67,10 @@ describe("projects wire decoders", () => {
     ["access missing revision", () => decodeProjectAccess({ project_id: "p", permissions: [], roles: [] })],
     ["member missing email", () => decodeProjectMemberList([{ ...VALID_MEMBER, email: 1 }])],
     ["member bad status", () => decodeProjectMemberList([{ ...VALID_MEMBER, status: "gone" }])],
+    ["member role key instead of projection", () => decodeProjectMemberList([{ ...VALID_MEMBER, role: "project_admin" }])],
+    ["member missing permissions", () => decodeProjectMemberList([{ ...VALID_MEMBER, permissions: undefined }])],
+    ["member invalid owner flag", () => decodeProjectMemberList([{ ...VALID_MEMBER, provider_owner: "true" }])],
+    ["member invalid account activity", () => decodeProjectMemberList([{ ...VALID_MEMBER, account_active: "false" }])],
   ])("rejects %s", (_label, decode) => {
     expect(decode).toThrowError(ApiError)
     try {

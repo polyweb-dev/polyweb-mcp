@@ -1,6 +1,7 @@
+import { useEffect, useRef } from "react"
 import type { ReactNode } from "react"
 import { Button } from "@/shared/ui/button"
-import { isProjectUnavailableError, useProjectScope } from "@/domains/projects"
+import { isProjectUnavailableError, useProjectScope, useProjects } from "@/domains/projects"
 import { ProjectUnavailableView } from "./ProjectUnavailableView"
 
 /**
@@ -13,6 +14,17 @@ import { ProjectUnavailableView } from "./ProjectUnavailableView"
  */
 export function ProjectScopeGate({ children }: { children: ReactNode }) {
   const { accessState, refreshAccess } = useProjectScope()
+  const { reloadProjects } = useProjects()
+
+  // Once access resolves to denied/not-found, refresh the list once so the
+  // revoked project drops from it without a full page reload.
+  const denied =
+    accessState.status === "error" && isProjectUnavailableError(accessState.error)
+  const wasDenied = useRef(false)
+  useEffect(() => {
+    if (denied && !wasDenied.current) void reloadProjects()
+    wasDenied.current = denied
+  }, [denied, reloadProjects])
 
   if (accessState.status === "error") {
     if (isProjectUnavailableError(accessState.error)) return <ProjectUnavailableView />

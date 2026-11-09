@@ -335,7 +335,6 @@ def _provider_payload(config: ProviderConfig) -> dict[str, Any]:
         "config": {
             "enable_mask": config.enable_mask,
             "support_mask": config.support_mask,
-            "priority": config.priority,
             "free_tier_estimates": {
                 operation.value: str(units)
                 for operation, units in config.free_tier_estimates.items()
@@ -445,6 +444,14 @@ async def initialize_provider_configs(repository: SQLiteRepository | None) -> No
 
     if repository is None:
         return
+    from freesearch.services.pool_materializer import ensure_keyless_credentials, materialize_pools
+    from freesearch.services.project_routing import seed_legacy_orders
+
+    async with repository.session() as session:
+        await ensure_keyless_credentials(session)
+        await materialize_pools(session)
+        await session.commit()
+    await seed_legacy_orders(repository)
     for provider in ProviderName:
         await _reconcile_provider_config(repository, provider)
 
@@ -489,6 +496,16 @@ async def persist_provider_config(
         return
     await repository.set_runtime_setting(_provider_key(provider), _provider_payload(config))
     clear_config_cache(repository, provider.value)
+    await _refresh_keyless_bindings(repository, provider)
+
+
+async def _refresh_keyless_bindings(repository: SQLiteRepository, provider: ProviderName) -> None:
+    from freesearch.services.pool_materializer import KEYLESS_PROVIDERS, materialize_pools
+
+    if provider.value in KEYLESS_PROVIDERS:
+        async with repository.session() as session:
+            await materialize_pools(session)
+            await session.commit()
 
 
 async def patch_provider_config(
@@ -519,6 +536,7 @@ async def patch_provider_config(
 
     await repository.update_runtime_setting(_provider_key(provider), _merge)
     clear_config_cache(repository, provider.value)
+    await _refresh_keyless_bindings(repository, provider)
     return outcome["config"]
 
 

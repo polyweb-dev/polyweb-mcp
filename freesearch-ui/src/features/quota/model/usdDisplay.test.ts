@@ -1,0 +1,388 @@
+import { describe, expect, it } from "vitest"
+import type {
+  UsdView,
+  ProviderAuthLimits,
+  RateProgressView,
+  TierBalance,
+} from "@/domains/dashboard"
+import {
+  callsText,
+  formatUsd,
+  providerUsdModel,
+  rateBarModel,
+  resetRuleText,
+  tierBarModel,
+} from "./usdDisplay"
+import * as usdDisplayModule from "./usdDisplay"
+
+/**
+ * S0 generic Usd display: one-decimal ROUND_HALF_UP text, exact model amounts,
+ * synthetic providers only, no vendor prices.
+ */
+
+function makeView(overrides: Partial<UsdView> = {}): UsdView {
+  return {
+    state: "finite",
+    operation: "search",
+    remaining_usd: "0.005",
+    local_remaining_usd: "0.005",
+    request_cost_usd: null,
+    shared_pool_id: null,
+    possible_standard_calls: null,
+    price_version: null,
+    priced: true,
+    ...overrides,
+  }
+}
+
+function makeTier(overrides: Partial<TierBalance> = {}): TierBalance {
+  return {
+    pool_id: "pool-synth-1",
+    tier: "free",
+    native_unit: "REQUEST",
+    native_remaining: "10",
+    native_allowance: "20",
+    remaining_usd: "0.005",
+    allowance_usd: "0.01",
+    reset_rule: "monthly_first",
+    reset_at: null,
+    funding_mode: "prepaid",
+    source: "synth-source",
+    confidence: "authoritative",
+    transport_available: true,
+    label: null,
+    ...overrides,
+  }
+}
+
+function makeProgress(overrides: Partial<RateProgressView> = {}): RateProgressView {
+  return {
+    bucket_id: "bucket-synth-1",
+    operation: "search",
+    window: "1h",
+    unit: "requests",
+    remaining: "5",
+    limit: "10",
+    reset_at: null,
+    source: "synth-source",
+    confidence: "authoritative",
+    kind: "rate",
+    stale: false,
+    enforceable: false,
+    ...overrides,
+  }
+}
+
+function makeAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimits {
+  return {
+    auth_mode: "keyed",
+    transport_available: true,
+    search: null,
+    fetch: null,
+    free_tiers: [],
+    paid_tiers: [],
+    unknown_tiers: [],
+    tier_split_known: true,
+    aggregate_pool: null,
+    usd_views: [],
+    rate_progress: [],
+    grants: null,
+    detail: null,
+    ...overrides,
+  }
+}
+
+describe("formatUsd", () => {
+  it("formats an unmetered view as Free", () => {
+    expect(formatUsd(makeView({ state: "unmetered" }))).toBe("Free")
+  })
+
+  it("formats an unavailable view as n/a", () => {
+    expect(formatUsd(makeView({ state: "unavailable" }))).toBe("n/a")
+  })
+
+  it("formats an unknown view as Unknown", () => {
+    expect(formatUsd(makeView({ state: "unknown" }))).toBe("Unknown")
+  })
+
+  it("picks the minimum of remaining and local remaining", () => {
+    expect(
+      formatUsd(makeView({ remaining_usd: "0.005", local_remaining_usd: "0.003" })),
+    ).toBe("$0.003")
+    expect(
+      formatUsd(makeView({ remaining_usd: "0.002", local_remaining_usd: "0.005" })),
+    ).toBe("$0.002")
+  })
+
+  it("formats a finite view without any spendable amount as Unknown", () => {
+    expect(
+      formatUsd(makeView({ remaining_usd: null, local_remaining_usd: null })),
+    ).toBe("Unknown")
+  })
+})
+
+describe("providerUsdModel", () => {
+  it("reports a shared pool once with a do-not-add-up note", () => {
+    const model = providerUsdModel({
+      provider: "synth-a",
+      providerName: "Synth A",
+      authMode: "keyed",
+      auth: makeAuth({
+        usd_views: [
+          makeView({
+            operation: "search",
+            remaining_usd: "0.005",
+            local_remaining_usd: "0.005",
+            shared_pool_id: "pool-synth-1",
+          }),
+          makeView({
+            operation: "fetch",
+            remaining_usd: "0.005",
+            local_remaining_usd: "0.005",
+            shared_pool_id: "pool-synth-1",
+          }),
+        ],
+      }),
+    })
+    expect(model.sharedPoolId).toBe("pool-synth-1")
+    expect(model.sharedNote).toBe(
+      "Shared pool pool-synth-1: the two views read the same funds and do not add up.",
+    )
+  })
+
+  it("reports no shared pool when the two views use different pools", () => {
+    const model = providerUsdModel({
+      provider: "synth-a",
+      providerName: "Synth A",
+      authMode: "keyed",
+      auth: makeAuth({
+        usd_views: [
+          makeView({ operation: "search", shared_pool_id: "pool-synth-1" }),
+          makeView({ operation: "fetch", shared_pool_id: "pool-synth-2" }),
+        ],
+      }),
+    })
+    expect(model.sharedPoolId).toBe(null)
+    expect(model.sharedNote).toBe(null)
+  })
+
+  it("adds a ceiling note for the lowest local grant ceiling", () => {
+    const model = providerUsdModel({
+      provider: "synth-a",
+      providerName: "Synth A",
+      authMode: "keyed",
+      auth: makeAuth({
+        usd_views: [
+          makeView({ operation: "search", local_remaining_usd: "0.005" }),
+          makeView({ operation: "fetch", local_remaining_usd: "0.003" }),
+        ],
+      }),
+    })
+    expect(model.notes).toContain("Local grant ceiling $0.003")
+  })
+
+  it("adds standard-call notes for search and fetch", () => {
+    const model = providerUsdModel({
+      provider: "synth-a",
+      providerName: "Synth A",
+      authMode: "keyed",
+      auth: makeAuth({
+        usd_views: [
+          makeView({
+            operation: "search",
+            possible_standard_calls: "10.9",
+          }),
+          makeView({
+            operation: "fetch",
+            possible_standard_calls: "4.2",
+          }),
+        ],
+      }),
+    })
+    expect(model.notes).toContain("About 10 standard search calls remain")
+    expect(model.notes).toContain("About 4 standard fetch calls remain")
+  })
+
+  it("adds an unpriced note when priced use is not configured", () => {
+    const model = providerUsdModel({
+      provider: "synth-a",
+      providerName: "Synth A",
+      authMode: "keyed",
+      auth: makeAuth({
+        usd_views: [makeView({ operation: "search", priced: false })],
+      }),
+    })
+    expect(model.notes).toContain(
+      "Priced use is not configured; the credit value stays unknown",
+    )
+  })
+})
+
+describe("tierBarModel", () => {
+  it("returns unknown with a Tier split unavailable note when the split is unknown", () => {
+    const bar = tierBarModel({
+      tier: "free",
+      balances: [makeTier()],
+      tierSplitKnown: false,
+    })
+    expect(bar.state).toBe("unknown")
+    expect(bar.remainingUsd).toBe(null)
+    expect(bar.allowanceUsd).toBe(null)
+    expect(bar.percentRemaining).toBe(null)
+    expect(bar.resetNotes).toEqual(["Tier split unavailable"])
+  })
+
+  it("returns unknown with empty notes for empty balances", () => {
+    const bar = tierBarModel({ tier: "paid", balances: [], tierSplitKnown: true })
+    expect(bar.state).toBe("unknown")
+    expect(bar.remainingUsd).toBe(null)
+    expect(bar.percentRemaining).toBe(null)
+    expect(bar.resetNotes).toEqual([])
+  })
+
+  it("sums 0.599 plus 0.599 to exactly 1.198 without float error", () => {
+    const bar = tierBarModel({
+      tier: "free",
+      tierSplitKnown: true,
+      balances: [
+        makeTier({ pool_id: "pool-synth-1", remaining_usd: "0.000599", allowance_usd: "0.001" }),
+        makeTier({ pool_id: "pool-synth-2", remaining_usd: "0.000599", allowance_usd: "0.001" }),
+      ],
+    })
+    expect(bar.remainingUsd).toBe("0.001198")
+    expect(bar.allowanceUsd).toBe("0.002")
+  })
+
+  it("rounds the remaining percent half-up to one decimal", () => {
+    const bar = tierBarModel({
+      tier: "free",
+      tierSplitKnown: true,
+      balances: [makeTier({ remaining_usd: "0.001", allowance_usd: "0.006" })],
+    })
+    expect(bar.percentRemaining).toBe(16.7)
+  })
+
+  it("clamps an over-allowance percent to 100", () => {
+    const bar = tierBarModel({
+      tier: "free",
+      tierSplitKnown: true,
+      balances: [makeTier({ remaining_usd: "0.01", allowance_usd: "0.005" })],
+    })
+    expect(bar.percentRemaining).toBe(100)
+  })
+
+  it("returns a null percent without a known positive allowance", () => {
+    const nullAllowance = tierBarModel({
+      tier: "free",
+      tierSplitKnown: true,
+      balances: [makeTier({ remaining_usd: "0.005", allowance_usd: null })],
+    })
+    expect(nullAllowance.percentRemaining).toBe(null)
+    const zeroAllowance = tierBarModel({
+      tier: "free",
+      tierSplitKnown: true,
+      balances: [makeTier({ remaining_usd: "0.005", allowance_usd: "0" })],
+    })
+    expect(zeroAllowance.percentRemaining).toBe(null)
+  })
+})
+
+describe("rateBarModel", () => {
+  it("passes through the 1h window with its amounts", () => {
+    const bar = rateBarModel({ progress: makeProgress({ window: "1h" }) })
+    expect(bar.window).toBe("1h")
+    expect(bar.remaining).toBe("5")
+    expect(bar.limit).toBe("10")
+  })
+
+  it("passes through the 1d window with its amounts", () => {
+    const bar = rateBarModel({
+      progress: makeProgress({ window: "1d", remaining: "7", limit: "20" }),
+    })
+    expect(bar.window).toBe("1d")
+    expect(bar.percentRemaining).toBe(35)
+  })
+
+  it("computes a 50 percent bar for 5 of 10", () => {
+    const bar = rateBarModel({
+      progress: makeProgress({ remaining: "5", limit: "10" }),
+    })
+    expect(bar.percentRemaining).toBe(50)
+  })
+
+  it("returns a null percent for an unknown limit and never a zero bar", () => {
+    const bar = rateBarModel({
+      progress: makeProgress({ remaining: "7", limit: null }),
+    })
+    expect(bar.limit).toBe(null)
+    expect(bar.percentRemaining).toBe(null)
+  })
+
+  it("returns a null percent for a zero limit", () => {
+    const bar = rateBarModel({
+      progress: makeProgress({ remaining: "5", limit: "0" }),
+    })
+    expect(bar.percentRemaining).toBe(null)
+  })
+})
+
+describe("resetRuleText", () => {
+  it("returns the base text without a reset date", () => {
+    expect(resetRuleText("monthly_first", null)).toBe(
+      "Resets on the first of the month",
+    )
+    expect(resetRuleText("unknown", null)).toBe("Reset rule unknown")
+  })
+
+  it("keeps an unparsable reset date verbatim", () => {
+    expect(resetRuleText("never", "not-a-date")).toBe("Never resets (not-a-date)")
+  })
+})
+
+describe("formatQuotaCount", () => {
+  it("formats_integer_quota_counts_without_decimal_zeros", () => {
+    const formatQuotaCount = (
+      usdDisplayModule as unknown as { formatQuotaCount?: (amount: string) => string }
+    ).formatQuotaCount
+    expect(typeof formatQuotaCount).toBe("function")
+    const format = formatQuotaCount as (amount: string) => string
+    expect(format("1000.000000000")).toBe("1000")
+    expect(format("498.000000000")).toBe("498")
+    expect(format("1000")).toBe("1000")
+    expect(format("500")).toBe("500")
+    expect(format("0")).toBe("0")
+    expect(format("0.000000000")).toBe("0")
+    expect(format("5")).toBe("5")
+    expect(format("9007199254740993")).toBe("9007199254740993")
+    expect(format("9007199254740993.000000000")).toBe("9007199254740993")
+    expect(format("498.5")).toBe("498.5")
+    expect(format("99.6")).toBe("99.6")
+    expect(format("5.25")).toBe("5.25")
+    expect(format("nonsense")).toBe("nonsense")
+  })
+})
+
+describe("callsText", () => {
+  it("floors decimal request text to whole counts", () => {
+    expect(callsText("1000.00000000")).toBe("1000")
+    expect(callsText("999.9")).toBe("999")
+  })
+
+  it("keeps zero exact without a fabricated count", () => {
+    expect(callsText("0")).toBe("0")
+    expect(callsText("0.00000000")).toBe("0")
+  })
+
+  it("returns null for null, negative, and malformed amounts", () => {
+    expect(callsText(null)).toBe(null)
+    expect(callsText("-1")).toBe(null)
+    expect(callsText("lots")).toBe(null)
+    expect(callsText("")).toBe(null)
+    expect(callsText("49, 900")).toBe(null)
+  })
+
+  it("keeps a whole count above MAX_SAFE_INTEGER without precision loss", () => {
+    expect(callsText("9007199254740993")).toBe("9007199254740993")
+    expect(callsText("9007199254740993.9")).toBe("9007199254740993")
+  })
+})

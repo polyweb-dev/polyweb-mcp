@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { cn } from "cn"
 import type { TraceDetail, TraceProviderAttempt } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
+import { formatLatency } from "@/shared/lib/formatTime"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { TraceStatusPill } from "./TraceStatusPill"
 
@@ -76,15 +77,14 @@ export function TraceDetailSummary({
         {cell("Provider", providerCell(trace, attempt), 1)}
         {cell(
           attempt === null ? "Total latency" : "Provider latency",
-          `${attempt === null ? trace.durationMs : attempt.durationMs}ms`,
+          formatLatency(attempt === null ? trace.durationMs : attempt.durationMs),
           2
         )}
         {cell("Results", results === null ? "—" : String(results), 3)}
       </dl>
       {attempt !== null && (
         <p className="text-[12px] text-[var(--muted)]">
-          Showing this provider's response. The trajectory view below still covers the whole
-          trace.
+          Showing this provider's response; the timeline covers the whole trace
         </p>
       )}
     </div>

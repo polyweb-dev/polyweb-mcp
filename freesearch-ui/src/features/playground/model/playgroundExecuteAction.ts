@@ -1,8 +1,10 @@
 import type { FormEvent } from "react"
-import { useFreeSearch } from "@/context/useFreeSearch"
-import type { ProviderConfig } from "@/domains/providers"
 import type { SearchResponse, SearchResult } from "@/domains/execution"
+import type { ProjectExecutionValue } from "@/domains/execution/state/projectExecutionContext"
 import type { PlaygroundMode } from "@/store/playgroundSlice"
+
+/** The one field the request helpers read from a picker provider. */
+type ProviderRef = { id: string }
 
 export interface ExecuteActionDeps {
   mode: PlaygroundMode
@@ -10,15 +12,15 @@ export interface ExecuteActionDeps {
   fetchUrl: string
   selectedProviderId: string
   resultCount: number
-  eligibleProviders: ProviderConfig[]
-  runSearch: ReturnType<typeof useFreeSearch>["runSearch"]
-  runFetch: ReturnType<typeof useFreeSearch>["runFetch"]
+  eligibleProviders: readonly ProviderRef[]
+  runSearch: ProjectExecutionValue["runSearch"]
+  runFetch: ProjectExecutionValue["runFetch"]
   showResult: (result: SearchResult | null) => void
 }
 
 export function resolvePinnedProvider(
   selectedProviderId: string,
-  eligibleProviders: ProviderConfig[]
+  eligibleProviders: readonly ProviderRef[]
 ): string | undefined {
   if (selectedProviderId === "auto" || selectedProviderId === "all") {
     return undefined
@@ -31,7 +33,7 @@ export function resolvePinnedProvider(
 export function resolveSearchProviderIds(
   selectedProvider: string | undefined,
   isFanout: boolean,
-  eligibleProviders: ProviderConfig[]
+  eligibleProviders: readonly ProviderRef[]
 ): string[] | undefined {
   if (selectedProvider !== undefined) return [selectedProvider]
   if (isFanout) return eligibleProviders.map((p) => p.id)

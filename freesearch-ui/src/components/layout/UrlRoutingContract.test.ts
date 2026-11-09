@@ -13,13 +13,15 @@ import { describe, it, expect } from "vitest"
  * runtime history; this suite pins the wiring the plan requires:
  *   C4-1  react-router v7 installed; main.tsx renders BrowserRouter.
  *   C4-2  App.tsx Routes table with the exact paths, root redirect, and
- *         unknown-path catch-all to /playground; quotas maps to /usage.
+ *         unknown-path catch-all; quotas maps to /system/quotas. U1: the root
+ *         and unknown paths land on the last valid project, else /projects.
  *   C4-5  Sidebar renders NavLink (role link) with exact `to` targets and
  *         no plain-button nav items.
  *
  * P1-FINAL (blessed inversion, NOT a regression): the standalone Providers
- * page is retired — five workspace routes, no /providers view, legacy
- * /providers redirects to /settings, providers TabId retired.
+ * page is retired — no /providers view, providers TabId retired. The legacy
+ * /providers, /settings and /usage paths redirect through routes.ts
+ * LEGACY_GLOBAL_REDIRECTS to /system/providers and /system/quotas.
  */
 
 const layoutDir = import.meta.dirname
@@ -52,10 +54,16 @@ const packageJson = JSON.parse(
 const ROUTE_PATHS = [
   "/playground",
   "/routing",
-  "/usage",
+  "/system/quotas",
   "/activity",
-  "/settings",
+  "/system/providers",
 ] as const
+
+/** The LEGACY_GLOBAL_REDIRECTS block of routes.ts. */
+const legacyRedirectsBlock = routesSource.slice(
+  routesSource.indexOf("export const LEGACY_GLOBAL_REDIRECTS"),
+  routesSource.indexOf("export const LOGIN_PATH")
+)
 
 describe("C4-1: react-router v7 install + BrowserRouter boot", () => {
   it("declares react-router as a runtime dependency", () => {
@@ -85,17 +93,16 @@ describe("C4-2: App.tsx Routes table + redirects", () => {
     }
   })
 
-  it("redirects the root path to the playground", () => {
-    expect(dashboardShellSource).toContain('"/playground"')
-    expect(dashboardShellSource).toMatch(/path="\/"[^>]*element=\{[^}]*Navigate/)
+  it("U1: lands the root path on the project-first entry", () => {
+    expect(dashboardShellSource).toMatch(/path="\/"[^>]*element=\{<WorkspaceLanding/)
   })
 
-  it("catches unknown paths back to the playground", () => {
-    expect(dashboardShellSource).toMatch(/path="\*"[^>]*element=\{[^}]*Navigate/)
+  it("U1: catches unknown paths with the project-first entry", () => {
+    expect(dashboardShellSource).toMatch(/path="\*"[^>]*element=\{<WorkspaceLanding/)
   })
 
-  it("maps the quotas TabId to the /usage path (no /quotas route)", () => {
-    expect(routesSource).toContain('"/usage"')
+  it("maps the quotas TabId to the /system/quotas path (no /quotas route)", () => {
+    expect(routesSource).toMatch(/quotas:\s*"\/system\/quotas"/)
     expect(routesSource).not.toContain('"/quotas"')
     expect(routesSource).toContain('"quotas"')
   })
@@ -105,12 +112,17 @@ describe("C4-2: App.tsx Routes table + redirects", () => {
     expect(appSource).not.toMatch(/ProviderMatrix/)
   })
 
-  it("P1-FINAL: redirects the legacy /providers path to /settings", () => {
-    expect(dashboardShellSource).toContain('"/providers"')
-    const idx = dashboardShellSource.indexOf('"/providers"')
-    const window_ = dashboardShellSource.slice(Math.max(0, idx - 120), idx + 300)
-    expect(window_).toMatch(/Navigate/)
-    expect(window_).toContain('"/settings"')
+  it("P1-FINAL: redirects the legacy /providers path to /system/providers", () => {
+    // The legacy targets are pinned once, in routes.ts; the shell renders
+    // each entry as a Navigate and never repeats the literal path.
+    expect(legacyRedirectsBlock).toMatch(/"\/providers":\s*TAB_PATHS\.settings/)
+    expect(legacyRedirectsBlock).toMatch(/"\/settings":\s*TAB_PATHS\.settings/)
+    expect(legacyRedirectsBlock).toMatch(/"\/usage":\s*TAB_PATHS\.quotas/)
+    expect(routesSource).toMatch(/settings:\s*"\/system\/providers"/)
+    expect(dashboardShellSource).toMatch(
+      /LEGACY_GLOBAL_REDIRECTS\)\.map\([\s\S]{0,200}<Navigate to=\{target\}/
+    )
+    expect(dashboardShellSource).not.toContain('"/providers"')
   })
 })
 
@@ -126,15 +138,12 @@ describe("C4-5: Sidebar NavLink contract in source", () => {
     // Route identifiers live in app routing: TAB_PATHS pins each id->target
     // pair exactly once, and the nav binds through that table.
     const tabPathsBlock = routesSource.slice(
-      routesSource.indexOf("TAB_PATHS"),
-      routesSource.indexOf("WorkspaceRoute")
+      routesSource.indexOf("export const TAB_PATHS"),
+      routesSource.indexOf("export const LEGACY_GLOBAL_REDIRECTS")
     )
     for (const [id, routePath] of [
-      ["playground", "/playground"],
-      ["routing", "/routing"],
-      ["quotas", "/usage"],
-      ["activity", "/activity"],
-      ["settings", "/settings"],
+      ["quotas", "/system/quotas"],
+      ["settings", "/system/providers"],
     ]) {
       expect(tabPathsBlock).toContain(`"${routePath}"`)
       expect(tabPathsBlock).toMatch(new RegExp(`${id}:`))
@@ -147,7 +156,14 @@ describe("C4-5: Sidebar NavLink contract in source", () => {
   it("P1-FINAL: sidebar drops the retired /providers target", () => {
     expect(sidebarNavSource).not.toContain('"/providers"')
     expect(sidebarNavSource).not.toContain('"providers"')
-    expect(routesSource).not.toContain('"providers"')
+    // U3: "providers" is now a project section; the global TabId block stays clean.
+    const globalRouteBlock = routesSource.slice(
+      routesSource.indexOf("export type TabId"),
+      routesSource.indexOf("export type ProjectSectionId")
+    )
+    expect(globalRouteBlock).not.toContain('"providers"')
+    // The retired path stays a legacy redirect, not a sidebar target.
+    expect(legacyRedirectsBlock).toContain('"/providers"')
   })
 
   it("renders no plain-button nav items (controls stay buttons)", () => {

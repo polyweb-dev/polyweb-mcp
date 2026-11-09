@@ -2,30 +2,26 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { screen, within } from "@testing-library/react"
 import { NavList } from "@/app/layout/SidebarNavList"
 import { renderAuthenticated } from "@/test/renderAuthenticated"
+import { adminAccountFixture } from "@/test/authFixtures"
 import {
-  adminAccountFixture,
-  agentAccountFixture,
-  developerAccountFixture,
-} from "@/test/authFixtures"
+  SETTINGS_READER_PERMISSIONS,
+  SYSTEM_ADMIN_PERMISSIONS,
+} from "@/test/accessFixtures"
 
 const ADMIN_LABELS = [
-  "Playground",
-  "Routing",
-  "Usage",
-  "Activity",
-  "Settings",
+  "Providers",
+  "Quotas",
+  "Projects",
+  "Keys and pools",
   "Account",
-  "Admin",
 ]
 
 const ADMIN_HREFS = [
-  "/playground",
-  "/routing",
-  "/usage",
-  "/activity",
-  "/settings",
+  "/system/providers",
+  "/system/quotas",
+  "/projects",
+  "/account/keys",
   "/account",
-  "/admin/users",
 ]
 
 function navLinks(): HTMLElement[] {
@@ -38,78 +34,106 @@ function ariaLabels(links: HTMLElement[]): Array<string | null> {
   return links.map((link) => link.getAttribute("aria-label"))
 }
 
+function renderNav(systemPermissions: readonly string[] | undefined, collapsed = false) {
+  return renderAuthenticated(<NavList collapsed={collapsed} />, {
+    account: adminAccountFixture(),
+    ...(systemPermissions === undefined ? {} : { systemPermissions }),
+  })
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe("NavList role filter", () => {
-  it("shows all seven links in order with exact hrefs for admin", () => {
-    renderAuthenticated(<NavList collapsed={false} />, {
-      account: adminAccountFixture(),
-    })
+describe("NavList permission filter", () => {
+  it("shows Keys and pools only when vault.manage is present", () => {
+    const view = renderNav(["vault.manage"])
+    expect(screen.getByRole("link", { name: "Keys and pools" })).toHaveAttribute("href", "/account/keys")
+    view.unmount()
+    renderNav([])
+    expect(screen.queryByRole("link", { name: "Keys and pools" })).toBeNull()
+  })
+
+  it("shows all five links in order with exact hrefs for the system administrator", () => {
+    renderNav([...SYSTEM_ADMIN_PERMISSIONS, "vault.manage"])
 
     const links = navLinks()
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(5)
     expect(ariaLabels(links)).toEqual(ADMIN_LABELS)
     expect(links.map((link) => link.getAttribute("href"))).toEqual(ADMIN_HREFS)
     expect(links[0]?.getAttribute("title")).toBeNull()
   })
 
-  it("shows six links without Admin for developer", () => {
-    renderAuthenticated(<NavList collapsed={false} />, {
-      account: developerAccountFixture(),
-    })
+  it("shows four links without Accounts with system.settings.read only", () => {
+    renderNav(SETTINGS_READER_PERMISSIONS)
 
     const links = navLinks()
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(4)
     expect(ariaLabels(links)).toEqual([
-      "Playground",
-      "Routing",
-      "Usage",
-      "Activity",
-      "Settings",
+      "Providers",
+      "Quotas",
+      "Projects",
       "Account",
     ])
     expect(
-      screen.queryByRole("link", { name: "Admin" })
+      screen.queryByRole("link", { name: "Accounts" })
     ).not.toBeInTheDocument()
   })
 
-  it("shows exactly Playground, Activity, and Account for agent", () => {
-    renderAuthenticated(<NavList collapsed={false} />, {
-      account: agentAccountFixture(),
-    })
+  it("shows exactly Projects and Account without system permissions", () => {
+    renderNav([])
 
     const links = navLinks()
-    expect(links).toHaveLength(3)
-    expect(ariaLabels(links)).toEqual(["Playground", "Activity", "Account"])
+    expect(links).toHaveLength(2)
+    expect(ariaLabels(links)).toEqual(["Projects", "Account"])
+    expect(screen.queryByRole("link", { name: "Playground" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Activity" })).not.toBeInTheDocument()
     expect(
       screen.queryByRole("link", { name: "Routing" })
     ).not.toBeInTheDocument()
     expect(
-      screen.queryByRole("link", { name: "Settings" })
+      screen.queryByRole("link", { name: "Providers" })
     ).not.toBeInTheDocument()
   })
 
-  it("points the Admin link at /admin/users", () => {
-    renderAuthenticated(<NavList collapsed={false} />, {
-      account: adminAccountFixture(),
-    })
+  it("hides every gated link while the system access is unknown", () => {
+    renderNav(undefined)
+
+    expect(ariaLabels(navLinks())).toEqual(["Projects", "Account"])
+  })
+
+  it("shows no Accounts link with system.settings.write alone", () => {
+    renderNav(["system.settings.write"])
+
+    expect(ariaLabels(navLinks())).toEqual(["Projects", "Account"])
+  })
+
+  it("shows Providers (hosting the Credentials tab) with system.credentials.manage alone", () => {
+    renderNav(["system.credentials.manage"])
+    expect(ariaLabels(navLinks())).toEqual(["Providers", "Projects", "Account"])
+    expect(screen.getByRole("link", { name: "Providers" })).toHaveAttribute("href", "/system/providers")
+  })
+
+  it("does not show Capacity with allocation management alone", () => {
+    renderNav(["system.allocations.manage"])
+    expect(ariaLabels(navLinks())).toEqual(["Projects", "Account"])
+  })
+
+  it("does not show the Accounts link to a system administrator", () => {
+    renderNav(SYSTEM_ADMIN_PERMISSIONS)
 
     expect(
-      screen.getByRole("link", { name: "Admin" })
-    ).toHaveAttribute("href", "/admin/users")
+      screen.queryByRole("link", { name: "Accounts" })
+    ).not.toBeInTheDocument()
   })
 })
 
 describe("NavList collapsed mode", () => {
   it("keeps every aria-label and title without visible text", () => {
-    renderAuthenticated(<NavList collapsed />, {
-      account: adminAccountFixture(),
-    })
+    renderNav([...SYSTEM_ADMIN_PERMISSIONS, "vault.manage"], true)
 
     const links = navLinks()
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(5)
     for (const label of ADMIN_LABELS) {
       const link = screen.getByRole("link", { name: label })
       expect(link.getAttribute("aria-label")).toBe(label)

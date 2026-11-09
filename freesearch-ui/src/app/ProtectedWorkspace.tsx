@@ -1,11 +1,10 @@
 import type { ReactNode } from "react"
 import { Navigate, useLocation } from "react-router"
-import { FreeSearchProvider } from "@/context/FreeSearchContext"
 import { useAuth } from "@/domains/auth"
 import { ProjectsProvider } from "@/domains/projects"
-import { canEditControls, canReadControls } from "./permissions"
 import { RestoreStatusView } from "./RestoreStatusView"
-import { loginPathFor } from "./routes"
+import { legacyKeysDestination, loginPathFor } from "./routes"
+import { WorkspaceControls } from "./WorkspaceControls"
 
 const RESTORE_FAILURE = "The account session could not be restored."
 
@@ -19,7 +18,8 @@ const RESTORE_FAILURE = "The account session could not be restored."
  *
  * The confirmed account UUID keys the provider tree, so an account switch
  * remounts the store and the domain state instead of reusing the previous
- * account's results.
+ * account's results. The projects provider sits outermost: it owns the live
+ * system access descriptor that the control-plane flags derive from.
  */
 export function ProtectedWorkspace({ children }: { children: ReactNode }) {
   const { status, account, error, restore } = useAuth()
@@ -47,17 +47,13 @@ export function ProtectedWorkspace({ children }: { children: ReactNode }) {
   }
 
   if (account === null) {
-    return <Navigate to={loginPathFor(location.pathname)} replace />
+    const destination = legacyKeysDestination(location.pathname, location.search) ?? location.pathname
+    return <Navigate to={loginPathFor(destination)} replace />
   }
 
   return (
-    <FreeSearchProvider
-      key={account.id}
-      accountId={account.id}
-      canReadControls={canReadControls(account.role)}
-      canEditControls={canEditControls(account.role)}
-    >
-      <ProjectsProvider accountId={account.id}>{children}</ProjectsProvider>
-    </FreeSearchProvider>
+    <ProjectsProvider key={account.id} accountId={account.id}>
+      <WorkspaceControls accountId={account.id}>{children}</WorkspaceControls>
+    </ProjectsProvider>
   )
 }

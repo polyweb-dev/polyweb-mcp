@@ -32,7 +32,6 @@ from freesearch.models.contracts import (
     UsageOperation,
 )
 from freesearch.models.credentials import CredentialOperation
-from freesearch.models.projects import BuiltinRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from tests.fixtures.a2_execution import _seed_credential
@@ -226,12 +225,11 @@ async def test_member_without_execute_permission_gets_403(
         headers, pair = _register(client, "adv-limited")
         owner = await seed_execution_user(repository, "adv-owner")
         attr = await seed_execution_project(repository, user_id=owner.id)
-        # grant membership with a role that lacks search.execute
+        # The default member fixture has no execution permission bits.
         await add_execution_member(
             repository,
             project_id=attr.project_id,
             user_id=account_id_from_pair(pair),
-            role_key=BuiltinRole.TOKEN_MANAGER,
         )
         response = client.post(
             "/search",
@@ -498,7 +496,6 @@ async def test_rejections_leave_no_side_effects(
             repository,
             project_id=limited.project_id,
             user_id=user_id,
-            role_key=BuiltinRole.TOKEN_MANAGER,
         )
         suspended = await seed_execution_project(repository, user_id=user_id, name="Suspended")
         await suspend_execution_member(repository, project_id=suspended.project_id, user_id=user_id)

@@ -1,6 +1,5 @@
 import type {
-  CRDConversionProfile,
-  CRDOperation,
+  UsdOperation,
   LimitRecord,
   ProviderAuthLimits,
   ProviderLimits,
@@ -23,9 +22,8 @@ export interface PriceNoteInput {
 export interface PriceNoteRow {
   provider: string
   providerName: string
-  operation: CRDOperation
+  operation: UsdOperation
   usdPerCall: string | null
-  crdPerCall: string | null
   priceVersion: string | null
   estimated: boolean
   free: boolean
@@ -34,13 +32,11 @@ export interface PriceNoteRow {
 
 interface PriceNoteDependencies {
   activeAuth: (limits: ProviderLimits, hasKey?: boolean) => ProviderAuthLimits | undefined
-  usdFromCRD: (crd: string, profile: CRDConversionProfile) => string | null
-  formatCRDAmount: (crd: string) => string
+  formatUsdAmount: (usd: string) => string
 }
 
 interface RuntimePrice {
   usdPerCall: string | null
-  crdPerCall: string | null
   priceVersion: string | null
   estimated: boolean
 }
@@ -53,8 +49,8 @@ interface PriceProvider {
   capabilities: readonly string[]
 }
 
-const OPERATIONS: readonly CRDOperation[] = ["search", "fetch"]
-const RUNTIME_PRICE_BASES: Readonly<Record<string, Partial<Record<CRDOperation, string>>>> = {
+const OPERATIONS: readonly UsdOperation[] = ["search", "fetch"]
+const RUNTIME_PRICE_BASES: Readonly<Record<string, Partial<Record<UsdOperation, string>>>> = {
   brave: { search: "per search request" },
   keenable: { search: "per request", fetch: "per request" },
   tinyfish: { search: "per search request", fetch: "per fetch request" },
@@ -65,26 +61,24 @@ const RUNTIME_PRICE_BASES: Readonly<Record<string, Partial<Record<CRDOperation, 
   youcom: { search: "per search request", fetch: "per live page" },
 }
 
-function recordFor(auth: ProviderAuthLimits, operation: CRDOperation): LimitRecord | null {
+function recordFor(auth: ProviderAuthLimits, operation: UsdOperation): LimitRecord | null {
   return operation === "search" ? auth.search : auth.fetch
 }
 
 function runtimePrice(
   auth: ProviderAuthLimits | undefined,
-  operation: CRDOperation,
+  operation: UsdOperation,
   dependencies: PriceNoteDependencies,
 ): RuntimePrice | null {
   if (auth === undefined) return null
   const record = recordFor(auth, operation)
   if (record === null || !record.supported) return null
-  const view = auth.crd_views.find((entry) => entry.operation === operation)
-  const crd = view?.request_cost_crd
-  if (crd === null || crd === undefined) return null
-  const usd = dependencies.usdFromCRD(crd, record.conversion_profile)
+  const view = auth.usd_views.find((entry) => entry.operation === operation)
+  const usd = view?.request_cost_usd
+  if (usd === null || usd === undefined) return null
   const version = record.conversion_profile.price_version
   return {
-    usdPerCall: usd,
-    crdPerCall: dependencies.formatCRDAmount(crd),
+    usdPerCall: dependencies.formatUsdAmount(usd),
     priceVersion: version === "" ? null : version,
     estimated: record.conversion_profile.estimated,
   }
@@ -122,26 +116,32 @@ function isZero(value: string | null | undefined): boolean {
   return amount !== null && amount.int === 0n
 }
 
+function freeRecord(record: LimitRecord | null): boolean {
+  if (record === null) return false
+  return ["unbilled_free", "unbilled_keyless"].includes(record.conversion_profile.source)
+    || isZero(record.budget?.usd_per_call)
+}
+
 /** Only explicit zero or noncharging limit facts make a runtime rail free. */
 function runtimeFreeOperation(
   auth: ProviderAuthLimits | undefined,
-  operation: CRDOperation,
+  operation: UsdOperation,
 ): boolean {
   if (auth === undefined) return false
   const record = recordFor(auth, operation)
-  const view = auth.crd_views.find((entry) => entry.operation === operation)
-  if (isZero(view?.request_cost_crd) || isZero(record?.budget?.usd_per_call)) return true
+  const view = auth.usd_views.find((entry) => entry.operation === operation)
+  if (freeRecord(record) || isZero(view?.request_cost_usd)) return true
   return view?.state === "unmetered" && view.priced === false && record?.budget?.model === "none"
 }
 
-function runtimePriceBasis(provider: string, operation: CRDOperation): string {
+function runtimePriceBasis(provider: string, operation: UsdOperation): string {
   return RUNTIME_PRICE_BASES[provider]?.[operation] ?? `per ${operation} request`
 }
 
 function supportedRecord(
   provider: PriceProvider,
   auth: ProviderAuthLimits | undefined,
-  operation: CRDOperation,
+  operation: UsdOperation,
 ): LimitRecord | null | undefined {
   const record = auth === undefined ? null : recordFor(auth, operation)
   if (record === null) return provider.capabilities.includes(operation) ? null : undefined
@@ -158,7 +158,7 @@ function showDocumentedReference(
 
 function documentedRow(
   provider: PriceProvider,
-  operation: CRDOperation,
+  operation: UsdOperation,
   free: boolean,
   documented: NonNullable<ReturnType<typeof documentedProviderPrice>>,
 ): PriceNoteRow {
@@ -167,7 +167,6 @@ function documentedRow(
     providerName: provider.name,
     operation,
     usdPerCall: documented.usdPerCall,
-    crdPerCall: documented.crdPerCall,
     priceVersion: DOCUMENTED_PRICE_VERSION,
     estimated: documented.usdPerCall !== null,
     free,
@@ -177,7 +176,7 @@ function documentedRow(
 
 function freeRow(
   provider: PriceProvider,
-  operation: CRDOperation,
+  operation: UsdOperation,
   record: LimitRecord | null | undefined,
 ): PriceNoteRow {
   return {
@@ -185,7 +184,6 @@ function freeRow(
     providerName: provider.name,
     operation,
     usdPerCall: null,
-    crdPerCall: null,
     priceVersion: record?.conversion_profile.price_version || null,
     estimated: record?.conversion_profile.estimated ?? false,
     free: true,
@@ -197,7 +195,7 @@ interface OperationPriceInput {
   provider: PriceProvider
   auth: ProviderAuthLimits | undefined
   authMode: string
-  operation: CRDOperation
+  operation: UsdOperation
   dependencies: PriceNoteDependencies
 }
 

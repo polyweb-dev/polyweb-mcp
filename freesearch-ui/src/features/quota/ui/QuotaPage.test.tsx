@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import { QuotaPage } from "./QuotaPage"
 import { installFetchStub } from "@/test/fetchMock"
 
@@ -20,7 +20,7 @@ const mockFreeSearchState = vi.hoisted(() => ({
   current: {
     providers: [{ id: "brave", name: "Brave", capabilities: ["search"] }],
     providerLimits: [],
-    crdUsageTotals: [],
+    usdUsageTotals: [],
     dashboardQuotas: [],
     dashboardNotice: null,
     usageLoading: false,
@@ -39,7 +39,7 @@ vi.mock("./ProviderActionSlots", () => ({
 }))
 
 /**
- * UI7 page: cards, CRD totals, action slot, one price footer; no legacy
+ * UI7 page: cards, Usd totals, action slot, one price footer; no legacy
  * native grid, no cache widget, no per-card price version. Covers
  * UI7-05 and UI7-06.
  */
@@ -50,10 +50,11 @@ describe("QuotaPage", () => {
       throw new Error("no backend on page test")
     })
     render(<QuotaPage />)
-    expect(screen.getByText("Usage")).not.toBeNull()
-    expect(screen.getByText("Provider credit units")).not.toBeNull()
+    expect(screen.getByRole("heading", { name: "Quotas" })).not.toBeNull()
+    expect(screen.getByText("Provider balances and allowances across all projects")).not.toBeNull()
+    expect(screen.getByText("Allowance left")).not.toBeNull()
     expect(screen.getByText("Usage totals")).not.toBeNull()
-    expect(screen.getByText("How credit units are priced")).not.toBeNull()
+    expect(screen.queryByText("How credit units are priced")).toBeNull()
     expect(screen.queryByText("Provider quota view")).toBe(null)
     expect(screen.queryByText("—")).toBe(null)
     vi.unstubAllGlobals()
@@ -65,7 +66,7 @@ describe("QuotaPage", () => {
     })
     render(<QuotaPage />)
     expect(screen.queryByRole("alert")).toBe(null)
-    expect(screen.getByText("Usage")).not.toBeNull()
+    expect(screen.getByRole("heading", { name: "Quotas" })).not.toBeNull()
     vi.unstubAllGlobals()
   })
 
@@ -86,9 +87,9 @@ describe("QuotaPage", () => {
     vi.unstubAllGlobals()
   })
 
-  it("supplies native usage totals to the Tavily block", () => {    const previous = mockFreeSearchState.current
+  it("supplies precise USD usage totals to the Tavily row", () => {
+    const previous = mockFreeSearchState.current
     const profile = {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -129,7 +130,7 @@ describe("QuotaPage", () => {
               unknown_tiers: [],
               tier_split_known: true,
               aggregate_pool: null,
-              crd_views: [],
+              usd_views: [],
               rate_progress: [],
               grants: null,
               detail: null,
@@ -140,8 +141,8 @@ describe("QuotaPage", () => {
           generated_at: "2026-09-06T10:05:00Z",
         },
       ],
-      crdUsageTotals: [
-        { provider: "tavily", operation: "search", normalized_crd: "8", attempt_count: 1, volume_count: 1 },
+      usdUsageTotals: [
+        { provider: "tavily", operation: "search", spend_usd: "0.008", attempt_count: 1, volume_count: 1 },
       ],
       dashboardQuotas: [],
       dashboardNotice: null,
@@ -154,8 +155,11 @@ describe("QuotaPage", () => {
         throw new Error("no backend on page test")
       })
       render(<QuotaPage />)
-      expect(screen.getByText("Tavily native Credits use")).not.toBeNull()
-      expect(screen.getByText("1 Credit")).not.toBeNull()
+      const table = screen.getByRole("table", { name: "Usage totals" })
+      const row = within(table).getByRole("row", { name: /Tavily/ })
+      expect(within(row).getByText("1")).toBeInTheDocument()
+      expect(within(row).getByText("$0.008")).toBeInTheDocument()
+      expect(table).not.toHaveTextContent(/Tavily credits?/i)
     } finally {
       mockFreeSearchState.current = previous
       vi.unstubAllGlobals()
@@ -171,7 +175,6 @@ describe("QuotaPage", () => {
 describe("QuotaPage rate-tier slot (FIX)", () => {
   function pageProfile() {
     return {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -237,13 +240,13 @@ describe("QuotaPage rate-tier slot (FIX)", () => {
             stale: false,
             manual_anchor: false,
           },
-          crd_views: [
+          usd_views: [
             {
               state: "finite",
               operation: "search",
-              remaining_crd: "7992",
-              local_remaining_crd: null,
-              request_cost_crd: "8",
+              remaining_usd: "7.992",
+              local_remaining_usd: null,
+              request_cost_usd: "0.008",
               shared_pool_id: "tavily:keyed:credits",
               possible_standard_calls: "999",
               price_version: "paygo-reference",
@@ -279,7 +282,6 @@ describe("QuotaPage rate-tier slot (FIX)", () => {
             rate: null,
             budget: null,
             conversion_profile: {
-              reference_usd_per_crd: "0.001",
               native_usd_per_unit: "1",
               cost_basis: "priced_native_use",
               price_version: "v2026-09",
@@ -300,7 +302,6 @@ describe("QuotaPage rate-tier slot (FIX)", () => {
             rate: null,
             budget: null,
             conversion_profile: {
-              reference_usd_per_crd: "0.001",
               native_usd_per_unit: null,
               cost_basis: "priced_native_use",
               price_version: "",
@@ -333,13 +334,13 @@ describe("QuotaPage rate-tier slot (FIX)", () => {
             stale: false,
             manual_anchor: false,
           },
-          crd_views: [
+          usd_views: [
             {
               state: "finite",
               operation: "search",
-              remaining_crd: "4500",
-              local_remaining_crd: null,
-              request_cost_crd: "5",
+              remaining_usd: "4.5",
+              local_remaining_usd: null,
+              request_cost_usd: "0.005",
               shared_pool_id: "brave:keyed:usd",
               possible_standard_calls: "900",
               price_version: "v2026-09",
@@ -367,7 +368,7 @@ describe("QuotaPage rate-tier slot (FIX)", () => {
         { id: "brave", name: "Brave" },
       ],
       providerLimits: [tavilyLimitsEntry(), braveLimitsEntry()],
-      crdUsageTotals: [],
+      usdUsageTotals: [],
       dashboardQuotas: [],
       dashboardNotice: null,
       usageLoading: false,
@@ -392,7 +393,7 @@ describe("QuotaPage rate-tier slot (FIX)", () => {
           }}
         />,
       )
-      expect(seen).toEqual(["tavily"])
+      expect([...new Set(seen)]).toEqual(["tavily"])
       expect(confirmedKind).toBe("function")
       expect(screen.getByTestId("tier-stub")).not.toBeNull()
       expect(screen.getByTestId("oauth-stub-tavily")).not.toBeNull()

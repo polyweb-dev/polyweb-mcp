@@ -7,6 +7,7 @@ closed to an empty list without keys, which the no-provider guard surfaces.
 
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 import pytest
@@ -35,6 +36,7 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
+from freesearch.persistence.settings import ProjectSettingsRepository
 from freesearch.persistence.storage import SQLiteRepository
 from tests.fixtures.api_keys import mcp_project_key
 from tests.fixtures.execution import install_adapter_map, seed_provider_bindings
@@ -791,12 +793,29 @@ async def test_mcp_stale_first_then_new_snapshot(
 async def test_mcp_single_attempt_preserves_tool_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """E6 MCP: CHAINED/FIRST_ONLY/allow_fallback=false invoke only the first candidate."""
+    """MCP propagates an unexpected first-provider error without fallback."""
     await _reset_mcp_caches()
     repository = await SQLiteRepository.open(tmp_path / "mcp-single.db")
     try:
         from freesearch.models.contracts import RoutingConfigResponse
         from freesearch.routers.control import persist_routing_config
+
+        async def order_exa_first(pid: str) -> None:
+            async with repository.session() as session:
+                settings = ProjectSettingsRepository(session)
+                project_id = UUID(pid)
+                revision = await settings.revision(
+                    project_id=project_id, namespace="provider_order"
+                )
+                order = {"strategy": "custom", "custom_order": ["exa", "brave"]}
+                assert await settings.compare_and_set(
+                    project_id=project_id,
+                    namespace="provider_order",
+                    schema_version=1,
+                    overrides={"search": order, "fetch": order},
+                    expected_revision=revision,
+                )
+                await session.commit()
 
         for fallback in ("chained", "first_only"):
             await persist_routing_config(
@@ -818,21 +837,20 @@ async def test_mcp_single_attempt_preserves_tool_error(
                     f"mcp-single-{fallback}",
                     monkeypatch=monkeypatch,
                 )
-                with pytest.raises(ToolError, match="simulated failure"):
-                    await server.call_tool(
-                        "search",
-                        {
-                            "request": {
-                                "project_id": pid,
-                                "query": "single",
-                                "routing": {
-                                    "mode": "require",
-                                    "providers": ["exa", "brave"],
-                                    "allow_fallback": allow,
-                                },
-                            }
+                await order_exa_first(pid)
+                arguments = {
+                    "request": {
+                        "project_id": pid,
+                        "query": "single",
+                        "routing": {
+                            "mode": "require",
+                            "providers": ["exa", "brave"],
+                            "allow_fallback": allow,
                         },
-                    )
+                    }
+                }
+                with pytest.raises(ToolError, match="simulated failure"):
+                    await server.call_tool("search", arguments)
                 assert primary.search_calls == 1
                 assert fallback_adapter.search_calls == 0
                 primary_f = _FailStub("exa")
@@ -843,21 +861,20 @@ async def test_mcp_single_attempt_preserves_tool_error(
                     f"mcp-single-f-{fallback}",
                     monkeypatch=monkeypatch,
                 )
-                with pytest.raises(ToolError, match="simulated failure"):
-                    await server_f.call_tool(
-                        "fetch",
-                        {
-                            "request": {
-                                "project_id": pid,
-                                "url": "https://example.com",
-                                "routing": {
-                                    "mode": "require",
-                                    "providers": ["exa", "brave"],
-                                    "allow_fallback": allow,
-                                },
-                            }
+                await order_exa_first(pid)
+                fetch_arguments = {
+                    "request": {
+                        "project_id": pid,
+                        "url": "https://example.com",
+                        "routing": {
+                            "mode": "require",
+                            "providers": ["exa", "brave"],
+                            "allow_fallback": allow,
                         },
-                    )
+                    }
+                }
+                with pytest.raises(ToolError, match="simulated failure"):
+                    await server_f.call_tool("fetch", fetch_arguments)
                 assert primary_f.fetch_calls == 1
                 assert fallback_f.fetch_calls == 0
     finally:

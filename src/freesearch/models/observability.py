@@ -124,7 +124,7 @@ class TraceAttribute:
     SERVER_PORT: Final[str] = "server.port"
     #: Internal capture decision stamped by the trusted execution boundary.
     CAPTURE_PAYLOAD: Final[str] = "freesearch.trace.capture_payload"
-    #: Internal sampling decision stamped by the trusted execution boundary.
+    #: Reserved legacy key; untrusted callers cannot inject it.
     SAMPLED: Final[str] = "freesearch.trace.sampled"
 
 
@@ -285,25 +285,6 @@ def is_trace_id(value: str) -> bool:
     """Return whether ``value`` is a canonical trace identifier."""
 
     return _TRACE_ID_PATTERN.fullmatch(value) is not None
-
-
-def trace_is_sampled(trace_id: str, sampling_rate: float) -> bool:
-    """Return whether one trace id falls inside the sampling rate.
-
-    The decision is a pure function of the trace id and rate, so a root and all
-    its children (even when exported in different batches) always agree. A
-    malformed id fails open and is kept.
-    """
-
-    if sampling_rate <= 0.0:
-        return False
-    if sampling_rate >= 1.0:
-        return True
-    try:
-        bucket = int(trace_id[-16:], 16) / float(1 << 64)
-    except (ValueError, TypeError):
-        return True
-    return bucket < sampling_rate
 
 
 def parse_trace_output(output_json: str | None) -> TraceOutput | None:

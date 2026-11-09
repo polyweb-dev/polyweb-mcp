@@ -1,67 +1,81 @@
-import { Link } from "react-router"
-import { PROJECT_ROLE_LABELS, useProjectScope } from "@/domains/projects"
-import type { ProjectRoleKey } from "@/domains/projects"
+import { useCallback } from "react"
+import { PROJECT_PERMISSIONS, hasPermission, useProjectScope, useProjects } from "@/domains/projects"
+import { getProjectProviderView, hasEffectiveRoute } from "@/domains/providers"
+import { getProjectOrder } from "@/domains/routing"
+import { useScopedResource } from "@/shared/lib/useScopedResource"
+import { OverviewRecentActivity } from "./OverviewRecentActivity"
+import { OverviewRouteOrder } from "./OverviewRouteOrder"
+import { ProjectOverviewHeader } from "./ProjectOverviewHeader"
+import { ProjectSetupChecklist } from "./ProjectSetupChecklist"
+import { ProjectUsageSummary } from "./ProjectUsageSummary"
 
-const PREVIEW_NOTICE =
-  "Project playground, usage and activity are not available in this preview. " +
-  "The account workspace keeps working as before."
+const TWO_COLUMNS = "grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"
+const ONE_COLUMN = "grid items-start gap-6"
 
-function roleLabel(role: string): string {
-  return PROJECT_ROLE_LABELS[role as ProjectRoleKey] ?? role
+/** Provider view of the overview page; loads only with providers.read. */
+function useProviderView(accountId: string, projectId: string, enabled: boolean) {
+  const load = useCallback(
+    (signal: AbortSignal) => getProjectProviderView(projectId, signal),
+    [projectId]
+  )
+  const view = useScopedResource({ scopeKey: `overview:${accountId}:${projectId}`, load, enabled })
+  const providers = view.status === "ready" ? view.data.providers : []
+  return {
+    ready: enabled && view.status === "ready",
+    hasCredential: providers.some((provider) => provider.credentials.length > 0),
+    hasEffective: hasEffectiveRoute(providers),
+  }
 }
 
 /**
- * Landing page of one project.
- *
- * The page shows the project status and the caller's role labels only. No
- * execution, usage, or activity data appears here; account-scoped surfaces
- * keep their existing routes.
+ * Landing page of one project: its status and the caller's roles, the
+ * setup guide while nothing can run, this project's search and fetch
+ * figures, its latest traces and its route order. Each block loads only
+ * with the permission that reads it.
  */
 export function ProjectOverviewPage() {
+  const { accountId } = useProjects()
   const { project, projectId, accessState } = useProjectScope()
-  const roles = accessState.status === "ready" ? accessState.data.roles : []
+  const access = accessState.status === "ready" ? accessState.data : null
+
+  const canConfigureProviders = hasPermission(access, PROJECT_PERMISSIONS.providersConfigure)
+  const canReadTraces = hasPermission(access, PROJECT_PERMISSIONS.tracesRead)
+  const canReadProviders = hasPermission(access, PROJECT_PERMISSIONS.providersRead)
+  const loadOrder = useCallback((signal: AbortSignal) => getProjectOrder(projectId, signal), [projectId])
+  const order = useScopedResource({ scopeKey: `overview-order:${accountId}:${projectId}`, load: loadOrder, enabled: canReadProviders })
+  const providerView = useProviderView(
+    accountId,
+    projectId,
+    canReadProviders
+  )
 
   return (
     <section className="flex flex-1 flex-col space-y-6">
-      <header className="border-b border-[var(--border-subtle)] pb-2">
-        <h2 className="text-[var(--text-strong)]">{project?.name ?? "Project"}</h2>
-        {project !== null && (
-          <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-            Status: {project.status === "archived" ? "Archived" : "Active"}
-          </p>
-        )}
-      </header>
+      <ProjectOverviewHeader project={project} projectId={projectId} access={access} />
 
-      <div className="space-y-1">
-        <h3 className="text-[13px] font-medium text-[var(--text-strong)]">Your roles</h3>
-        {roles.length === 0 ? (
-          <p className="text-[13px] text-[var(--muted)]">No project roles.</p>
-        ) : (
-          <ul className="flex flex-wrap gap-2">
-            {roles.map((role) => (
-              <li
-                key={role}
-                className="rounded border border-[var(--border-subtle)] px-2 py-0.5 text-[12px] text-[var(--text)]"
-              >
-                {roleLabel(role)}
-              </li>
-            ))}
-          </ul>
+      {providerView.ready && !providerView.hasEffective && (
+        <ProjectSetupChecklist
+          projectId={projectId}
+          canConfigure={canConfigureProviders}
+          hasCredential={providerView.hasCredential}
+          hasEffective={providerView.hasEffective}
+        />
+      )}
+
+      {hasPermission(access, PROJECT_PERMISSIONS.usageRead) && (
+        <ProjectUsageSummary accountId={accountId} projectId={projectId} order={order.status === "ready" ? order.data : undefined} />
+      )}
+
+      <div className={canReadTraces && canReadProviders ? TWO_COLUMNS : ONE_COLUMN}>
+        {canReadTraces && <OverviewRecentActivity accountId={accountId} projectId={projectId} />}
+        {canReadProviders && (
+          <OverviewRouteOrder
+            projectId={projectId}
+            order={order}
+            canConfigure={canConfigureProviders}
+          />
         )}
       </div>
-
-      <p className="text-[13px]">
-        <Link
-          to={`/p/${projectId}/members`}
-          className="text-[var(--signal)] hover:underline"
-        >
-          Members
-        </Link>
-      </p>
-
-      <p role="note" className="max-w-xl text-[13px] text-[var(--muted)]">
-        {PREVIEW_NOTICE}
-      </p>
     </section>
   )
 }

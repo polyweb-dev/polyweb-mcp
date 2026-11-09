@@ -273,7 +273,7 @@ class RateLimitService:
             if (view.bucket_id, view.window) not in seen
         ]
         for view in extra:
-            view.remaining = await self._local_remaining(view, instant)
+            view.remaining = await self._local_remaining(provider, view, instant)
         return sorted([*stored, *extra], key=lambda view: (view.bucket_id, view.window))
 
     # ------------------------------------------------------------- internals
@@ -482,10 +482,13 @@ class RateLimitService:
                 return (window.bucket_id, window)
         return None
 
-    async def _local_remaining(self, view: RateProgressView, now: datetime) -> Decimal | None:
+    async def _local_remaining(
+        self, provider: str, view: RateProgressView, now: datetime
+    ) -> Decimal | None:
         if self._repository is None or view.limit is None:
             return None
-        used = await self._repository.count_attempts(
+        used = await self._repository.count_catalog_attempts(
+            provider,
             view.bucket_id,
             window=RateWindowName(view.window),
             now=now,

@@ -1,7 +1,9 @@
 Feature: Project shell and membership UX
   The desktop shell gains a project selector, project-scoped URLs, and
   membership administration driven by live backend permissions. Drafts and
-  access state are isolated per (account, project) and per tab.
+  access state are isolated per (account, project) and per tab. Accounts carry
+  no role: system permissions come from GET /api/v1/system/access and project
+  permissions from GET /api/v1/projects/{id}/access.
 
   Background:
     Given the projects backend is stubbed
@@ -12,6 +14,7 @@ Feature: Project shell and membership UX
     When I open the workspace page "/projects"
     Then I see "You are not a member of any project."
     And I see "Ask a system administrator to add you."
+    And the create project form is absent
     When I open the workspace page "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
     Then I see "Project unavailable"
 
@@ -20,6 +23,20 @@ Feature: Project shell and membership UX
     Given I am a member of project Beta with role project_member
     When I open the workspace page "/p/bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb/members"
     Then the members table shows "member@example.com"
+
+  @stub
+  Scenario: An admin grants a developer access to Activity
+    Given I am a member of project Alpha with role project_admin
+    When I open the workspace page "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/members"
+    Then the member roles and provider owner are shown
+    When I open the provider ownership transfer dialog
+    Then the transfer dialog requires another project admin
+    When I cancel the provider ownership transfer
+    When I change the developer's activity permission to off
+    And I change the developer's activity permission to on
+    And I sign in as the developer
+    Then I see the heading "Activity"
+    And the page URL path should be "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/activity"
 
   @stub
   Scenario: A rapid project switch drops the late Alpha members response
@@ -56,6 +73,57 @@ Feature: Project shell and membership UX
     When I submit the create project form
     Then I see the heading "Gamma"
     And the page URL path should be "/p/cccccccc-3333-4333-8333-cccccccccccc"
-    When I open the workspace page "/p/cccccccc-3333-4333-8333-cccccccccccc/usage"
+    When I open the workspace page "/p/cccccccc-3333-4333-8333-cccccccccccc/routing"
     Then the page URL path should be "/p/cccccccc-3333-4333-8333-cccccccccccc"
-    And the heading "Usage" is absent
+    And the heading "Routing" is absent
+
+  @stub
+  Scenario: Only project.create offers the create project form
+    Given the projects backend is stubbed with system permissions "system.projects.create, system.settings.read"
+    And I am a member of project Alpha with role project_member
+    When I open the workspace page "/projects"
+    Then I see the heading "Projects"
+    And I see "Alpha"
+    And the create project form is absent
+
+  @stub
+  Scenario: The root path reopens the last explicitly selected project
+    Given I am a member of project Alpha with role project_member
+    And I am a member of project Beta with role project_member
+    When I open the workspace page "/projects"
+    And I select project Beta from the project selector
+    Then the page URL path should be "/p/bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+    When I open the workspace page "/"
+    Then the page URL path should be "/p/bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+    And I see the heading "Beta"
+
+  @stub
+  Scenario Outline: The selected project and active screen stay visible at <width> by <height>
+    Given I am a member of project Alpha with role project_admin
+    When I open the workspace page "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/api-keys" at <width> by <height>
+    Then the project selector names "Alpha" within the viewport
+    And the active Project link "API keys" is current within the viewport
+    And the heading "API keys" is within the viewport
+
+    Examples:
+      | width | height |
+      | 1280  | 800    |
+      | 1440  | 900    |
+
+  @stub
+  Scenario Outline: A long project name wraps in the selector at <width> by <height>
+    Given the projects backend is stubbed for a system administrator
+    And I am a member of project Alpha with role project_admin
+    And project Alpha is renamed to "Customer Research — Shared Workspace"
+    When I open the workspace page "/projects" at <width> by <height>
+    And I select project "Customer Research — Shared Workspace" from the project selector
+    Then the project selector shows "Customer Research — Shared Workspace" without clipping
+    And the heading "Customer Research — Shared Workspace" is within the viewport
+    When I open the workspace page "/system/quotas" at <width> by <height>
+    Then the project selector shows "Customer Research — Shared Workspace" without clipping
+    And the Back link "Customer Research — Shared Workspace" is absent
+
+    Examples:
+      | width | height |
+      | 1280  | 800    |
+      | 1440  | 900    |

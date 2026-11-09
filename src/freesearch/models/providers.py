@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import unicodedata
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
 from pydantic import ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
 
-from freesearch.models.contracts import ContractModel
+from freesearch.models.contracts import ContractModel, UsageOperation
 from freesearch.models.credentials import CredentialOperation
 from freesearch.models.projects import CredentialOwnerScope
 from freesearch.models.schema_enums import PoolStatus, UpstreamScope
@@ -222,11 +223,11 @@ class AllocationRead(ContractModel):
     project_id: UUID
     pool_id: UUID
     operation_scope: CredentialOperation
-    base_rate: int
+    base_rate: int | None
     rate_window_seconds: int
     borrow_enabled: bool
     max_rate: int | None
-    effective_max_rate: int
+    effective_max_rate: int | None
     weight: int
     best_effort: bool
     max_concurrency: int | None
@@ -299,11 +300,16 @@ class ProviderTypeView(ContractModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider_type: str
+    keyless: bool = False
+    call_cost_usd: dict[UsageOperation, Decimal] = Field(default_factory=dict)
+    keyless_call_cost_usd: dict[UsageOperation, Decimal] = Field(default_factory=dict)
     capability: frozenset[CredentialOperation]
     kill_switch: bool
     system_enabled_operations: frozenset[CredentialOperation]
     available: bool
     enabled: bool
+    health_status: str | None = None
+    health_checked_at: datetime | None = None
     credentials: list[AvailableCredentialRead]
     bindings: list[ProviderBindingView]
     effective_operations: frozenset[CredentialOperation]

@@ -44,7 +44,6 @@ export interface WireProviderStatus {
   enable_mask: number
   /** System support mask 0..7: Brave 3, all others 7. */
   support_mask: number
-  priority: number
   health: "healthy" | "degraded" | "unavailable" | "unknown" | null
   circuit_breaker: { state: "closed" | "open" | "half_open"; updated_at: string }
   latency_p95_ms: number | null
@@ -98,7 +97,6 @@ export function providerStatus(
         : enableMask
   return {
     provider_id: backendId,
-    priority: order[backendId],
     health: "healthy",
     circuit_breaker: { state: "closed", updated_at: "2026-09-06T00:00:00Z" },
     latency_p95_ms: 100 + order[backendId] * 10,

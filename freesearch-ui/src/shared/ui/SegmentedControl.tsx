@@ -9,7 +9,7 @@ export interface SegmentedControlProps {
   onChange: (value: string) => void
   /** Accessible group label (also announced with each toggle button). */
   ariaLabel: string
-  /** Optional minimum column width override, defaults to 80px. */
+  /** Optional minimum column width override; segments size to their label by default. */
   minColumnWidth?: string
   /** Disables every segment button while an operation is in flight. */
   disabled?: boolean
@@ -17,7 +17,8 @@ export interface SegmentedControlProps {
 
 /**
  * Exclusive toggle-button group. Exactly one button exposes
- * `aria-pressed="true"`; the rest expose `aria-pressed="false"`.
+ * `aria-pressed="true"`; the rest expose `aria-pressed="false"`. The
+ * selected segment is one neutral surface step, not an accent fill.
  */
 export const SegmentedControl: React.FC<SegmentedControlProps> = ({
   options,
@@ -31,7 +32,7 @@ export const SegmentedControl: React.FC<SegmentedControlProps> = ({
     <div
       role="group"
       aria-label={ariaLabel}
-      className="inline-flex items-center gap-0.5 rounded-md border border-[var(--border-subtle)] p-0.5"
+      className="inline-flex h-8 max-w-full items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] p-0.5"
     >
       {options.map((option) => {
         const isSelected = option === value
@@ -43,11 +44,11 @@ export const SegmentedControl: React.FC<SegmentedControlProps> = ({
             onClick={() => onChange(option)}
             disabled={disabled}
             className={cn(
-              "min-w-[80px] rounded px-3 py-1 text-[13px] font-medium transition-colors motion-reduce:transition-none",
+              "h-full rounded-[4px] px-3 text-[13px] transition-colors motion-reduce:transition-none",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/40",
               "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
               isSelected
-                ? "bg-[var(--signal-muted)] text-[var(--signal)]"
+                ? "bg-[var(--raised)] font-medium text-[var(--text-strong)] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
                 : "text-[var(--muted)] hover:text-[var(--text-strong)]"
             )}
             style={minColumnWidth ? { minWidth: minColumnWidth } : undefined}

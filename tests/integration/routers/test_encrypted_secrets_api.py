@@ -1,8 +1,8 @@
-"""Original encrypted-secret security cases migrated to A4 credential instances.
+"""Encrypted-secret security cases using vault keys and project pools.
 
 Origin: this module's provider-name singleton suite. Every original case name
 and every ciphertext, sentinel, idempotency and fail-closed invariant remains;
-requests now exercise the actual credential endpoints and execution bindings.
+requests now exercise the vault endpoints and materialized execution bindings.
 """
 
 import pytest
@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from freesearch.configuration.config import get_settings
 from freesearch.models.projects import CredentialInstanceRead
+from freesearch.models.vault import VaultKeyDetails
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
 from freesearch.services.credentials import credential_secret_slot
@@ -23,7 +24,6 @@ from tests.fixtures.auth import (
     temp_email,
 )
 from tests.fixtures.execution import (
-    create_bound_provider,
     install_adapter_map,
     seed_execution_project,
 )
@@ -54,7 +54,7 @@ def passphrase_env(monkeypatch, tmp_path):
 
 def _put_secret(client, provider, key, headers):
     return client.post(
-        "/api/v1/system/credentials",
+        "/api/v1/account/vault/keys",
         headers=headers,
         json={"provider_type": provider, "label": "encrypted proof", "secret": key},
     )
@@ -63,12 +63,30 @@ def _put_secret(client, provider, key, headers):
 def _assert_metadata(response, sentinel):
     assert response.status_code == 201, response.text
     body = response.json()
-    assert set(body) == set(CredentialInstanceRead.model_fields)
+    assert set(body) == set(VaultKeyDetails.model_fields)
     assert body["provider_type"] == "exa" and body["generation"] == 1
-    assert body["status"] == "active" and body["owner_scope"] == "system"
+    assert body["status"] == "active"
     assert_no_sentinels(response.text, (sentinel,), "credential response")
-    assert_no_sentinels(repr(CredentialInstanceRead.model_validate(body)), (sentinel,), "model")
+    assert_no_sentinels(repr(VaultKeyDetails.model_validate(body)), (sentinel,), "model")
     return body
+
+
+def _create_bound_provider(client, project_id, provider, secret, headers):
+    key = _put_secret(client, provider, secret, headers)
+    _assert_metadata(key, secret)
+    pool = client.post(
+        f"/api/v1/account/vault/keys/{key.json()['id']}/pools",
+        headers=headers,
+        json={
+            "label": "encrypted proof pool",
+            "project_id": project_id,
+            "rate": {"limit": None, "window_seconds": 60},
+            "operations": ["search"],
+        },
+    )
+    assert pool.status_code == 201, pool.text
+    assert_no_sentinels(pool.text, (secret,), "pool response")
+    return key
 
 
 async def _admin(client, repository, prefix):
@@ -78,9 +96,10 @@ async def _admin(client, repository, prefix):
 
 async def test_secret_source_includes_encrypted_db():
     """Replacement contract is metadata-only and rejects a secret read field."""
-    assert "secret" not in CredentialInstanceRead.model_fields
-    with pytest.raises(ValidationError):
-        CredentialInstanceRead.model_validate({"secret": "forbidden"})
+    for model in (CredentialInstanceRead, VaultKeyDetails):
+        assert "secret" not in model.model_fields
+        with pytest.raises(ValidationError):
+            model.model_validate({"secret": "forbidden"})
 
 
 async def test_put_secret_reports_encrypted_db_fingerprint_only(
@@ -96,7 +115,7 @@ async def test_put_secret_reports_encrypted_db_fingerprint_only(
         _, headers = await _admin(client, repository, "enc-put")
         response = _put_secret(client, "exa", sentinel, headers)
         _assert_metadata(response, sentinel)
-        listed = client.get("/api/v1/system/credentials", headers=headers)
+        listed = client.get("/api/v1/account/vault/keys", headers=headers)
         assert listed.status_code == 200
         assert response.json() in listed.json()
     assert_no_sentinels(caplog.text + listed.text, (sentinel,), "logs and list")
@@ -118,7 +137,7 @@ async def test_keenable_reports_keyless_public(repository, passphrase_env, auth_
         response = client.get("/api/v1/providers/keenable", headers=headers)
         assert response.status_code == 200
         assert response.json()["secret_presence"] == "keyless_public"
-        # Catalog capability never grants implicit execution credentials.
+        # A nonmember cannot use even a project's implicit keyless credentials.
         pid = str((await seed_execution_project(repository)).project_id)
         denied = client.post("/search", headers=headers, json={"project_id": pid, "query": "q"})
         assert denied.status_code == 404
@@ -166,7 +185,7 @@ async def test_put_key_makes_missing_adapter_testable(
                 await seed_execution_project(repository, user_id=account_id_from_pair(pair))
             ).project_id
         )
-        write = create_bound_provider(client, pid, "exa", sentinel, headers)
+        write = _create_bound_provider(client, pid, "exa", sentinel, headers)
         assert write.status_code == 201
         probe = client.post("/search", headers=headers, json={"project_id": pid, "query": "q"})
         assert probe.status_code == 200, probe.text
@@ -191,12 +210,12 @@ async def test_delete_secret_is_idempotent_and_clears_encrypted_row(
         write = _put_secret(client, "exa", sentinel, headers)
         body = _assert_metadata(write, sentinel)
         slot = credential_secret_slot(UUID(body["id"]), body["generation"])
-        for expected in (204, 404):
-            response = client.delete(f"/api/v1/system/credentials/{body['id']}", headers=headers)
+        for expected in (200, 404):
+            response = client.delete(f"/api/v1/account/vault/keys/{body['id']}", headers=headers)
             assert response.status_code == expected
             assert_no_sentinels(response.text, (sentinel,), "delete credential")
         assert await app.state.secret_store.get(slot) is None
-        listed = client.get("/api/v1/system/credentials", headers=headers)
+        listed = client.get("/api/v1/account/vault/keys", headers=headers)
         assert listed.status_code == 200 and listed.json() == []
     assert await repository.get_runtime_setting("secret.enc:" + slot) is None
 
@@ -216,7 +235,7 @@ async def test_wrong_passphrase_degrades_reads_without_crash_or_leak(
             pid = str(
                 (await seed_execution_project(first, user_id=account_id_from_pair(pair))).project_id
             )
-            write = create_bound_provider(client, pid, "exa", sentinel, headers)
+            write = _create_bound_provider(client, pid, "exa", sentinel, headers)
             assert write.status_code == 201
     finally:
         await first.close()
@@ -227,7 +246,7 @@ async def test_wrong_passphrase_degrades_reads_without_crash_or_leak(
     install_adapter_map(monkeypatch, [adapter], secrets={"exa": sentinel})
     try:
         with TestClient(create_app([], repository=second)) as client:
-            status = client.get("/api/v1/system/credentials", headers=headers)
+            status = client.get("/api/v1/account/vault/keys", headers=headers)
             probe = client.post("/search", headers=headers, json={"project_id": pid, "query": "q"})
         assert status.status_code == 200
         assert probe.status_code == 503 and adapter.search_calls == 0

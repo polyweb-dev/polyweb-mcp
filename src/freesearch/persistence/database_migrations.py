@@ -1,16 +1,6 @@
-"""Alpha baseline lifecycle for FreeSearch SQLite databases.
+"""SQLite database creation, validation and backed-up revision upgrades."""
 
-The alpha keeps no compatibility with databases written by earlier schema
-revisions. A missing or empty file is created at the single baseline revision;
-a database at the baseline is validated and opened. Any other database (another
-revision, or an unversioned file that already holds tables) is rejected with an
-actionable reset message *before* anything touches it: the decision reads the
-file through a read-only SQLite connection, and no Alembic command, journal
-pragma, or backup runs against a rejected file. A fresh database is built in
-a staging file next to the target and moved into place atomically, so a
-concurrent reader never sees a half-built schema.
-"""
-
+import logging
 import os
 import re
 import sqlite3
@@ -21,6 +11,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import BinaryIO
@@ -28,6 +19,8 @@ from typing import BinaryIO
 from alembic import command as command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+
+logger = logging.getLogger(__name__)
 
 _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     "accounts": frozenset({"id", "status"}),
@@ -53,7 +46,7 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     "projects": frozenset(
         {"id", "account_id", "name", "slug", "status", "created_by", "created_at", "version"}
     ),
-    "project_memberships": frozenset({"project_id", "user_id", "status", "version"}),
+    "project_memberships": frozenset({"project_id", "user_id", "status", "version", "permissions"}),
     "system_role_assignments": frozenset(
         {"account_id", "user_id", "role_key", "granted_by", "version"}
     ),
@@ -72,6 +65,13 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
             "provider_type",
             "owner_scope",
             "owner_project_id",
+            "owner_user_id",
+            "overcommit",
+            "contention_mode",
+            "capacity_rate",
+            "capacity_rate_window_seconds",
+            "capacity_budget_micros",
+            "capacity_budget_window",
             "label",
             "auth_mode",
             "generation",
@@ -189,6 +189,9 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
             "last_tier_observed_at",
         }
     ),
+    "provider_budgets": frozenset(
+        {"provider", "auth_mode", "period", "search_crd_text", "fetch_crd_text", "version"}
+    ),
     "provider_crd_grants": frozenset(
         {
             "provider",
@@ -245,10 +248,33 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     "credential_pool_links": frozenset(
         {"credential_id", "operation_scope", "pool_id", "provider_type", "created_at", "version"}
     ),
+    "key_pools": frozenset(
+        {
+            "id",
+            "credential_id",
+            "project_id",
+            "provider_type",
+            "label",
+            "rate_limit",
+            "rate_window_seconds",
+            "budget_limit",
+            "budget_window_seconds",
+            "operations",
+            "operation_limits",
+            "created_by",
+            "created_at",
+            "updated_at",
+            "version",
+        }
+    ),
     "project_pool_allocations": frozenset(
         {
             "project_id",
             "pool_id",
+            "key_pool_id",
+            "limit_scope",
+            "budget_limit",
+            "budget_window_seconds",
             "operation_scope",
             "base_rate",
             "rate_window_seconds",
@@ -269,6 +295,7 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
     "provider_limit_admissions": frozenset(
         {
             "attempt_id",
+            "grant_window_start",
             "provider",
             "operation",
             "auth_mode",
@@ -452,6 +479,7 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
             "version",
         }
     ),
+    "pool_budget_usage": frozenset({"pool_id", "window_start", "spent_micros", "updated_at"}),
     "execution_dispatches": frozenset(
         {
             "attempt_id",
@@ -487,6 +515,9 @@ _HEAD_INDEXES = frozenset(
         "ix_projects_account_id_slug",
         "ix_projects_created_by",
         "ix_project_memberships_user_id",
+        "project_memberships_one_provider_owner",
+        "key_pools_credential_project_key",
+        "key_pools_project_provider_key",
         "ix_system_role_assignments_user_id",
         "ix_project_role_assignments_user_id",
         "ix_project_role_assignments_project_user",
@@ -544,6 +575,7 @@ _ATTRIBUTION_FOREIGN_KEYS = frozenset(
 #: The foreign keys the tables must declare: table -> (local column, target).
 #: A composite key contributes one pair per column.
 _HEAD_FOREIGN_KEYS: dict[str, frozenset[tuple[str, str]]] = {
+    "pool_budget_usage": frozenset({("pool_id", "key_pools")}),
     "auth_sessions": frozenset({("user_id", "user")}),
     "refresh_tokens": frozenset({("family_id", "auth_sessions")}),
     "projects": frozenset({("account_id", "accounts"), ("created_by", "user")}),
@@ -560,7 +592,12 @@ _HEAD_FOREIGN_KEYS: dict[str, frozenset[tuple[str, str]]] = {
     ),
     "project_settings": frozenset({("project_id", "projects")}),
     "provider_credentials": frozenset(
-        {("account_id", "accounts"), ("owner_project_id", "projects"), ("created_by", "user")}
+        {
+            ("account_id", "accounts"),
+            ("owner_project_id", "projects"),
+            ("owner_user_id", "user"),
+            ("created_by", "user"),
+        }
     ),
     "credential_project_grants": frozenset(
         {
@@ -602,7 +639,19 @@ _HEAD_FOREIGN_KEYS: dict[str, frozenset[tuple[str, str]]] = {
         }
     ),
     "project_pool_allocations": frozenset(
-        {("project_id", "projects"), ("pool_id", "upstream_quota_pools")}
+        {
+            ("project_id", "projects"),
+            ("pool_id", "upstream_quota_pools"),
+            ("key_pool_id", "key_pools"),
+        }
+    ),
+    "key_pools": frozenset(
+        {
+            ("credential_id", "provider_credentials"),
+            ("provider_type", "provider_credentials"),
+            ("project_id", "projects"),
+            ("created_by", "user"),
+        }
     ),
     "provider_limit_admissions": _ATTRIBUTION_FOREIGN_KEYS,
     "provider_rate_attempts": _ATTRIBUTION_FOREIGN_KEYS,
@@ -675,6 +724,7 @@ class DatabaseStatus:
 class _Decision(Enum):
     CREATE = "create"
     OPEN = "open"
+    UPGRADE = "upgrade"
     RESET = "reset"
 
 
@@ -686,11 +736,13 @@ class _Inspection:
     has_tables: bool
     unreadable: bool = False
 
-    def decision(self, head: str) -> _Decision:
+    def decision(self, head: str, ancestors: frozenset[str]) -> _Decision:
         if self.unreadable:
             return _Decision.RESET
         if self.revision == head:
             return _Decision.OPEN
+        if self.revision in ancestors:
+            return _Decision.UPGRADE
         if self.revision is None and not self.has_tables:
             return _Decision.CREATE
         return _Decision.RESET
@@ -719,6 +771,11 @@ def migration_head() -> str:
     if head is None:
         raise DatabaseMigrationError("the migration history has no head revision")
     return head
+
+
+def _ancestor_revisions(head: str) -> frozenset[str]:
+    script = ScriptDirectory.from_config(_config(Path("unused.db")))
+    return frozenset(revision.revision for revision in script.walk_revisions(head=head)) - {head}
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -796,7 +853,11 @@ def _reset_message(database: Path, inspection: _Inspection, head: str) -> str:
     elif inspection.revision is None:
         found = "has no schema revision (unversioned)"
     else:
-        found = f"is at revision {inspection.revision}"
+        return (
+            f"FreeSearch cannot open the database at {database}: unknown or newer revision "
+            f"{inspection.revision}; expected {head} or a known earlier revision. "
+            "The database was not changed. Use a compatible FreeSearch version."
+        )
     return (
         f"FreeSearch cannot open the database at {database}: it {found}, "
         f"but this alpha build only opens databases created at revision {head}. "
@@ -819,7 +880,7 @@ def database_reset_message(database: str | Path) -> str | None:
     path = absolute_database_path(database)
     head = migration_head()
     inspection = _inspect(path)
-    if inspection.decision(head) is not _Decision.RESET:
+    if inspection.decision(head, _ancestor_revisions(head)) is not _Decision.RESET:
         return None
     return _reset_message(path, inspection, head)
 
@@ -1039,7 +1100,7 @@ def _create_baseline(path: Path, head: str) -> MigrationResult:
     return MigrationResult(path, None, head, True)
 
 
-def _definitely_foreign(inspection: _Inspection, head: str) -> bool:
+def _definitely_foreign(inspection: _Inspection, head: str, ancestors: frozenset[str]) -> bool:
     """Return whether a database is rejected no matter what a creator is doing.
 
     An unversioned database with tables is only judged under the migration
@@ -1048,28 +1109,65 @@ def _definitely_foreign(inspection: _Inspection, head: str) -> bool:
 
     if inspection.unreadable:
         return True
-    return inspection.revision is not None and inspection.revision != head
+    return (
+        inspection.revision is not None
+        and inspection.revision != head
+        and inspection.revision not in ancestors
+    )
+
+
+def _backup_database(path: Path, revision: str) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    backup = path.with_name(f"{path.name}.backup-{timestamp}-{uuid.uuid4().hex[:8]}")
+    try:
+        with backup.open("xb"):
+            pass
+        with (
+            closing(_connect_read_only(path)) as source,
+            closing(sqlite3.connect(backup, timeout=_SQLITE_TIMEOUT_SECONDS)) as target,
+        ):
+            source.backup(target)
+            integrity = target.execute("PRAGMA integrity_check").fetchall()
+            if integrity != [("ok",)] or _revision_label(_revisions(target)) != revision:
+                raise DatabaseMigrationError(f"database backup verification failed: {backup}")
+    except (OSError, sqlite3.Error) as error:
+        raise DatabaseMigrationError(f"could not back up database to {backup}: {error}") from error
+    logger.info("Database backup created at %s", backup)
+    return backup
+
+
+def _upgrade_existing(path: Path, revision: str, head: str) -> MigrationResult:
+    backup = _backup_database(path, revision)
+    try:
+        command.upgrade(_config(path), head)
+        validate_database_schema(path)
+        _apply_wal_mode(path)
+    except Exception as error:
+        raise DatabaseMigrationError(
+            f"failed to upgrade {path}; backup is at {backup}: {error}"
+        ) from error
+    return MigrationResult(path, revision, head, True)
 
 
 def upgrade_database(database: str | Path) -> MigrationResult:
-    """Create a missing or empty database at the baseline, or validate one at it.
-
-    Any other database raises :class:`DatabaseResetRequired` after a read-only
-    inspection and before any write, Alembic command, or journal pragma.
-    """
+    """Create, validate or back up and upgrade a known database revision."""
 
     path = absolute_database_path(database)
     head = migration_head()
+    ancestors = _ancestor_revisions(head)
     inspection = _inspect(path)
-    if _definitely_foreign(inspection, head):
+    if _definitely_foreign(inspection, head, ancestors):
         raise DatabaseResetRequired(_reset_message(path, inspection, head))
     with _ALEMBIC_THREAD_LOCK, _migration_lock(path):
         inspection = _inspect(path)
-        decision = inspection.decision(head)
+        decision = inspection.decision(head, ancestors)
         if decision is _Decision.RESET:
             raise DatabaseResetRequired(_reset_message(path, inspection, head))
         if decision is _Decision.CREATE:
             return _create_baseline(path, head)
+        if decision is _Decision.UPGRADE:
+            assert inspection.revision is not None
+            return _upgrade_existing(path, inspection.revision, head)
         _apply_wal_mode(path)
         validate_database_schema(path)
         return MigrationResult(path, head, head, False)

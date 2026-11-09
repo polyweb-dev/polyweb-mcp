@@ -17,5 +17,4 @@ export type {
   BackendFetchedDocument,
   BackendFetchResponse,
 } from "./api/wire";
-export { makeSearchEvent, makeFetchEvent } from "./model/optimisticEvents";
-export { createTimeoutSignal, clampLimit } from "./model/requestUtils";
+export { clampLimit } from "./model/requestUtils";

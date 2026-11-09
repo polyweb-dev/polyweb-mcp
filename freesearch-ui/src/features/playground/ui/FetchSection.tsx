@@ -2,23 +2,28 @@ import type { PlaygroundController } from "../model/usePlaygroundController"
 import { FetchComposer } from "./FetchComposer"
 import { FetchErrorBanner } from "./FetchErrorBanner"
 import { FetchResult } from "./FetchResult"
+import { isNoProviderConfigured } from "./noProviderConfigured"
+import { ProviderSetupNotice } from "./ProviderSetupNotice"
 
-/** Fetch panel: hero/docked composer wrapper, error banner, document. */
+/** Fetch panel: fixed composer position, error banner, document. */
 export function FetchSection({ controller }: { controller: PlaygroundController }) {
   return (
     <>
       <div
         data-testid="fetch-layout"
-        data-state={controller.hasFetchContent ? "docked" : "hero"}
-        className={"transition-all duration-300 ease-out motion-reduce:transition-none " + (controller.hasFetchContent
-          ? "top-docked"
-          : "w-full mx-auto flex flex-1 min-h-[55vh] max-w-3xl flex-col justify-center")}
+        data-state="docked"
+        className="top-docked w-full"
       >
         <FetchComposer controller={controller} />
       </div>
-      {controller.fetchError && (
-        <FetchErrorBanner error={controller.fetchError} />
-      )}
+      {controller.noProviderForMode && <ProviderSetupNotice projectId={controller.projectId} />}
+
+      {controller.fetchError !== null &&
+        (isNoProviderConfigured(controller.fetchError) ? (
+          <ProviderSetupNotice projectId={controller.projectId} />
+        ) : (
+          <FetchErrorBanner error={controller.fetchError} />
+        ))}
 
       {/* Fetch result — Widescreen 2-column layout */}
       {controller.activeFetch && (

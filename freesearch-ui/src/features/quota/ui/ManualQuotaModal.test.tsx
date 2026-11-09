@@ -40,7 +40,7 @@ describe("ManualQuotaModal", () => {
         <p>grant-body</p>
       </ManualQuotaModal>,
     )
-    expect(screen.getByText("Budget Limit — Brave")).toBeInTheDocument()
+    expect(screen.getByText("Brave budget")).toBeInTheDocument()
     expect(screen.getByText("grant-body")).toBeInTheDocument()
   })
 })
@@ -98,23 +98,27 @@ describe("ManualQuotaModal credit mode fields (CARD-4)", () => {
 
   it("keeps the credit-tier words exact for the combo and the popover note", () => {
     expect(CREDIT_MODE_LABEL.free).toBe("Free credits")
-    expect(CREDIT_MODE_LABEL.paid).toBe("Paid credits")
-    expect(CREDIT_MODE_LABEL.both).toBe("Free + Paid")
+    expect(CREDIT_MODE_LABEL.paid).toBe("Paid balance")
+    expect(CREDIT_MODE_LABEL.both).toBe("Free credits and paid balance")
   })
 
-  it("shows the Credit mode combo first with three tier options in a one-column grid", () => {
+  it("shows the Credit mode combo first with three tier options in a one-column grid", async () => {
+    const user = userEvent.setup()
     renderBalanceEntry()
-    const combo = screen.getByRole("combobox", { name: "Credit mode" })
+    const combo = screen.getByRole("combobox", { name: "Balance type" })
     expect(combo).toBeInTheDocument()
-    const options = within(combo as HTMLElement).getAllByRole("option").map((entry) => entry.textContent)
-    expect(options).toEqual(["Free credits", "Paid credits", "Free + Paid"])
+    expect(combo.tagName).toBe("BUTTON")
+    await user.click(combo)
+    const options = (await screen.findAllByRole("option")).map((entry) => entry.textContent)
+    expect(options).toEqual(["Free balance", "Paid balance", "Free and paid balances"])
+    await user.keyboard("{Escape}")
     const grid = document.querySelector("div.grid-cols-1")
     expect(grid?.className ?? "").toContain("grid-cols-1")
     expect(grid?.className ?? "").not.toContain("sm:grid-cols-2")
     const labels = Array.from(document.querySelectorAll("label")).map((entry) => entry.textContent)
     expect(labels).toEqual([
       "Provider",
-      "Credit mode",
+      "Balance type",
       "Billing start",
       "Billing end",
       "Allowance (USD)",
@@ -140,20 +144,20 @@ describe("ManualQuotaModal provider balance title", () => {
     )
   }
 
-  it("uses the Provider Balance title for a new entry with no provider suffix", () => {
-    expect(BALANCE_ENTRY).toBe("Provider Balance")
+  it("uses the Provider balance title for a new entry with no provider suffix", () => {
+    expect(BALANCE_ENTRY).toBe("Provider balance")
     renderEntry(null)
     const heading = within(screen.getByRole("dialog")).getByRole("heading")
-    expect(heading.textContent).toBe("Provider Balance")
-    expect(heading.textContent).not.toContain("Brave")
+    expect(heading.textContent).toBe("Brave balance")
+    expect(within(heading).getByTestId("provider-logo-brave")).toBeInTheDocument()
     expect(heading.textContent).not.toContain("—")
   })
 
   it("uses the Update provider balance title for an existing entry with no provider suffix", () => {
     renderEntry({ billingStart: "2026-09-01", billingEnd: "2026-09-30", allowance: "5.00", used: "0.88" })
     const heading = within(screen.getByRole("dialog")).getByRole("heading")
-    expect(heading.textContent).toBe("Update provider balance")
-    expect(heading.textContent).not.toContain("Brave")
+    expect(heading.textContent).toBe("Brave balance")
+    expect(within(heading).getByTestId("provider-logo-brave")).toBeInTheDocument()
     expect(heading.textContent).not.toContain("—")
   })
 })
@@ -204,7 +208,7 @@ describe("ManualQuotaModal provider target", () => {
     expect(labels[0]).toBe("Provider")
     expect(labels).toEqual([
       "Provider",
-      "Credit mode",
+      "Balance type",
       "Billing start",
       "Billing end",
       "Allowance (USD)",
@@ -218,8 +222,8 @@ describe("ManualQuotaModal provider target", () => {
     expect(screen.queryByRole("option", { name: "Brave" })).toBeNull()
     expect(screen.queryByRole("option", { name: "Exa" })).toBeNull()
     expect(within(trigger as HTMLElement).getByTestId("provider-logo-brave")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("4.995")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(4.995)
     await user.click(trigger)
     expect(trigger.getAttribute("aria-expanded")).toBe("true")
     const popup = await screen.findByRole("listbox")
@@ -230,9 +234,9 @@ describe("ManualQuotaModal provider target", () => {
     expect(within(options[1] as HTMLElement).getByTestId("provider-logo-exa")).toBeInTheDocument()
     await user.click(screen.getByRole("option", { name: "Exa" }))
     expect(screen.queryByRole("listbox")).toBeNull()
-    expect(screen.getByTestId("provider-logo-exa")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("10.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("9.00")
+    expect(within(screen.getByRole("heading", { name: "Exa balance" })).getByTestId("provider-logo-exa")).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(10.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(9.00)
   })
 
   it("holds the logo inside the trigger with no separate badge beside the combo", () => {
@@ -289,14 +293,14 @@ describe("ManualQuotaModal provider target", () => {
     await user.keyboard("{Escape}")
     expect(trigger.getAttribute("aria-expanded")).toBe("false")
     expect(screen.queryByRole("listbox")).toBeNull()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
     trigger.focus()
     await user.keyboard("{Enter}")
     await user.keyboard("{ArrowDown}")
     await user.keyboard("{Enter}")
-    expect(screen.getByTestId("provider-logo-exa")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("10.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("9.00")
+    expect(within(screen.getByRole("heading", { name: "Exa balance" })).getByTestId("provider-logo-exa")).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(10.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(9.00)
   })
 
   it("closes the open list on a click outside the combo", async () => {
@@ -319,7 +323,7 @@ describe("ManualQuotaModal provider target", () => {
     const trigger = screen.getByRole("combobox", { name: "Provider" })
     await user.click(trigger)
     expect(await screen.findByRole("listbox")).toBeInTheDocument()
-    await user.click(screen.getByRole("heading", { name: "Provider Balance" }))
+    await user.click(screen.getByRole("heading", { name: "Brave balance" }))
     expect(screen.queryByRole("listbox")).toBeNull()
     expect(trigger.getAttribute("aria-expanded")).toBe("false")
   })
@@ -341,11 +345,10 @@ describe("ManualQuotaModal balance prefill", () => {
         onSave={() => Promise.resolve({})}
       />,
     )
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("4.995")
-    expect(screen.getByTestId("manual-quota-prefill")).toHaveTextContent(
-      "Prefilled from the observed provider balance, as an estimate.",
-    )
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(4.995)
+    expect(screen.queryByTestId("manual-quota-prefill")).toBeNull()
+    expect(screen.getByTestId("manual-quota-preview")).toHaveTextContent("99.9% remaining")
   })
 
   it("lets a saved entry win over the observed pool with no estimate note", () => {
@@ -363,8 +366,8 @@ describe("ManualQuotaModal balance prefill", () => {
         onSave={() => Promise.resolve({})}
       />,
     )
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("5.00")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("4.12")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(5.00)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(4.12)
     expect(screen.queryByTestId("manual-quota-prefill")).toBeNull()
   })
 })
@@ -400,13 +403,13 @@ describe("ManualQuotaModal target units", () => {
     await user.click(screen.getByRole("option", { name: "Exa" }))
     expect(screen.getByText("Allowance (USD)")).toBeInTheDocument()
     expect(screen.getByText("Balance remaining (USD)")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("")
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(null)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(null)
 
-    fireEvent.change(screen.getByTestId("manual-quota-start"), {
+    fireEvent.change(screen.getByLabelText("Billing start"), {
       target: { value: "2026-10-01" },
     })
-    fireEvent.change(screen.getByTestId("manual-quota-end"), {
+    fireEvent.change(screen.getByLabelText("Billing end"), {
       target: { value: "2026-10-31" },
     })
     fireEvent.change(screen.getByTestId("manual-quota-allowance"), {
@@ -454,9 +457,9 @@ describe("ManualQuotaModal target units", () => {
     await user.click(screen.getByRole("combobox", { name: "Provider" }))
     await user.click(screen.getByRole("option", { name: "Tinyfish" }))
     expect(screen.getByText("Allowance (requests)")).toBeInTheDocument()
-    expect(screen.getByText("Current usage (requests)")).toBeInTheDocument()
-    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue("")
-    expect(screen.getByTestId("manual-quota-usage")).toHaveValue("")
+    expect(screen.getByText("Balance remaining (requests)")).toBeInTheDocument()
+    expect(screen.getByTestId("manual-quota-allowance")).toHaveValue(null)
+    expect(screen.getByTestId("manual-quota-usage")).toHaveValue(null)
   })
 
   it("uses Exa USD balance fields when no balance or catalog unit metadata is available", () => {
@@ -473,5 +476,18 @@ describe("ManualQuotaModal target units", () => {
     )
     expect(screen.getByText("Allowance (USD)")).toBeInTheDocument()
     expect(screen.getByText("Balance remaining (USD)")).toBeInTheDocument()
+  })
+})
+
+
+describe("balance labels by type", () => {
+  it("keeps USD labels for a Brave free balance", async () => {
+    render(<ManualQuotaModal open providerId="brave" providerName="Brave" unitKind="USD" displayUnit="USD"
+      defaults={null} amountMode="balance" onClose={() => {}} onSave={() => Promise.resolve()} />)
+    expect(screen.getByLabelText("Allowance (USD)")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("combobox", { name: "Balance type" }))
+    await userEvent.click(screen.getByRole("option", { name: "Free balance" }))
+    expect(screen.getByLabelText("Allowance (USD)")).toBeInTheDocument()
+    expect(screen.getByLabelText("Balance remaining (USD)")).toBeInTheDocument()
   })
 })

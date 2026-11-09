@@ -407,16 +407,15 @@ async def test_deactivate_uses_the_same_last_admin_guard(
     database = tmp_path / "cli-deactivate.db"
     repository = await create_alpha_test_db(database)
     try:
-        system_row = await create_temp_user(
-            repository, temp_email("cli-deactivate-sys"), system_admin=True
+        await create_temp_user(repository, temp_email("cli-deactivate-sys"), system_admin=True)
+        admin_row = await create_temp_user(
+            repository, temp_email("cli-deactivate-admin"), system_admin=True
         )
-        admin_row = await create_temp_user(repository, temp_email("cli-deactivate-admin"))
         peer_row = await create_temp_user(repository, temp_email("cli-deactivate-peer"))
-        system = temp_principal(system_row)
         admin = temp_principal(admin_row)
         peer = temp_principal(peer_row)
         project = await ProjectService(repository).create_project(
-            system,
+            admin,
             ProjectCreate(
                 name="CLI Deactivate",
                 slug="cli-deactivate",
@@ -529,7 +528,7 @@ async def test_cli_deactivate_refuses_the_last_active_system_admin(
 
 
 async def _pending_flows(tmp_path: Path) -> tuple[Path, dict[str, object]]:
-    """Seed one private-credential and one system-credential pending OAuth flow.
+    """Seed pending vault OAuth flows for a project admin and a system admin.
 
     The flows are started with a throwaway in-memory master key, so the CLI
     (which only sees an empty key directory) cannot read their initiators.
@@ -541,9 +540,10 @@ async def _pending_flows(tmp_path: Path) -> tuple[Path, dict[str, object]]:
 
     from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
     from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-    from freesearch.models.credentials import CredentialAuthMode, CredentialCreate
-    from freesearch.services.credential_oauth import CredentialOAuthService, OAuthTarget
-    from freesearch.services.credentials import CredentialService
+    from freesearch.models.credentials import CredentialAuthMode
+    from freesearch.models.vault import VaultKeyCreate
+    from freesearch.services.credential_oauth import OAuthTarget
+    from freesearch.services.vault_keys import VaultKeyService, VaultOAuthService
     from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
     from tests.fixtures.parallel_oauth_vendor import FakeParallelVendor
 
@@ -572,25 +572,24 @@ async def _pending_flows(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             project.id,
             ProjectMemberAdd(user_id=co_admin_row.id, initial_role=BuiltinRole.PROJECT_ADMIN),
         )
-        credentials = CredentialService(boot.repository, store)
-        private = await credentials.create_project_credential(
+        credentials = VaultKeyService(boot.repository, store)
+        private = await credentials.create(
             initiator,
-            project.id,
-            CredentialCreate(
+            VaultKeyCreate(
                 provider_type="parallel", label="cli-private", auth_mode=CredentialAuthMode.OAUTH
             ),
         )
-        system = await credentials.create_system_credential(
-            system_admin,
-            CredentialCreate(
+        second = temp_principal(second_row)
+        system = await credentials.create(
+            second,
+            VaultKeyCreate(
                 provider_type="parallel", label="cli-system", auth_mode=CredentialAuthMode.OAUTH
             ),
         )
-        oauth = CredentialOAuthService(boot.repository, store, http_client=http)
-        private_target = OAuthTarget(project_id=project.id)
-        await oauth.start(initiator, private_target, private.id)
-        second = temp_principal(second_row)
-        await oauth.start(second, OAuthTarget(), system.id)
+        private_oauth = VaultOAuthService(boot.repository, store, initiator.id, http_client=http)
+        system_oauth = VaultOAuthService(boot.repository, store, second.id, http_client=http)
+        await private_oauth.start(initiator, OAuthTarget(), private.id)
+        await system_oauth.start(second, OAuthTarget(), system.id)
     finally:
         await http.aclose()
         await boot.repository.close()
@@ -708,5 +707,5 @@ async def test_cli_revoke_system_admin_creates_no_key_and_ends_system_flows_only
         "disconnected",
         "initiator_permission_revoked",
     )
-    # The system-scope guard never touches a project's private flow.
+    # Revoking another admin does not touch this project admin's vault flow.
     assert await _grant_state(database, ids["private_id"]) == ("pending", None)

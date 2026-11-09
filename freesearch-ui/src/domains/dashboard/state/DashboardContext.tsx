@@ -2,13 +2,13 @@ import React, { useCallback, useState } from "react";
 import { apiService } from "@/services/api/freesearchApi";
 import { errorMessage } from "@/shared/api/http";
 import type { ToastNotification } from "@/shared/notifications/context";
-import type { CRDUsageTotal, DashboardQuota, ProviderLimits, UsageEvent, UsageTotal } from "@/domains/dashboard";
+import type { UsdUsageTotal, DashboardQuota, ProviderLimits, UsageEvent, UsageTotal } from "@/domains/dashboard";
 import {
   mapDashboardQuotas,
   mapDashboardTotals,
   mapDashboardUsage,
 } from "@/services/api/mappers";
-import { decodeCRDUsageTotals, decodeProviderLimits } from "../api/limitsWire";
+import { decodeUsdUsageTotals, decodeProviderLimits } from "../api/limitsWire";
 
 export type ShowToast = (message: string, type?: ToastNotification["type"]) => void;
 
@@ -27,7 +27,7 @@ export const DashboardProvider: React.FC<{
   const [usageTotals, setUsageTotals] = useState<UsageTotal[]>([]);
   const [dashboardQuotas, setDashboardQuotas] = useState<DashboardQuota[]>([]);
   const [providerLimits, setProviderLimits] = useState<ProviderLimits[]>([]);
-  const [crdUsageTotals, setCrdUsageTotals] = useState<CRDUsageTotal[]>([]);
+  const [usdUsageTotals, setUsdUsageTotals] = useState<UsdUsageTotal[]>([]);
   const [dashboardNotice, setDashboardNotice] = useState<string | null>(null);
   const quotaAvailable = dashboardQuotas.length > 0;
   // Only the newest dashboard request may write state, so a slow older
@@ -37,12 +37,12 @@ export const DashboardProvider: React.FC<{
   const refreshDashboard = useCallback(async () => {
     if (!canReadControls) {
       // A role without control-read access keeps an empty telemetry state and a
-      // clear busy flag. This covers the startup read and the post-search read.
+      // clear busy flag.
       setUsageEvents([]);
       setUsageTotals([]);
       setDashboardQuotas([]);
       setProviderLimits([]);
-      setCrdUsageTotals([]);
+      setUsdUsageTotals([]);
       setDashboardNotice(null);
       setUsageError(null);
       setUsageLoading(false);
@@ -59,7 +59,7 @@ export const DashboardProvider: React.FC<{
       setUsageTotals(mapDashboardTotals(dashboard));
       setDashboardQuotas(mapDashboardQuotas(dashboard));
       setProviderLimits(decodeProviderLimits(dashboard.provider_limits));
-      setCrdUsageTotals(decodeCRDUsageTotals(dashboard.crd_usage_totals));
+      setUsdUsageTotals(decodeUsdUsageTotals(dashboard.spend_totals));
       setDashboardNotice(dashboard.notice);
     } catch (error) {
       if (generation !== requestGeneration.current) return;
@@ -68,7 +68,7 @@ export const DashboardProvider: React.FC<{
       setUsageTotals([]);
       setDashboardQuotas([]);
       setProviderLimits([]);
-      setCrdUsageTotals([]);
+      setUsdUsageTotals([]);
       setUsageError(message);
       showToast(message, "error");
     } finally {
@@ -84,14 +84,12 @@ export const DashboardProvider: React.FC<{
       usageTotals,
       dashboardQuotas,
       providerLimits,
-      crdUsageTotals,
+      usdUsageTotals,
       quotaAvailable,
       dashboardNotice,
       canReadControls,
       canEditControls,
       refreshDashboard,
-      prependUsageEvent: (event: UsageEvent) =>
-        setUsageEvents((previous) => [event, ...previous]),
     }),
     [
       usageEvents,
@@ -100,7 +98,7 @@ export const DashboardProvider: React.FC<{
       usageTotals,
       dashboardQuotas,
       providerLimits,
-      crdUsageTotals,
+      usdUsageTotals,
       quotaAvailable,
       dashboardNotice,
       canReadControls,

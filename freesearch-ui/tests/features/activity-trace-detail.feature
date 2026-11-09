@@ -8,11 +8,11 @@ Feature: Activity trace detail presentation parity with Playground
   non-selectable execution waterfall, and the fetch metadata presentation.
 
   Background:
-    Given I navigate to the web application
+    Given the stubbed session works in project Alpha
 
   @stub
   Scenario: Playground cards, inspector, and waterfall share one presentation
-    When I select the "Playground" header tab
+    When I open the "playground" section of project Alpha
     And I pin the playground provider to "Brave Search"
     And I submit the playground search query "parity probe"
     Then the playground cards should show titles, urls, two-line snippets, badges, and scores
@@ -21,6 +21,7 @@ Feature: Activity trace detail presentation parity with Playground
     Then the playground inspector should show the shared result presentation
     And the playground inspector link should carry the Open target URL tooltip
     And the playground waterfall should be non-selectable with latency and result counts
+    And the playground raw JSON inspector should start collapsed
     When I expand the playground raw JSON inspector
     Then the playground raw JSON inspector should offer a copy action
     When I copy the playground raw JSON

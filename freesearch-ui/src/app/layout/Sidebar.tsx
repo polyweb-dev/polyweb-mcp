@@ -3,8 +3,11 @@ import { useLocation } from "react-router"
 import { cn } from "cn"
 import { useAuth } from "@/domains/auth"
 import { ProjectSelector } from "@/features/projects/ui/ProjectSelector"
+import { Button } from "@/shared/ui/button"
+import { parseProjectPath, projectIdFromPath, projectPath } from "../routes"
 import { Brand } from "./SidebarBrand"
 import { NavList } from "./SidebarNavList"
+import { ProjectNav } from "./SidebarProjectNav"
 import { SidebarAccountMenu } from "./SidebarAccountMenu"
 import { useSidebarState } from "./useSidebarState"
 
@@ -33,6 +36,18 @@ function accountMenuKey(
 }
 
 /**
+ * Project selection of the current URL: the open project and a path builder
+ * that keeps the current section on a project switch.
+ */
+function projectSelection(pathname: string) {
+  const section = parseProjectPath(pathname)?.section ?? "overview"
+  return {
+    currentProjectId: projectIdFromPath(pathname),
+    pathForProject: (projectId: string) => projectPath(projectId, section),
+  }
+}
+
+/**
  * Brand row of the desktop rail.
  *
  * The collapsed rail shows the logo as the expansion control itself, so the
@@ -43,18 +58,19 @@ function renderBrandRow(isCollapsed: boolean, onToggle: () => void) {
   if (isCollapsed) return <Brand collapsed onExpand={onToggle} />
 
   return (
-    <div className="flex h-16 shrink-0 items-center justify-between pr-2">
+    <div className="flex h-14 shrink-0 items-center justify-between pr-2">
       <Brand />
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="icon-lg"
         aria-label={collapseLabel(isCollapsed)}
         aria-expanded={!isCollapsed}
         aria-controls="primary-sidebar"
         onClick={onToggle}
-        className="grid size-9 shrink-0 place-items-center rounded-md text-[var(--muted)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] motion-reduce:transition-none"
+        className="text-[var(--muted)]"
       >
-        <PanelLeftClose aria-hidden="true" className="size-[18px]" />
-      </button>
+        <PanelLeftClose aria-hidden="true" strokeWidth={1.75} />
+      </Button>
     </div>
   )
 }
@@ -63,7 +79,8 @@ function renderBrandRow(isCollapsed: boolean, onToggle: () => void) {
 function renderDrawer(
   menuKey: string,
   drawerOpen: boolean,
-  onClose: (returnFocus?: boolean) => void
+  onClose: (returnFocus?: boolean) => void,
+  pathname: string
 ) {
   return (
     <div className="fixed inset-0 z-50 md:hidden">
@@ -82,16 +99,22 @@ function renderDrawer(
       >
         <div className="flex items-center justify-between pr-3">
           <Brand />
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-lg"
             aria-label="Close navigation"
             onClick={() => onClose(true)}
-            className="grid size-9 place-items-center rounded-md text-[var(--muted)] hover:bg-[var(--secondary)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
+            className="text-[var(--muted)]"
           >
-            <X aria-hidden="true" className="size-5" />
-          </button>
+            <X aria-hidden="true" />
+          </Button>
         </div>
-        <ProjectSelector collapsed={false} onNavigate={() => onClose()} />
+        <ProjectSelector
+          collapsed={false}
+          onNavigate={() => onClose()}
+          {...projectSelection(pathname)}
+        />
+        <ProjectNav collapsed={false} onNavigate={() => onClose()} />
         <NavList collapsed={false} onNavigate={() => onClose()} />
         <div className="shrink-0 p-2">
           <SidebarAccountMenu key={`drawer|${drawerOpen}|${menuKey}`} collapsed={false} />
@@ -135,25 +158,31 @@ export function Sidebar({
         <Menu aria-hidden="true" className="size-5" />
       </button>
 
+      {/* The rail surface stretches to the full page height while its content
+          stays pinned to the viewport, so long pages never show the rail ending. */}
       <aside
         id="primary-sidebar"
         className={cn(
-          "sticky top-0 hidden h-screen shrink-0 flex-col overflow-hidden border-r border-[var(--border-subtle)] bg-[var(--elevated)] transition-[width] duration-200 motion-reduce:transition-none md:flex",
+          "hidden min-h-screen shrink-0 self-stretch border-r border-[var(--border-subtle)] bg-[var(--elevated)] transition-[width] duration-200 motion-reduce:transition-none md:block",
           isCollapsed ? "w-16" : "w-60"
         )}
       >
-        {renderBrandRow(isCollapsed, toggleCollapsed)}
+        <div className="sticky top-0 flex h-screen flex-col overflow-hidden">
+          {renderBrandRow(isCollapsed, toggleCollapsed)}
 
-        <ProjectSelector collapsed={isCollapsed} />
+          <ProjectSelector collapsed={isCollapsed} {...projectSelection(pathname)} />
 
-        <NavList collapsed={isCollapsed} />
+          <ProjectNav collapsed={isCollapsed} />
 
-        <div className="shrink-0 p-2">
-          <SidebarAccountMenu key={menuKey} collapsed={isCollapsed} />
+          <NavList collapsed={isCollapsed} />
+
+          <div className="shrink-0 p-2">
+            <SidebarAccountMenu key={menuKey} collapsed={isCollapsed} />
+          </div>
         </div>
       </aside>
 
-      {drawerOpen && renderDrawer(menuKey, drawerOpen, closeDrawer)}
+      {drawerOpen && renderDrawer(menuKey, drawerOpen, closeDrawer, pathname)}
     </>
   )
 }

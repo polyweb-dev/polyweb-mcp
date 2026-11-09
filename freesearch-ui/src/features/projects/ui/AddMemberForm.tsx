@@ -1,62 +1,76 @@
 import type { FormEvent } from "react"
 import { Button } from "@/shared/ui/button"
+import { Field } from "@/shared/ui/Field"
+import { FormActions } from "@/shared/ui/FormActions"
+import { Select } from "@/shared/ui/select"
 import { TextField } from "@/shared/ui/TextField"
-import { PROJECT_ROLE_KEYS, PROJECT_ROLE_LABELS } from "@/domains/projects"
-import type { ProjectRoleKey } from "@/domains/projects"
+import { isProjectRoleKey, memberPermissionSummary, PERMISSION_PRESETS } from "@/domains/projects"
+import { isEmailFieldMessage } from "../model/useProjectMembersController"
 import type { ProjectMembersController } from "../model/useProjectMembersController"
 
+const EMAIL_ID = "member-add-email"
+const ROLE_OPTIONS = [
+  { value: "project_member", label: "Developer" },
+  { value: "project_admin", label: "Project admin" },
+]
+
 /**
- * Add-member form of the members page.
+ * Add-member panel of the members page.
  *
  * The form renders only under `members.manage` (the page gates it). Its draft
  * lives in the controller, which persists it under the project-scoped key.
+ * An email-shaped refusal lands under the email field with the focus on it;
+ * any other server error stays as the page alert.
  */
 export function AddMemberForm({ controller }: { controller: ProjectMembersController }) {
+  const fieldError =
+    controller.message !== null && isEmailFieldMessage(controller.message)
+      ? controller.message
+      : null
+
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    void controller.add()
+    // The field stays disabled until the submit settles; the focus lands on
+    // the next task, once React has flipped the disabled attribute back.
+    void controller.add().finally(() => {
+      window.setTimeout(() => document.getElementById(EMAIL_ID)?.focus(), 0)
+    })
   }
 
   return (
-    <form
-      aria-label="Add member"
-      className="flex flex-wrap items-end gap-3 rounded border border-[var(--border-subtle)] p-4"
-      onSubmit={submit}
-      noValidate
-    >
-      <TextField
-        id="member-add-email"
-        label="Account email"
-        type="email"
-        value={controller.draft.email}
-        onChange={(email) => controller.updateDraft({ ...controller.draft, email })}
-        disabled={controller.pending}
-        autoComplete="off"
-      />
-      <label className="flex flex-col gap-1 text-[13px] text-[var(--text)]">
-        <span>Initial role</span>
-        <select
-          aria-label="Initial role"
-          className="rounded border border-[var(--border-subtle)] bg-[var(--elevated)] px-2 py-1.5 text-[13px] text-[var(--text)]"
-          value={controller.draft.role}
+    <section aria-labelledby="member-add-heading" className="fs-panel p-4">
+      <h3 id="member-add-heading" className="fs-section-title">
+        New member
+      </h3>
+      <form aria-label="Add member" className="mt-4 space-y-4" onSubmit={submit} noValidate>
+        <TextField
+          id={EMAIL_ID}
+          label="Account email"
+          type="email"
+          placeholder="name@example.com"
+          value={controller.draft.email}
+          onChange={(email) => controller.updateDraft({ ...controller.draft, email })}
           disabled={controller.pending}
-          onChange={(event) => {
-            const role = event.target.value
-            if ((PROJECT_ROLE_KEYS as readonly string[]).includes(role)) {
-              controller.updateDraft({ ...controller.draft, role: role as ProjectRoleKey })
-            }
-          }}
-        >
-          {PROJECT_ROLE_KEYS.map((role) => (
-            <option key={role} value={role}>
-              {PROJECT_ROLE_LABELS[role]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <Button type="submit" disabled={controller.pending}>
-        Add member
-      </Button>
-    </form>
+          autoComplete="off"
+          error={fieldError}
+        />
+        <Field id="member-add-role" label="Role" hint={controller.draft.role === "project_member" ? `Starts with ${memberPermissionSummary(PERMISSION_PRESETS.Standard)}. Change them in the menu` : undefined}>
+          <Select
+            id="member-add-role"
+            value={controller.draft.role}
+            options={ROLE_OPTIONS}
+            disabled={controller.pending}
+            onValueChange={(role) => {
+              if (isProjectRoleKey(role)) controller.updateDraft({ ...controller.draft, role })
+            }}
+          />
+        </Field>
+        <FormActions>
+          <Button type="submit" size="form" disabled={controller.pending}>
+            Add member
+          </Button>
+        </FormActions>
+      </form>
+    </section>
   )
 }

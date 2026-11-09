@@ -5,7 +5,7 @@ manual reuse, unknown rails, and absent-record compatibility. No vendor I/O.
 """
 
 import asyncio
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -182,8 +182,7 @@ async def test_unknown_balance_stays_eligible_until_grant_zero(repository) -> No
         "synth",
         GrantPayload(
             version=0,
-            period_start=date(2026, 3, 1),
-            period_end=date(2026, 4, 1),
+            period="month",
             search_crd=Decimal("0"),
             fetch_crd=Decimal("0"),
         ),
@@ -197,8 +196,7 @@ async def test_grant_and_history_audit(repository) -> None:
         "synth",
         GrantPayload(
             version=0,
-            period_start=date(2026, 3, 1),
-            period_end=date(2026, 4, 1),
+            period="month",
             search_crd=Decimal("10"),
             fetch_crd=Decimal("4"),
         ),

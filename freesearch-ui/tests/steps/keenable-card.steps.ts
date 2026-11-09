@@ -1,6 +1,8 @@
 import { expect } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
-import { setStubbedCrdTotals, setStubbedProviderLimits } from "./backendStub"
+import { providerQuotaSurface } from "./providerQuotaUi"
+import { setStubbedUsdTotals, setStubbedProviderLimits } from "./backendStub"
+import { userAccountBody } from "./accountStub"
 
 /**
  * Keenable card shared bar (@keenable-cr1).
@@ -27,7 +29,7 @@ function multiplyByFour(amount: string): string {
 
 function keenableConversionProfile(): Record<string, unknown> {
   return {
-    reference_usd_per_crd: "0.001",
+    reference_usd_per_usd: "0.000001",
     native_usd_per_unit: "0.004",
     cost_basis: "priced_native_use",
     price_version: "list_price",
@@ -38,7 +40,7 @@ function keenableConversionProfile(): Record<string, unknown> {
 
 function keenableKeylessConversionProfile(): Record<string, unknown> {
   return {
-    reference_usd_per_crd: "0.001",
+    reference_usd_per_usd: "0.000001",
     native_usd_per_unit: "0",
     cost_basis: "priced_native_use",
     price_version: "",
@@ -73,13 +75,13 @@ function keenableCreditLimits(
   remaining: string,
 ): unknown[] {
   if (authMode === "keyed") {
-    const remainingCrd = multiplyByFour(remaining)
+    const remainingUsd = multiplyByFour(remaining)
     const view = (operation: string): Record<string, unknown> => ({
       state: "finite",
       operation,
-      remaining_crd: remainingCrd,
-      local_remaining_crd: null,
-      request_cost_crd: "4",
+      remaining_usd: remainingUsd,
+      local_remaining_usd: null,
+      request_cost_usd: "0.004",
       shared_pool_id: "keenable:keyed:request",
       possible_standard_calls: remaining,
       price_version: "list_price",
@@ -117,7 +119,7 @@ function keenableCreditLimits(
               stale: false,
               manual_anchor: false,
             },
-            crd_views: [view("search"), view("fetch")],
+            usd_views: [view("search"), view("fetch")],
             rate_progress: [],
             grants: null,
             detail: null,
@@ -146,9 +148,9 @@ function keenableCreditLimits(
   const unmetered = (operation: string): Record<string, unknown> => ({
     state: "unmetered",
     operation,
-    remaining_crd: null,
-    local_remaining_crd: null,
-    request_cost_crd: null,
+    remaining_usd: null,
+    local_remaining_usd: null,
+    request_cost_usd: null,
     shared_pool_id: null,
     possible_standard_calls: null,
     price_version: null,
@@ -169,7 +171,7 @@ function keenableCreditLimits(
           unknown_tiers: [],
           tier_split_known: true,
           aggregate_pool: null,
-          crd_views: [unmetered("search"), unmetered("fetch")],
+          usd_views: [unmetered("search"), unmetered("fetch")],
           rate_progress: [progress("search"), progress("fetch")],
           grants: null,
           detail: {
@@ -187,7 +189,7 @@ function keenableCreditLimits(
             last_sync_at: null,
             stale: false,
             price_version: "",
-            crd_split_note: null,
+            balance_split_note: null,
             rate_windows: [
               {
                 bucket_id: "keenable:keyless:requests",
@@ -257,18 +259,17 @@ Given(
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({
-          id: "11111111-1111-4111-8111-111111111111",
-          email: "admin@example.com",
-          role: "admin",
-          is_active: true,
-          is_superuser: true,
-          is_verified: true,
-        }),
+        // Role-less account; the Before hook's system access serves the
+        // system administrator permission set.
+        body: JSON.stringify(
+          userAccountBody("11111111-1111-4111-8111-111111111111", "admin@example.com", {
+            username: "admin",
+          })
+        ),
       })
     })
     setStubbedProviderLimits(keenableCreditLimits(access, capacity))
-    setStubbedCrdTotals([])
+    setStubbedUsdTotals([])
   },
 )
 
@@ -276,7 +277,7 @@ When("I open the Keenable quota details", async ({ page }) => {
   await page
     .getByRole("button", { name: /Credit details for Keenable/i })
     .click()
-  await expect(page.getByText("Quota Details")).toBeVisible()
+  await expect(page.getByText("Quota details")).toBeVisible()
 })
 
 When("I cancel the Keenable details", async ({ page }) => {
@@ -293,15 +294,15 @@ Then(
       })
     } else if (kind === "search") {
       bar = page.getByRole("progressbar", {
-        name: "Keenable search hourly requests remaining",
+        name: "Keenable search and fetch limits remaining",
       })
     } else if (kind === "fetch") {
       bar = page.getByRole("progressbar", {
-        name: "Keenable fetch hourly requests remaining",
+        name: "Keenable search and fetch limits remaining",
       })
     } else if (kind === "rate") {
       bar = page
-        .getByRole("progressbar", { name: /Keenable search hourly requests remaining/i })
+        .getByRole("progressbar", { name: /Keenable search and fetch limits remaining/i })
         .first()
     } else {
       throw new Error(`Unknown Keenable bar kind: ${kind}`)
@@ -319,10 +320,10 @@ Then(
 )
 
 Then("the Keenable rate bar occupies a line below its text", async ({ page }) => {
-  const text = page.getByText("Search hourly rate").first()
+  const text = page.getByText("Search and fetch limits", { exact: true })
   const bar = page
     .getByRole("progressbar", {
-      name: "Keenable search hourly requests remaining",
+      name: "Keenable search and fetch limits remaining",
     })
     .first()
   await expect(text).toBeVisible()
@@ -336,14 +337,14 @@ Then("the Keenable rate bar occupies a line below its text", async ({ page }) =>
 })
 
 Then("the Keenable request counts contain no decimal part", async ({ page }) => {
-  await expect(page.getByText("1000 of 1000 requests").first()).toBeVisible()
+  await expect(page.getByText("1,000 of 1,000 requests left this hour", { exact: true })).toBeVisible()
   await expect(page.getByText("1000.00000000")).toHaveCount(0)
 })
 
-Then("the Keenable keyless value has a strike line next to free", async ({ page }) => {
-  const card = page.locator("article", { hasText: "Keenable" }).first()
-  await expect(card.locator("s", { hasText: "Free - unmetered" })).toBeVisible()
-  await expect(card.getByText("free", { exact: true }).first()).toBeVisible()
+Then("the Keenable keyless costs are struck beside Free", async ({ page }) => {
+  const popover = page.locator('[data-slot="popover-content"]')
+  await expect(popover.locator("s")).toHaveCount(2)
+  await expect(popover.getByText("Free", { exact: true }).first()).toBeVisible()
 })
 
 Then("the Keenable keyless details contain no authoritative label", async ({ page }) => {
@@ -355,12 +356,20 @@ Then("the Keenable details should show {string}", async ({ page }, text: string)
 })
 
 Then("the Keenable card should show the {string} action", async ({ page }, label: string) => {
-  const card = page.locator("article", { hasText: "Keenable" }).first()
-  await expect(card.getByRole("button", { name: new RegExp(label, "i") })).toBeVisible()
+  const card = providerQuotaSurface(page, "Keenable")
+  const direct = card.getByRole("button", { name: new RegExp(label, "i") })
+  if ((await direct.count()) > 0) {
+    await expect(direct.first()).toBeVisible()
+    return
+  }
+  // Dialog actions live in the card `…` menu.
+  await card.getByRole("button", { name: /^Actions for /i }).click()
+  await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible()
+  await page.keyboard.press("Escape")
 })
 
 Then("the Keenable card should show no funds bar", async ({ page }) => {
-  const card = page.locator("article", { hasText: "Keenable" }).first()
+  const card = providerQuotaSurface(page, "Keenable")
   await expect(
     card.getByRole("progressbar", { name: "Keenable credit units remaining" }),
   ).toHaveCount(0)
@@ -370,4 +379,10 @@ Then("the Keenable details control regains focus", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: /Credit details for Keenable/i }),
   ).toBeFocused()
+})
+
+Then("the Keenable card should offer no Refresh action", async ({ page }) => {
+  const surface = providerQuotaSurface(page, "Keenable")
+  await expect(surface).toBeVisible()
+  await expect(surface.getByRole("button", { name: /Refresh/i })).toHaveCount(0)
 })

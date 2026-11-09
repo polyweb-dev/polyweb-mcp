@@ -382,6 +382,16 @@ class CircuitBreakerStatusResponse(ContractModel):
     updated_at: datetime
 
 
+class ProviderPriceRead(ContractModel):
+    """Price facts only, without provider state or account metadata."""
+
+    provider_id: str
+    call_cost_usd: dict[UsageOperation, Decimal]
+    keyless_call_cost_usd: dict[UsageOperation, Decimal]
+    free: bool
+    keyless: bool
+
+
 class ProviderStatusResponse(ContractModel):
     """One canonical provider's control-plane status entry.
 
@@ -393,8 +403,11 @@ class ProviderStatusResponse(ContractModel):
     enabled: bool
     enable_mask: int = Field(ge=0, le=ALL_BITS, strict=True)
     support_mask: int = Field(ge=0, le=ALL_BITS, strict=True)
-    priority: int
+    call_cost_usd: dict[UsageOperation, Decimal] = Field(default_factory=dict)
+    keyless_call_cost_usd: dict[UsageOperation, Decimal] = Field(default_factory=dict)
     health: HealthStatus | None = None
+    # When ``health`` was observed; null exactly when ``health`` is null.
+    health_checked_at: datetime | None = None
     circuit_breaker: CircuitBreakerState
     latency_p95_ms: int | None = Field(default=None, ge=0)
     secret_presence: SecretPresence
@@ -450,15 +463,20 @@ class RoutingConfigResponse(ContractModel):
     """Persisted global routing defaults."""
 
     fallback_policy: FallbackPolicy = FallbackPolicy.CHAINED
-    cost_optimization_preset: CostPreset = CostPreset.BALANCED
     max_attempts: int = Field(default=3, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _discard_legacy_preset(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            value = {key: item for key, item in value.items() if key != "cost_optimization_preset"}
+        return value
 
 
 class RoutingConfigUpdate(ContractModel):
     """Partial routing-policy update merged onto the persisted record."""
 
     fallback_policy: FallbackPolicy | None = None
-    cost_optimization_preset: CostPreset | None = None
     max_attempts: int | None = Field(default=None, ge=1)
 
 

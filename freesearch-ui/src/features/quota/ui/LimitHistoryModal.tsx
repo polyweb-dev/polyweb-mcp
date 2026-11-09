@@ -1,24 +1,26 @@
 import type { ReactNode } from "react"
 import { Modal } from "@/shared/ui/Modal"
+import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
 import { LimitHistory, type LimitHistoryProps } from "./LimitHistory"
 
 export type LimitHistoryModalProps = LimitHistoryProps & {
   open: boolean
+  providerId: string
   onClose: () => void
 }
 
-const SUBTITLE = "Recorded balance changes of this provider rail, newest first."
+const SUBTITLE = "Recorded balance changes, newest first"
 
-/** The paged balance history of one provider rail, shown in a modal. */
+/** The paged balance history of one provider, shown in a modal. */
 export function LimitHistoryModal(props: LimitHistoryModalProps): ReactNode {
-  const { open, onClose, providerName, ...historyProps } = props
+  const { open, onClose, providerId, providerName, ...historyProps } = props
   return (
     <Modal
       isOpen={open}
       onClose={onClose}
-      title={"Balance history — " + providerName}
+      title={<ProviderDialogTitle providerId={providerId} title={`${providerName} balance history`} />}
       subtitle={SUBTITLE}
-      maxWidth="4xl"
+      maxWidth={props.events.length === 0 ? "md" : "2xl"}
     >
       <LimitHistory providerName={providerName} {...historyProps} />
     </Modal>

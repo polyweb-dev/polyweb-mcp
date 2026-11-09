@@ -63,10 +63,10 @@ from freesearch.models.provider_limits import (
     LimitDeniedError,
     LimitOperation,
     LimitStoreUnavailable,
-    ProviderLimitsResponse,
     ProviderObservationScope,
     local_rate_denial,
 )
+from freesearch.models.quota_api import USDProviderLimits, USDUsageTotal
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.storage import LegacyUsageTotal, SQLiteRepository, UsageTotal
 from freesearch.services.authorization import ScopedAuthorizationService
@@ -220,7 +220,7 @@ class StatsResponse(ContractModel):
     recent_usage: list[RecentUsageEntry]
     latest_quota: list[QuotaSnapshot]
     latest_health: list[LatestHealthEntry]
-    crd_usage_totals: list[CRDUsageTotal] = Field(default_factory=list)
+    spend_totals: list[USDUsageTotal] = Field(default_factory=list)
 
     @model_serializer(mode="wrap")
     def _serialize_compat(self, handler: Any) -> Any:
@@ -238,7 +238,7 @@ class DashboardResponse(StatsResponse):
     """JSON dashboard snapshot: the stats read plus its generation instant."""
 
     generated_at: AwareDatetime
-    provider_limits: list[ProviderLimitsResponse] = Field(default_factory=list)
+    provider_limits: list[USDProviderLimits] = Field(default_factory=list)
 
 
 class ProjectUsageResponse(ContractModel):
@@ -664,6 +664,9 @@ class _CapacityCharger:
                     # same-identity retry, but mark the known completed send
                     # dispatch-complete so durable concurrency is free, and
                     # release the fair-queue slot it was holding.
+                    settle_pool = getattr(token.reservation, "settle_pool_failure", None)
+                    if callable(settle_pool):
+                        await settle_pool(token.error)
                     await complete()
                     token.finalized = True
                     await self._resolve(token, "failed")
@@ -740,19 +743,32 @@ class _CapacityCharger:
         admission = getattr(send.reservation, "admission", None)
         if admission is not None and self._limits is not None and response is not None:
             await self._limits.record_success(admission, response, request=self._request)
+            settle_pool = getattr(send.reservation, "settle_pool_actual", None)
+            if callable(settle_pool):
+                await settle_pool(response)
             return
         if admission is not None and self._limits is not None:
             await self._limits.record_uncertain(
                 admission, reason="missing_response", upstream_complete=True
             )
             return
+        if response is not None:
+            settle_pool = getattr(send.reservation, "settle_pool_actual", None)
+            if callable(settle_pool):
+                await settle_pool(response)
         await _settle_reservation(send.reservation, "completed", self._settle)
 
     async def _failure(self, send: _DispatchSend, error: BaseException | None) -> None:
         admission = getattr(send.reservation, "admission", None)
         if admission is not None and self._limits is not None:
             await _finalize_native_failure(self._limits, admission, error, request=self._request)
+            settle_pool = getattr(send.reservation, "settle_pool_failure", None)
+            if callable(settle_pool):
+                await settle_pool(error)
             return
+        settle_pool = getattr(send.reservation, "settle_pool_failure", None)
+        if callable(settle_pool):
+            await settle_pool(error)
         await _settle_reservation(send.reservation, "failed", self._settle)
 
     async def _uncertain(self, send: _DispatchSend, *, error: BaseException | None) -> None:
@@ -1678,7 +1694,7 @@ async def collect_stats(
         recent_usage=_contract_recent(recent),
         latest_quota=latest_quota,
         latest_health=_contract_health(latest_health),
-        crd_usage_totals=crd_totals,
+        spend_totals=[USDUsageTotal.model_validate(row) for row in crd_totals],
     )
 
 

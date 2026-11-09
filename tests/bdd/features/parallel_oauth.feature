@@ -73,6 +73,7 @@ Feature: Parallel OAuth device flow and Account API balance
     Then the revocation should precede the deletion and the status should be unpaired
     When I disconnect the Parallel OAuth pairing again
     Then the disconnect should still return 204
+    When I delete the disconnected OAuth vault key after revocation
 
   Scenario: Starting a second device flow while paired returns conflict
     Given an offline Parallel OAuth API with a paired bearer
@@ -81,7 +82,7 @@ Feature: Parallel OAuth device flow and Account API balance
 
   Scenario: Other providers reject OAuth pairing
     Given an offline Parallel OAuth API with stubbed platform responses
-    When I start the device flow for "exa"
-    Then the OAuth response should be 404 oauth-not-supported
-    When I check the OAuth status for "ghost"
-    Then the OAuth response should be 404 unknown provider
+    When I create a vault OAuth key for "exa"
+    Then the vault should reject the unsupported OAuth provider without vendor calls
+    When I access OAuth for an unknown vault key
+    Then every OAuth endpoint should return 404 without vendor calls

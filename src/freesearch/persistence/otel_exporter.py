@@ -363,7 +363,7 @@ def write_trace_spans(database: Path, records: Sequence[TraceSpanRecord]) -> Non
     """Upsert span rows in one short transaction (also the fixture seed path).
 
     This is the raw storage path: the caller supplies the rows to persist.
-    Project trace policy (sampling, detail, redaction) is applied by
+    Project trace detail policy is applied by
     :class:`SQLiteSpanExporter` before it reaches this function, so fixture
     seeds can intentionally write rows of a project whose current policy is
     narrower.
@@ -384,20 +384,14 @@ def write_trace_spans(database: Path, records: Sequence[TraceSpanRecord]) -> Non
         _write_rows(connection, rows)
 
 
-def _capture_decision(span: ReadableSpan) -> tuple[bool, bool]:
-    """Return ``(sampled, captures_payload)`` from the stamped trusted decision.
+def _capture_decision(span: ReadableSpan) -> bool:
+    """Return the stamped trusted payload capture decision.
 
-    The execution boundary stamps both keys when the span starts, so the
-    exporter never reads settings and a later policy edit cannot change a
-    finished span. A span without an explicit ``True`` sampling decision is
-    suppressed: an absent stamp means the trusted boundary never resolved a
-    policy, and optional traces must fail closed rather than persist.
+    A missing decision fails closed to metadata-only capture.
     """
 
     attributes = span.attributes or {}
-    sampled = attributes.get(TraceAttribute.SAMPLED) is True
-    captures_payload = attributes.get(TraceAttribute.CAPTURE_PAYLOAD) is True
-    return sampled, captures_payload
+    return attributes.get(TraceAttribute.CAPTURE_PAYLOAD) is True
 
 
 class SQLiteSpanExporter(SpanExporter):
@@ -468,8 +462,7 @@ class SQLiteSpanExporter(SpanExporter):
 
         Spans without trusted ownership (for example a root opened before the
         handler bound its execution scope) are dropped from the batch and
-        logged by count only — never with payload. A span without an explicit
-        sampled decision is suppressed; one whose payload capture is disabled is
+        logged by count only — never with payload. A span whose payload capture is disabled is
         projected to metadata before persistence. Failures are reported, never
         raised.
         """
@@ -477,12 +470,8 @@ class SQLiteSpanExporter(SpanExporter):
         try:
             retained: list[TraceSpanRecord] = []
             skipped = 0
-            sampled_out = 0
             for span in spans:
-                sampled, captures_payload = _capture_decision(span)
-                if not sampled:
-                    sampled_out += 1
-                    continue
+                captures_payload = _capture_decision(span)
                 record = span_record(span)
                 if (
                     record.project_id is None
@@ -496,8 +485,6 @@ class SQLiteSpanExporter(SpanExporter):
                 )
             if skipped:
                 logger.warning("trace export skipped %d unattributed span(s)", skipped)
-            if sampled_out:
-                logger.debug("trace export sampled out %d span(s)", sampled_out)
             rows = _record_rows(retained)
             if not rows:
                 return SpanExportResult.SUCCESS

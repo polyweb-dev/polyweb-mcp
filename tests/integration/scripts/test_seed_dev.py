@@ -23,10 +23,11 @@ from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from freesearch.models.projects import BuiltinRole
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.persistence.users import UserRow
-from freesearch.services.credentials import CredentialService, credential_secret_slot
+from freesearch.services.credentials import credential_secret_slot
 from freesearch.services.projects import ProjectNotFound, ProjectService
 from freesearch.services.provider_bindings import ProviderBindingService, provider_capability
 from freesearch.services.users import AuthService
+from freesearch.services.vault_keys import VaultKeyService
 
 
 async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: Path) -> None:
@@ -71,6 +72,9 @@ async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: 
             assert {member.email for member in listed} == {
                 USER_EMAILS[index] for index in (*admins, *members)
             }
+            for member in listed:
+                if member.email == USER_EMAILS[2]:
+                    assert member.role == "developer" and member.permissions == 15
             for index in (*admins, *members):
                 access = await service.project_access(users[index], project.id)
                 role = BuiltinRole.PROJECT_ADMIN if index in admins else BuiltinRole.PROJECT_MEMBER
@@ -79,11 +83,14 @@ async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: 
                 assert ("members.manage" in access.permissions) == (index in admins)
             bindings = ProviderBindingService(repository)
             view = await bindings.project_providers(administrator, project.id)
-            for provider in keys:
-                item = next(p for p in view.providers if p.provider_type == provider)
-                assert item.available and item.enabled
-                assert set(item.effective_operations) == provider_capability(provider)
-            assert len(await bindings.list_bindings(administrator, project.id)) == len(keys)
+            if project.slug == "alpha":
+                for provider in keys:
+                    item = next(p for p in view.providers if p.provider_type == provider)
+                    assert item.available and item.enabled
+                    assert set(item.effective_operations) == provider_capability(provider)
+            assert len(await bindings.list_bindings(administrator, project.id)) == (
+                len(keys) if project.slug == "alpha" else 0
+            )
         # A system admin has no implicit membership in Beta; user3 has none in Alpha/Gamma.
         for user, project in (
             (users[0], projects[1]),
@@ -94,8 +101,8 @@ async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: 
                 await service.project_access(user, project.id)
 
         store = EncryptedDbSecretStore(repository, load_secret_codec(settings))
-        credentials = await CredentialService(repository, store).list_system_credentials(users[0])
-        assert len(credentials) == len(keys)  # shared, not duplicated per project
+        credentials = await VaultKeyService(repository, store).list_keys(users[0])
+        assert len(credentials) == len(keys)
         for credential in credentials:
             slot = credential_secret_slot(credential.id, credential.generation)
             assert (
@@ -106,6 +113,40 @@ async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: 
             rows = list((await session.scalars(select(UserRow))).all())
             assert len(rows) == 5
             assert all(row.hashed_password != DEV_PASSWORD for row in rows)
+            owners = (
+                await session.execute(
+                    text(
+                        "SELECT provider_type,owner_user_id FROM provider_credentials "
+                        "WHERE auth_mode != 'keyless'"
+                    )
+                )
+            ).all()
+            assert set(owners) == {(provider.value, str(users[0].id)) for provider in keys}
+            labels = (
+                await session.execute(text("SELECT provider_type,label FROM key_pools"))
+            ).all()
+            assert set(labels) == {(provider.value, projects[0].name) for provider in keys}
+            pools = (
+                await session.execute(
+                    text("SELECT provider_type,project_id,rate_limit,budget_limit FROM key_pools")
+                )
+            ).all()
+            assert set(pools) == {
+                (provider.value, str(projects[0].id), 60, 20_000_000) for provider in keys
+            }
+            allocations = (
+                await session.execute(
+                    text(
+                        "SELECT k.provider_type,a.project_id,a.operation_scope,a.base_rate "
+                        "FROM project_pool_allocations a JOIN key_pools k ON k.id=a.key_pool_id"
+                    )
+                )
+            ).all()
+            assert set(allocations) == {
+                (provider.value, str(projects[0].id), operation.value, 60)
+                for provider in keys
+                for operation in provider_capability(provider.value)
+            }
             assert not (await session.execute(text("PRAGMA foreign_key_check"))).all()
     contents = database.read_bytes()
     assert DEV_PASSWORD.encode() not in contents

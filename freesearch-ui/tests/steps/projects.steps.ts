@@ -2,17 +2,24 @@ import { expect } from "@playwright/test"
 import type { Page } from "@playwright/test"
 import { Given, Then, When } from "./fixtures"
 import { installBackendStub } from "./backendStub"
+import { SYSTEM_ADMIN_PERMISSIONS, parsePermissionList, userAccountBody } from "./accountStub"
 import {
+  USER_ID,
   clearProjectStubMemberships,
   holdProjectStubMembers,
   installProjectStub,
   releaseProjectStubMembers,
+  removeProjectStubMember,
+  renameProjectStub,
   resetProjectStub,
   setProjectStubRoles,
   setProjectStubAccount,
 } from "./projectStub"
+import { secondTab, setSecondTab } from "./tabs"
 
 const USER_EMAIL = "member@example.com"
+const PEER_EMAIL = "alpha-peer@example.com"
+const PEER_ID = "44444444-4444-4444-8444-444444444444"
 const ALPHA_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 const ALPHA_MEMBERS_URL = `/api/v1/projects/${ALPHA_ID}/members`
 
@@ -33,7 +40,7 @@ async function json(route: import("@playwright/test").Route, body: unknown, stat
   })
 }
 
-async function installProjectAuth(page: Page): Promise<void> {
+async function installProjectAuth(page: Page, id = USER_ID, email = USER_EMAIL): Promise<void> {
   await page.unroute("**/auth/jwt/refresh").catch(() => {})
   await page.unroute("**/users/me").catch(() => {})
   await page.route("**/auth/jwt/refresh", (route) => {
@@ -42,18 +49,13 @@ async function installProjectAuth(page: Page): Promise<void> {
   })
   await page.route("**/users/me", (route) => {
     if (route.request().method() !== "GET") return route.fallback()
-    return json(route, {
-      id: "33333333-3333-4333-8333-333333333333",
-      email: USER_EMAIL,
-      role: "agent",
-      is_active: true,
-      is_superuser: false,
-      is_verified: true,
-    })
+    // The backend account carries no role: authority is the system access
+    // list served by the project stub plus the per-project access descriptor.
+    return json(route, userAccountBody(id, email))
   })
 }
 
-async function installAll(page: Page, systemPermissions: string[] = []): Promise<void> {
+async function installAll(page: Page, systemPermissions: readonly string[] = []): Promise<void> {
   resetProjectStub()
   setProjectStubAccount(USER_EMAIL, systemPermissions)
   await installBackendStub(page)
@@ -61,15 +63,20 @@ async function installAll(page: Page, systemPermissions: string[] = []): Promise
   await installProjectAuth(page)
 }
 
-let secondPage: Page | null = null
-
 Given("the projects backend is stubbed", async ({ page }) => {
   await installAll(page)
 })
 
 Given("the projects backend is stubbed for a system administrator", async ({ page }) => {
-  await installAll(page, ["project.create"])
+  await installAll(page, SYSTEM_ADMIN_PERMISSIONS)
 })
+
+Given(
+  "the projects backend is stubbed with system permissions {string}",
+  async ({ page }, list: string) => {
+    await installAll(page, parsePermissionList(list))
+  }
+)
 
 Given("I am a member of project {word} with role {word}", async ({ page: _page }, name: string, role: string) => {
   setProjectStubRoles(name, [role])
@@ -107,17 +114,42 @@ When("I select project {word} from the project selector", async ({ page }, name:
   await page.getByRole("menuitem", { name, exact: false }).first().click()
 })
 
+When("I select project {string} from the project selector", async ({ page }, name: string) => {
+  await page.getByRole("button", { name: "Select project" }).first().click()
+  await page.getByRole("menuitem", { name, exact: false }).first().click()
+})
+
+Given("project {word} is renamed to {string}", async ({ page: _page }, name: string, newName: string) => {
+  renameProjectStub(name, newName)
+})
+
 When("I open a second tab on the workspace page {string}", async ({ page }, path: string) => {
   const context = page.context()
-  secondPage = await context.newPage()
-  await installBackendStub(secondPage)
-  await installProjectStub(secondPage)
-  await installProjectAuth(secondPage)
-  await secondPage.goto(path)
+  const tab = await context.newPage()
+  setSecondTab(tab)
+  await installBackendStub(tab)
+  await installProjectStub(tab)
+  await installProjectAuth(tab)
+  await tab.goto(path)
 })
 
 When("the project role in {word} is revoked", async ({ page: _page }, name: string) => {
   setProjectStubRoles(name, ["project_member"])
+})
+
+When(
+  "the membership in project {word} is revoked",
+  async ({ page: _page }, name: string) => {
+    removeProjectStubMember(name, USER_EMAIL)
+  }
+)
+
+When("the window regains focus", async ({ page }) => {
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")))
+})
+
+When("I follow the {string} link", async ({ page }, label: string) => {
+  await page.getByRole("link", { name: label }).first().click()
 })
 
 When("the delayed Alpha members request has settled", async ({ page: _page }) => {
@@ -134,13 +166,11 @@ When("the delayed Alpha members request has settled", async ({ page: _page }) =>
 
 When("I focus both tabs again", async ({ page }) => {
   await page.evaluate(() => window.dispatchEvent(new Event("focus")))
-  if (secondPage === null) throw new Error("second tab not open")
-  await secondPage.evaluate(() => window.dispatchEvent(new Event("focus")))
+  await secondTab().evaluate(() => window.dispatchEvent(new Event("focus")))
 })
 
 When("I type {string} into the field {string} of the second tab", async ({ page: _page }, value: string, label: string) => {
-  if (secondPage === null) throw new Error("second tab not open")
-  await secondPage.getByLabel(label).fill(value)
+  await secondTab().getByLabel(label).fill(value)
 })
 
 Then("the members table shows {string}", async ({ page }, email: string) => {
@@ -153,13 +183,68 @@ Then("the members table does not show {string}", async ({ page }, email: string)
   await expect(page.getByRole("cell", { name: email, exact: true })).toBeHidden()
 })
 
+When("I change the developer's activity permission to {word}", async ({ page }, state: string) => {
+  await page.getByRole("button", { name: `Actions for ${PEER_EMAIL}` }).click()
+  await page.getByRole("button", { name: "Edit permissions", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: `Permissions for ${PEER_EMAIL}` })
+  const toggle = dialog.getByRole("switch", { name: "View activity" })
+  const checked = state === "on"
+  await expect(toggle).toHaveAttribute("aria-checked", String(!checked))
+  await toggle.click()
+  await expect(toggle).toHaveAttribute("aria-checked", String(checked))
+  const response = page.waitForResponse((res) =>
+    res.url().includes(`/members/${PEER_ID}`) && res.request().method() === "PATCH"
+  )
+  await dialog.getByRole("button", { name: "Save permissions" }).click()
+  const saved = await response
+  expect(saved.status()).toBe(200)
+  const member = await saved.json() as { permissions: number }
+  expect((member.permissions & 4) !== 0).toBe(checked)
+  await expect(dialog).toBeHidden()
+})
+
+Then("the member roles and provider owner are shown", async ({ page }) => {
+  const table = page.getByRole("table", { name: "Members" })
+  await expect(table.getByRole("row").filter({ hasText: USER_EMAIL })).toContainText("Project admin")
+  await expect(table.getByRole("row").filter({ hasText: USER_EMAIL })).toContainText("Provider owner")
+  await expect(table.getByRole("row").filter({ hasText: PEER_EMAIL })).toContainText("Developer")
+})
+
+When("I open the provider ownership transfer dialog", async ({ page }) => {
+  await page.getByRole("button", { name: `Actions for ${USER_EMAIL}` }).click()
+  await page.getByRole("button", { name: "Transfer provider ownership" }).click()
+})
+
+Then("the transfer dialog requires another project admin", async ({ page }) => {
+  const dialog = page.getByRole("dialog", { name: "Transfer provider ownership" })
+  await expect(dialog).toContainText(/make another member a project admin first/i)
+  await expect(dialog.getByRole("button", { name: "Transfer ownership" })).toHaveCount(0)
+})
+
+When("I cancel the provider ownership transfer", async ({ page }) => {
+  const dialog = page.getByRole("dialog", { name: "Transfer provider ownership" })
+  await dialog.getByRole("button", { name: "Cancel" }).click()
+  await expect(dialog).toBeHidden()
+})
+
+When("I sign in as the developer", async ({ page }) => {
+  setProjectStubAccount(PEER_EMAIL, [], PEER_ID)
+  await installProjectAuth(page, PEER_ID, PEER_EMAIL)
+  const traces = page.waitForResponse((res) =>
+    new URL(res.url()).pathname === `/api/v1/projects/${ALPHA_ID}/traces`
+      && res.request().method() === "GET"
+  )
+  await page.goto(`/p/${ALPHA_ID}/activity`)
+  expect((await traces).status()).toBe(200)
+})
+
 Then("the second tab shows the members table of {word}", async ({ page: _page }, _name: string) => {
-  if (secondPage === null) throw new Error("second tab not open")
-  await expect(secondPage.getByRole("heading", { name: "Members" })).toBeVisible({
+  const tab = secondTab()
+  await expect(tab.getByRole("heading", { name: "Members" })).toBeVisible({
     timeout: 15_000,
   })
   await expect(
-    secondPage.getByRole("cell", { name: USER_EMAIL, exact: true }).first()
+    tab.getByRole("cell", { name: USER_EMAIL, exact: true }).first()
   ).toBeVisible()
 })
 
@@ -178,13 +263,11 @@ Then("the first tab has no member management controls", async ({ page }) => {
 })
 
 Then("the second tab still has member management controls", async ({ page: _page }) => {
-  if (secondPage === null) throw new Error("second tab not open")
-  await expect(secondPage.getByRole("button", { name: "Add member" })).toBeVisible({ timeout: 15_000 })
+  await expect(secondTab().getByRole("button", { name: "Add member" })).toBeVisible({ timeout: 15_000 })
 })
 
 Then("the second tab's draft still contains {string}", async ({ page: _page }, value: string) => {
-  if (secondPage === null) throw new Error("second tab not open")
-  await expect(secondPage.getByLabel("Account email")).toHaveValue(value)
+  await expect(secondTab().getByLabel("Account email")).toHaveValue(value)
 })
 
 Then("I see {string}", async ({ page }, text: string) => {
@@ -203,6 +286,12 @@ Then("I see the heading {string}", async ({ page }, text: string) => {
 
 When("I fill {string} with {string}", async ({ page }, label: string, value: string) => {
   await page.getByLabel(label).fill(value)
+})
+
+Then("the create project form is absent", async ({ page }) => {
+  // Without system project creation permission there is no form at all.
+  await expect(page.getByRole("button", { name: "Create project" })).toHaveCount(0)
+  await expect(page.getByLabel("Project name")).toHaveCount(0)
 })
 
 When("I submit the create project form", async ({ page }) => {

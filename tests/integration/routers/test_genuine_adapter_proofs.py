@@ -6,16 +6,13 @@ drives the REAL adapter classes. The only test double is the HTTP wire itself
 mandated offline pattern — adapter construction, key handling, normalization,
 and routing all run genuine production code.
 
-- Wire validation (passes today): canned payloads satisfy each genuine
-  adapter when keyed via the environment, proving the stub contracts before
-  the app-level proofs depend on them.
-- Proof 1a (AC-1/AC-8): PUT encrypted key -> on-demand ``/test`` construction
-  succeeds with no env/``.env``/keyring key. Fails loudly (503) for every
-  provider whose constructor still resolves keys keyring-only; Keenable
-  additionally proves keyed use on the wire (a bare 200 would also pass
-  silently keyless).
-- Proof 1b (AC-3/AC-7/AC-8): persist key -> full app restart -> ``/search``
-  routes WITHOUT a preceding ``/test`` and the recorded vendor call carries
+- Wire validation: canned payloads satisfy each genuine adapter with an
+  explicit key, proving the stub contracts before the app-level proofs.
+- Proof 1a (AC-1/AC-8): create a vault key and project pool, then construct
+  the adapter on demand through ``/search`` without an env/``.env``/keyring
+  key. Keenable additionally proves keyed use on the wire.
+- Proof 1b (AC-3/AC-7/AC-8): persist key and pool -> full app restart ->
+  ``/search`` routes without a preceding probe and the vendor call carries
   the encrypted sentinel (proving provenance, not env/keyring).
 """
 
@@ -49,10 +46,36 @@ from tests.fixtures.auth import (
     register_system_admin_login,
     temp_email,
 )
-from tests.fixtures.execution import FIXTURE_ACTOR, create_bound_provider, seed_execution_project
+from tests.fixtures.execution import FIXTURE_ACTOR, seed_execution_project
 from tests.integration.services.oauth.oauth_stubs import install_http_stub
 
 PASSPHRASE = "genuine-proof-passphrase-9f31"
+
+
+def _create_bound_provider(
+    client: TestClient, project_id: str, provider: str, secret: str, headers: dict[str, str]
+) -> httpx.Response:
+    key = client.post(
+        "/api/v1/account/vault/keys",
+        headers=headers,
+        json={"provider_type": provider, "label": "Proof key", "secret": secret},
+    )
+    assert key.status_code == 201, key.text
+    assert_no_sentinels(key.text, (secret,), "vault key creation")
+    pool = client.post(
+        f"/api/v1/account/vault/keys/{key.json()['id']}/pools",
+        headers=headers,
+        json={
+            "label": "Proof pool",
+            "project_id": project_id,
+            "rate": {"limit": None, "window_seconds": 60},
+            "operations": ["search"],
+        },
+    )
+    assert pool.status_code == 201, pool.text
+    assert_no_sentinels(pool.text, (secret,), "pool creation")
+    return key
+
 
 _GENUINE_ADAPTERS = {
     ProviderName.BRAVE: BraveAdapter,
@@ -289,7 +312,7 @@ async def test_canned_wire_shapes_satisfy_genuine_adapters(
         await client.aclose()
 
 
-# --- Proof 1a: PUT -> on-demand /test constructs the genuine adapter --------
+# --- Proof 1a: vault key and pool -> on-demand genuine adapter ---------------
 
 
 @pytest.mark.parametrize("provider", list(ProviderName))
@@ -301,7 +324,7 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
     provider,  # type: ignore[no-untyped-def]
     auth_secret: str,
 ) -> None:
-    """PUT encrypted key -> /test 200 with no env/.env/keyring key (genuine build)."""
+    """Create an encrypted key and search without an env/.env/keyring key."""
     # Use one Admin account for write, probe, and search.
     wire = _VendorWire()
     install_http_stub(monkeypatch, wire)
@@ -309,7 +332,7 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
     app = create_app(None, repository=repository)
 
     # One TestClient session: exiting the block runs lifespan shutdown, which
-    # closes the app-owned shared client, so PUT/probe/search must share it.
+    # closes the app-owned shared client, so key creation and search share it.
     with TestClient(app) as client:
         pair = await register_system_admin_login(
             client, repository, temp_email(f"proof-put-{provider.value}")
@@ -320,7 +343,7 @@ async def test_put_then_on_demand_test_constructs_genuine_adapter(
                 await seed_execution_project(repository, user_id=account_id_from_pair(pair))
             ).project_id
         )
-        put = create_bound_provider(client, pid, provider.value, sentinel, headers)
+        put = _create_bound_provider(client, pid, provider.value, sentinel, headers)
         assert put.status_code == 201
         assert_no_sentinels(put.text, (sentinel,), "credential creation")
         probe = client.post(
@@ -372,7 +395,7 @@ async def test_restart_routes_search_through_encrypted_key(
     provider,  # type: ignore[no-untyped-def]
     auth_secret: str,
 ) -> None:
-    """Persist key -> full restart -> /search (no preceding /test) uses it."""
+    """Persist key and pool -> full restart -> /search uses the key."""
     # Use one Admin account. The token works after restart on the same file.
     wire = _VendorWire()
     install_http_stub(monkeypatch, wire)
@@ -392,7 +415,7 @@ async def test_restart_routes_search_through_encrypted_key(
             pid = str(
                 (await seed_execution_project(first, user_id=account_id_from_pair(pair))).project_id
             )
-            put = create_bound_provider(client, pid, provider.value, sentinel, headers)
+            put = _create_bound_provider(client, pid, provider.value, sentinel, headers)
             assert put.status_code == 201
             assert_no_sentinels(put.text, (sentinel,), "credential creation")
             if provider is not ProviderName.KEENABLE:
@@ -442,7 +465,7 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
     provider,  # type: ignore[no-untyped-def]
     auth_secret: str,
 ) -> None:
-    """Env decoy set + vault PUT -> /search sends the vault key, never the env key."""
+    """Env decoy set + vault key -> /search sends the vault key, never the env key."""
     # Use one Admin account for write, config, and search.
     wire = _VendorWire()
     install_http_stub(monkeypatch, wire)
@@ -461,7 +484,7 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
                 await seed_execution_project(repository, user_id=account_id_from_pair(pair))
             ).project_id
         )
-        put = create_bound_provider(client, pid, provider.value, vault_sentinel, headers)
+        put = _create_bound_provider(client, pid, provider.value, vault_sentinel, headers)
         assert put.status_code == 201
         assert_no_sentinels(put.text, (vault_sentinel, env_decoy), "credential creation")
         if provider is not ProviderName.KEENABLE:

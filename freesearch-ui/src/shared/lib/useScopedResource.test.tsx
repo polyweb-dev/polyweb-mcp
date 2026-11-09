@@ -152,4 +152,39 @@ describe("useScopedResource", () => {
     await act(async () => {})
     expect(result.current.status).toBe("error")
   })
+
+  it("retains ready data when a same-scope refresh fails with retainOnRefreshError", async () => {
+    let call = 0
+    const load = vi.fn(async (signal: AbortSignal) => {
+      void signal
+      call += 1
+      if (call === 2) throw new Error("refresh boom")
+      return `value-${call}`
+    })
+    const { result } = renderHook(() =>
+      useScopedResource({ scopeKey: "a", load, retainOnRefreshError: true })
+    )
+    await act(async () => {})
+    expect(result.current).toMatchObject({ status: "ready", data: "value-1" })
+    await act(async () => {
+      await result.current.reload()
+    })
+    expect(result.current).toMatchObject({ status: "ready", data: "value-1" })
+    await act(async () => {
+      await result.current.reload()
+    })
+    expect(result.current).toMatchObject({ status: "ready", data: "value-3" })
+  })
+
+  it("surfaces the error on an initial load failure even with retainOnRefreshError", async () => {
+    const load = vi.fn(async (signal: AbortSignal) => {
+      void signal
+      throw new Error("first boom")
+    })
+    const { result } = renderHook(() =>
+      useScopedResource({ scopeKey: "a", load, retainOnRefreshError: true })
+    )
+    await act(async () => {})
+    expect(result.current.status).toBe("error")
+  })
 })

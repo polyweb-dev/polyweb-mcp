@@ -17,16 +17,16 @@ Feature: Provider control plane and routing settings
     And a fresh control-plane read should still report enabled false
 
   Scenario: Secret write is masked and delete removes the vault value
-    Given an offline control API with an in-memory secret store
+    Given an offline control API with an encrypted vault
     When I write a secret for "exa" through the control API
-    Then the secret response should be configured with a masked fingerprint
+    Then the vault response should be configured without exposing the secret
     When I delete the "exa" secret through the control API
-    Then the secret response should report missing and contain no raw key
+    Then the vault value should be removed without exposing the secret
 
   Scenario: Routing policy GET and PUT round trip
     Given an offline control API with stub adapters
-    When I update routing to first_only and free_first with 2 attempts
-    Then the routing GET should equal first_only free_first and 2 attempts
+    When I update routing to first_only with 2 attempts
+    Then the routing GET should equal first_only and 2 attempts
 
   Scenario: Dashboard activity exposes measured latency and status
     Given an offline control API with stub adapters
@@ -80,7 +80,7 @@ Feature: Provider control plane and routing settings
   Scenario: Unsupported Brave fetch is rejected
     Given an offline control API with stub adapters and call counters
     When I submit an offline fetch requiring provider "brave" via REST
-    Then the REST fetch outcome should be "fail-503"
+    Then the REST fetch should fail with 503 containing "no required provider is configured"
     And the adapter call counts should be exa search 0 fetch 0 and brave search 0 fetch 0
 
   Scenario: Explicit routing modes respect access masks

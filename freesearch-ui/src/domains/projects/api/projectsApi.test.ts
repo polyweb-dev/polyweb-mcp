@@ -13,12 +13,14 @@ import {
   isProjectUnavailableError,
   listProjectMembers,
   listProjects,
+  listSystemProjects,
   projectMutationMessage,
   removeProjectMember,
   removeProjectRole,
   assignProjectRole,
   setProjectMemberStatus,
 } from "@/domains/projects"
+import { projectConflictCode } from "./projectsApi"
 
 const ACCESS_BODY = { rollout_state: "preview", permissions: ["project.create"] }
 const PROJECT_ACCESS_BODY = {
@@ -34,6 +36,10 @@ const MEMBER_BODY = {
   status: "active",
   roles: ["project_member"],
   version: 1,
+  role: "developer",
+  permissions: 15,
+  provider_owner: false,
+  account_active: true,
 }
 
 describe("projectsApi", () => {
@@ -52,6 +58,12 @@ describe("projectsApi", () => {
     const stub = installFetchStub(() => ok([]))
     expect(await listProjects(new AbortController().signal)).toEqual([])
     expect(stub.requests[0]?.url).toBe("/api/v1/projects?include_archived=true")
+  })
+
+  it("requests every installation project from the system list", async () => {
+    const stub = installFetchStub(() => ok([]))
+    expect(await listSystemProjects(new AbortController().signal)).toEqual([])
+    expect(stub.requests[0]?.url).toBe("/api/v1/system/projects?include_archived=true")
   })
 
   it("creates a project by first-admin email", async () => {
@@ -96,16 +108,44 @@ describe("projectsApi", () => {
     const failure = await removeProjectMember("p1", "u1").catch((e: unknown) => e)
     expect(isLastProjectAdminError(failure)).toBe(true)
     expect(projectMutationMessage(failure, "x")).toBe(LAST_PROJECT_ADMIN_MESSAGE)
+    expect(LAST_PROJECT_ADMIN_MESSAGE).toBe(
+      "A project must keep at least one active administrator. Make another active member a project admin first."
+    )
   })
 
-  it("maps 400 to the unknown-email copy and 403 to the permission copy", async () => {
+  it("reads the conflict code of a 409 body only", () => {
+    const conflict = new ApiError(409, "", { detail: { code: "PROJECT_ARCHIVED", message: "x" } })
+    expect(projectConflictCode(conflict)).toBe("PROJECT_ARCHIVED")
+    expect(projectMutationMessage(conflict, "x")).toBe("An archived project cannot change its members.")
+    expect(projectConflictCode(new ApiError(400, "", { detail: { code: "X" } }))).toBeNull()
+    expect(projectConflictCode(new ApiError(409, "", { detail: "plain" }))).toBeNull()
+    expect(projectConflictCode(new ApiError(409, "", null))).toBeNull()
+    expect(projectConflictCode(new Error("x"))).toBeNull()
+  })
+
+  it("maps a 400 to the unknown-email copy only on an email lookup", async () => {
     installFetchStub(() => err(400, null))
     const bad = await addProjectMember("p1", { email: "x@y.io", initial_role: "project_member" }).catch(
       (e: unknown) => e
     )
-    expect(projectMutationMessage(bad, "x")).toBe(UNKNOWN_ACCOUNT_EMAIL_MESSAGE)
+    expect(projectMutationMessage(bad, "x", { emailLookup: true })).toBe(UNKNOWN_ACCOUNT_EMAIL_MESSAGE)
+    expect(projectMutationMessage(bad, "The change could not be saved.")).toBe(
+      "The change could not be saved."
+    )
+    expect(projectMutationMessage(bad, "fallback", { emailLookup: false })).toBe("fallback")
+  })
+
+  it("shows the server detail of a 400 with a body outside an email lookup", () => {
+    const withDetail = new ApiError(400, "slug already in use", { detail: "slug already in use" })
+    expect(projectMutationMessage(withDetail, "fallback")).toBe("slug already in use")
+  })
+
+  it("falls back for a bare failure and maps 403 to the permission copy", () => {
+    expect(projectMutationMessage(new ApiError(500, "Unknown API error", undefined), "fallback")).toBe("fallback")
+    expect(projectMutationMessage(new Error("boom"), "fallback")).toBe("fallback")
     const denied = new ApiError(403, "", null)
     expect(projectMutationMessage(denied, "x")).toBe(PERMISSION_LOST_MESSAGE)
+    expect(projectMutationMessage(denied, "x", { emailLookup: true })).toBe(PERMISSION_LOST_MESSAGE)
     expect(isProjectUnavailableError(new ApiError(404, "", null))).toBe(true)
     expect(isProjectUnavailableError(new ApiError(403, "", null))).toBe(false)
   })

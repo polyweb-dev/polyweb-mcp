@@ -35,10 +35,12 @@ parsers. This is deliberately not a generic OAuth framework.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from typing import Final
 from uuid import UUID
 
@@ -70,7 +72,7 @@ from freesearch.persistence.oauth_grants import (
     StoredOAuthGrant,
     oauth_secret_slot,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from freesearch.persistence.storage import RuntimeSettingRow, SQLiteRepository
 from freesearch.persistence.transactions import DEFAULT_WRITE_ATTEMPTS
 from freesearch.services.audit_events import record_project_event, record_system_event
 from freesearch.services.authorization import AuthorizationDenied, ScopedAuthorizationService
@@ -156,6 +158,17 @@ class _PollState:
     flow: DeviceFlow
     client_id: str
     client_secret: SecretStr | None
+
+
+def _poll_timing_key(credential_id: UUID, generation: int) -> str:
+    return f"oauth.poll:{credential_id}:{generation}"
+
+
+def _poll_timing(row: RuntimeSettingRow | None, interval: int) -> tuple[datetime | None, int]:
+    if row is None:
+        return None, interval
+    data = json.loads(row.value_json)
+    return datetime.fromisoformat(data["last_poll_at"]), int(data["interval"])
 
 
 class _CompletionRefused(Exception):
@@ -298,9 +311,8 @@ class CredentialOAuthService:
     ) -> CredentialOAuthStatusRead:
         """Make one bounded device-code exchange and store tokens only if every fence holds."""
 
-        state = await run_control_read(
-            self._repository,
-            lambda session: self._poll_state(session, actor, target, credential_id),
+        state = await self._write(
+            lambda session: self._claim_poll(session, actor, target, credential_id)
         )
         if isinstance(state, CredentialOAuthStatusRead):
             return state
@@ -315,10 +327,7 @@ class CredentialOAuthService:
                     state.client_id, state.flow.device_code, state.client_secret
                 )
             except DeviceSlowDown:
-                interval = min(
-                    state.flow.interval + _SLOW_DOWN_INCREMENT_SECONDS, _MAX_INTERVAL_SECONDS
-                )
-                return _status_read(credential_id, state.grant, interval=interval)
+                return await self._slow_down(actor, target, credential_id, state)
             except DeviceAuthorizationPending:
                 return _status_read(credential_id, state.grant, interval=state.flow.interval)
             except DeviceAccessDenied:
@@ -428,6 +437,60 @@ class CredentialOAuthService:
     # ------------------------------------------------------------------
     # Device-flow internals
     # ------------------------------------------------------------------
+
+    async def _claim_poll(
+        self,
+        session: AsyncSession,
+        actor: UserPrincipal,
+        target: OAuthTarget,
+        credential_id: UUID,
+    ) -> _PollState | StoredOAuthGrant | CredentialOAuthStatusRead:
+        state = await self._poll_state(session, actor, target, credential_id)
+        if not isinstance(state, _PollState) or state.flow.expires_at <= self._clock():
+            return state
+        key = _poll_timing_key(credential_id, state.grant.token_generation)
+        row = await session.get(RuntimeSettingRow, key)
+        last_poll, interval = _poll_timing(row, state.flow.interval)
+        now = self._clock()
+        if last_poll is not None:
+            remaining = (last_poll + timedelta(seconds=interval) - now).total_seconds()
+            if remaining > 0:
+                return _status_read(credential_id, state.grant, interval=ceil(remaining))
+        payload = json.dumps({"last_poll_at": now.isoformat(), "interval": interval})
+        if row is None:
+            session.add(RuntimeSettingRow(key=key, value_json=payload))
+        else:
+            row.value_json = payload
+        return replace(state, flow=replace(state.flow, interval=interval))
+
+    async def _slow_down(
+        self,
+        actor: UserPrincipal,
+        target: OAuthTarget,
+        credential_id: UUID,
+        state: _PollState,
+    ) -> CredentialOAuthStatusRead:
+        async def operation(session: AsyncSession) -> CredentialOAuthStatusRead:
+            await self._authorize(session, actor, target, write=True)
+            credential = await self._require_oauth_credential(session, target, credential_id)
+            grant = await self._grant(session, credential)
+            if (
+                grant is None
+                or grant.status is not OAuthGrantStatus.PENDING
+                or grant.token_generation != state.grant.token_generation
+            ):
+                return _status_read(credential_id, grant)
+            key = _poll_timing_key(credential_id, grant.token_generation)
+            row = await session.get(RuntimeSettingRow, key)
+            last_poll, interval = _poll_timing(row, state.flow.interval)
+            interval = min(interval + _SLOW_DOWN_INCREMENT_SECONDS, _MAX_INTERVAL_SECONDS)
+            if row is not None and last_poll is not None:
+                row.value_json = json.dumps(
+                    {"last_poll_at": last_poll.isoformat(), "interval": interval}
+                )
+            return _status_read(credential_id, grant, interval=interval)
+
+        return await self._write(operation)
 
     async def _poll_state(
         self,
@@ -737,6 +800,9 @@ class CredentialOAuthService:
     ) -> None:
         for slot in oauth_slot_names(credential_id, generation):
             await self._secret_store.tombstone_in_session(session, slot)
+        timing = await session.get(RuntimeSettingRow, _poll_timing_key(credential_id, generation))
+        if timing is not None:
+            await session.delete(timing)
 
     @asynccontextmanager
     async def _vendor(self) -> AsyncIterator[ParallelOAuthClient]:

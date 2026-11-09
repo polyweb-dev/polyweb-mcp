@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 
 import freesearch.persistence.database_migrations as migration_module
@@ -16,7 +16,6 @@ from freesearch.models.credentials import CredentialOperation
 from freesearch.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     CredentialOwnerScope,
-    ProjectCreate,
 )
 from freesearch.persistence.credentials import (
     CredentialProjectGrantRow,
@@ -27,7 +26,8 @@ from freesearch.persistence.database_migrations import (
     upgrade_database,
     validate_database_schema,
 )
-from freesearch.persistence.projects import ProjectRepository, ProjectRow
+from freesearch.persistence.projects import ProjectRow
+from freesearch.persistence.users import UserDatabase, UserRow
 from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
 
 
@@ -163,25 +163,36 @@ async def test_grant_on_private_credential_fails_composite_fk(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_live_label_partial_unique_index(tmp_path: Path) -> None:
-    """Duplicate live labels conflict only within (owner, provider, label)."""
+    """Duplicate live labels conflict only within (vault owner, provider, label)."""
 
     boot = await bootstrap_fresh_alpha(tmp_path / "p08-labels.db")
     try:
         async with boot.repository.session() as session:
-            second_project, _, _ = await ProjectRepository(session).create_project_with_admin(
-                account_id=boot.account_id,
-                created_by=boot.admin_user.id,
-                project_create=ProjectCreate(
-                    name="Second",
-                    slug="second-labels",
-                    initial_admin_user_id=boot.admin_user.id,
-                ),
+            other = await UserDatabase(session, UserRow).create(
+                {
+                    "email": "other-vault@example.test",
+                    "hashed_password": "hash",
+                    "is_active": True,
+                    "is_verified": True,
+                }
             )
             await session.commit()
+            other_id = str(other.id)
 
         async def insert(**overrides: object) -> None:
             async with boot.repository.session() as session:
-                session.add(_credential_row(created_by=str(boot.admin_user.id), **overrides))
+                values: dict[str, object] = {
+                    "created_by": str(boot.admin_user.id),
+                }
+                values.update(overrides)
+                owner = values.pop("owner_user_id", str(boot.admin_user.id))
+                row = _credential_row(**values)
+                session.add(row)
+                await session.flush()
+                await session.execute(
+                    text("UPDATE provider_credentials SET owner_user_id=:owner WHERE id=:id"),
+                    {"owner": owner, "id": row.id},
+                )
                 await session.commit()
 
         await insert(provider_type="tavily", label="dup", owner_scope="system")
@@ -190,26 +201,20 @@ async def test_live_label_partial_unique_index(tmp_path: Path) -> None:
             await insert(provider_type="tavily", label="dup", owner_scope="system")
         # Same label, other provider: allowed.
         await insert(provider_type="exa", label="dup", owner_scope="system")
-        # Same label+provider, other owner scope/project: allowed.
+        # Same label+provider in another user's vault: allowed.
         await insert(
             provider_type="tavily",
             label="dup",
-            owner_scope="project",
-            owner_project_id=str(boot.default_project.id),
+            owner_scope="system",
+            owner_user_id=other_id,
         )
-        await insert(
-            provider_type="tavily",
-            label="dup",
-            owner_scope="project",
-            owner_project_id=str(second_project.id),
-        )
-        # Same label again in the same project: rejected.
+        # Same label again in the other vault: rejected.
         with pytest.raises(IntegrityError):
             await insert(
                 provider_type="tavily",
                 label="dup",
-                owner_scope="project",
-                owner_project_id=str(boot.default_project.id),
+                owner_scope="system",
+                owner_user_id=other_id,
             )
 
         # After the system row is deleted, its label frees up.
@@ -217,20 +222,14 @@ async def test_live_label_partial_unique_index(tmp_path: Path) -> None:
             await session.execute(
                 delete(ProviderCredentialRow).where(
                     ProviderCredentialRow.owner_scope == "system",
+                    text("owner_user_id = :owner"),
                     ProviderCredentialRow.provider_type == "tavily",
                     ProviderCredentialRow.label == "dup",
-                )
-            )
-            session.add(
-                _credential_row(
-                    created_by=str(boot.admin_user.id),
-                    provider_type="tavily",
-                    label="dup",
-                    owner_scope="system",
-                    status="deleted",
-                )
+                ),
+                {"owner": str(boot.admin_user.id)},
             )
             await session.commit()
+        await insert(provider_type="tavily", label="dup", owner_scope="system", status="deleted")
         await insert(provider_type="tavily", label="dup", owner_scope="system")
     finally:
         await boot.repository.close()
@@ -301,19 +300,19 @@ async def test_project_delete_cascades_private_credentials_and_grants(
 
 
 def test_downgrade_to_base_then_upgrade_restores_head(tmp_path: Path) -> None:
-    """The credential tables round-trip through the baseline downgrade and re-upgrade."""
+    """The keyless migration refuses an unsafe downgrade and preserves head."""
 
     database = tmp_path / "p08-roundtrip.db"
     upgrade_database(database)
 
-    migration_module.command.downgrade(_config_for(database), "base")
+    with pytest.raises(NotImplementedError, match="cannot be safely downgraded"):
+        migration_module.command.downgrade(_config_for(database), "base")
     with sqlite3.connect(database) as connection:
         tables = {
             str(row[0])
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
-    assert "provider_credentials" not in tables
-    assert "credential_project_grants" not in tables
+    assert "provider_credentials" in tables
+    assert "credential_project_grants" in tables
 
-    migration_module.command.upgrade(_config_for(database), "head")
     validate_database_schema(database)

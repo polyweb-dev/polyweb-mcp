@@ -3,7 +3,7 @@ import type { ReactNode } from "react"
 import type { TraceSearchResult } from "@/domains/activity"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { ResultScore } from "@/shared/ui/ResultScore"
-import { toTraceResultView } from "../model/traceResultPresentation"
+import { plainTraceSnippet, toTraceResultView } from "../model/traceResultPresentation"
 import type { RankingMode } from "./TraceRankingExplanation"
 import { TraceRankingExplanation } from "./TraceRankingExplanation"
 
@@ -20,8 +20,8 @@ export interface TraceResultInspectorProps {
 
 function emptyCopy(results: readonly TraceSearchResult[]): string {
   return results.length === 0
-    ? "This trace recorded no ranked result to inspect."
-    : "Select a result to inspect its full snippet, URL, and recorded score."
+    ? "This trace recorded no ranked result to inspect"
+    : "Select a result to inspect its full snippet, URL and recorded score"
 }
 
 function metadata(label: string, value: ReactNode, className = "") {
@@ -80,16 +80,14 @@ export function TraceResultInspector({
 
   const view = toTraceResultView({ result, rank, total: results.length, mode, providerId })
   const scoreValue: ReactNode =
-    view.score.value === null
-      ? <span className="text-[var(--muted)]">Not recorded</span>
-      : view.score.value === 0
+    view.score.value === 0
         ? <span className="text-[var(--muted)]">0 (no ranking signal)</span>
         : <ResultScore score={view.score} />
   return (
     <div className="min-w-0 space-y-4 text-[13px]">
       <header className="flex min-w-0 items-start justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
         <div className="min-w-0">
-          <p className="tnum text-[11px] text-[var(--signal)]">
+          <p className="tnum text-[11px] text-[var(--muted)]">
             Result {rank} of {results.length}
           </p>
           <h3 className="mt-1 text-[14px] font-medium leading-snug text-[var(--text-strong)] [overflow-wrap:anywhere]">
@@ -110,7 +108,7 @@ export function TraceResultInspector({
 
       <dl className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-3">
         {metadata(view.attributionLabel, attribution(view), "min-w-0 flex-1")}
-        {metadata(view.score.label, scoreValue, "shrink-0 text-right")}
+        {view.score.value !== null && metadata(view.score.label, scoreValue, "shrink-0 text-right")}
       </dl>
 
       <section className="min-w-0 space-y-1">
@@ -129,7 +127,7 @@ export function TraceResultInspector({
       <section className="min-w-0 space-y-1">
         <h4 className="text-[12px] text-[var(--muted)]">Snippet summary</h4>
         <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--text)] [overflow-wrap:anywhere]">
-          {result.snippet || <span className="text-[var(--muted)]">Snippet not recorded</span>}
+          {result.snippet ? plainTraceSnippet(result.snippet) : <span className="text-[var(--muted)]">Snippet not recorded</span>}
         </p>
       </section>
 

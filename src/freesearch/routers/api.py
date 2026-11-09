@@ -69,7 +69,12 @@ from freesearch.models.execution_failures import (
 )
 from freesearch.models.observability import ExecutionAttribution, TraceRootSpan
 from freesearch.models.projects import PermissionAction, ProjectApiKeyPrincipal, ProjectContext
-from freesearch.models.provider_limits import LimitDeniedError, LimitStoreUnavailable
+from freesearch.models.provider_limits import (
+    LimitDeniedError,
+    LimitStoreUnavailable,
+    SyncResult,
+)
+from freesearch.models.quota_api import USDProviderLimits
 from freesearch.models.users import UserPrincipal
 from freesearch.persistence.database_migrations import (
     DatabaseResetRequired,
@@ -81,14 +86,16 @@ from freesearch.routers.api_keys import register_api_key_routes
 from freesearch.routers.auth import register_auth_routes, require_control_reader
 from freesearch.routers.bindings import register_binding_routes
 from freesearch.routers.control import register_control_routes
-from freesearch.routers.credential_oauth import register_credential_oauth_routes
-from freesearch.routers.credentials import register_credential_routes
+from freesearch.routers.credentials import register_project_credential_read_routes
 from freesearch.routers.limits import limit_denial_response, register_limit_routes
 from freesearch.routers.observability import register_observability_routes
-from freesearch.routers.pools import register_pool_routes
+from freesearch.routers.project_pools import router as project_pools_router
+from freesearch.routers.project_routing import register_project_routing_routes
 from freesearch.routers.projects import register_project_routes
 from freesearch.routers.retention import register_retention_routes
 from freesearch.routers.settings import register_settings_routes
+from freesearch.routers.vault_keys import router as vault_keys_router
+from freesearch.routers.vault_pools import router as vault_pools_router
 from freesearch.services.api_keys import DEFAULT_USE_RECORDER, ApiKeyVerifier
 from freesearch.services.authorization import human_principal
 from freesearch.services.execution import (
@@ -366,13 +373,15 @@ def create_app(
     app.add_middleware(IngressDeadlineMiddleware)
     register_auth_routes(app)
     register_project_routes(app)
+    register_project_routing_routes(app)
     register_api_key_routes(app)
     register_settings_routes(app)
     register_retention_routes(app)
-    register_credential_routes(app)
-    register_credential_oauth_routes(app)
+    register_project_credential_read_routes(app)
+    app.include_router(vault_keys_router)
+    app.include_router(vault_pools_router)
+    app.include_router(project_pools_router)
     register_binding_routes(app)
-    register_pool_routes(app)
     register_control_routes(app)
     register_limit_routes(app)
     register_observability_routes(app)
@@ -491,8 +500,11 @@ def create_app(
             recent_usage=snapshot.recent_usage,
             latest_quota=snapshot.latest_quota,
             latest_health=snapshot.latest_health,
-            crd_usage_totals=snapshot.crd_usage_totals,
-            provider_limits=await _provider_limits(app.state.limits),
+            spend_totals=snapshot.spend_totals,
+            provider_limits=[
+                USDProviderLimits.model_validate(row)
+                for row in await _provider_limits(app.state.limits)
+            ],
             generated_at=datetime.now(UTC),
         )
 
@@ -582,10 +594,9 @@ async def _compose_runtime_generation(
 ) -> None:
     """Build one runtime generation: adapters, limit rails, execution, tracing.
 
-    The compose step belongs to the lifespan: adapters load in configured
-    priority order, the quota state hydrates, the limit schedule starts, and the
-    shared execution service (repository, encrypted credential slots, and limit
-    rails) comes up before any request is accepted.
+    The compose step belongs to the lifespan: the quota state hydrates, the
+    limit schedule starts, and the shared execution service (repository,
+    encrypted credential slots, and limit rails) comes up before requests.
     """
 
     del adapter_source
@@ -635,9 +646,22 @@ async def _start_limits(
     await limits.initialize()
     apply_keenable_auth_mode(routes, limits)
     app.state.limits = limits
-    app.state.limits_sync = LimitSyncService(repo.limits, limits, lambda: routes)
-    # Credential-scoped observations are scheduled only by admitted execution.
-    # There is no provider-name credential or global vendor polling schedule.
+
+    async def sync_system_credentials(provider: str, now: datetime) -> SyncResult | None:
+        # The execution service starts after the limit rails, so the manual
+        # refresh resolves it per call; without one there is nothing to poll.
+        execution = getattr(app.state, "execution", None)
+        if execution is None:
+            return None
+        result: SyncResult = await execution.sync_system_limits(provider, now)
+        return result
+
+    app.state.limits_sync = LimitSyncService(
+        repo.limits, limits, lambda: routes, credential_sync=sync_system_credentials
+    )
+    # Credential-scoped observations are scheduled only by admitted execution
+    # and by the admin's manual refresh, which polls the provider's active
+    # vault credentials. There is no global vendor polling schedule.
 
 
 def apply_keenable_auth_mode(routes: Sequence[ProviderAdapter], limits: Any) -> None:

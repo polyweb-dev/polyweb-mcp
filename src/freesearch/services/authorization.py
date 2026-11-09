@@ -28,6 +28,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from freesearch.models.project_permissions import STANDARD, effective_project_permissions
 from freesearch.models.projects import (
     API_KEY_ACTIONS,
     BUILTIN_ROLE_DEFINITIONS,
@@ -58,8 +59,12 @@ from freesearch.persistence.users import UserRow
 def project_role_permissions(role_key: str) -> frozenset[PermissionAction]:
     """Return a project role's permissions, rejecting non-project role keys."""
 
-    definition = _project_role_definition(role_key)
-    return definition.permissions
+    _project_role_definition(role_key)
+    if role_key not in {"project_admin", "project_member"}:
+        raise ValueError(f"Role {role_key!r} is not assignable")
+    return frozenset(
+        PermissionAction(action) for action in effective_project_permissions([role_key], STANDARD)
+    )
 
 
 def _project_role_definition(role_key: str) -> RoleDefinition:
@@ -256,10 +261,12 @@ class ScopedAuthorizationService:
             return None
         membership = (
             await session.execute(
-                select(ProjectMembershipRow).where(
+                select(ProjectMembershipRow)
+                .where(
                     ProjectMembershipRow.project_id == str(project_id),
                     ProjectMembershipRow.user_id == str(principal.user_id),
                 )
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if membership is None or membership.status != "active":
@@ -274,7 +281,7 @@ class ScopedAuthorizationService:
                 )
             ).scalars()
         )
-        permissions = self._permissions_from_project_roles(role_rows)
+        permissions = self._permissions_from_project_roles(role_rows, membership.permissions or 0)
         policy_revision = max([membership.version, *(row.version for row in role_rows), 1])
         return ProjectContext(
             account_id=self._account_id,
@@ -299,12 +306,11 @@ class ScopedAuthorizationService:
         caller can grant a system role or a capability they do not hold.
         """
 
-        definition = _project_role_definition(role_key)
         await self.require_delegable_permissions_in_session(
             session,
             actor,
             project_id=project_id,
-            permissions=definition.permissions,
+            permissions=project_role_permissions(role_key),
             required_permission=PermissionAction.ROLES_ASSIGN,
         )
 
@@ -412,10 +418,12 @@ class ScopedAuthorizationService:
             return frozenset()
         membership = (
             await session.execute(
-                select(ProjectMembershipRow).where(
+                select(ProjectMembershipRow)
+                .where(
                     ProjectMembershipRow.project_id == str(scope_id),
                     ProjectMembershipRow.user_id == str(user_id),
                 )
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if membership is None or membership.status != "active":
@@ -429,25 +437,19 @@ class ScopedAuthorizationService:
                 )
             )
         ).scalars()
-        return self._permissions_from_project_roles(list(role_rows))
+        return self._permissions_from_project_roles(list(role_rows), membership.permissions or 0)
 
     @staticmethod
     def _permissions_from_project_roles(
         role_rows: list[ProjectRoleAssignmentRow],
+        bits: int,
     ) -> frozenset[PermissionAction]:
-        """Map project role rows to live project-scope catalog permissions."""
+        """Resolve membership actions from stored bits and the admin role."""
 
-        project_permissions: set[PermissionAction] = set()
-        for role_row in role_rows:
-            definition = BUILTIN_ROLE_DEFINITIONS.get(role_row.role_key)
-            if definition is None or definition.scope_type is not ScopeType.PROJECT:
-                continue
-            project_permissions.update(
-                action
-                for action in definition.permissions
-                if action_scope(action) is ScopeType.PROJECT
-            )
-        return frozenset(project_permissions)
+        return frozenset(
+            PermissionAction(action)
+            for action in effective_project_permissions((row.role_key for row in role_rows), bits)
+        )
 
 
 def human_principal(user: UserPrincipal) -> HumanPrincipal:

@@ -16,6 +16,29 @@ import { When, Then } from "./fixtures"
 
 const ERROR_RE = /unreachable|failed|error|unavailable|no provider|timed out|timeout/i
 
+/**
+ * Project of the live run (U2: the playground and Activity are project
+ * sections). Name it with FREESEARCH_E2E_PROJECT; the local seed script
+ * creates "Local E2E".
+ */
+const LIVE_PROJECT_NAME = process.env.FREESEARCH_E2E_PROJECT ?? "Local E2E"
+
+When("I open the projects list", async ({ page }) => {
+  await page.goto("/projects")
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible({
+    timeout: 15_000,
+  })
+})
+
+When("I choose the live e2e project in the project selector", async ({ page }) => {
+  await page.getByRole("button", { name: /^Select project/ }).first().click()
+  await page.getByRole("menuitem", { name: LIVE_PROJECT_NAME, exact: false }).first().click()
+  await expect(page).toHaveURL(/\/p\/[0-9a-f-]{36}/, { timeout: 15_000 })
+  await expect(
+    page.getByRole("button", { name: `Select project (current: ${LIVE_PROJECT_NAME})` })
+  ).toBeVisible({ timeout: 15_000 })
+})
+
 function searchErrorBanner(page: import("@playwright/test").Page) {
   return page.locator("main").locator('p[style*="status-danger"]', { hasText: ERROR_RE })
 }
@@ -55,7 +78,7 @@ When(
   "I capture the first live fetch outcome for provider {string}",
   async ({ page }, provider: string) => {
     const panel = page.locator("main")
-    const content = panel.getByText(/Parsed Markdown Document/i)
+    const content = panel.getByText(/Parsed markdown/i)
     const errors = fetchErrorBanner(page)
     const deadline = Date.now() + 30_000
     let outcome = "indeterminate"
@@ -91,7 +114,7 @@ Then(
   "the playground should show live fetch content without an API-failure alert",
   async ({ page }) => {
     const panel = page.locator("main")
-    await expect(panel.getByText(/Parsed Markdown Document/i).first()).toBeVisible({
+    await expect(panel.getByText(/Parsed markdown/i).first()).toBeVisible({
       timeout: 30_000,
     })
     await expect(fetchErrorBanner(page)).toHaveCount(0)

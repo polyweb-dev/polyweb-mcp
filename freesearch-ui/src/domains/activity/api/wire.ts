@@ -1,5 +1,6 @@
 /**
- * Wire types for the trace read API (`GET /api/v1/traces` and its detail).
+ * Wire types for the project trace read API
+ * (`GET /api/v1/projects/{id}/traces` and its detail).
  *
  * Mirrors the FastAPI contract verbatim (snake_case, ISO-8601 UTC timestamps,
  * numeric milliseconds). Values arriving from the network are still treated as
@@ -18,6 +19,7 @@ export interface BackendTraceError {
 /** Fast, scannable list row: never carries the query or the results. */
 export interface BackendTraceSummary {
   trace_id: string
+  user_id?: string | null
   operation: BackendTraceOperation | null
   started_at: string
   duration_ms: number
@@ -83,4 +85,6 @@ export interface BackendTraceDetail extends BackendTraceSummary {
 export interface BackendTraceList {
   items: BackendTraceSummary[]
   generated_at: string
+  /** Opaque, project-bound cursor of the next page; `null` on the last page. */
+  next_cursor?: string | null
 }

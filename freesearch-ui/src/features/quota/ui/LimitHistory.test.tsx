@@ -5,12 +5,12 @@ import { LimitHistory } from "./LimitHistory"
 
 /**
  * UI7 history: semantic table with Time, Old balance, New balance, Source,
- * Actor; CRD one-decimal display; native fallback with unit label; actor
+ * Actor; Usd one-decimal display; native fallback with unit label; actor
  * category (no invented identity); empty/load/error states; cursor paging
  * disabled while active. Covers UI7-09.
  */
 
-function crdEvent() {
+function usdEvent() {
   return {
     event_id: "evt-2",
     provider: "brave",
@@ -22,9 +22,9 @@ function crdEvent() {
     reason: "local_success",
     old_native: "4.500",
     new_native: "4.495",
-    old_crd: "4500",
-    new_crd: "4495",
-    crd_debit: "5",
+    old_usd: "4.5",
+    new_usd: "4.495",
+    debit_usd: "0.005",
     native_debit: "0.005",
     actual_usd: null,
     confidence: "observed",
@@ -45,14 +45,14 @@ function grantEvent() {
     reason: "grant",
     old_native: null,
     new_native: null,
-    old_crd: null,
-    new_crd: null,
-    crd_debit: null,
+    old_usd: null,
+    new_usd: null,
+    debit_usd: null,
     native_debit: null,
     actual_usd: null,
     confidence: "authoritative",
     local_attempt_id: null,
-    detail: { search_granted_crd: "100" },
+    detail: { search_granted_usd: "0.1" },
   }
 }
 
@@ -68,9 +68,9 @@ function nativeEvent() {
     reason: "vendor_sync",
     old_native: "4.500",
     new_native: "4.495",
-    old_crd: null,
-    new_crd: null,
-    crd_debit: null,
+    old_usd: null,
+    new_usd: null,
+    debit_usd: null,
     native_debit: null,
     actual_usd: null,
     confidence: "observed",
@@ -80,11 +80,20 @@ function nativeEvent() {
 }
 
 describe("LimitHistory", () => {
+  it.each(["USD", "CREDIT"])("shows a stored %s unit as credits", (unit) => {
+    const event = { ...nativeEvent(), old_native: "1000", new_native: "900", detail: { native_unit: unit } }
+    render(<LimitHistory providerName="Provider" events={[event] as never} loading={false}
+      error={null} hasMore={false} onLoadMore={() => Promise.resolve()} />)
+    expect(screen.getByText(unit === "USD" ? "$1,000.00" : "1,000 credits")).toBeInTheDocument()
+    expect(screen.getByText(unit === "USD" ? "$900.00" : "900 credits")).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain("USD")
+  })
+
   it("renders exact event facts with table headers and actor category (UI7-09)", () => {
     render(
       <LimitHistory
         providerName="Brave"
-        events={[crdEvent(), grantEvent()] as never}
+        events={[usdEvent(), grantEvent()] as never}
         loading={false}
         error={null}
         hasMore={false}
@@ -94,13 +103,17 @@ describe("LimitHistory", () => {
     for (const header of ["Time", "Old balance", "New balance", "Source", "Actor"]) {
       expect(screen.getByRole("columnheader", { name: header })).not.toBeNull()
     }
-    expect(screen.getByText("4500 CRD")).not.toBeNull()
-    expect(screen.getByText("4495 CRD")).not.toBeNull()
+    expect(screen.getByText("$4.50")).toBeInTheDocument()
+    expect(screen.getByText("$4.495")).toBeInTheDocument()
     expect(screen.getByText("System")).not.toBeNull()
     expect(screen.getByText("Operator")).not.toBeNull()
     expect(screen.getByText("Search · Local success")).not.toBeNull()
     // Polish Item 1: Source cells show human labels, not raw keys.
-    expect(screen.getByText("Local use")).not.toBeNull()
+    expect(screen.getByText("Local usage")).not.toBeNull()
+    expect(screen.getByRole("columnheader", { name: "Change" })).not.toBeNull()
+    expect(screen.getByText("−$0.005")).not.toBeNull()
+    expect(screen.getAllByText("Not recorded")).toHaveLength(3)
+    expect(screen.queryByRole("heading", { name: "Balance history" })).toBeNull()
     expect(screen.getByText("Operator action")).not.toBeNull()
     expect(screen.queryByText("local")).toBeNull()
     expect(screen.queryByText("operator")).toBeNull()
@@ -114,7 +127,7 @@ describe("LimitHistory", () => {
     expect(newestTime?.textContent).not.toBe("2026-09-06T10:04:00Z")
   })
 
-  it("falls back to native values with a unit label when CRD stays absent (UI7-09)", () => {
+  it("falls back to native values with a unit label when Usd stays absent (UI7-09)", () => {
     render(
       <LimitHistory
         providerName="Brave"
@@ -125,8 +138,8 @@ describe("LimitHistory", () => {
         onLoadMore={() => Promise.resolve()}
       />,
     )
-    expect(screen.getByText("4.500 USD")).not.toBeNull()
-    expect(screen.getByText("4.495 USD")).not.toBeNull()
+    expect(screen.getAllByText("$4.50")[0]).not.toBeNull()
+    expect(screen.getAllByText("$4.50")[1]).not.toBeNull()
   })
 
   it("leaves absent values empty without an Unknown row or fake zero (UI7-09)", () => {
@@ -148,7 +161,7 @@ describe("LimitHistory", () => {
     render(
       <LimitHistory
         providerName="Brave"
-        events={[crdEvent()] as never}
+        events={[usdEvent()] as never}
         loading={false}
         error={null}
         hasMore={false}
@@ -162,7 +175,7 @@ describe("LimitHistory", () => {
     const { rerender } = render(
       <LimitHistory providerName="Brave" events={[]} loading={false} error={null} hasMore={false} onLoadMore={() => Promise.resolve()} />,
     )
-    expect(screen.getByText("No balance change recorded yet.")).not.toBeNull()
+    expect(screen.getByText("No balance change recorded yet")).not.toBeNull()
     rerender(
       <LimitHistory providerName="Brave" events={[]} loading error={null} hasMore={false} onLoadMore={() => Promise.resolve()} />,
     )
@@ -178,7 +191,7 @@ describe("LimitHistory", () => {
     render(
       <LimitHistory
         providerName="Brave"
-        events={[crdEvent()] as never}
+        events={[usdEvent()] as never}
         loading
         error={null}
         hasMore
@@ -196,7 +209,6 @@ describe("LimitHistory", () => {
 describe("LimitHistory Tavily native", () => {
   function tavilyProfile() {
     return {
-      reference_usd_per_crd: "0.001",
       native_usd_per_unit: "0.008",
       cost_basis: "paygo_reference",
       price_version: "paygo-reference",
@@ -217,9 +229,9 @@ describe("LimitHistory Tavily native", () => {
       reason: "sync",
       old_native: "999",
       new_native: "998",
-      old_crd: "7992",
-      new_crd: "7984",
-      crd_debit: "8",
+      old_usd: "7.992",
+      new_usd: "7.984",
+      debit_usd: "0.008",
       native_debit: "1",
       actual_usd: null,
       confidence: "observed",
@@ -228,7 +240,7 @@ describe("LimitHistory Tavily native", () => {
     }
   }
 
-  function tavilyCrdOnlyEvent() {
+  function tavilyUsdOnlyEvent() {
     return {
       event_id: "evt-tavily-2",
       provider: "tavily",
@@ -240,18 +252,18 @@ describe("LimitHistory Tavily native", () => {
       reason: "grant",
       old_native: null,
       new_native: null,
-      old_crd: null,
-      new_crd: null,
-      crd_debit: null,
+      old_usd: null,
+      new_usd: null,
+      debit_usd: null,
       native_debit: null,
       actual_usd: null,
       confidence: "authoritative",
       local_attempt_id: null,
-      detail: { search_granted_crd: "8" },
+      detail: { search_granted_usd: "0.008" },
     }
   }
 
-  it("prefers native Tavily balances over CRD amounts", () => {
+  it("prefers native Tavily balances over Usd amounts", () => {
     render(
       <LimitHistory
         providerName="Tavily"
@@ -262,12 +274,12 @@ describe("LimitHistory Tavily native", () => {
         onLoadMore={() => Promise.resolve()}
       />,
     )
-    expect(screen.getByText("999 Credits")).not.toBeNull()
-    expect(screen.getByText("998 Credits")).not.toBeNull()
-    expect(screen.queryByText("7992 CRD")).toBeNull()
+    expect(screen.getByText("999 credits")).not.toBeNull()
+    expect(screen.getByText("998 credits")).not.toBeNull()
+    expect(screen.queryByText("7992 Usd")).toBeNull()
   })
 
-  it("converts CRD-only Tavily grant events through the profile", () => {
+  it("converts Usd-only Tavily grant events through the profile", () => {
     const grant = {
       event_id: "evt-tavily-3",
       provider: "tavily",
@@ -279,9 +291,9 @@ describe("LimitHistory Tavily native", () => {
       reason: "local_success",
       old_native: null,
       new_native: null,
-      old_crd: "8",
-      new_crd: "16",
-      crd_debit: "8",
+      old_usd: "0.008",
+      new_usd: "0.016",
+      debit_usd: "0.008",
       native_debit: null,
       actual_usd: null,
       confidence: "observed",
@@ -299,12 +311,12 @@ describe("LimitHistory Tavily native", () => {
         profile={tavilyProfile() as never}
       />,
     )
-    expect(screen.getByText("1 Credit")).not.toBeNull()
-    expect(screen.getByText("2 Credits")).not.toBeNull()
-    expect(tavilyCrdOnlyEvent().event_id).toBe("evt-tavily-2")
+    expect(screen.getByText("1 credit")).not.toBeNull()
+    expect(screen.getByText("2 credits")).not.toBeNull()
+    expect(tavilyUsdOnlyEvent().event_id).toBe("evt-tavily-2")
   })
 
-  it("converts CRD-only Tavily events through the default profile without a profile prop", () => {
+  it("converts Usd-only Tavily events through the default profile without a profile prop", () => {
     const grant = {
       event_id: "evt-tavily-4",
       provider: "tavily",
@@ -316,9 +328,9 @@ describe("LimitHistory Tavily native", () => {
       reason: "local_success",
       old_native: null,
       new_native: null,
-      old_crd: "8",
-      new_crd: "16",
-      crd_debit: "8",
+      old_usd: "0.008",
+      new_usd: "0.016",
+      debit_usd: "0.008",
       native_debit: null,
       actual_usd: null,
       confidence: "observed",
@@ -335,7 +347,7 @@ describe("LimitHistory Tavily native", () => {
         onLoadMore={() => Promise.resolve()}
       />,
     )
-    expect(screen.getByText("1 Credit")).not.toBeNull()
-    expect(screen.getByText("2 Credits")).not.toBeNull()
+    expect(screen.getByText("1 credit")).not.toBeNull()
+    expect(screen.getByText("2 credits")).not.toBeNull()
   })
 })

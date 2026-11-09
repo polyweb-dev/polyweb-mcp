@@ -38,6 +38,7 @@ describe("ResultCard", () => {
         selected={false}
         isSearching={false}
         isFetching={false}
+        canFetch
         onSelect={() => {}}
         onFetch={() => {}}
       />
@@ -59,6 +60,7 @@ describe("ResultCard", () => {
         selected={false}
         isSearching={false}
         isFetching={false}
+        canFetch
         onSelect={() => {}}
         onFetch={() => {}}
       />
@@ -81,6 +83,7 @@ describe("ResultCard", () => {
         selected={false}
         isSearching={false}
         isFetching={false}
+        canFetch
         onSelect={onSelect}
         onFetch={() => {}}
       />
@@ -101,6 +104,7 @@ describe("ResultCard", () => {
         selected={false}
         isSearching={false}
         isFetching={false}
+        canFetch
         onSelect={onSelect}
         onFetch={onFetch}
       />
@@ -119,6 +123,7 @@ describe("ResultCard", () => {
         selected={false}
         isSearching
         isFetching={false}
+        canFetch
         onSelect={() => {}}
         onFetch={() => {}}
       />
@@ -134,12 +139,31 @@ describe("ResultCard", () => {
         selected={false}
         isSearching={false}
         isFetching
+        canFetch
         onSelect={() => {}}
         onFetch={() => {}}
       />
     )
 
     expect(screen.getByTestId("fetch-result-r1")).toBeDisabled()
+  })
+
+  it("disables fetch without fetch.execute in the project", () => {
+    render(
+      <ResultCard
+        result={searchResult()}
+        selected={false}
+        isSearching={false}
+        isFetching={false}
+        canFetch={false}
+        onSelect={() => {}}
+        onFetch={() => {}}
+      />
+    )
+
+    const button = screen.getByTestId("fetch-result-r1")
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute("title", "Fetch is not permitted in this project")
   })
 
   it("enables fetch when neither a search nor a fetch is running", () => {
@@ -149,6 +173,7 @@ describe("ResultCard", () => {
         selected={false}
         isSearching={false}
         isFetching={false}
+        canFetch
         onSelect={() => {}}
         onFetch={() => {}}
       />

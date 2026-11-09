@@ -110,6 +110,18 @@ export function mapTraceSummary(payload: unknown): TraceSummary | null {
   }
 }
 
+/** One decoded list page: the rows plus the opaque cursor of the next page. */
+export interface TracePage {
+  items: TraceSummary[]
+  nextCursor: string | null
+}
+
+/** Decode one list page; a missing or empty cursor means the last page. */
+export function mapTracePage(payload: unknown): TracePage {
+  const cursor = asString(asRecord(payload)?.next_cursor)
+  return { items: mapTraceList(payload), nextCursor: cursor === null || cursor === "" ? null : cursor }
+}
+
 /** Decode the list payload, ignoring rows that fail validation. */
 export function mapTraceList(payload: unknown): TraceSummary[] {
   const items = asRecord(payload)?.items

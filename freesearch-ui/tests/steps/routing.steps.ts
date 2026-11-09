@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test"
 import type { Page } from "@playwright/test"
 import { Given, When, Then } from "./fixtures"
+import { providerQuotaSurface } from "./providerQuotaUi"
 import {
   delayStubbedProviderPatch,
   failStubbedDashboardGet,
@@ -23,157 +24,9 @@ import {
   tavilyProdCreditLimits,
 } from "./backendStub"
 
-Given("I am on the Routing view", async ({ page }) => {
-  await page.getByRole("link", { name: "Routing", exact: true }).click()
-  await expect(page.getByRole("heading", { name: "Routing", exact: true })).toBeVisible()
-})
-
-Then(
-  "the routing sub-tabs should be visible: {string} and {string}",
-  async ({ page }, first: string, second: string) => {
-    for (const label of [first, second]) {
-      await expect(page.getByRole("tab", { name: label, exact: true })).toHaveCount(1)
-    }
-  }
-)
-
-When("I choose the {string} routing strategy", async ({ page }, strategy: string) => {
-  await page.getByRole("tab", { name: "Strategy", exact: true }).click()
-  await page.getByRole("button", { name: new RegExp(`^${escapeRegExp(strategy)}`) }).click()
-})
-
-Then("{string} is the primary routing provider", async ({ page }, provider: string) => {
-  const providerText = page.getByText(provider, { exact: true }).first()
-  await expect(providerText).toBeVisible()
-
-  // The provider card and its Primary marker are one accessible region.
-  const primaryRegion = providerText.locator(
-    "xpath=ancestor::*[contains(normalize-space(.), 'Primary')][1]"
-  )
-  await expect(primaryRegion).toContainText(provider)
-  await expect(primaryRegion).toContainText("Primary")
-})
-
-const KNOWN_PROVIDER_NAMES = /Brave Search|Keenable|Tavily|Exa|Firecrawl|You\.com|Parallel/
-
-Then("a primary routing provider row should be visible", async ({ page }) => {
-  // Tolerant to live latency ordering: assert the role structure (a Primary
-  // marker bound to a real provider name), never a pinned provider.
-  const primary = page.getByText("Primary", { exact: true }).first()
-  await expect(primary).toBeVisible()
-  const region = primary.locator(
-    "xpath=ancestor::*[contains(normalize-space(.), 'Primary')][1]"
-  )
-  await expect(region).toContainText("Primary")
-  await expect(region).toContainText(KNOWN_PROVIDER_NAMES)
-})
-
-const FAILOVER_STATUS = /^Failover (active|inactive)$/
-
-Then("the routing status should show {string}", async ({ page }, status: string) => {
-  // State-tolerant: under the deterministic stub the status is always the
-  // expected copy, but against the live backend the persisted fallback policy
-  // may render either state — accept both, anchored to the exact element.
-  if (status === "Failover active" || status === "Failover inactive") {
-    await expect(page.getByText(FAILOVER_STATUS)).toBeVisible()
-    return
-  }
-  await expect(page.getByText(status, { exact: true })).toBeVisible()
-})
-
-Then("the routing eligibility should match {string}", async ({ page }, pattern: string) => {
-  // Backend-tolerant count, e.g. "\d+ of \d+ providers eligible".
-  await expect(page.getByText(new RegExp(pattern))).toBeVisible()
-})
-
-Then("the routing status should not use a middle-dot separator", async ({ page }) => {
-  // State-tolerant: the status element renders one of the two failover states
-  // (stub: active; live: whichever policy is persisted) — neither may use "·".
-  const status = page.getByText(FAILOVER_STATUS)
-  await expect(status).toBeVisible()
-  const statusRegion = status.locator("xpath=../..")
-  await expect(statusRegion).not.toContainText("·")
-})
-
-When("I open the {string} routing tab", async ({ page }, tabLabel: string) => {
-  await page.getByRole("tab", { name: tabLabel, exact: true }).click()
-})
-
-When("I enter the simulated search query {string}", async ({ page }, query: string) => {
-  await page.getByPlaceholder("Type simulated query...", { exact: true }).fill(query)
-})
-
-When("I choose the {string} simulator operation", async ({ page }, operation: string) => {
-  await page.getByRole("button", { name: operation, exact: true }).click()
-})
-
-Then("the simulator input placeholder should be {string}", async ({ page }, placeholder: string) => {
-  await expect(page.getByPlaceholder(placeholder, { exact: true })).toBeVisible()
-})
-
 When("I click the {string} button", async ({ page }, buttonLabel: string) => {
   await page.getByRole("button", { name: buttonLabel, exact: true }).click()
 })
-
-Then("the execution pipeline should contain the {string} step", async ({ page }, step: string) => {
-  await expect(page.getByText(step, { exact: true })).toBeVisible()
-})
-
-Then(
-  "the execution pipeline should contain the primary provider {string}",
-  async ({ page }, provider: string) => {
-    await expect(page.getByText(provider, { exact: true }).first()).toBeVisible()
-  }
-)
-
-Then("the execution pipeline should contain a primary provider", async ({ page }) => {
-  // Tolerant to live ordering: the pipeline shows a Primary marker bound to
-  // whichever provider the active strategy promoted.
-  const primary = page.getByText("Primary", { exact: true }).first()
-  await expect(primary).toBeVisible()
-  const region = primary.locator(
-    "xpath=ancestor::*[contains(normalize-space(.), 'Primary')][1]"
-  )
-  await expect(region).toContainText(KNOWN_PROVIDER_NAMES)
-})
-
-Then("the failover cascade should be rendered", async ({ page }) => {
-  // State-tolerant: with fallback chaining the pipeline renders the failover
-  // cascade (stub default); with single-attempt dispatch it renders the
-  // single-shot notice instead (RouteSimulator ExecutionPipeline branches).
-  const cascade = page.getByText(/Failover cascade/i).first()
-  const singleShot = page.getByText(/Single-shot mode active/).first()
-  await expect(async () => {
-    const cascadeCount = await cascade.count()
-    const singleShotCount = await singleShot.count()
-    expect(cascadeCount + singleShotCount).toBeGreaterThan(0)
-  }).toPass({ timeout: 10_000 })
-})
-
-When("I open the {string} resilience tab", async ({ page }, tabLabel: string) => {
-  await page.getByRole("tab", { name: tabLabel, exact: true }).click()
-})
-
-Then("the resilience row {string} should be visible", async ({ page }, label: string) => {
-  await expect(page.getByText(label, { exact: true })).toBeVisible()
-})
-
-Then(
-  "the resilience row {string} should show {string}",
-  async ({ page }, label: string, value: string) => {
-    const row = page.getByText(label, { exact: true }).locator("xpath=..")
-    await expect(row).toContainText(value)
-  }
-)
-
-Then(
-  "the resilience row {string} should not show {string}",
-  async ({ page }, label: string, forbidden: string) => {
-    const row = page.getByText(label, { exact: true }).locator("xpath=..")
-    await expect(row).toBeVisible()
-    await expect(row).not.toContainText(forbidden)
-  }
-)
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -205,7 +58,7 @@ function escapeRegExp(value: string): string {
 // ---------------------------------------------------------------------------
 
 function tavilyArticle(page: Page) {
-  return page.locator("article", { hasText: "Tavily" }).first()
+  return providerQuotaSurface(page, "Tavily")
 }
 
 function tavilyRateTierSelect(page: Page) {
@@ -220,8 +73,7 @@ function tavilyCardTierSelect(page: Page) {
 }
 
 function tavilyOptionLabel(env: string): string {
-  if (env === "prod") return "Production — 1000 requests per minute"
-  return "Development — 100 requests per minute"
+  return env === "prod" ? "Production" : "Development"
 }
 
 function tavilyPatches() {
@@ -314,7 +166,8 @@ When("I choose the Tavily rate tier {string}", async ({ page }, env: string) => 
   const select = tavilyRateTierSelect(page)
   await expect(select).toBeVisible()
   await expect(select).toBeEnabled()
-  await select.selectOption(env)
+  await select.click()
+  await page.getByRole("listbox").getByRole("option", { name: new RegExp(`^${tavilyOptionLabel(env)}`) }).click()
 })
 
 When("I focus the Tavily rate tier select", async ({ page }) => {
@@ -332,14 +185,15 @@ When("I focus the Tavily card rate tier select", async ({ page }) => {
 })
 
 When("I choose the Tavily card rate tier with the keyboard", async ({ page }) => {
-  // Native select keyboard: one ArrowDown step moves dev to prod and fires
-  // the change event, so the partial PATCH goes through keyboard input only.
+  // Open at the current value, move from dev to prod, and commit the choice.
   const select = tavilyCardTierSelect(page)
   await expect(select).toBeVisible()
   await expect(select).toBeEnabled()
   await select.focus()
   await expect(select).toBeFocused()
+  await page.keyboard.press("Enter")
   await page.keyboard.press("ArrowDown")
+  await page.keyboard.press("Enter")
 })
 
 When("I open the Tavily quota details with the keyboard", async ({ page }) => {
@@ -347,7 +201,7 @@ When("I open the Tavily quota details with the keyboard", async ({ page }) => {
   await trigger.focus()
   await expect(trigger).toBeFocused()
   await page.keyboard.press("Enter")
-  await expect(page.getByText("Quota Details", { exact: true })).toBeVisible()
+  await expect(page.getByText("Quota details", { exact: true })).toBeVisible()
 })
 
 When("I cancel the Tavily quota details", async ({ page }) => {
@@ -372,21 +226,20 @@ When("I attempt a registry drag from the Tavily rate tier select", async ({ page
 Then("the Tavily rate tier should show {string}", async ({ page }, env: string) => {
   const select = tavilyRateTierSelect(page)
   await expect(select).toBeVisible()
-  await expect(select).toHaveValue(env)
   await expect(select).toContainText(tavilyOptionLabel(env))
 })
 
 Then("the Tavily rate tier should show Unknown", async ({ page }) => {
   const select = tavilyRateTierSelect(page)
   await expect(select).toBeVisible()
-  await expect(select).toHaveValue("unknown")
+  await expect(select).toContainText("Unknown")
   await expect(select).toBeDisabled()
 })
 
 Then("the Tavily card rate tier should lock to Unknown", async ({ page }) => {
   const select = tavilyCardTierSelect(page)
   await expect(select).toBeVisible()
-  await expect(select).toHaveValue("unknown")
+  await expect(select).toContainText("Unknown")
   await expect(select).toBeDisabled()
 })
 
@@ -421,7 +274,8 @@ Then(
   async ({ page }) => {
     const select = tavilyCardTierSelect(page)
     await expect(select).toBeVisible()
-    const options = select.locator("option")
+    await select.click()
+    const options = page.getByRole("listbox").getByRole("option")
     await expect(options).toHaveCount(2)
     await expect(options.nth(0)).toHaveText("Development")
     await expect(options.nth(1)).toHaveText("Production")
@@ -430,6 +284,7 @@ Then(
       expect(label).not.toMatch(/\d/)
       expect(label).not.toMatch(/requests/i)
     }
+    await page.keyboard.press("Escape")
   }
 )
 
@@ -450,14 +305,14 @@ Then("the Tavily rate row should show {string}", async ({ page }, text: string) 
   // "Search and Fetch Rate Limit 100/100 requests per minute" or the
   // immediate-ceiling "Search and Fetch Rate Limit unknown/1000 requests
   // per minute". The label and the value are sibling spans, so assert both.
-  const label = "Search and Fetch Rate Limit"
+  const label = "Search and fetch rate limit"
   const value = text.startsWith(label) ? text.slice(label.length).trim() : text
   await expect(page.getByText(label, { exact: true })).toBeVisible()
   await expect(page.getByText(value, { exact: true })).toBeVisible()
 })
 
 Then("the Tavily quota details should be closed", async ({ page }) => {
-  await expect(page.getByText("Quota Details", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("Quota details", { exact: true })).toHaveCount(0)
 })
 
 Then(
@@ -483,7 +338,7 @@ Then("the Tavily Credits should still show {string}", async ({ page }, text: str
 
 Then("an inline Tavily rate tier error should show {string}", async ({ page }, text: string) => {
   await expect(page.getByRole("alert")).toContainText(text)
-  await expect(tavilyRateTierSelect(page)).toHaveValue("dev")
+  await expect(tavilyRateTierSelect(page)).toContainText("Development")
 })
 
 Then(
@@ -491,7 +346,7 @@ Then(
   async ({ page }, text: string) => {
     const card = tavilyArticle(page)
     await expect(card.getByRole("alert")).toContainText(text)
-    await expect(tavilyCardTierSelect(page)).toHaveValue("dev")
+    await expect(tavilyCardTierSelect(page)).toContainText("Development")
   }
 )
 

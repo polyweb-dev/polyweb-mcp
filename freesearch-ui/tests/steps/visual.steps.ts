@@ -46,76 +46,13 @@ Then(
   }
 )
 
-Then("reduced-motion transitions should be disabled", async ({ page }) => {
-  const strategyCard = page.getByRole("button", { name: /^Strict priority/ })
-  await expect(strategyCard).toBeVisible()
-  expect(await transitionDuration(strategyCard)).toBe("0s")
-
-  await page.getByRole("tab", { name: "Simulator", exact: true }).click()
-  const simulatorGroup = page.getByRole("group", {
-    name: "Simulator operation",
-    exact: true,
-  })
-  const segmentedButton = simulatorGroup.getByRole("button", {
-    name: "Search",
-    exact: true,
-  })
-  await expect(segmentedButton).toBeVisible()
-  expect(await transitionDuration(segmentedButton)).toBe("0s")
-
-  await page.getByRole("tab", { name: "Strategy", exact: true }).click()
-  await expect(strategyCard).toBeVisible()
-})
-
-When("I walk from the header through Routing with keyboard only", async ({ page }) => {
-  // Sidebar redesign: the collapse control is the first focus stop, then the
-  // seven navigation links in order, then the account row trigger.
-  const collapseButton = page.getByRole("button", {
-    name: "Collapse sidebar",
-    exact: true,
-  })
-  await page.keyboard.press("Tab")
-  await expectFocusVisible(collapseButton)
-
-  for (const label of ["Playground", "Routing"]) {
-    await page.keyboard.press("Tab")
-    await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
-  }
-
-  const routingLink = page.getByRole("link", { name: "Routing", exact: true })
-  await page.keyboard.press("Enter")
-  await expect(page.getByRole("heading", { name: "Routing", exact: true })).toBeVisible()
-  await expectFocusVisible(routingLink)
-
-  for (const label of ["Usage", "Activity", "Settings", "Account", "Admin"]) {
-    await page.keyboard.press("Tab")
-    await expectFocusVisible(page.getByRole("link", { name: label, exact: true }))
-  }
-
-  const userMenuButton = page.getByRole("button", {
-    name: "Open user menu",
-    exact: true,
-  })
-  await page.keyboard.press("Tab")
-  await expectFocusVisible(userMenuButton)
-
-  const strategyTab = page.getByRole("tab", { name: "Strategy", exact: true })
-  await page.keyboard.press("Tab")
-  await expectFocusVisible(strategyTab)
-
-  const strategyPanel = page.getByRole("tabpanel", { name: "Strategy", exact: true })
-  await page.keyboard.press("Tab")
-  await expectFocusVisible(strategyPanel)
-
-  const firstStrategyCard = page.getByRole("button", { name: /^Strict priority/ })
-  await page.keyboard.press("Tab")
-  await expectFocusVisible(firstStrategyCard)
-})
-
 When("I move to the {string} view using keyboard only", async ({ page }, view: string) => {
   let navigationLink = page.getByRole("link", { name: view, exact: true })
+  const openNavigation = page.getByRole("button", { name: "Open navigation", exact: true })
+  // Permission-gated links appear once system access has loaded (U1).
+  await expect(navigationLink.or(openNavigation).first()).toBeVisible()
   if (!(await navigationLink.isVisible())) {
-    await page.getByRole("button", { name: "Open navigation", exact: true }).click()
+    await openNavigation.click()
     navigationLink = page
       .getByRole("dialog", { name: "Navigation" })
       .getByRole("link", { name: view, exact: true })
@@ -148,8 +85,8 @@ When(
   }
 )
 
-When("I press Space on the focused failover switch", async ({ page }) => {
-  const switchControl = switchByLabel(page, "Fallback chaining")
+When("I press Space on the focused fallback switch", async ({ page }) => {
+  const switchControl = switchByLabel(page, "Fallback")
   await expect(switchControl).toBeFocused()
   const before = await switchControl.getAttribute("aria-checked")
   expect(before).toMatch(/^(true|false)$/)
@@ -161,46 +98,20 @@ When("I press Space on the focused failover switch", async ({ page }) => {
   )
 })
 
-Then("the failover sub-switches should remain reachable by Tab", async ({ page }) => {
-  for (const label of [
-    "Failover on rate limit (429)",
-    "Failover on timeout",
-    "Failover on server error (5xx)",
-  ]) {
+Then("the max attempts controls should remain reachable by Tab", async ({ page }) => {
+  // Turning fallback off hides the stepper. Turn it back on with the
+  // keyboard, then continue through the controls in document order.
+  const fallback = switchByLabel(page, "Fallback")
+  await expect(fallback).toBeFocused()
+  if ((await fallback.getAttribute("aria-checked")) === "false") {
+    await page.keyboard.press("Space")
+    await expect(fallback).toBeChecked()
+  }
+  for (const label of ["Decrease max attempts", "Increase max attempts"]) {
     await page.keyboard.press("Tab")
-    await expectFocusVisible(switchByLabel(page, label))
+    await expectFocusVisible(page.getByRole("button", { name: label, exact: true }))
   }
 })
-
-When(
-  "I open the {string} routing tab using keyboard only",
-  async ({ page }, tabLabel: string) => {
-    const tab = page.getByRole("tab", { name: tabLabel, exact: true })
-    await tab.focus()
-    await expectFocusVisible(tab)
-    await page.keyboard.press("Enter")
-    await expect(tab).toHaveAttribute("aria-selected", "true")
-  }
-)
-
-When(
-  "I choose {string} in the simulator operation using keyboard only",
-  async ({ page }, operation: string) => {
-    const simulatorGroup = page.getByRole("group", {
-      name: "Simulator operation",
-      exact: true,
-    })
-    const current = simulatorGroup.getByRole("button", { name: "Search", exact: true })
-    const requested = simulatorGroup.getByRole("button", { name: operation, exact: true })
-
-    await current.focus()
-    await expectFocusVisible(current)
-    await page.keyboard.press("Tab")
-    await expectFocusVisible(requested)
-    await page.keyboard.press("Space")
-    await expect(requested).toHaveAttribute("aria-pressed", "true")
-  }
-)
 
 async function openVisualApp(
   page: Page,
@@ -223,16 +134,13 @@ async function openVisualApp(
 /**
  * Settle gate for screenshots: the shell logo (awaited in openVisualApp)
  * paints before backend data resolves, so screenshots must additionally await
- * a data-loaded signal. Under the deterministic stub the Routing workbench
- * always renders the failover status, the Settings Providers/Keys tabs render
- * the stub catalog names, and the Failover tab renders its master switch —
- * whichever settles first proves the view is data-complete.
+ * a data-loaded signal. The Settings Providers/Keys tabs render the stub
+ * catalog names and the Providers tab renders its Fallback switch.
  */
 async function waitForDeterministicData(page: Page): Promise<void> {
   const dataSignal = page
-    .getByText(/^Failover (active|inactive)$/)
-    .or(page.getByText("Brave Search", { exact: true }))
-    .or(page.getByText("Fallback chaining", { exact: true }))
+    .getByText("Brave Search", { exact: true })
+    .or(page.getByRole("switch", { name: "Fallback", exact: true }))
   await expect(dataSignal.first()).toBeVisible({ timeout: 15_000 })
 }
 
@@ -253,10 +161,6 @@ function switchByLabel(page: Page, label: string): Locator {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-async function transitionDuration(locator: Locator): Promise<string> {
-  return locator.evaluate((element) => getComputedStyle(element).transitionDuration)
 }
 
 async function expectFocusVisible(locator: Locator): Promise<void> {

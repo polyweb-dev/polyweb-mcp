@@ -13,8 +13,11 @@ export interface BackendProviderStatus {
   enabled: boolean
   enable_mask: number
   support_mask: number
-  priority: number
+  /** List price from the provider limits catalog, by operation. */
+  call_cost_usd?: Partial<Record<"search" | "fetch", string | number | null>>
+  keyless_call_cost_usd?: Partial<Record<"search" | "fetch", string | number | null>>
   health: BackendHealth | null
+  health_checked_at?: string | null
   circuit_breaker: BackendCircuitBreaker
   latency_p95_ms: number | null
   secret_presence: BackendSecretPresence
@@ -31,12 +34,4 @@ export interface BackendProviderTest {
   latency_ms: number
   checked_at: string
   detail: string | null
-}
-
-export interface BackendSecretStatus {
-  provider: string
-  presence: BackendSecretPresence
-  fingerprint: string | null
-  updated_at: string | null
-  source: BackendSecretSource
 }

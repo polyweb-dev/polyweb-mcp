@@ -1,45 +1,21 @@
 import { expect } from "@playwright/test"
-import { When, Then } from "./fixtures"
+import { Then } from "./fixtures"
 
-/**
- * PG-S1 Search empty state (Red).
- *
- * Wrapper contract (Developer implements exactly this in PlaygroundPage):
- *   <div data-testid="search-layout" data-state="hero|docked" ...>
- * Idle -> hero (centered, min-h ~55-60vh, max-w-3xl); any search content
- * (activeSearch / isSearching / searchError) -> docked (top, results below).
- * Animation: transition-all duration-300 ease-out motion-reduce:transition-none.
- */
-
-Then("the search request zone should be in hero state", async ({ page }) => {
-  const zone = page.getByTestId("search-layout")
-  await expect(zone).toHaveAttribute("data-state", "hero")
-  const cls = (await zone.getAttribute("class")) ?? ""
-  expect(cls).toContain("transition-all")
-  expect(cls).toContain("duration-300")
-  expect(cls).toContain("ease-out")
-  expect(cls).toContain("motion-reduce:transition-none")
-  expect(cls).toMatch(/min-h-\[(55|60)vh\]/)
-  expect(cls).toContain("max-w-3xl")
-  expect(cls).not.toContain("top-docked")
-})
+/** The search composer stays docked at full width in every request state. */
 
 Then("the search request zone should be in docked state", async ({ page }) => {
   const zone = page.getByTestId("search-layout")
   await expect(zone).toHaveAttribute("data-state", "docked")
   const cls = (await zone.getAttribute("class")) ?? ""
   expect(cls).toContain("top-docked")
-  expect(cls).toContain("transition-all")
-  expect(cls).toContain("duration-300")
-  expect(cls).toContain("ease-out")
-  expect(cls).toContain("motion-reduce:transition-none")
+  expect(cls).toContain("w-full")
 })
 
 Then(
   "the search form should be present with no search results",
   async ({ page }) => {
     await expect(
-      page.getByPlaceholder(/Search across all providers/i)
+      page.getByPlaceholder(/Search the web/i)
     ).toBeVisible()
     await expect(page.getByTestId("search-layout")).toBeVisible()
     // No result cards and no telemetry bar on the empty/error-first surface.
@@ -51,7 +27,7 @@ Then(
 Then(
   "the search results should render below the search form",
   async ({ page }) => {
-    const form = page.getByPlaceholder(/Search across all providers/i)
+    const form = page.getByPlaceholder(/Search the web/i)
     const resultsHeading = page.getByText(/Returned results|% match/i).first()
     await expect(resultsHeading).toBeVisible()
     const formBox = await form.boundingBox()
@@ -62,25 +38,21 @@ Then(
   }
 )
 
-Then("the search request zone should animate smoothly", async ({ page }) => {
+Then("the search request zone should stay full width without a layout transition", async ({ page }) => {
   const zone = page.getByTestId("search-layout")
-  await expect(zone).toBeVisible()
+  await expect(zone).toHaveAttribute("data-state", "docked")
   const cls = (await zone.getAttribute("class")) ?? ""
-  expect(cls).toContain("transition-all")
-  expect(cls).toContain("duration-300")
-  expect(cls).toContain("ease-out")
-  expect(cls).toContain("motion-reduce:transition-none")
+  expect(cls.split(/\s+/)).toEqual(expect.arrayContaining(["top-docked", "w-full"]))
+  expect(cls).not.toContain("transition-all")
+  expect(cls).not.toMatch(/min-h-|max-w-3xl/)
 })
 
 Then(
   "the search form should keep its value {string}",
   async ({ page }, value: string) => {
     await expect(
-      page.getByPlaceholder(/Search across all providers/i)
+      page.getByPlaceholder(/Search the web/i)
     ).toHaveValue(value)
   }
 )
 
-// Re-export guard: keep this module's When import referenced so lint does not
-// flag the shared fixture import as unused.
-void When

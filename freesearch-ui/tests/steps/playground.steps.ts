@@ -16,7 +16,7 @@ import {
  */
 When("I submit the playground search query {string}", async ({ page }, query: string) => {
   await page
-    .getByPlaceholder(/Search across all providers/i)
+    .getByPlaceholder(/Search the web/i)
     .fill(query)
   await page.getByRole("button", { name: "Search", exact: true }).click()
 })
@@ -66,13 +66,13 @@ When(
 )
 
 When("I submit the playground fetch URL {string}", async ({ page }, url: string) => {
-  await page.getByPlaceholder(/Enter a URL to fetch/i).fill(url)
+  await page.getByPlaceholder(/URL to fetch/i).fill(url)
   await page.getByRole("button", { name: "Fetch", exact: true }).click()
 })
 
 Then("the playground should show fetch content or an error banner", async ({ page }) => {
   const panel = page.locator("main")
-  const content = panel.getByText(/Parsed Markdown Document/i)
+  const content = panel.getByText(/Parsed markdown/i)
   const errorBanner = panel.locator('p[style*="status-danger"]', {
     hasText: /unreachable|failed|error|unavailable|no provider|timed out|timeout/i,
   })

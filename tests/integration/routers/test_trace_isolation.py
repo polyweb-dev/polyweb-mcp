@@ -345,6 +345,8 @@ async def test_historical_unowned_rows_stay_outside_account_reads(
 async def test_same_project_teammate_reads_another_actors_traces_and_usage(
     isolation_client: TestClient,
 ) -> None:
+    from freesearch.models.project_permissions import ProjectPermission
+    from freesearch.persistence.projects import ProjectRepository
     from tests.fixtures.execution import add_execution_member
 
     headers, owner, pid = await _login(isolation_client, "trace-team-owner")
@@ -360,6 +362,13 @@ async def test_same_project_teammate_reads_another_actors_traces_and_usage(
         project_id=UUID(pid),
         user_id=account_id_from_pair(pair),
     )
+    async with isolation_client.app.state.repository.session() as session:
+        await ProjectRepository(session).set_member_permissions(
+            UUID(pid),
+            account_id_from_pair(pair),
+            int(ProjectPermission.TRACES | ProjectPermission.USAGE),
+        )
+        await session.commit()
     response = isolation_client.post(
         "/search", json={"project_id": pid, "query": "team-visible"}, headers=headers
     )
@@ -368,8 +377,8 @@ async def test_same_project_teammate_reads_another_actors_traces_and_usage(
     detail = isolation_client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=teammate)
     assert detail.status_code == 200
     assert detail.json()["user_id"] == owner
-    assert detail.json()["input"] is None
-    assert detail.json()["output"] is None
+    assert detail.json()["input"] == "team-visible"
+    assert detail.json()["output"] is not None
     for suffix in ("traces", "usage", "dashboard"):
         team_view = isolation_client.get(f"/api/v1/projects/{pid}/{suffix}", headers=teammate)
         owner_view = isolation_client.get(f"/api/v1/projects/{pid}/{suffix}", headers=headers)
@@ -421,7 +430,7 @@ async def test_policy_read_failure_keeps_execution_and_audit_but_samples_every_s
     await SettingsService(repository).update_project_settings(
         actor,
         UUID(pid),
-        ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(sampling_rate=0.0)),
+        ProjectSettingsUpdate(expected_revision=0, trace=TraceSettings(detail="metadata")),
     )
     memory = InMemorySpanExporter()
     isolation_client.app.state.observability._provider.add_span_processor(
@@ -438,11 +447,14 @@ async def test_policy_read_failure_keeps_execution_and_audit_but_samples_every_s
     finished = memory.get_finished_spans()
     assert len(finished) >= 2
     for span in finished:
-        assert span.attributes[TraceAttribute.SAMPLED] is False
+        assert TraceAttribute.SAMPLED not in span.attributes
         assert span.attributes[TraceAttribute.CAPTURE_PAYLOAD] is False
         assert "DO_NOT_BUFFER_ON_FAILURE" not in span.to_json()
     items = isolation_client.get(f"/api/v1/projects/{pid}/traces", headers=headers).json()["items"]
-    assert [item["trace_id"] for item in items] == [first.headers["x-trace-id"]]
+    assert {item["trace_id"] for item in items} == {
+        first.headers["x-trace-id"],
+        response.headers["x-trace-id"],
+    }
     async with repository.session() as session:
         events = await AuditRepository(session).list_project_events(project_id=UUID(pid))
     assert any(event.action == "settings.edit" for event in events)

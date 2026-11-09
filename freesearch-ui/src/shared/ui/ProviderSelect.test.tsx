@@ -86,7 +86,7 @@ describe("ProviderSelect", () => {
     const row = screen.getByRole("option", { name: "Auto arbitration" })
     const mark = within(row).getByTestId("provider-select-mark")
     expect(mark.tagName).toBe("svg")
-    expect(mark.getAttribute("class") ?? "").toContain("lucide-sparkles")
+    expect(mark.getAttribute("class") ?? "").toContain("lucide-route")
     expect(row.querySelector("img")).toBeNull()
   })
 
@@ -121,7 +121,7 @@ describe("ProviderSelect", () => {
 
     const trigger = screen.getByTestId("probe-picker")
     const mark = within(trigger).getByTestId("provider-select-mark")
-    expect(mark.getAttribute("class") ?? "").toContain("lucide-sparkles")
+    expect(mark.getAttribute("class") ?? "").toContain("lucide-route")
     expect(trigger.textContent).toContain("Auto arbitration")
   })
 
@@ -136,18 +136,16 @@ describe("ProviderSelect", () => {
     expect(screen.queryByRole("listbox")).toBeNull()
   })
 
-  it("holds no check gutter: no row shows a check mark", async () => {
-    renderPicker()
+  it("shows a visible check mark on the shown value row only", async () => {
+    renderPicker("tavily")
     await openPicker()
 
     const rows = screen.getAllByRole("option")
     expect(rows.length).toBeGreaterThan(0)
-    for (const row of rows) {
-      expect(row.querySelector("svg.lucide-check")).toBeNull()
-    }
-    expect(
-      screen.getByRole("listbox").querySelector("svg.lucide-check")
-    ).toBeNull()
+    const visibleChecks = rows.filter(
+      (row) => !(row.querySelector("svg.lucide-check")?.getAttribute("class") ?? "invisible").includes("invisible")
+    )
+    expect(visibleChecks).toEqual([screen.getByRole("option", { name: "Tavily" })])
   })
 
   it("starts each row with the caller identity row", async () => {
@@ -159,18 +157,20 @@ describe("ProviderSelect", () => {
     }
   })
 
-  it("marks the shown value row selected with signal background and white text", async () => {
+  it("marks the shown value row selected with strong text and a check, never a signal fill", async () => {
     renderPicker("auto")
     await openPicker()
 
     const selected = screen.getByRole("option", { name: "Auto arbitration" })
     expect(selected.getAttribute("aria-selected")).toBe("true")
-    expect(selected).toHaveClass("bg-[var(--signal)]")
-    expect(selected).toHaveClass("text-white")
+    expect(selected).toHaveClass("text-[var(--text-strong)]")
+    expect(selected.className).not.toContain("bg-[var(--signal)]")
+    expect(selected.querySelector("svg.lucide-check")?.getAttribute("class") ?? "").not.toContain("invisible")
 
     const other = screen.getByRole("option", { name: "Tavily" })
     expect(other.getAttribute("aria-selected")).toBe("false")
     expect(other.className).not.toContain("bg-[var(--signal)]")
+    expect(other.querySelector("svg.lucide-check")?.getAttribute("class") ?? "").toContain("invisible")
   })
 
   it("keeps aria-selected on every row, true only for the shown value", async () => {
@@ -209,7 +209,7 @@ describe("ProviderSelect", () => {
     )
   })
 
-  it("tints the keyboard cursor row with the surface color, with the shown value winning", async () => {
+  it("tints the keyboard cursor row with the raised surface and moves the tint with the cursor", async () => {
     renderPicker("auto")
     await openPicker()
     const trigger = screen.getByTestId("probe-picker")
@@ -217,11 +217,11 @@ describe("ProviderSelect", () => {
     fireEvent.keyDown(trigger, { key: "ArrowDown" })
     const cursor = screen.getByRole("option", { name: "Tavily" })
     expect(cursor.getAttribute("aria-selected")).toBe("false")
-    expect(cursor).toHaveClass("bg-[var(--surface)]")
+    expect(cursor).toHaveClass("bg-[var(--raised)]")
 
     fireEvent.keyDown(trigger, { key: "ArrowUp" })
     const selected = screen.getByRole("option", { name: "Auto arbitration" })
-    expect(selected).toHaveClass("bg-[var(--signal)]")
-    expect(selected.className).not.toContain("bg-[var(--surface)]")
+    expect(selected).toHaveClass("bg-[var(--raised)]")
+    expect(screen.getByRole("option", { name: "Tavily" }).className).not.toContain("bg-[var(--raised)]")
   })
 })

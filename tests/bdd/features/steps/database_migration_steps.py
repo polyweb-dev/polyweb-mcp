@@ -1,7 +1,7 @@
 """Behave steps for the alpha database lifecycle (TASK-000040).
 
 Only the critical end-to-end flows live here: create at the baseline, reject an
-older database without modifying it, and keep worktree databases independent.
+database with an unknown revision without modifying it, and keep worktrees independent.
 Detailed permutations are covered by the persistence integration tests.
 """
 
@@ -23,8 +23,8 @@ from freesearch.persistence.database_migrations import (
     validate_database_schema,
 )
 
-# 0001_alpha_baseline remains the baseline; fresh databases include the additive A2 head.
-_MIGRATION_HEAD = "0002_capacity_actor"
+# 0001_alpha_baseline remains the baseline; fresh databases include additive migrations.
+_MIGRATION_HEAD = migration_head()
 
 
 def _scenario_root(context: Any) -> Path:
@@ -38,7 +38,7 @@ def _sha256(path: Path) -> str:
 
 
 def _create_older_database(database: Path, revision: str) -> None:
-    """A pre-alpha database in rollback-journal mode stamped at ``revision``."""
+    """A database in rollback-journal mode stamped at an unknown ``revision``."""
 
     database.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(database)
@@ -68,7 +68,6 @@ def _create_older_database(database: Path, revision: str) -> None:
 
 def _assert_at_alpha_baseline(database: Path) -> None:
     status = database_status(database)
-    assert migration_head() == _MIGRATION_HEAD
     assert status.current_revision == _MIGRATION_HEAD, status
     assert status.schema_valid is True, status
 
@@ -105,7 +104,7 @@ def then_selected_database_validates(context: Any) -> None:
         connection.close()
 
 
-@given('a FreeSearch database left at the older revision "{revision}"')
+@given('a FreeSearch database left at the unknown revision "{revision}"')
 def given_older_selected_database(context: Any, revision: str) -> None:
     database = _scenario_root(context) / "old checkout" / "freesearch.db"
     _create_older_database(database, revision)
@@ -123,7 +122,7 @@ def when_try_prepare_selected_database(context: Any) -> None:
         context.reset_error = error
 
 
-@then('FreeSearch refuses the database with a reset message naming "{revision}"')
+@then('FreeSearch refuses the database with a compatibility message naming "{revision}"')
 def then_refused_with_reset_message(context: Any, revision: str) -> None:
     error = context.reset_error
     assert error is not None, "the older database was not rejected"
@@ -131,8 +130,7 @@ def then_refused_with_reset_message(context: Any, revision: str) -> None:
     assert str(absolute_database_path(context.database_path)) in message, message
     assert revision in message, message
     assert _MIGRATION_HEAD in message, message
-    assert "FREESEARCH_DB" in message, message
-    assert "-wal" in message and "-shm" in message, message
+    assert "compatible FreeSearch version" in message, message
 
 
 @then("the refused database bytes are unchanged")
@@ -144,7 +142,7 @@ def then_refused_database_unchanged(context: Any) -> None:
     assert {name for name in new_files if not name.endswith(".migration.lock")} == set(), new_files
 
 
-@given('a main checkout database at the older revision "{revision}"')
+@given('a main checkout database at the unknown revision "{revision}"')
 def given_main_checkout_database(context: Any, revision: str) -> None:
     main_database = _scenario_root(context) / "main" / "freesearch.db"
     _create_older_database(main_database, revision)

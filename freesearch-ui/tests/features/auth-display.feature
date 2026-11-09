@@ -1,7 +1,8 @@
 Feature: Auth display errors and brand
   The login, register, and confirmation screens show friendly error text,
   the repository brand, and the configuration state. No screen shows a raw
-  server body.
+  server body. Signup offers no account-type choice and sends exactly
+  {email, password}.
 
   @stub
   Scenario: Register shows the friendly password rule without raw JSON
@@ -11,6 +12,8 @@ Feature: Auth display errors and brand
     And I submit a registration with a weak password
     Then the register screen shows the password rule text
     And the register screen shows no raw JSON body
+    And the register screen offers no account-type choice
+    And the registration request carried only email and password
 
   @stub
   Scenario: Login shows friendly bad-credentials text without raw JSON

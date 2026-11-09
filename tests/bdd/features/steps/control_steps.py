@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
@@ -34,29 +34,19 @@ from freesearch.models.contracts import (
 from freesearch.models.provider_access import is_operation_enabled
 from freesearch.persistence.storage import SQLiteRepository
 from freesearch.routers.api import create_app
+from freesearch.services.credentials import credential_secret_slot
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
+    auth_service_for,
     configure_bdd_secret,
     promote_to_system_admin,
     temp_email,
 )
-from tests.fixtures.execution import bdd_project_id
-
-
-class _MemorySecretStore:
-    """Scenario-local keyring double; no OS keyring or network is touched."""
-
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-
-    def get(self, name: str) -> str | None:
-        return self.values.get(name)
-
-    def set(self, name: str, value: str) -> None:
-        self.values[name] = value
-
-    def delete(self, name: str) -> None:
-        self.values.pop(name, None)
+from tests.fixtures.execution import (
+    _install_bdd_adapters,
+    account_id_from_headers,
+    seed_member_project,
+)
 
 
 class _ScenarioDirectory:
@@ -266,25 +256,109 @@ def _control_headers(context: Any) -> dict[str, str]:
 
 
 def _build_mcp_server(context: Any) -> Any:
-    """Build one MCP tool server with a real project API key as its stdio credential."""
+    """Use the same project and vault pools as the REST requests."""
 
-    from tests.fixtures.execution import bdd_mcp_server
+    from freesearch.mcp.server import create_server
+    from tests.fixtures.api_keys import key_for_account
 
-    server, context.mcp_pid = context.loop.run_until_complete(
-        bdd_mcp_server(context, context.adapters, "control-mcp")
+    key = context.loop.run_until_complete(
+        key_for_account(
+            context.repository,
+            account_id_from_headers(context.developer_headers),
+            UUID(context.project_id),
+        )
     )
+    server = create_server(
+        context.adapters,
+        repository=context.repository,
+        auth_service=auth_service_for(context.repository),
+        stdio_token=key.key,
+    )
+    session = server._mcp_server.lifespan(server)
+    context.loop.run_until_complete(session.__aenter__())
+    sessions = getattr(context, "_bdd_mcp_sessions", None)
+    if sessions is None:
+        sessions = []
+        context._bdd_mcp_sessions = sessions
+    sessions.append((session, server))
+    context.mcp_pid = context.project_id
     return server
+
+
+def _setup_control_project(context: Any) -> None:
+    attribution = context.loop.run_until_complete(
+        seed_member_project(context.repository, context.developer_headers)
+    )
+    context.project_id = str(attribution.project_id)
+    context.execution_headers = _login_headers(context, "control-developer")
+    secrets = {adapter.name: f"offline-control-{adapter.name}" for adapter in context.adapters}
+    with _client(context) as client:
+        member = client.post(
+            f"/api/v1/projects/{context.project_id}/members",
+            headers=context.developer_headers,
+            json={
+                "user_id": str(account_id_from_headers(context.execution_headers)),
+                "permissions": 3,
+            },
+        )
+        assert member.status_code == 201, member.text
+        assert member.json()["role"] == "developer" and member.json()["permissions"] == 3
+        for provider in ("keenable", "tavily"):
+            response = client.patch(
+                f"/api/v1/providers/{provider}",
+                json={"enabled": False},
+                headers=context.admin_headers,
+            )
+            assert response.status_code == 200, response.text
+        for adapter in context.adapters:
+            key = client.post(
+                "/api/v1/account/vault/keys",
+                headers=context.developer_headers,
+                json={
+                    "provider_type": adapter.name,
+                    "label": f"Control {adapter.name}",
+                    "secret": secrets[adapter.name],
+                },
+            )
+            assert key.status_code == 201, key.text
+            operations = ["search"]
+            if adapter.capabilities.fetch:
+                operations.append("fetch")
+            pool = client.post(
+                f"/api/v1/account/vault/keys/{key.json()['id']}/pools",
+                headers=context.developer_headers,
+                json={
+                    "label": "Control pool",
+                    "project_id": context.project_id,
+                    "operations": operations,
+                },
+            )
+            assert pool.status_code == 201, pool.text
+        for operation in ("search", "fetch"):
+            order = [
+                adapter.name
+                for adapter in context.adapters
+                if getattr(adapter.capabilities, operation)
+            ]
+            response = client.put(
+                f"/api/v1/projects/{context.project_id}/routing/order/{operation}",
+                headers=context.developer_headers,
+                json={"strategy": "custom", "order": order},
+            )
+            assert response.status_code == 200, response.text
+    _install_bdd_adapters(context, context.adapters, secrets)
 
 
 @given("an offline control API with stub adapters")
 def step_given_control_api(context: Any) -> None:
     configure_bdd_secret(context)
     _open_repository(context)
-    context.adapters = [_ControlAdapter("exa"), _ControlAdapter("brave")]
+    context.adapters = [_ControlAdapter("exa"), _ControlAdapter("brave", fetch_capable=False)]
     _build_app(context)
     # Admin owns mutations, Developer owns reads. One account per role is enough.
     context.admin_headers = _login_headers(context, "control-admin", system_admin=True)
     context.developer_headers = _login_headers(context, "control-reader", system_admin=True)
+    _setup_control_project(context)
 
 
 @given("an offline control API with stub adapters and call counters")
@@ -301,6 +375,7 @@ def step_given_control_api_counters(context: Any) -> None:
     # Reads and searches need an account; mutations need Admin.
     context.admin_headers = _login_headers(context, "control-admin", system_admin=True)
     context.developer_headers = _login_headers(context, "control-reader", system_admin=True)
+    _setup_control_project(context)
 
 
 @given("an offline control API with stub adapters and call counters and an MCP server")
@@ -315,17 +390,17 @@ def step_given_control_api_counters_mcp(context: Any) -> None:
     _build_app(context)
     context.admin_headers = _login_headers(context, "control-admin", system_admin=True)
     context.developer_headers = _login_headers(context, "control-reader", system_admin=True)
+    _setup_control_project(context)
     context.server = _build_mcp_server(context)
 
 
-@given("an offline control API with an in-memory secret store")
+@given("an offline control API with an encrypted vault")
 def step_given_control_api_secret_store(context: Any) -> None:
     configure_bdd_secret(context)
     _open_repository(context)
     context.temp_directory = _ScenarioDirectory()
     context.control_directory = Path(context.temp_directory.name)
     context.adapters = [_ControlAdapter("exa"), _ControlAdapter("brave")]
-    context.secret_store = _MemorySecretStore()
     _build_app(context)
     # Secret writes need the Admin role.
     context.admin_headers = _login_headers(context, "control-admin", system_admin=True)
@@ -335,10 +410,15 @@ def step_given_control_api_secret_store(context: Any) -> None:
 def step_given_failing_control_api(context: Any) -> None:
     configure_bdd_secret(context)
     _open_repository(context)
-    context.adapters = [_ControlAdapter("exa", fail=True), _ControlAdapter("brave")]
+    context.adapters = [
+        _ControlAdapter("exa", fail=True),
+        _ControlAdapter("brave", fetch_capable=False),
+    ]
     _build_app(context)
     # Search needs any role, stats and dashboard need the Reader role.
     context.developer_headers = _login_headers(context, "control-reader", system_admin=True)
+    context.admin_headers = context.developer_headers
+    _setup_control_project(context)
 
 
 @when("I list the control-plane providers")
@@ -408,53 +488,64 @@ def step_when_write_secret(context: Any, provider: str) -> None:
     context.raw_key = "offline-control-secret"
     with _client(context) as client:
         context.secret_write_response = client.post(
-            "/api/v1/system/credentials",
+            "/api/v1/account/vault/keys",
             json={"provider_type": provider, "label": "control secret", "secret": context.raw_key},
             headers=context.admin_headers,
         )
 
 
-@then("the secret response should be configured with a masked fingerprint")
+@then("the vault response should be configured without exposing the secret")
 def step_then_secret_configured(context: Any) -> None:
-    from freesearch.models.projects import CredentialInstanceRead
+    from freesearch.models.vault import VaultKeyDetails
 
-    assert context.secret_write_response.status_code == 201
+    assert context.secret_write_response.status_code == 201, context.secret_write_response.text
     body = context.secret_write_response.json()
-    assert set(body) == set(CredentialInstanceRead.model_fields)
+    assert set(body) == set(VaultKeyDetails.model_fields)
     assert body["status"] == "active" and body["auth_mode"] == "api_key"
     assert context.raw_key not in context.secret_write_response.text
+    slot = credential_secret_slot(UUID(body["id"]), body["generation"])
+    assert (
+        context.loop.run_until_complete(context.app.state.secret_store.get(slot)) == context.raw_key
+    )
 
 
 @when('I delete the "{provider}" secret through the control API')
 def step_when_delete_secret(context: Any, provider: str) -> None:
     with _client(context) as client:
         context.secret_delete_response = client.delete(
-            f"/api/v1/system/credentials/{context.secret_write_response.json()['id']}",
+            f"/api/v1/account/vault/keys/{context.secret_write_response.json()['id']}",
             headers=context.admin_headers,
         )
 
 
-@then("the secret response should report missing and contain no raw key")
+@then("the vault value should be removed without exposing the secret")
 def step_then_secret_missing(context: Any) -> None:
-    assert context.secret_delete_response.status_code == 204
+    assert context.secret_delete_response.status_code == 200, context.secret_delete_response.text
     assert context.raw_key not in context.secret_delete_response.text
+    body = context.secret_write_response.json()
+    slot = credential_secret_slot(UUID(body["id"]), body["generation"])
+    assert context.loop.run_until_complete(context.app.state.secret_store.get(slot)) is None
+    with _client(context) as client:
+        listed = client.get("/api/v1/account/vault/keys", headers=context.admin_headers)
+    assert listed.status_code == 200, listed.text
+    assert all(key["id"] != body["id"] for key in listed.json())
+    assert context.raw_key not in listed.text
 
 
-@when("I update routing to first_only and free_first with 2 attempts")
+@when("I update routing to first_only with 2 attempts")
 def step_when_update_routing(context: Any) -> None:
     with _client(context) as client:
         context.routing_response = client.put(
             "/api/v1/routing/config",
             json={
                 "fallback_policy": "first_only",
-                "cost_optimization_preset": "free_first",
                 "max_attempts": 2,
             },
             headers=context.admin_headers,
         )
 
 
-@then("the routing GET should equal first_only free_first and 2 attempts")
+@then("the routing GET should equal first_only and 2 attempts")
 def step_then_routing_round_trip(context: Any) -> None:
     assert context.routing_response.status_code == 200
     with _client(context) as client:
@@ -462,7 +553,6 @@ def step_then_routing_round_trip(context: Any) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "fallback_policy": "first_only",
-        "cost_optimization_preset": "free_first",
         "max_attempts": 2,
     }
 
@@ -473,10 +563,10 @@ def step_when_control_search(context: Any) -> None:
         context.search_response = client.post(
             "/search",
             json={
-                "project_id": bdd_project_id(context, context.developer_headers),
+                "project_id": context.project_id,
                 "query": "control activity",
             },
-            headers=context.developer_headers,
+            headers=context.execution_headers,
         )
         context.dashboard_response = client.get("/dashboard", headers=context.developer_headers)
 
@@ -498,10 +588,10 @@ def step_when_failing_control_search(context: Any) -> None:
         context.failure_response = client.post(
             "/search",
             json={
-                "project_id": bdd_project_id(context, context.developer_headers),
+                "project_id": context.project_id,
                 "query": "control failure",
             },
-            headers=context.developer_headers,
+            headers=context.execution_headers,
         )
         context.stats_response = client.get("/stats", headers=context.developer_headers)
         context.dashboard_response = client.get("/dashboard", headers=context.developer_headers)
@@ -576,16 +666,16 @@ def _store_fanout(context: Any, status: int, body: Any) -> None:
 
 @when("I submit offline search and fetch via REST")
 def step_when_rest_search_and_fetch(context: Any) -> None:
-    headers = _control_headers(context)
+    headers = context.execution_headers
     with _client(context) as client:
         search = client.post(
             "/search",
-            json={"project_id": bdd_project_id(context, headers), "query": "offline mask probe"},
+            json={"project_id": context.project_id, "query": "offline mask probe"},
             headers=headers,
         )
         fetch = client.post(
             "/fetch",
-            json={"project_id": bdd_project_id(context, headers), "url": "https://example.com/doc"},
+            json={"project_id": context.project_id, "url": "https://example.com/doc"},
             headers=headers,
         )
     _store_search(context, search.status_code, search.json() if search.content else None)
@@ -598,10 +688,10 @@ def step_when_rest_search_only(context: Any) -> None:
         search = client.post(
             "/search",
             json={
-                "project_id": bdd_project_id(context, _control_headers(context)),
+                "project_id": context.project_id,
                 "query": "offline mask probe",
             },
-            headers=_control_headers(context),
+            headers=context.execution_headers,
         )
     _store_search(context, search.status_code, search.json() if search.content else None)
 
@@ -615,8 +705,8 @@ def step_when_rest_fetch_require(context: Any, provider: str) -> None:
     with _client(context) as client:
         fetch = client.post(
             "/fetch",
-            json={"project_id": bdd_project_id(context, _control_headers(context)), **payload},
-            headers=_control_headers(context),
+            json={"project_id": context.project_id, **payload},
+            headers=context.execution_headers,
         )
     _store_fetch(context, fetch.status_code, fetch.json() if fetch.content else None)
 
@@ -630,8 +720,8 @@ def step_when_rest_search_require(context: Any, provider: str) -> None:
     with _client(context) as client:
         search = client.post(
             "/search",
-            json={"project_id": bdd_project_id(context, _control_headers(context)), **payload},
-            headers=_control_headers(context),
+            json={"project_id": context.project_id, **payload},
+            headers=context.execution_headers,
         )
     _store_search(context, search.status_code, search.json() if search.content else None)
 
@@ -645,8 +735,8 @@ def step_when_rest_search_prefer(context: Any, provider: str) -> None:
     with _client(context) as client:
         search = client.post(
             "/search",
-            json={"project_id": bdd_project_id(context, _control_headers(context)), **payload},
-            headers=_control_headers(context),
+            json={"project_id": context.project_id, **payload},
+            headers=context.execution_headers,
         )
     _store_search(context, search.status_code, search.json() if search.content else None)
 
@@ -657,11 +747,11 @@ def step_when_rest_search_auto(context: Any) -> None:
         search = client.post(
             "/search",
             json={
-                "project_id": bdd_project_id(context, _control_headers(context)),
+                "project_id": context.project_id,
                 "query": "offline mask probe",
                 "routing": {"mode": "auto"},
             },
-            headers=_control_headers(context),
+            headers=context.execution_headers,
         )
     _store_search(context, search.status_code, search.json() if search.content else None)
 
@@ -672,11 +762,11 @@ def step_when_rest_fanout(context: Any) -> None:
         response = client.post(
             "/search",
             json={
-                "project_id": bdd_project_id(context, _control_headers(context)),
+                "project_id": context.project_id,
                 "query": "offline mask probe",
                 "fanout": True,
             },
-            headers=_control_headers(context),
+            headers=context.execution_headers,
         )
     _store_fanout(context, response.status_code, response.json() if response.content else None)
 
@@ -692,8 +782,8 @@ def step_when_rest_fanout_restricted(context: Any, allow_list: str) -> None:
     with _client(context) as client:
         response = client.post(
             "/search",
-            json={"project_id": bdd_project_id(context, _control_headers(context)), **payload},
-            headers=_control_headers(context),
+            json={"project_id": context.project_id, **payload},
+            headers=context.execution_headers,
         )
     _store_fanout(context, response.status_code, response.json() if response.content else None)
 
@@ -785,6 +875,12 @@ def step_then_rest_fetch_outcome(context: Any, outcome: str) -> None:
         assert context.rest_fetch_body["provider"] == expected, context.rest_fetch_body
     else:
         raise AssertionError(f"unknown fetch outcome {outcome!r}")
+
+
+@then('the REST fetch should fail with {status:d} containing "{detail}"')
+def step_then_rest_fetch_error(context: Any, status: int, detail: str) -> None:
+    assert context.rest_fetch_status == status, (context.rest_fetch_status, context.rest_fetch_body)
+    assert detail in str(context.rest_fetch_body), context.rest_fetch_body
 
 
 @then(

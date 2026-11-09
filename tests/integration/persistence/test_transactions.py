@@ -255,11 +255,14 @@ async def test_binding_mutation_and_its_audit_roll_back_together(
 
     from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
     from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-    from freesearch.models.credentials import CredentialCreate
-    from freesearch.models.providers import BindingCreate
-    from freesearch.services import provider_bindings
-    from freesearch.services.credentials import CredentialService
-    from freesearch.services.provider_bindings import ProviderBindingService
+    from freesearch.models.projects import CredentialOwnerScope
+    from freesearch.models.vault import KeyPoolCreate
+    from freesearch.persistence.bindings import ProjectBindingRepository
+    from freesearch.persistence.credentials import CredentialRepository
+    from freesearch.persistence.key_pools import KeyPoolRepository
+    from freesearch.services import key_pools
+    from freesearch.services.credentials import credential_secret_slot
+    from freesearch.services.key_pools import KeyPoolService
     from tests.fixtures.auth import create_temp_user, temp_email, temp_principal
     from tests.fixtures.execution import seed_execution_project
 
@@ -267,26 +270,40 @@ async def test_binding_mutation_and_its_audit_roll_back_together(
     actor = temp_principal(user)
     project_id = (await seed_execution_project(repository, user_id=user.id)).project_id
     store = EncryptedDbSecretStore(repository, SecretCodec(MasterKey(os.urandom(32))))
-    credential = await CredentialService(repository, store).create_project_credential(
-        actor,
-        project_id,
-        CredentialCreate(provider_type="tavily", label="tx", secret="fake-tx-secret"),  # type: ignore[arg-type]
-    )
-    original = provider_bindings.record_project_event
+    async with repository.session() as session:
+        credential = await CredentialRepository(session).insert_credential(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            provider_type="exa",
+            owner_scope=CredentialOwnerScope.SYSTEM,
+            owner_project_id=None,
+            owner_user_id=user.id,
+            label="tx",
+            auth_mode="api_key",
+            created_by=user.id,
+        )
+        await store.create_slot_in_session(
+            session, credential_secret_slot(credential.id, 1), "fake-tx-secret"
+        )
+        await session.commit()
+    original = key_pools.record_system_event
 
     async def audit_then_fail(*args: object, **kwargs: object) -> None:
         await original(*args, **kwargs)  # type: ignore[arg-type]
         raise RuntimeError("fail after the audit append")
 
-    monkeypatch.setattr(provider_bindings, "record_project_event", audit_then_fail)
-    service = ProviderBindingService(repository)
+    monkeypatch.setattr(key_pools, "record_system_event", audit_then_fail)
+    service = KeyPoolService(repository)
     with pytest.raises(RuntimeError):
-        await service.create_binding(
-            actor, project_id, BindingCreate(credential_id=credential.id, route_label="tx")
+        await service.create(
+            actor,
+            credential.id,
+            KeyPoolCreate(label="tx", project_id=project_id, operations=frozenset({"search"})),
         )
-    monkeypatch.undo()
-    assert await service.list_bindings(actor, project_id) == []
-    rows = await audit_rows(repository, scope="project", action="binding.created")
+    async with repository.session() as session:
+        assert await KeyPoolRepository(session).list_for_key(credential.id) == []
+        bindings = await ProjectBindingRepository(session).list_for_project(project_id=project_id)
+        assert all(binding.credential_id != credential.id for binding in bindings)
+    rows = await audit_rows(repository, scope="system", action="vault.pool_created")
     assert rows == []
 
 
