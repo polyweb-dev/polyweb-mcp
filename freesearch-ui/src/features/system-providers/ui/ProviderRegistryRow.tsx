@@ -7,7 +7,7 @@ import {
   TableCell,
   TableRow,
 } from "@/shared/ui/table"
-import { FETCH_BIT, SEARCH_BIT, providerCallCost, type ProviderConfig } from "@/domains/providers"
+import { FETCH_BIT, SEARCH_BIT, formatCallCost, providerCallCost, type ProviderConfig } from "@/domains/providers"
 import { stripProtocol } from "./providerDisplay"
 import type { TimedTestResult } from "./providerDisplay"
 import { HealthStatus } from "@/shared/ui/HealthStatus"
@@ -99,10 +99,10 @@ export const ProviderRegistryRow: React.FC<ProviderRegistryRowProps> = ({
     </TableCell>
     <TableCell className={CELL}>
       <div className="tabular-nums text-[12px] text-[var(--muted)]">
-        {callCost(provider, "search") === "Free" && callCost(provider, "fetch") === "Free" ? <div>Free</div> : <>
+        {callCost(provider, "search") === formatCallCost(0) && callCost(provider, "fetch") === formatCallCost(0) ? <div>{formatCallCost(0)}</div> : <>
           {(provider.supportMask & SEARCH_BIT) !== 0 && <div>Search: {callCost(provider, "search")}</div>}
           {(provider.supportMask & FETCH_BIT) !== 0 && <div>Fetch: {callCost(provider, "fetch")}</div>}
-          {provider.capabilities.includes("keyless_tier") && <div>Free without a key</div>}
+          {provider.capabilities.includes("keyless_tier") && <div>{formatCallCost(0)} without a key</div>}
         </>}
       </div>
     </TableCell>

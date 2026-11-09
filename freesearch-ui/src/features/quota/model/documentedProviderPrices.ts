@@ -1,5 +1,5 @@
 import type { UsdOperation } from "@/domains/dashboard"
-import { formatUsdAmount } from "./usdDisplay"
+import { formatCallCost } from "@/domains/providers"
 
 /** Prices are references researched in LIMITS.md on 2026-10-05. */
 export const DOCUMENTED_PRICE_VERSION = "LIMITS.md (2026-10-05)"
@@ -15,7 +15,7 @@ const price = (
   usdPerCall: string | null,
   priceBasis: string,
 ): DocumentedProviderPrice => ({
-  usdPerCall: usdPerCall === null ? null : formatUsdAmount(usdPerCall),
+  usdPerCall: usdPerCall === null ? null : formatCallCost(usdPerCall),
   priceBasis,
 })
 

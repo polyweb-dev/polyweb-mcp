@@ -27,7 +27,7 @@ describe("PoolBudgetUsage", () => {
 
   it("clamps usage above the cap and displays the actual amount", () => {
     render(<PoolBudgetUsage pool={{ ...pool, budget: { limit: 10, period: "day" }, budget_used_usd: 12.345678 }} />)
-    expect(screen.getByText("$12.35 of $10.00 today")).toBeInTheDocument()
+    expect(screen.getByText("$12.345678 of $10.00 today")).toBeInTheDocument()
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100")
   })
 

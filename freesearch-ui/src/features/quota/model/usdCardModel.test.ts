@@ -347,7 +347,7 @@ describe("priceNoteRows", () => {
       }] as never,
     })
     expect(zeroCostRows[0]).toMatchObject({
-      usdPerCall: "$0.0000", free: true,
+      usdPerCall: "Free", free: true,
     })
 
     const tinyPositiveAuth = braveAuth({

@@ -24,7 +24,7 @@ it("names pools affected by transfer and sends the selected admin", async () => 
   expect(await screen.findByText("Brave Search")).toBeInTheDocument()
   expect(screen.getByTestId("provider-logo-brave")).toBeInTheDocument()
   expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Brave Search", "Exa"])
-  expect(screen.getByText("These providers stop until new@example.com adds capacity")).toBeInTheDocument()
+  expect(screen.getByText("These providers stop until new@example.com adds capacity:")).toBeInTheDocument()
   expect(screen.queryByText(/Your pools no longer serve this project/)).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole("button", { name: "Transfer ownership" }))
   await waitFor(() => expect(saved).toHaveBeenCalledOnce())

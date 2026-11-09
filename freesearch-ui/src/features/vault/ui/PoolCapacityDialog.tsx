@@ -86,6 +86,10 @@ function poolName(label: string, project: VaultProject | undefined): string {
   return label || project?.name || ""
 }
 
+function renderPoolName(pool: KeyPool | undefined, name: string, setLabel: (value: string) => void) {
+  return pool && <TextField id="pool-label" label="Pool name" type="text" value={name} onChange={setLabel} />
+}
+
 function eligibleProjects(projects: readonly VaultProject[], provider: string, fixedProject?: VaultProject) {
   return fixedProject ? [fixedProject] : projects.filter((project) => project.available_providers.includes(provider))
 }
@@ -123,7 +127,7 @@ function renderActions({ pool, pending, selected, projectId, onClose }: {
   projectId: string
   onClose: () => void
 }) {
-  return <FormActions className="!mt-6"><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button><Button type="submit" size="form" pending={pending} disabled={selected.length === 0 || (!pool && !projectId)}>{pool ? "Save pool" : "Create pool"}</Button></FormActions>
+  return <FormActions><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button><Button type="submit" size="form" pending={pending} disabled={selected.length === 0 || (!pool && !projectId)}>{pool ? "Save pool" : "Create pool"}</Button></FormActions>
 }
 
 function renderOperations(item: VaultKey, selected: PoolOperation[], setSelected: (value: PoolOperation[]) => void) {
@@ -234,7 +238,7 @@ export function PoolCapacityDialog({ item, pool, projects, project: fixedProject
           </Field>}
           <div><p className="fs-label">Key</p><p>{item.label}</p></div>
           {!pool && eligible.length === 0 && <p>You are not the provider owner of a project without this provider</p>}
-          <TextField id="pool-label" label="Pool name" type="text" value={name} onChange={setLabel} />
+          {renderPoolName(pool, name, setLabel)}
           {renderOperations(item, selected, setSelected)}
           <div className="grid grid-cols-2 gap-3">
             {!separate && <NumericField id="pool-rate" label="Request rate" min="0" value={rate} onChange={setRate} />}

@@ -11,7 +11,8 @@ export function KeysTable({ rows, projects, onKey, onPool }: {
   onPool: (action: PoolAction, item: VaultRow, pool: KeyPool) => void
 }) {
   const [expanded, setExpanded] = useState<string[]>([])
-  return <div className="fs-panel overflow-hidden"><table className="fs-table w-full">
+  return <div className="fs-panel overflow-hidden"><table className="fs-table w-full table-fixed">
+    <colgroup><col className="w-[20%]" /><col className="w-[30%]" /><col className="w-[15%]" /><col /><col className="w-12" /></colgroup>
     <thead><tr><th>Provider</th><th>Key</th><th>Pools</th><th>Projects</th><th><span className="sr-only">Actions</span></th></tr></thead>
     <tbody>{[...rows].sort((a, b) => providerTypeName(a.key.provider_type).localeCompare(providerTypeName(b.key.provider_type)) || a.key.label.localeCompare(b.key.label)).map((row) => {
       const item = row.key

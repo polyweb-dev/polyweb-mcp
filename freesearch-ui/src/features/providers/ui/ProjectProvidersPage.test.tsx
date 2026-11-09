@@ -348,12 +348,12 @@ describe("ProjectProvidersPage pool capacity", () => {
     const dialog = await screen.findByRole("dialog", { name: "Add Parallel capacity" })
     expect(within(dialog).queryByRole("combobox", { name: "Project" })).toBeNull()
     expect(within(dialog).getByText("Alpha")).toBeInTheDocument()
-    expect(within(dialog).getByLabelText("Pool name")).toHaveValue("Alpha")
+    expect(within(dialog).queryByLabelText("Pool name")).toBeNull()
     expect(within(dialog).getByRole("checkbox", { name: "Search" })).toBeChecked()
     expect(within(dialog).queryByLabelText("Search requests")).toBeNull()
     await userEvent.click(within(dialog).getByRole("button", { name: "Create pool" }))
     await waitFor(() => expect(stub.requests.find((req) => req.method === "POST" && req.url === "/api/v1/account/vault/keys/par/pools")?.body)
-      .toMatchObject({ project_id: PROJECT_ALPHA_ID, operations: ["search", "fetch"] }))
+      .toMatchObject({ project_id: PROJECT_ALPHA_ID, label: "Alpha", operations: ["search", "fetch"] }))
   })
 
   it("hides capacity controls from other users", async () => {

@@ -7,8 +7,6 @@ import type {
 } from "@/domains/dashboard"
 import {
   callsText,
-  dollarText,
-  formatUsdAmount,
   formatUsd,
   providerUsdModel,
   rateBarModel,
@@ -94,46 +92,6 @@ function makeAuth(overrides: Partial<ProviderAuthLimits> = {}): ProviderAuthLimi
   }
 }
 
-describe("formatUsdAmount", () => {
-  it("formats zero as 0 Usd", () => {
-    expect(formatUsdAmount("0")).toBe("$0.0000")
-  })
-
-  it("formats a positive amount below 0.1 as <0.1 Usd", () => {
-    expect(formatUsdAmount("0.05")).toBe("$0.0500")
-  })
-
-  it("rounds 0.599 to one decimal with an approximation mark", () => {
-    expect(formatUsdAmount("0.599")).toBe("$0.5990")
-  })
-
-  it("rounds 0.58 to the same text while keeping the exact inputs distinct", () => {
-    expect(formatUsdAmount("0.58")).toBe("$0.5800")
-    const exactA: string = "0.58"
-    const exactB: string = "0.599"
-    expect(exactA === exactB).toBe(false)
-  })
-
-  it("formats a whole unit without a trailing .0", () => {
-    expect(formatUsdAmount("1")).toBe("$1.0000")
-  })
-
-  it("rounds 1.55 half-up to ≈1.6 Usd", () => {
-    expect(formatUsdAmount("1.55")).toBe("$1.5500")
-  })
-
-  it("formats 5 as 5 Usd", () => {
-    expect(formatUsdAmount("5")).toBe("$5.0000")
-    expect(formatUsdAmount("1000")).toBe("$1,000.0000")
-  })
-
-  it("formats garbage as Unknown", () => {
-    expect(formatUsdAmount("nonsense")).toBe("Unknown")
-    expect(formatUsdAmount("")).toBe("Unknown")
-    expect(formatUsdAmount("1e3")).toBe("Unknown")
-  })
-})
-
 describe("formatUsd", () => {
   it("formats an unmetered view as Free", () => {
     expect(formatUsd(makeView({ state: "unmetered" }))).toBe("Free")
@@ -150,10 +108,10 @@ describe("formatUsd", () => {
   it("picks the minimum of remaining and local remaining", () => {
     expect(
       formatUsd(makeView({ remaining_usd: "0.005", local_remaining_usd: "0.003" })),
-    ).toBe("$0.0030")
+    ).toBe("$0.003")
     expect(
       formatUsd(makeView({ remaining_usd: "0.002", local_remaining_usd: "0.005" })),
-    ).toBe("$0.0020")
+    ).toBe("$0.002")
   })
 
   it("formats a finite view without any spendable amount as Unknown", () => {
@@ -220,7 +178,7 @@ describe("providerUsdModel", () => {
         ],
       }),
     })
-    expect(model.notes).toContain("Local grant ceiling $0.0030")
+    expect(model.notes).toContain("Local grant ceiling $0.003")
   })
 
   it("adds standard-call notes for search and fetch", () => {
@@ -378,32 +336,6 @@ describe("resetRuleText", () => {
 
   it("keeps an unparsable reset date verbatim", () => {
     expect(resetRuleText("never", "not-a-date")).toBe("Never resets (not-a-date)")
-  })
-})
-
-describe("dollarText", () => {
-  it("trims trailing zeros: 4.500 becomes $4.5 (final-polish 3a, 3d)", () => {
-    expect(dollarText("4.500")).toBe("$4.5")
-  })
-
-  it("trims allowance zeros: 5.000 becomes $5 (final-polish 3d)", () => {
-    expect(dollarText("5.000")).toBe("$5")
-  })
-
-  it("keeps exact cents: 4.495 stays $4.495 (final-polish 3c)", () => {
-    expect(dollarText("4.495")).toBe("$4.495")
-  })
-
-  it("keeps call price precision: 0.005 stays $0.005", () => {
-    expect(dollarText("0.005")).toBe("$0.005")
-  })
-
-  it("handles whole dollars without a dot", () => {
-    expect(dollarText("10")).toBe("$10")
-  })
-
-  it("trims surrounding whitespace before the dollar form", () => {
-    expect(dollarText("  4.500  ")).toBe("$4.5")
   })
 })
 

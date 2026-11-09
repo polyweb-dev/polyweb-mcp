@@ -77,14 +77,14 @@ describe("ProjectProvidersPage private keys", () => {
     const pool = await screen.findByRole("dialog", { name: "Add Tavily capacity" })
     expect(within(pool).getByText("Alpha")).toBeInTheDocument()
     expect(within(pool).getByText("Main")).toBeInTheDocument()
-    expect(within(pool).getByLabelText("Pool name")).toHaveValue("Alpha")
+    expect(within(pool).queryByLabelText("Pool name")).toBeNull()
     expect(within(pool).getByRole("checkbox", { name: "Search" })).toBeChecked()
     expect(within(pool).getByRole("checkbox", { name: "Fetch" })).toBeChecked()
     expect(within(pool).queryByLabelText("Search requests")).toBeNull()
     expect(leakedAnywhere(FAKE_PROVIDER_KEY)).toEqual([])
     await userEvent.click(within(pool).getByRole("button", { name: "Create pool" }))
     await waitFor(() => expect(api.createKeyPool).toHaveBeenCalledWith("key-1", expect.objectContaining({
-      project_id: "p1", operations: ["search", "fetch"],
+      project_id: "p1", label: "Alpha", operations: ["search", "fetch"],
     })))
   })
 

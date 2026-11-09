@@ -1,4 +1,5 @@
 import type { ProviderAuthLimits } from "@/domains/dashboard"
+import { formatCallCost } from "@/domains/providers"
 import { normalizeUnitKind, type UnitKind } from "@/shared/api/units"
 import type { ManualAmountMode } from "./manualQuotaMath"
 
@@ -24,7 +25,7 @@ function nativeUnitOf(auth: ProviderAuthLimits, providerId: string): string | nu
 
 function displayUnitOf(unitKind: UnitKind): string {
   if (unitKind === "CREDIT") return "credits"
-  return unitKind === "FREE" ? "Free" : unitKind
+  return unitKind === "FREE" ? formatCallCost(0) : unitKind
 }
 
 export function manualUnit(auth: ProviderAuthLimits, providerId: string): ManualUnit {

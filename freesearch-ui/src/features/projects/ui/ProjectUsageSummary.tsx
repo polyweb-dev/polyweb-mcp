@@ -3,7 +3,7 @@ import { getProjectDashboard } from "@/domains/usage"
 import type { ProjectOrder } from "@/domains/routing"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
 import { Stat } from "@/shared/ui/Stat"
-import { formatCostTotal } from "@/domains/providers"
+import { formatCallCost, formatCostTotal } from "@/domains/providers"
 import { usageFigures } from "../model/usageFigures"
 
 /** The dashboard totals carry no time window: they count every recorded call. */
@@ -53,7 +53,7 @@ export function ProjectUsageSummary({
         <Stat label="Fetches" value={figures.fetches.toLocaleString("en-US")} detail={PERIOD} />
         <Stat
           label={figures.costIncomplete ? "Known provider cost" : "Provider cost"}
-          value={figures.free ? "Free" : formatCostTotal(figures.usd)}
+          value={figures.free ? formatCallCost(0) : formatCostTotal(figures.usd)}
           detail={PERIOD}
         />
       </dl>

@@ -96,7 +96,7 @@ function keyTableRows(input: TableRowsInput): ReactNode {
             {index === 0 && <>{input.refresh}{input.actions}{input.keys.length > 0 && input.keyStatus}</>}
             {keyOAuthActions(key, input.oauthActions, input.keyStatus)}
           </div>
-          <div className="w-7">{index === 0 && input.menu}</div>
+          <div className="w-8">{index === 0 && input.menu}</div>
         </div>
       </td>
     </tr>
@@ -142,9 +142,9 @@ export function ProviderUsageRow(props: ProviderUsageRowProps): ReactNode {
       />
   const identity = <><div className="flex items-center gap-2">
     <ProviderBadge providerId={providerId} name={providerName} />
+    {free && <Tag tone="neutral">Free</Tag>}
     <ProviderInfoPopover providerId={providerId} providerName={providerName} info={info} auth={view.auth}
       {...(view.nativeDisplay === null ? {} : { nativeDisplay: view.nativeDisplay })} />
-    {free && <Tag tone="neutral">Free</Tag>}
   </div>{modals}</>
   const actions = <ProviderCardActions providerName={providerName} syncing={controller.syncing}
       updatedAt={controller.updatedAt} onSync={() => void controller.syncNow()}

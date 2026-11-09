@@ -2,8 +2,8 @@ import type { ReactNode } from "react"
 import { catalogNameOf } from "@/services/api/providerCatalog"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import type { UsdUsageTotal } from "@/domains/dashboard"
-import type { ProviderConfig } from "@/domains/providers"
-import { formatUsdTotal, sumAmounts } from "../model/usdDisplay"
+import { formatCallCost, formatCostTotal, type ProviderConfig } from "@/domains/providers"
+import { sumAmounts } from "../model/usdDisplay"
 import { latencyText } from "../model/numberText"
 import { catalogFree } from "../model/catalogQuota"
 import { useQuotaPrices, quotaPricedProvider } from "../model/useQuotaPrices"
@@ -37,11 +37,6 @@ function usageRows(totals: UsdUsageTotal[]): UsageRow[] {
     row.usd.push(total.spend_usd)
   }
   return rows
-}
-
-/** The USD reference value of one normalized usage amount. */
-function costText(usd: string | null): string {
-  return usd === null ? "—" : formatUsdTotal(usd)
 }
 
 /**
@@ -90,7 +85,7 @@ function usageRow({ row, name, p95, free }: { row: UsageRow; name: string; p95: 
       </td>
       <td className="tnum text-right">{row.searches.toLocaleString("en-US")}</td>
       <td className="tnum text-right">{row.urls.toLocaleString("en-US")}</td>
-      <td className="tnum text-right">{free ? "Free" : costText(usd)}</td>
+      <td className="tnum text-right">{free ? formatCallCost(0) : formatCostTotal(usd)}</td>
       <td className="tnum text-right">{p95}</td>
     </tr>
   )

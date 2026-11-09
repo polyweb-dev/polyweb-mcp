@@ -3,7 +3,7 @@ import { Button } from "@/shared/ui/button"
 import { formatDateTime, formatRelativeTime } from "@/shared/lib/formatTime"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/shared/ui/table"
 import type { UsdConversionProfile, LimitAuditEvent } from "@/domains/dashboard"
-import { formatUsdTotal } from "../model/usdDisplay"
+import { formatCallCost, formatCostTotal } from "@/domains/providers"
 import { DEFAULT_TAVILY_PROFILE, formatCreditAmount, tavilyUsdToCredits } from "../model/tavilyCredits"
 import { operationLabel, reasonLabel, sourceLabel } from "../model/quotaLabels"
 import { newestFirst } from "../model/timeText"
@@ -36,12 +36,12 @@ function nativeUnitText(event: LimitAuditEvent, fallback: string | null): string
 }
 
 function usdFromLedger(value: string): string {
-  return formatUsdTotal(value)
+  return formatCostTotal(value)
 }
 
 function nativeText(value: string, unit: string): string {
-  if (unit.toUpperCase() === "USD") return formatUsdTotal(value)
-  if (unit.toUpperCase() === "FREE") return "Free"
+  if (unit.toUpperCase() === "USD") return formatCostTotal(value)
+  if (unit.toUpperCase() === "FREE") return formatCallCost(0)
   return groupDigits(value) + " " + nativeUnitLabel(unit)
 }
 
@@ -74,7 +74,7 @@ function detailText(event: LimitAuditEvent): string {
 function changeText(event: LimitAuditEvent, nativeUnit: string | null): string {
   const unit = nativeUnitText(event, nativeUnit)
   if (event.native_debit !== null && unit?.toUpperCase() === "USD") {
-    return "−" + formatUsdTotal(event.native_debit)
+    return "−" + formatCostTotal(event.native_debit)
   }
   if (event.native_debit !== null && unit !== null) return "−" + nativeText(event.native_debit, unit)
   return event.debit_usd === null ? "Not recorded" : "−" + usdFromLedger(event.debit_usd)

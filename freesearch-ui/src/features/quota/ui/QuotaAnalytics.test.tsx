@@ -222,12 +222,12 @@ describe("QuotaAnalytics shell (UI7)", () => {
       ).toBeInTheDocument()
     })
     // CARD-3: credit fraction "4500 / 5000 Usd" renders as split spans; no single "4500 Usd" node.
-    expect(screen.getByText("$4.5")).toBeInTheDocument()
-    expect(screen.getByText("/ $5")).toBeInTheDocument()
+    expect(screen.getByText("$4.50")).toBeInTheDocument()
+    expect(screen.getByText("/ $5.00")).toBeInTheDocument()
     expect(screen.getByText("USD")).toBeInTheDocument()
     expect(screen.queryByText("4500 Usd")).toBe(null)
     expect(screen.queryByText("Usd left")).toBe(null)
-    expect(screen.getByText("$4.5").closest("span")?.parentElement?.textContent?.replace(/\s+/g, "")).toBe("$4.5/$5USD")
+    expect(screen.getByText("$4.50").closest("span")?.parentElement?.textContent?.replace(/\s+/g, "")).toBe("$4.50/$5.00USD")
     expect(screen.queryByText("n/a")).toBe(null)
     expect(document.body.textContent ?? "").not.toContain("∞")
   })
@@ -248,10 +248,10 @@ describe("QuotaAnalytics shell (UI7)", () => {
     expect(screen.getByText("Reported by provider")).toBeInTheDocument()
     expect(within(card).getByRole("button", { name: "Actions for Brave Search" })).toBeInTheDocument()
     expect(within(card).queryByRole("button", { name: /Provider Balance/ })).toBeNull()
-    const creditRow = screen.getByText("$4.5").closest("span")?.parentElement?.parentElement
+    const creditRow = screen.getByText("$4.50").closest("span")?.parentElement?.parentElement
     const children = Array.from(creditRow?.children ?? [])
     expect(children.length).toBe(1)
-    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
+    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.50/$5.00USD")
     const bar = screen.getByRole("progressbar", { name: "Brave Search balance remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
   })

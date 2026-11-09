@@ -19,7 +19,8 @@ import type {
   ProviderAuthLimits,
   ProviderLimits,
 } from "@/domains/dashboard"
-import { formatUsdAmount, percentRemaining, sumAmounts } from "./usdDisplay"
+import { formatCallCost } from "@/domains/providers"
+import { percentRemaining, sumAmounts } from "./usdDisplay"
 import { multiplyDecimal, parseDecimal } from "./manualQuotaMath"
 import { buildPriceNoteRows, type PriceNoteInput, type PriceNoteRow } from "./priceNoteRows"
 import { sourceLabel, BALANCE_ENTRY } from "./quotaLabels"
@@ -265,5 +266,5 @@ export function creditCardModel(input: CreditCardInput): CreditCardModel {
 
 /** Footer price rows from runtime limits and documented provider references. */
 export function priceNoteRows(input: PriceNoteInput): PriceNoteRow[] {
-  return buildPriceNoteRows(input, { activeAuth, formatUsdAmount })
+  return buildPriceNoteRows(input, { activeAuth, formatUsdAmount: formatCallCost })
 }

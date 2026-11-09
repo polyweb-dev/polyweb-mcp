@@ -73,7 +73,7 @@ export function AddCapacityDialog({ item, provider, pool, projects, project, onC
       <KeyFormFields idPrefix="capacity-key" label={label} setLabel={setLabel} secret={secret} setSecret={setSecret}
         submitted={submitted} showSecret={!oauth} />
       {error && <p role="alert" className="fs-field-error">{error}</p>}
-      <FormActions className="!mt-6"><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button>
+      <FormActions><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button>
         <Button type="submit" size="form" pending={pending}>{oauth ? "Connect" : "Add key"}</Button></FormActions>
     </form>
   </Modal>

@@ -128,6 +128,7 @@ describe("AddCapacityDialog", () => {
     await user.type(within(keyDialog).getByLabelText("API key"), "secret")
     await user.click(within(keyDialog).getByRole("button", { name: "Add key" }))
     const poolDialog = await screen.findByRole("dialog", { name: "Create pool" })
+    expect(within(poolDialog).queryByLabelText("Pool name")).not.toBeInTheDocument()
     await user.click(within(poolDialog).getByRole("combobox", { name: "Project" }))
     await user.click(await screen.findByRole("option", { name: "Beta" }))
     await user.click(within(poolDialog).getByRole("switch", { name: "Budget" }))

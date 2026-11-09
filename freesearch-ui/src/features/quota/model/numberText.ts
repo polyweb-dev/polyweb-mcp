@@ -3,6 +3,7 @@
  * the leading integer and plain native-unit amounts.
  */
 import { formatLatency } from "@/shared/lib/formatTime"
+import { formatCallCost, formatCostTotal } from "@/domains/providers"
 
 /** Thousands separators on the first integer of one shown amount. */
 export function groupDigits(text: string): string {
@@ -13,7 +14,7 @@ export function groupDigits(text: string): string {
 export function nativeUnitLabel(unit: string): string {
   const key = unit.trim().toUpperCase()
   if (["CREDIT", "CREDITS"].includes(key)) return "credits"
-  if (key === "FREE") return "Free"
+  if (key === "FREE") return formatCallCost(0)
   if (key === "USD") return "USD"
   return key === "REQUEST" ? "requests" : unit.toLowerCase()
 }
@@ -31,11 +32,10 @@ function shortNumber(amount: string, fractionDigits: number): string | null {
  */
 export function nativeLeftText(amount: string, unit: string): string | null {
   const key = unit.trim().toUpperCase()
-  if (key === "FREE") return "Free"
+  if (key === "FREE") return formatCallCost(0)
   if (key === "USD") {
-    const value = Number(amount.trim())
-    if (!Number.isFinite(value)) return null
-    return "$" + value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " left"
+    const value = formatCostTotal(amount)
+    return value === "—" ? null : value + " left"
   }
   if (!["CREDIT", "CREDITS", "REQUEST"].includes(key)) return null
   const noun = nativeUnitLabel(unit)

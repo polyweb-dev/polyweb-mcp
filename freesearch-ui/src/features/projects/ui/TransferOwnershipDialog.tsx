@@ -20,7 +20,7 @@ interface Props {
   onSaved: () => void
 }
 
-function affectedPools(pools: ProjectPool[] | null) {
+function affectedPools(pools: ProjectPool[] | null, email: string | undefined) {
   if (pools === null || pools.length === 0) return null
   const providers = [...new Map(pools.map((pool) => {
     const identity = providerIdentity(pool.provider_type)
@@ -28,7 +28,7 @@ function affectedPools(pools: ProjectPool[] | null) {
   })).values()].sort((a, b) => a.name.localeCompare(b.name))
   return (
     <>
-      <p>These providers lose their capacity:</p>
+      <p>These providers stop until {email} adds capacity:</p>
       <ul className="space-y-1">{providers.map((provider) => (
         <li key={provider.id}>
           <ProviderBadge providerId={provider.id} name={provider.name} />
@@ -77,9 +77,8 @@ export function TransferOwnershipDialog({ projectId, projectName, members, owner
             <Select id="new-provider-owner" value={selected} onValueChange={setSelected}
               options={admins.map((admin) => ({ value: admin.user_id, label: admin.email }))} />
           </Field>
-          <p>{recipient?.email} becomes the provider owner of <strong>{projectName}</strong></p>
-          {affectedPools(pools)}
-          <p>These providers stop until {recipient?.email} adds capacity</p>
+          <p>{recipient?.email} becomes the provider owner of <strong className="whitespace-nowrap">{projectName}</strong></p>
+          {affectedPools(pools, recipient?.email)}
         </div>
       )}
       {error && <p role="alert" className="mt-4">{error}</p>}

@@ -70,9 +70,9 @@ export function MemberPermissionsDialog({ projectId, member, onClose, onSaved }:
       </div>
       {error && <p role="alert" className="shrink-0 pt-3 text-[var(--status-danger)]">{error}</p>}
       <FormActions
-        start={<p role="status">{pending ? "Saving permissions…" : memberPermissionSummary(bits)}</p>}>
+        start={<p role="status">{memberPermissionSummary(bits)}</p>}>
         <Button variant="outline" size="form" onClick={onClose}>Cancel</Button>
-        {!admin && <Button size="form" aria-busy={pending} onClick={() => void save()}>Save permissions</Button>}
+        {!admin && <Button size="form" pending={pending} pendingLabel="Saving…" onClick={() => void save()}>Save permissions</Button>}
       </FormActions>
     </Modal>
   )

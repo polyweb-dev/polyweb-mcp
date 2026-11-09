@@ -58,7 +58,7 @@ it("keeps Save enabled and closes an unchanged draft without a request", async (
   expect(stub.requests).toHaveLength(0)
 })
 
-it("shows inline progress and prevents duplicate saves while the button stays enabled", async () => {
+it("shows progress and prevents duplicate saves while pending", async () => {
   let finish!: (response: Response) => void
   const stub = installFetchStub(() => new Promise<Response>((resolve) => { finish = resolve }))
   const saved = vi.fn()
@@ -67,9 +67,10 @@ it("shows inline progress and prevents duplicate saves while the button stays en
   await user.click(screen.getByRole("switch", { name: "Fetch pages" }))
   const save = screen.getByRole("button", { name: "Save permissions" })
   await user.click(save)
-  expect(save).toBeEnabled()
+  expect(save).toBeDisabled()
   expect(save).toHaveAttribute("aria-busy", "true")
-  expect(screen.getByRole("status")).toHaveTextContent("Saving permissions")
+  expect(save).toHaveTextContent("Saving…")
+  expect(screen.getByRole("status")).toHaveTextContent("4 of 9 permissions")
   await user.click(save)
   expect(stub.requests).toHaveLength(1)
   finish(ok({ ...member, permissions: 13 }))

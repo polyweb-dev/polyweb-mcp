@@ -1,5 +1,5 @@
 import type { ProjectUsageTotal } from "@/domains/usage"
-import { formatCostTotal, providerIdentity } from "@/domains/providers"
+import { formatCallCost, formatCostTotal, providerIdentity } from "@/domains/providers"
 import type { ProjectOrder } from "@/domains/routing"
 
 /** Metered amounts of one row, one field per unit kind; null when none was recorded. */
@@ -107,11 +107,12 @@ const AMOUNT_FORMAT: Intl.NumberFormatOptions = { maximumFractionDigits: 4 }
 export function usageAmountText(amounts: UsageAmounts, column: UsageAmountColumn): string {
   const value = amounts[column]
   if (column === "usd" && (value === null || value === 0)) {
-    if (amounts.free && !amounts.unreportedCost) return "Free"
+    if (amounts.free && !amounts.unreportedCost) return formatCallCost(0)
     if (value === null) return "—"
   }
   if (value === null) return "—"
-  return column === "usd" ? formatCostTotal(value) : value.toLocaleString("en-US", AMOUNT_FORMAT)
+  // Ledger values arrive as numbers, so remove binary addition noise before display.
+  return column === "usd" ? formatCostTotal(Number(value.toPrecision(15))) : value.toLocaleString("en-US", AMOUNT_FORMAT)
 }
 
 export const USAGE_COLUMN_LABELS: Readonly<Record<UsageAmountColumn, string>> = {

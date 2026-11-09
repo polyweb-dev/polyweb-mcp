@@ -334,13 +334,13 @@ describe("ProviderLimitsCards", () => {
     // CARD-3: no "Usd left" label; the fraction "4500 / 5000 Usd" renders as split spans.
     expect(screen.queryByText("Usd left")).toBe(null)
     expect(screen.queryByText("USD left")).toBe(null)
-    expect(screen.getByText("$4.5")).not.toBeNull()
-    expect(screen.getByText("/ $5")).not.toBeNull()
+    expect(screen.getByText("$4.50")).not.toBeNull()
+    expect(screen.getByText("/ $5.00")).not.toBeNull()
     expect(screen.getByText("USD")).not.toBeNull()
     expect(screen.queryByText("4500 Usd")).toBe(null)
-    const usdValue = screen.getByText("$4.5")
-    expect(usdValue.getAttribute("title")).toBe("$4.5 left")
-    expect(usdValue.getAttribute("aria-label")).toBe("$4.5 left")
+    const usdValue = screen.getByText("$4.50")
+    expect(usdValue.getAttribute("title")).toBe("$4.50 left")
+    expect(usdValue.getAttribute("aria-label")).toBe("$4.50 left")
     expect(screen.queryByText("USD use (priced)")).toBe(null)
     expect(screen.queryByText("Parallel")).toBe(null)
   })
@@ -361,10 +361,10 @@ describe("ProviderLimitsCards", () => {
     expect(screen.getByRole("heading", { name: "Brave" })).not.toBeNull()
     expect(screen.getByText("Reported by provider")).not.toBeNull()
     expect(screen.getByRole("button", { name: "Actions for Brave" })).not.toBeNull()
-    const creditRow = screen.getByText("$4.5").closest("span")?.parentElement?.parentElement
+    const creditRow = screen.getByText("$4.50").closest("span")?.parentElement?.parentElement
     const children = Array.from(creditRow?.children ?? [])
     expect(children.length).toBe(1)
-    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
+    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.50/$5.00USD")
     const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
     expect((bar.compareDocumentPosition(creditRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
   })
@@ -792,11 +792,14 @@ describe("Quotas review r4b", () => {
   })
   it("puts unreported providers in a single table with three columns", () => {
     const empty = { ...braveEntry(), auths: braveEntry().auths.map((auth) => ({ ...auth, aggregate_pool: null, usd_views: [], rate_progress: [] })) }
-    render(<ProviderLimitsCards providers={[{ id: "brave", name: "Brave Search" }] as never} providerLimits={[empty] as never}
+    render(<ProviderLimitsCards providers={[{ id: "brave", name: "Brave Search", free: true, callCostUsd: { search: 0 } }] as never} providerLimits={[empty] as never}
       usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()} manualEligible={new Set()} />)
     const table = screen.getByRole("table", { name: "Key balances" })
     expect(Array.from(table.querySelectorAll("th")).map((cell) => cell.textContent)).toEqual(["Provider", "Key", "Balance", "Last refresh", "Provider controls"])
     expect(screen.queryByText("Not reported")).toBeNull()
+    const free = within(table).getByText("Free")
+    const info = within(table).getByRole("button", { name: "Credit details for Brave Search" })
+    expect(free.compareDocumentPosition(info) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
 

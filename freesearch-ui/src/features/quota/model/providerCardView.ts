@@ -5,7 +5,7 @@
 
 import type { UsdUsageTotal, DashboardQuota, ProviderAuthLimits, ProviderLimits } from "@/domains/dashboard"
 import { activeAuth, creditCardModel, operationAvailable, type CreditCardModel } from "./usdCardModel"
-import { dollarText } from "./usdDisplay"
+import { formatCostTotal } from "@/domains/providers"
 import { nativeLeftText } from "./numberText"
 import { balanceFallbackOf, type BalanceFallback } from "./providerCardFunds"
 import { providerCardRule, type ProviderCardRule } from "./providerCardRules"
@@ -55,7 +55,7 @@ function leftText(auth: ProviderAuthLimits, remainingUsd: string): string {
   const pool = auth.aggregate_pool
   const native = pool?.remaining == null ? null : nativeLeftText(pool.remaining, pool.native_unit)
   const usd = remainingUsd
-  return native ?? (usd === null ? "Not reported" : dollarText(usd) + " left")
+  return native ?? (usd === null ? "—" : formatCostTotal(usd) + " left")
 }
 
 interface Headline {

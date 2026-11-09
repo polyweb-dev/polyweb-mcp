@@ -1,5 +1,6 @@
 import type { UsdGrantsSummary } from "@/domains/dashboard"
-import { formatUsdBudgetUsage, formatUsdTotal } from "../model/usdDisplay"
+import { formatCostTotal } from "@/domains/providers"
+import { formatUsdBudgetUsage } from "../model/usdDisplay"
 
 /** Current calendar-window usage, with in-flight spend shown separately. */
 export function StoredBudgetTable({ grants, fetchAvailable }: {
@@ -14,6 +15,6 @@ export function StoredBudgetTable({ grants, fetchAvailable }: {
       <th scope="col" className="text-right">Reserved (USD)</th></tr></thead>
     <tbody>{rows.map((row) => <tr key={row.name}><td className="fs-cell-strong">{row.name}</td>
       <td className="tnum text-right">{formatUsdBudgetUsage(row.limit, row.used, grants.period)}</td>
-      <td className="tnum text-right">{formatUsdTotal(row.reserved)}</td></tr>)}</tbody>
+      <td className="tnum text-right">{formatCostTotal(row.reserved)}</td></tr>)}</tbody>
   </table>
 }

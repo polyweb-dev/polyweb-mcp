@@ -1,8 +1,7 @@
-import { formatPoolRate, POOL_BUDGET_HELP } from "@/domains/vault"
+import { formatPoolRate } from "@/domains/vault"
 import type { KeyPool, VaultProject } from "@/domains/vault"
 import { RowActionsMenu } from "@/shared/ui/RowActionsMenu"
 import { Tag } from "@/shared/ui/Tag"
-import { useFreeProvider } from "../model/useFreeProvider"
 import { PoolBudgetUsage } from "./PoolBudgetUsage"
 import type { PoolAction } from "./vaultTableTypes"
 
@@ -11,7 +10,6 @@ export function VaultPoolsTable({ pools, projects, onAction }: {
   projects: VaultProject[]
   onAction: (action: PoolAction, pool: KeyPool) => void
 }) {
-  const free = useFreeProvider(pools[0]?.provider_type ?? "")
   if (pools.length === 0) return <tr><td colSpan={5}>No pools yet. Create a pool to let a project use this key</td></tr>
   return <>
     {pools.map((pool) => <tr key={pool.id}>
@@ -35,6 +33,5 @@ export function VaultPoolsTable({ pools, projects, onAction }: {
         { key: "delete", label: "Delete pool", danger: true, onSelect: () => onAction("delete", pool) },
       ]} /></td>
     </tr>)}
-    {!free && pools.some((pool) => pool.budget) && <tr><td /><td colSpan={4}><p className="fs-hint">{POOL_BUDGET_HELP}</p></td></tr>}
   </>
 }

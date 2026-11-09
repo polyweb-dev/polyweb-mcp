@@ -86,8 +86,8 @@ export function LoginPage() {
             {error}
           </p>
         )}
-        <Button type="submit" size="form" disabled={pending} className={AUTH_SUBMIT_CLASSES}>
-          {pending ? "Signing in" : "Sign in"}
+        <Button type="submit" size="form" pending={pending} pendingLabel="Signing in…" className={AUTH_SUBMIT_CLASSES}>
+          Sign in
         </Button>
       </form>
       <div className={AUTH_FOOTER_CLASSES}>

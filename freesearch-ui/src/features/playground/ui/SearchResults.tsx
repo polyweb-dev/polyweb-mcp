@@ -86,7 +86,6 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
           {telemetryItem("Latency", formatLatency(activeSearch.executionTimeMs))}
           {telemetryItem(usage.label, usage.value)}
           {telemetryItem("Resolved by", resolvedBy(activeSearch))}
-          {telemetryItem("Results", activeSearch.results.length)}
         </div>
 
         <Button

@@ -16,9 +16,9 @@ import type {
   TierBarInput,
   TierBarView,
 } from "@/domains/dashboard"
+import { formatCallCost, formatCostBudgetUsage, formatCostTotal } from "@/domains/providers"
 import { parseDecimal } from "./manualQuotaMath"
 
-const UNMETERED_TEXT = "Free"
 const UNAVAILABLE_TEXT = "n/a"
 const UNKNOWN_TEXT = "Unknown"
 
@@ -65,50 +65,26 @@ function spendableUsd(view: UsdView): string | null {
   return minAmount(values)
 }
 
-/** Per-call USD prices use four decimal places. Unknown prices stay unknown. */
-export function formatUsdAmount(amount: string): string {
-  const value = scaled(amount)
-  if (value === null) return UNKNOWN_TEXT
-  return "$" + Number(amount).toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
-}
-
 /** Integer count form of one exact nonnegative decimal count: "498.000000000" becomes "498", and every other input stays verbatim. */
 export function formatQuotaCount(amount: string): string {
   return amount.replace(/^(\d+)\.0+$/, "$1")
 }
 
-/** Dollar form of one exact USD amount for display: "4.500" becomes "$4.5", and "5.000" becomes "$5". */
-export function dollarText(amount: string): string {
-  const text = amount.trim()
-  const trimmed = text.includes(".") ? text.replace(/0+$/, "").replace(/\.$/, "") : text
-  return "$" + (trimmed === "" ? "0" : trimmed)
-}
-
-/** Format stored USD without losing supported fractional amounts. */
-export function formatUsdTotal(amount: string): string {
-  const text = amount.trim()
-  if (scaled(text) === null) return "—"
-  const [whole = "0", fraction = ""] = text.split(".")
-  const digits = fraction.replace(/0+$/, "").padEnd(2, "0")
-  return "$" + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "." + digits
-}
-
 export function formatUsdBudgetUsage(limit: string, used: string, period: string): string {
-  const periods: Record<string, string> = { day: "today", week: "this week", month: "this month" }
-  return `${formatUsdTotal(used)} of ${formatUsdTotal(limit)} ${periods[period] ?? period}`
+  return formatCostBudgetUsage({ limit, period }, used)
 }
 
 /** Visible text of one credit-unit view, including its non-finite states. */
 export function formatUsd(view: UsdView): string {
-  if (view.state === "unmetered") return UNMETERED_TEXT
+  if (view.state === "unmetered") return formatCallCost(0)
   if (view.state === "unavailable") return UNAVAILABLE_TEXT
   if (view.state === "unknown") return UNKNOWN_TEXT
   const amount = spendableUsd(view)
-  return amount === null ? UNKNOWN_TEXT : formatUsdAmount(amount)
+  return amount === null ? UNKNOWN_TEXT : formatCostTotal(amount)
 }
 
 function stateText(state: UsdState): string {
-  if (state === "unmetered") return UNMETERED_TEXT
+  if (state === "unmetered") return formatCallCost(0)
   if (state === "unavailable") return UNAVAILABLE_TEXT
   return UNKNOWN_TEXT
 }
@@ -189,7 +165,7 @@ export function providerUsdModel(input: ProviderUsdInput): ProviderUsdModel {
   const views = [search.view, fetch.view]
   const notes = callsNotes(search.view, fetch.view)
   const ceiling = lowestCeiling(views)
-  if (ceiling !== null) notes.push(`Local grant ceiling ${formatUsdAmount(ceiling)}`)
+  if (ceiling !== null) notes.push(`Local grant ceiling ${formatCostTotal(ceiling)}`)
   if (views.some((view) => view !== null && !view.priced)) {
     notes.push("Priced use is not configured; the credit value stays unknown")
   }

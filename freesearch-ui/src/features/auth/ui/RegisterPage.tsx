@@ -107,8 +107,8 @@ export function RegisterPage() {
             {error}
           </p>
         )}
-        <Button type="submit" disabled={pending} className={AUTH_SUBMIT_CLASSES}>
-          {pending ? "Creating account" : "Create account"}
+        <Button type="submit" pending={pending} pendingLabel="Creating account…" className={AUTH_SUBMIT_CLASSES}>
+          Create account
         </Button>
       </form>
       <div className={AUTH_FOOTER_CLASSES}>

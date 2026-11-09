@@ -108,11 +108,11 @@ describe("ProviderCreditSummary native Credits", () => {
 describe("ProviderCreditSummary Usd default", () => {
   it("keeps the Usd fraction and USD hover text without native inputs", () => {
     render(<ProviderCreditSummary providerName="Brave" model={usdModel()} />)
-    expect(screen.getByText("$4.5")).not.toBeNull()
-    expect(screen.getByText("/ $5")).not.toBeNull()
+    expect(screen.getByText("$4.50")).not.toBeNull()
+    expect(screen.getByText("/ $5.00")).not.toBeNull()
     expect(screen.getByText("USD")).not.toBeNull()
-    const value = screen.getByText("$4.5")
-    expect(value.getAttribute("title")).toBe("$4.5 left")
+    const value = screen.getByText("$4.50")
+    expect(value.getAttribute("title")).toBe("$4.50 left")
     expect(screen.getByRole("progressbar", { name: "Brave balance remaining" })).not.toBeNull()
   })
 })

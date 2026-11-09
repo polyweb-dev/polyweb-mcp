@@ -323,14 +323,14 @@ describe("ProviderLimitsCard Brave", () => {
     expect(bar.getAttribute("aria-valuemax")).toBe("100")
     expect(screen.getByText("90%")).not.toBeNull()
     // CARD-3: credit fraction "4500 / 5000 Usd" via split spans; no "Usd left" label.
-    expectFraction("$4.5", "$5")
+    expectFraction("$4.50", "$5.00")
     // Final-polish Item 3c: card shows Usd only. USD value sits in hover title and aria-label.
     expect(screen.queryByText("4.500")).toBeNull()
     expect(screen.queryByText("USD left")).toBeNull()
     expect(screen.queryByText("USD use (priced)")).toBeNull()
-    const usdValue = screen.getByText("$4.5")
-    expect(usdValue.getAttribute("title")).toBe("$4.5 left")
-    expect(usdValue.getAttribute("aria-label")).toBe("$4.5 left")
+    const usdValue = screen.getByText("$4.50")
+    expect(usdValue.getAttribute("title")).toBe("$4.50 left")
+    expect(usdValue.getAttribute("aria-label")).toBe("$4.50 left")
     // Polish Item 6: no auth_mode chip, no "keyed rail" text on the card.
     expect(screen.queryByText("keyed rail")).toBeNull()
     expect(screen.queryByText("n/a")).toBeNull()
@@ -341,10 +341,10 @@ describe("ProviderLimitsCard Brave", () => {
 
   it("exposes USD value in hover title and aria-label only with Usd bar text intact (final-polish 3c, 3e)", () => {
     renderBraveCard()
-    expectFraction("$4.5", "$5")
-    const usdValue = screen.getByText("$4.5")
-    expect(usdValue.getAttribute("title")).toBe("$4.5 left")
-    expect(usdValue.getAttribute("aria-label")).toBe("$4.5 left")
+    expectFraction("$4.50", "$5.00")
+    const usdValue = screen.getByText("$4.50")
+    expect(usdValue.getAttribute("title")).toBe("$4.50 left")
+    expect(usdValue.getAttribute("aria-label")).toBe("$4.50 left")
     expect(screen.queryByText("USD left")).toBeNull()
     expect(screen.queryByText("Usd left")).toBeNull()
     const bar = screen.getByRole("progressbar", { name: "Brave balance remaining" })
@@ -409,7 +409,7 @@ describe("ProviderLimitsCard Brave", () => {
         manualEligible
       />,
     )
-    expectFraction("$4.5", "$5")
+    expectFraction("$4.50", "$5.00")
     const auth = braveAuth()
     const debited = {
       ...auth,
@@ -426,7 +426,7 @@ describe("ProviderLimitsCard Brave", () => {
         manualEligible
       />,
     )
-    expectFraction("$4.495", "$5")
+    expectFraction("$4.495", "$5.00")
     expect(screen.getByText("89.9%")).not.toBeNull()
     vi.unstubAllGlobals()
   })
@@ -449,11 +449,11 @@ describe("ProviderLimitsCard Brave", () => {
     expect((heading.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
     const info = screen.getByRole("button", { name: "Credit details for Brave" })
     expect(info.getAttribute("data-testid")).toBe("credit-info-brave")
-    const creditRow = screen.getByText("$4.5").closest("span")?.parentElement?.parentElement
+    const creditRow = screen.getByText("$4.50").closest("span")?.parentElement?.parentElement
     expect(creditRow?.className).toContain("justify-between")
     const children = Array.from(creditRow?.children ?? [])
     expect(children.length).toBe(1)
-    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.5/$5USD")
+    expect(children[0]?.textContent?.replace(/\s+/g, "")).toContain("$4.50/$5.00USD")
     const user = userEvent.setup()
     await user.click(menu)
     expect(await screen.findByRole("button", { name: "Set balance" })).not.toBeNull()
@@ -2166,8 +2166,8 @@ describe("ProviderLimitsCard You.com", () => {
       />,
     )
     // Finite-USD pool: 95.500/100.000 USD -> 95500/100000 Usd at 95.5%.
-    expect(screen.getByText("$95.5")).not.toBeNull()
-    expect(screen.getByText("/ $100")).not.toBeNull()
+    expect(screen.getByText("$95.50")).not.toBeNull()
+    expect(screen.getByText("/ $100.00")).not.toBeNull()
     expect(screen.getByText("USD")).not.toBeNull()
     const bar = screen.getByRole("progressbar", { name: "You.com balance remaining" })
     expect(bar.getAttribute("aria-valuenow")).toBe("95.5")

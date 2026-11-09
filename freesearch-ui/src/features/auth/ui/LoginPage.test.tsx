@@ -68,7 +68,7 @@ describe("LoginPage", () => {
     const submit = screen.getByRole("button", { name: "Sign in" })
     await user.click(submit)
 
-    const pending = await screen.findByRole("button", { name: "Signing in" })
+    const pending = await screen.findByRole("button", { name: "Signing in…" })
     expect(pending).toBeDisabled()
     await user.click(pending)
     expect(login).toHaveBeenCalledTimes(1)

@@ -59,7 +59,7 @@ function costFact(
   if (record === null) return null
   const label = operationLabel(operation) + " cost"
   if (["unbilled_free", "unbilled_keyless"].includes(record.conversion_profile.source)) {
-    return { label, value: "Free", note: null }
+    return { label, value: formatCallCost(0), note: null }
   }
   const view = auth.usd_views.find((entry) => entry.operation === operation)
   const cost = known(view?.request_cost_usd)

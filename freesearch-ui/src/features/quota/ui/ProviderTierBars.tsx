@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import type { UsdConversionProfile, TierBalance, TierBarView } from "@/domains/dashboard"
-import { dollarText, sumAmounts, tierBarModel } from "../model/usdDisplay"
+import { formatCallCost, formatCostTotal } from "@/domains/providers"
+import { sumAmounts, tierBarModel } from "../model/usdDisplay"
 import { formatTavilyPopoverAmount, tavilyUsdToCredits } from "../model/tavilyCredits"
 import type { TavilyDisplayAdapter } from "../model/tavilyCredits"
 import { groupDigits } from "../model/numberText"
@@ -15,11 +16,11 @@ export interface ProviderTierBarsProps {
 
 /** Known tier amounts only; an unknown tier yields no row at all. */
 function barAmount(bar: TierBarView): string | null {
-  if (bar.state === "unmetered") return "Free"
+  if (bar.state === "unmetered") return formatCallCost(0)
   if (bar.state === "postpaid") return "Postpaid access"
   if (bar.remainingUsd === null) return null
-  if (bar.allowanceUsd === null) return dollarText(bar.remainingUsd)
-  return dollarText(bar.remainingUsd) + " of " + dollarText(bar.allowanceUsd)
+  if (bar.allowanceUsd === null) return formatCostTotal(bar.remainingUsd)
+  return formatCostTotal(bar.remainingUsd) + " of " + formatCostTotal(bar.allowanceUsd)
 }
 
 /** A CREDIT-kind unit text of any casing. */

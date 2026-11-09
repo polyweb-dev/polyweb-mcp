@@ -359,6 +359,7 @@ describe("SearchPlayground inspector contract (characterization)", () => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
     expect(screen.getByText("Returned results (2)")).toBeInTheDocument()
+    expect(screen.queryByText("Results 2")).not.toBeInTheDocument()
     // One prompt only: the side inspector asks for a selection, the list does not repeat it.
     expect(screen.queryByText("Select item to inspect")).not.toBeInTheDocument()
     // The side inspector is always present: either the empty prompt or the

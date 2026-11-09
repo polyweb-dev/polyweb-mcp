@@ -1,10 +1,10 @@
-import type { KeyPool } from "@/domains/vault"
-import { formatPoolBudget } from "@/domains/vault"
+import { formatPoolBudget, type KeyPool } from "@/domains/vault"
+import { formatCallCost } from "@/domains/providers"
 import { useFreeProvider } from "../model/useFreeProvider"
 
 export function PoolBudgetUsage({ pool }: { pool: KeyPool }) {
   const free = useFreeProvider(pool.provider_type)
-  if (free) return <span className="text-[var(--muted)]">Free</span>
+  if (free) return <span className="text-[var(--muted)]">{formatCallCost(0)}</span>
   if (!pool.budget) return <span>No budget cap</span>
   const { limit } = pool.budget
   const text = formatPoolBudget(pool.budget, pool.budget_used_usd)

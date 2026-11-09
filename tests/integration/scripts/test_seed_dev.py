@@ -125,7 +125,7 @@ async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: 
             labels = (
                 await session.execute(text("SELECT provider_type,label FROM key_pools"))
             ).all()
-            assert set(labels) == {("brave", "Alpha - Brave Search"), ("exa", "Alpha - Exa")}
+            assert set(labels) == {(provider.value, projects[0].name) for provider in keys}
             pools = (
                 await session.execute(
                     text("SELECT provider_type,project_id,rate_limit,budget_limit FROM key_pools")
