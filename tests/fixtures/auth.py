@@ -3,7 +3,7 @@
 Every protected HTTP call uses a real verified JWT from ``POST
 /auth/jwt/login`` on an isolated temporary database. No helper disables the
 guard and no helper installs a global principal override. Each test sets
-``FREESEARCH_AUTH_JWT_SECRET`` before the first settings read and clears the
+``POLYWEB_AUTH_JWT_SECRET`` before the first settings read and clears the
 settings cache, so the signing secret never lands in code.
 
 Authority follows the A1 model (TASK-000041): every account starts ordinary.
@@ -26,12 +26,12 @@ from fastapi_users.password import PasswordHelper
 from httpx import Response
 from pydantic import SecretStr
 
-from freesearch.configuration.config import Settings
-from freesearch.models.users import UserPrincipal
-from freesearch.persistence.projects import bootstrap_fresh_installation
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserDatabase, UserRow
-from freesearch.services.users import AuthService
+from polyweb.configuration.config import Settings
+from polyweb.models.users import UserPrincipal
+from polyweb.persistence.projects import bootstrap_fresh_installation
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserDatabase, UserRow
+from polyweb.services.users import AuthService
 
 #: Strong password for temporary fixture accounts only.
 TEMP_PASSWORD = "StrongPass123!x-Temp"
@@ -142,17 +142,17 @@ def raw_auth_headers(token: str) -> dict[str, str]:
 def install_auth_secret(monkeypatch: pytest.MonkeyPatch) -> str:
     """Point one test at a generated signing secret.
 
-    Set ``FREESEARCH_AUTH_JWT_SECRET`` through the ``monkeypatch`` fixture
+    Set ``POLYWEB_AUTH_JWT_SECRET`` through the ``monkeypatch`` fixture
     and clear the settings cache, so the app composition reads the secret on
     its next access. The caller restores the environment through
     ``monkeypatch`` and clears the cache again in teardown. Return the raw
     secret for JWT claim checks.
     """
 
-    from freesearch.configuration.config import get_settings
+    from polyweb.configuration.config import get_settings
 
     secret = secrets.token_urlsafe(32)
-    monkeypatch.setenv("FREESEARCH_AUTH_JWT_SECRET", secret)
+    monkeypatch.setenv("POLYWEB_AUTH_JWT_SECRET", secret)
     get_settings.cache_clear()
     return secret
 
@@ -231,7 +231,7 @@ async def auth_headers_for(
 
 
 def install_process_auth_secret() -> tuple[str, Callable[[], None]]:
-    """Set a generated ``FREESEARCH_AUTH_JWT_SECRET`` in the process env.
+    """Set a generated ``POLYWEB_AUTH_JWT_SECRET`` in the process env.
 
     Clear the settings cache so the next composition reads it, and return the
     secret plus a restore callable that puts back the previous value (or
@@ -240,18 +240,18 @@ def install_process_auth_secret() -> tuple[str, Callable[[], None]]:
 
     import os
 
-    from freesearch.configuration.config import get_settings
+    from polyweb.configuration.config import get_settings
 
-    previous = os.environ.get("FREESEARCH_AUTH_JWT_SECRET")
+    previous = os.environ.get("POLYWEB_AUTH_JWT_SECRET")
     secret = secrets.token_urlsafe(32)
-    os.environ["FREESEARCH_AUTH_JWT_SECRET"] = secret
+    os.environ["POLYWEB_AUTH_JWT_SECRET"] = secret
     get_settings.cache_clear()
 
     def _restore() -> None:
         if previous is None:
-            os.environ.pop("FREESEARCH_AUTH_JWT_SECRET", None)
+            os.environ.pop("POLYWEB_AUTH_JWT_SECRET", None)
         else:
-            os.environ["FREESEARCH_AUTH_JWT_SECRET"] = previous
+            os.environ["POLYWEB_AUTH_JWT_SECRET"] = previous
         get_settings.cache_clear()
 
     return secret, _restore
@@ -287,11 +287,11 @@ def http_jwt_service(repository: SQLiteRepository) -> AuthService:
 
     It reads the same cached settings as the REST app composition, so one
     access JWT spans the API surface and the MCP surface of one test database.
-    The caller sets ``FREESEARCH_AUTH_JWT_SECRET`` first, through the shared
+    The caller sets ``POLYWEB_AUTH_JWT_SECRET`` first, through the shared
     ``auth_secret`` fixture or :func:`configure_bdd_secret`.
     """
 
-    from freesearch.configuration.config import get_settings
+    from polyweb.configuration.config import get_settings
 
     return AuthService(get_settings(), repository=repository)
 

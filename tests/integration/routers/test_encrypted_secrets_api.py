@@ -10,12 +10,12 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from freesearch.configuration.config import get_settings
-from freesearch.models.projects import CredentialInstanceRead
-from freesearch.models.vault import VaultKeyDetails
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.credentials import credential_secret_slot
+from polyweb.configuration.config import get_settings
+from polyweb.models.projects import CredentialInstanceRead
+from polyweb.models.vault import VaultKeyDetails
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.credentials import credential_secret_slot
 from tests.encrypted_secrets_helpers import SENTINEL_PROVIDER_KEYS, assert_no_sentinels
 from tests.fixtures.auth import (
     account_id_from_pair,
@@ -45,8 +45,8 @@ async def repository(tmp_path):
 
 @pytest.fixture
 def passphrase_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", PASSPHRASE)
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", PASSPHRASE)
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -239,7 +239,7 @@ async def test_wrong_passphrase_degrades_reads_without_crash_or_leak(
             assert write.status_code == 201
     finally:
         await first.close()
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", WRONG_PASSPHRASE)
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", WRONG_PASSPHRASE)
     get_settings.cache_clear()
     second = await SQLiteRepository.open(path)
     adapter = ControlAdapter("exa")

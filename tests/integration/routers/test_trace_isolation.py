@@ -16,8 +16,8 @@ from uuid import UUID
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -29,15 +29,15 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.observability import (
+from polyweb.models.observability import (
     ActorType,
     TraceOperation,
     TraceSpanKind,
     TraceSpanRecord,
 )
-from freesearch.persistence.otel_exporter import write_trace_spans
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.otel_exporter import write_trace_spans
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -345,8 +345,8 @@ async def test_historical_unowned_rows_stay_outside_account_reads(
 async def test_same_project_teammate_reads_another_actors_traces_and_usage(
     isolation_client: TestClient,
 ) -> None:
-    from freesearch.models.project_permissions import ProjectPermission
-    from freesearch.persistence.projects import ProjectRepository
+    from polyweb.models.project_permissions import ProjectPermission
+    from polyweb.persistence.projects import ProjectRepository
     from tests.fixtures.execution import add_execution_member
 
     headers, owner, pid = await _login(isolation_client, "trace-team-owner")
@@ -403,12 +403,12 @@ async def test_policy_read_failure_keeps_execution_and_audit_but_samples_every_s
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from freesearch.models.observability import TraceAttribute
-    from freesearch.models.projects import TraceSettings
-    from freesearch.models.settings import ProjectSettingsUpdate
-    from freesearch.models.users import UserPrincipal
-    from freesearch.persistence.audit import AuditRepository
-    from freesearch.services.settings import SettingsService
+    from polyweb.models.observability import TraceAttribute
+    from polyweb.models.projects import TraceSettings
+    from polyweb.models.settings import ProjectSettingsUpdate
+    from polyweb.models.users import UserPrincipal
+    from polyweb.persistence.audit import AuditRepository
+    from polyweb.services.settings import SettingsService
 
     headers, owner, pid = await _login(isolation_client, "policy-failure")
     repository = isolation_client.app.state.repository
@@ -437,7 +437,7 @@ async def test_policy_read_failure_keeps_execution_and_audit_but_samples_every_s
         SimpleSpanProcessor(memory)
     )
     monkeypatch.setattr(
-        "freesearch.services.execution_scope.project_trace_policy_in_session",
+        "polyweb.services.execution_scope.project_trace_policy_in_session",
         AsyncMock(side_effect=RuntimeError("injected read failure")),
     )
     response = isolation_client.post(

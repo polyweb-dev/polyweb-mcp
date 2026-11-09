@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS
 
 # ``features`` is an uninstalled namespace package at the repo root; make it
 # importable regardless of pytest's sys.path manipulation.

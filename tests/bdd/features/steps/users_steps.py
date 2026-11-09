@@ -20,9 +20,9 @@ from fastapi.testclient import TestClient
 from fastapi_users.password import PasswordHelper
 from sqlalchemy import select
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.config import Settings, require_transport_port
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.configuration.config import Settings, require_transport_port
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -34,18 +34,18 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.project_permissions import ProjectPermission
-from freesearch.models.users import AuthProvider, normalize_email
-from freesearch.persistence.database_migrations import (
+from polyweb.models.project_permissions import ProjectPermission
+from polyweb.models.users import AuthProvider, normalize_email
+from polyweb.persistence.database_migrations import (
     DatabaseResetRequired,
     database_status,
     migration_head,
     upgrade_database,
     validate_database_schema,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserDatabase, UserRow, local_password_hash
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserDatabase, UserRow, local_password_hash
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import account_id_from_pair, configure_bdd_secret
 from tests.fixtures.execution import _install_bdd_adapters, bdd_project_id
 from tests.fixtures.project_order import seed_order_pools
@@ -106,7 +106,7 @@ class _UsersStubAdapter(ProviderAdapter):
 
 def _open_users_repository(context: Any) -> None:
     with tempfile.NamedTemporaryFile(
-        prefix="freesearch-users-",
+        prefix="polyweb-users-",
         suffix=".db",
         dir=Path.cwd(),
         delete=False,
@@ -145,7 +145,7 @@ def step_when_create_local_account(context: Any, email: str) -> None:
 
 @then('the stored account should use email "{email}" and hold no system role')
 def step_then_account_email_no_role(context: Any, email: str) -> None:
-    from freesearch.persistence.projects import SystemRoleAssignmentRow
+    from polyweb.persistence.projects import SystemRoleAssignmentRow
 
     assert context.created_email == email
     assert normalize_email("Ops@Example.COM") == "ops@example.com"
@@ -298,7 +298,7 @@ def step_then_agent_not_superuser(context: Any) -> None:
 @given("a pre-Alembic users database with historical usage rows")
 def step_given_prealembic_users_db(context: Any) -> None:
     context.temp_directory = tempfile.TemporaryDirectory(prefix="users-migration-bdd-")
-    database = Path(context.temp_directory.name) / "freesearch.db"
+    database = Path(context.temp_directory.name) / "polyweb.db"
     database.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(database) as connection:
         connection.executescript(
@@ -354,7 +354,7 @@ def step_then_users_migration_refused(context: Any) -> None:
     message = str(error)
     assert "unversioned" in message
     assert migration_head() in message
-    assert "FREESEARCH_DB" in message
+    assert "POLYWEB_DB" in message
     status = database_status(Path(str(context.database_path)))
     assert status.current_revision is None
     assert status.schema_valid is False
@@ -407,7 +407,7 @@ def step_then_missing_secret_blocked(context: Any) -> None:
 @then("settings representations should contain no secret material")
 def step_then_settings_no_secrets(context: Any) -> None:
     assert "x" * 32 not in context.settings_repr
-    assert "FREESEARCH_AUTH_JWT_SECRET" not in context.settings_repr
+    assert "POLYWEB_AUTH_JWT_SECRET" not in context.settings_repr
 
 
 @given("an offline users API with stub adapters and a temporary database")
@@ -966,23 +966,23 @@ def step_then_authority_pooled_search(context: Any) -> None:
 
 
 _BROWSER_ORIGIN = "http://localhost:5177"
-_BROWSER_MARKER = {"Origin": _BROWSER_ORIGIN, "X-FreeSearch-Client": "browser"}
+_BROWSER_MARKER = {"Origin": _BROWSER_ORIGIN, "X-Polyweb-Client": "browser"}
 
 
 def _configure_browser_origins(context: Any) -> None:
     import os
 
-    from freesearch.configuration.config import get_settings
+    from polyweb.configuration.config import get_settings
 
-    previous = os.environ.get("FREESEARCH_AUTH_BROWSER_ORIGINS")
-    os.environ["FREESEARCH_AUTH_BROWSER_ORIGINS"] = f'["{_BROWSER_ORIGIN}"]'
+    previous = os.environ.get("POLYWEB_AUTH_BROWSER_ORIGINS")
+    os.environ["POLYWEB_AUTH_BROWSER_ORIGINS"] = f'["{_BROWSER_ORIGIN}"]'
     get_settings.cache_clear()
 
     def _restore() -> None:
         if previous is None:
-            os.environ.pop("FREESEARCH_AUTH_BROWSER_ORIGINS", None)
+            os.environ.pop("POLYWEB_AUTH_BROWSER_ORIGINS", None)
         else:
-            os.environ["FREESEARCH_AUTH_BROWSER_ORIGINS"] = previous
+            os.environ["POLYWEB_AUTH_BROWSER_ORIGINS"] = previous
         get_settings.cache_clear()
 
     cleanups: list[Any] = getattr(context, "enc_cleanups", None) or []
@@ -1004,7 +1004,7 @@ def _browser_cookie_headers(context: Any) -> dict[str, str]:
     assert context.browser_cookie is not None
     return {
         **_BROWSER_MARKER,
-        "Cookie": f"__Secure-freesearch_refresh={context.browser_cookie}",
+        "Cookie": f"__Secure-polyweb_refresh={context.browser_cookie}",
     }
 
 
@@ -1022,7 +1022,7 @@ def step_when_browser_login(context: Any) -> None:
 
 @then("the browser login should issue a strict cookie without a JSON refresh credential")
 def step_then_browser_login_cookie(context: Any) -> None:
-    from freesearch.infrastructure.browser_auth import (
+    from polyweb.infrastructure.browser_auth import (
         REFRESH_COOKIE_NAME,
         REFRESH_COOKIE_PATH,
     )
@@ -1086,7 +1086,7 @@ def step_when_browser_reuse(context: Any) -> None:
             "/auth/jwt/refresh",
             headers={
                 **_BROWSER_MARKER,
-                "Cookie": f"__Secure-freesearch_refresh={context.browser_first_cookie}",
+                "Cookie": f"__Secure-polyweb_refresh={context.browser_first_cookie}",
             },
         )
 
@@ -1108,7 +1108,7 @@ def step_then_browser_rotated_dead(context: Any) -> None:
             "/auth/jwt/refresh",
             headers={
                 **_BROWSER_MARKER,
-                "Cookie": f"__Secure-freesearch_refresh={context.browser_rotated_cookie}",
+                "Cookie": f"__Secure-polyweb_refresh={context.browser_rotated_cookie}",
             },
         )
         assert stale.status_code == 401
@@ -1126,8 +1126,8 @@ def step_when_browser_invalid_origin(context: Any) -> None:
             "/auth/jwt/refresh",
             headers={
                 "Origin": "https://evil.example.com",
-                "X-FreeSearch-Client": "browser",
-                "Cookie": f"__Secure-freesearch_refresh={context.browser_cookie}",
+                "X-Polyweb-Client": "browser",
+                "Cookie": f"__Secure-polyweb_refresh={context.browser_cookie}",
             },
         )
 

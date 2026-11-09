@@ -16,14 +16,14 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
-from freesearch.models.observability import (
+from polyweb.models.contracts import UsageEvent, UsageOperation, UsageStatus
+from polyweb.models.observability import (
     ActorType,
     TraceSpanKind,
     TraceSpanRecord,
 )
-from freesearch.persistence.otel_exporter import write_trace_spans
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.otel_exporter import write_trace_spans
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
 
@@ -122,13 +122,13 @@ async def test_exporter_skips_unattributed_spans_in_a_mixed_batch(
     repository: SQLiteRepository,
 ) -> None:
     """An unattributed span is dropped while attributed siblings persist."""
-    from freesearch.infrastructure.observability import (
+    from polyweb.infrastructure.observability import (
         bind_execution_attribution,
         bind_trace_capture,
         build_observability,
         use_observability,
     )
-    from freesearch.models.projects import ProjectTracePolicy
+    from polyweb.models.projects import ProjectTracePolicy
     from tests.fixtures.auth import test_settings
 
     attribution = await seed_execution_project(repository)
@@ -161,13 +161,13 @@ async def test_concurrent_two_project_spans_stay_attributed(
     """Two concurrently bound cells never leak ownership into each other's spans."""
     import asyncio
 
-    from freesearch.infrastructure.observability import (
+    from polyweb.infrastructure.observability import (
         bind_execution_attribution,
         bind_trace_capture,
         build_observability,
         use_observability,
     )
-    from freesearch.models.projects import ProjectTracePolicy
+    from polyweb.models.projects import ProjectTracePolicy
     from tests.fixtures.auth import test_settings
 
     attr_a = await seed_execution_project(repository, name="A")

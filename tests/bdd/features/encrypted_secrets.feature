@@ -1,6 +1,6 @@
 @control @encrypted-secrets
 Feature: Encrypted-DB secrets storage
-  As a local FreeSearch operator
+  As a local Polyweb operator
   I want provider keys and OAuth tokens encrypted at rest in SQLite
   So that database files and backups never carry plaintext secrets
 

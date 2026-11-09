@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-from freesearch.adapters.brave import BraveAdapter
+from polyweb.adapters.brave import BraveAdapter
 
 # Caller headers that must never reach Brave; kept on every helper-built client.
 CALLER_HEADERS: dict[str, str] = {"Authorization": "Bearer caller", "X-API-Key": "caller-key"}

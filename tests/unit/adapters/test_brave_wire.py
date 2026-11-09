@@ -15,9 +15,9 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import SearchRequest, SearchResponse
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import SearchRequest, SearchResponse
 from tests.unit.adapters._brave_test_support import brave_adapter, brave_payload
 
 _payload = brave_payload

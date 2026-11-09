@@ -1,6 +1,6 @@
 @control
 Feature: Manual billing-anchor quota overlay
-  As a local FreeSearch operator
+  As a local Polyweb operator
   I want to record dashboard billing figures per provider
   So that the dashboard shows an ESTIMATED balance without steering routing
 

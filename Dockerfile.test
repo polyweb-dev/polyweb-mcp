@@ -28,4 +28,4 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen
 
 # Default command: run parallel mutation testing across all source code with caching & reporting
-CMD ["uv", "run", "pytest", "--gremlins", "--gremlin-workers=auto", "--gremlin-targets=src/freesearch", "--gremlin-report=console,html,json", "--gremlin-cache"]
+CMD ["uv", "run", "pytest", "--gremlins", "--gremlin-workers=auto", "--gremlin-targets=src/polyweb", "--gremlin-report=console,html,json", "--gremlin-cache"]

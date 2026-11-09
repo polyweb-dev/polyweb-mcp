@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     AuthMode,
     CRDGrantPayload,
     LimitAdmission,
@@ -18,8 +18,8 @@ from freesearch.models.provider_limits import (
     LimitDeniedError,
     LimitOperation,
 )
-from freesearch.persistence import database_migrations as migrations
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence import database_migrations as migrations
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import FIXTURE_ACTOR
 
 

@@ -2,14 +2,14 @@
 
 The durable substrate this suite drives is already settled and is never
 monkeypatched away: the fenced authority persistence in
-``freesearch.persistence.execution_authority`` (lease, fencing tokens, dispatch
+``polyweb.persistence.execution_authority`` (lease, fencing tokens, dispatch
 rows, uncertain recovery), the queue/wait/concurrency bounds and loan fields on
 ``project_pool_allocations`` and ``upstream_quota_pools`` (D1 schema), and the
-strict admission store in ``freesearch.persistence.limit_repository``.
+strict admission store in ``polyweb.persistence.limit_repository``.
 
 SEAM CONTRACT (as landed; the tests assert this public shape)
 ========================================================================
-1. Module ``freesearch.services.execution_authority`` exposes
+1. Module ``polyweb.services.execution_authority`` exposes
    ``ExecutionAuthority`` -- the single API-hosted execution authority --
    composed into execution via ``ExecutionService(..., authority=...)`` (or
    hosted by default), so REST submits directly and MCP forwards to the same
@@ -18,7 +18,7 @@ SEAM CONTRACT (as landed; the tests assert this public shape)
    ``holder_id``, ``lease_seconds``, ``recovery_seconds``, and default queue
    bounds.
 
-2. Module ``freesearch.models.execution_failures`` (re-exported through the
+2. Module ``polyweb.models.execution_failures`` (re-exported through the
    authority module) carries the refusal taxonomy asserted here:
 
    * ``ExecutionAuthorityUnavailable`` -- typed, ``retriable=True`` refusal
@@ -34,7 +34,7 @@ SEAM CONTRACT (as landed; the tests assert this public shape)
 
 3. Queue telemetry: one successful queued dispatch records ``queue_wait_ms``
    into the usage event's ``metadata_json`` (via
-   ``freesearch.services.monitoring.add_queue_wait``) -- the observed wait
+   ``polyweb.services.monitoring.add_queue_wait``) -- the observed wait
    before dispatch, reported separately from the provider ``latency_ms``.
 
 4. Scheduler contract (covered behaviorally below, never by internals):
@@ -70,12 +70,12 @@ from tests.fixtures.a2_execution import RecordingAdapter, SeededCredential, prov
 from tests.fixtures.api_keys import ProjectKey, key_for_account
 from tests.fixtures.execution import seed_execution_project
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.provider_limits import provider_limit_defaults
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.configuration.provider_limits import provider_limit_defaults
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import (
     ProviderError,
     SearchRequest,
     SearchResponse,
@@ -83,9 +83,9 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import ExecutionAttribution
-from freesearch.models.projects import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import ExecutionAttribution
+from polyweb.models.projects import (
     API_KEY_SCOPES,
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     CredentialOwnerScope,
@@ -94,33 +94,33 @@ from freesearch.models.projects import (
     ProjectApiKeyPrincipal,
     ProjectContext,
 )
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     ProviderLimitRecord,
     RateScope,
     RateWindow,
     RateWindowName,
 )
-from freesearch.models.schema_enums import UpstreamScope
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.execution_authority import (
+from polyweb.models.schema_enums import UpstreamScope
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.execution_authority import (
     ExecutionDispatchRow,
 )
-from freesearch.persistence.limit_rows import RateAttemptRow
-from freesearch.persistence.pools import (
+from polyweb.persistence.limit_rows import RateAttemptRow
+from polyweb.persistence.pools import (
     PoolAllocationRepository,
     StoredAllocation,
     StoredPool,
     UpstreamPoolRepository,
 )
-from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.execution import ExecutionService
-from freesearch.services.execution_authority import AUTHORITY_KEY as REAL_AUTHORITY_KEY
-from freesearch.services.execution_scope import resolve_execution_scope
-from freesearch.services.monitoring import clear_quota_poll_cache
-from freesearch.services.provider_limits import ProviderLimitsService
-from freesearch.services.provider_runtime import clear_config_cache
+from polyweb.persistence.storage import SQLiteRepository, UsageEventRow
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.execution import ExecutionService
+from polyweb.services.execution_authority import AUTHORITY_KEY as REAL_AUTHORITY_KEY
+from polyweb.services.execution_scope import resolve_execution_scope
+from polyweb.services.monitoring import clear_quota_poll_cache
+from polyweb.services.provider_limits import ProviderLimitsService
+from polyweb.services.provider_runtime import clear_config_cache
 
 #: The single provider this suite binds. One provider keeps every queue, pool,
 #: and bucket assertion unambiguous.
@@ -345,7 +345,7 @@ class AuthorityWorld:
     monotonic: MonotonicControl
     pool: StoredPool
     spec: AuthorityPoolSpec
-    authority: Any  # freesearch.services.execution_authority.ExecutionAuthority
+    authority: Any  # polyweb.services.execution_authority.ExecutionAuthority
     service: ExecutionService
     projects: dict[str, AuthorityProject] = field(default_factory=dict)
     allocations: dict[str, StoredAllocation] = field(default_factory=dict)
@@ -890,7 +890,7 @@ async def build_authority_world(
 
     pool, allocations = await _seed_pool_and_allocations(repository, projects, spec=spec)
 
-    import freesearch.services.execution as execution_module
+    import polyweb.services.execution as execution_module
 
     def factory(client: Any, api_key: Any = None) -> ProviderAdapter:
         del client
@@ -913,7 +913,7 @@ async def build_authority_world(
     )
     await limits_service.initialize()
 
-    from freesearch.services.execution_authority import ExecutionAuthority
+    from polyweb.services.execution_authority import ExecutionAuthority
 
     stepped = monotonic or MonotonicControl()
     authority_arguments: dict[str, Any] = {}

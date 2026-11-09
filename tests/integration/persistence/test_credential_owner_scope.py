@@ -17,9 +17,9 @@ from uuid import UUID
 import pytest
 import pytest_asyncio
 
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
 _SYSTEM = CredentialOwnerScope.SYSTEM

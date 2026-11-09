@@ -10,12 +10,12 @@ __pycache__/
 *.pyc
 .env
 # Frontend build debris (reinstalled / rebuilt inside the ui-build stage).
-freesearch-ui/node_modules/
-freesearch-ui/dist/
-freesearch-ui/.stryker-tmp/
+polyweb-ui/node_modules/
+polyweb-ui/dist/
+polyweb-ui/.stryker-tmp/
 node_modules/
 # Local runtime state (Compose uses a named volume instead).
 *.db
 *.db-journal
 *.bak
-freesearch-control-cwd-*
+polyweb-control-cwd-*

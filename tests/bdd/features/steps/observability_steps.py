@@ -19,9 +19,9 @@ from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.keenable import KeenableAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -32,8 +32,8 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
@@ -48,12 +48,12 @@ _FAKE_API_KEY = "sk-test-obs-7f3a9c-not-a-real-secret"
 _SEARCH_RESULTS = [
     {
         "title": "Consensus algorithms explained",
-        "url": "https://docs.freesearch.dev/consensus",
+        "url": "https://docs.polyweb.dev/consensus",
         "snippet": "Raft, Paxos, and where each applies.",
     },
     {
         "title": "Raft vs Paxos",
-        "url": "https://docs.freesearch.dev/raft-vs-paxos",
+        "url": "https://docs.polyweb.dev/raft-vs-paxos",
         "snippet": "A practical comparison.",
     },
 ]
@@ -146,7 +146,7 @@ def _open_trace_repository(context: Any) -> None:
     configure_bdd_secret(context)
     _reset_otel_state(context)
     with tempfile.NamedTemporaryFile(
-        prefix="freesearch-otel-",
+        prefix="polyweb-otel-",
         suffix=".db",
         dir=Path.cwd(),
         delete=False,
@@ -297,18 +297,18 @@ def _assert_hierarchy(context: Any, root_name: str, *, expect_adapter_children: 
 
     root_children = [span for span in spans if span["parent_span_id"] == root["span_id"]]
     assert {span["name"] for span in root_children} == {
-        "freesearch.backend",
-        "freesearch.response",
+        "polyweb.backend",
+        "polyweb.response",
     }, repr([(span["name"], span["parent_span_id"]) for span in root_children])
-    backend = next(span for span in root_children if span["name"] == "freesearch.backend")
+    backend = next(span for span in root_children if span["name"] == "polyweb.backend")
 
     backend_children = [span for span in spans if span["parent_span_id"] == backend["span_id"]]
     assert {span["name"] for span in backend_children} == {
-        "freesearch.route",
-        "freesearch.provider",
-        "freesearch.results",
+        "polyweb.route",
+        "polyweb.provider",
+        "polyweb.results",
     }, repr([span["name"] for span in backend_children])
-    provider = next(span for span in backend_children if span["name"] == "freesearch.provider")
+    provider = next(span for span in backend_children if span["name"] == "polyweb.provider")
     assert provider["kind"] == "client"
 
     if expect_adapter_children:
@@ -316,11 +316,11 @@ def _assert_hierarchy(context: Any, root_name: str, *, expect_adapter_children: 
             span for span in spans if span["parent_span_id"] == provider["span_id"]
         ]
         assert {span["name"] for span in provider_children} == {
-            "freesearch.provider.http",
-            "freesearch.provider.parse",
+            "polyweb.provider.http",
+            "polyweb.provider.parse",
         }, repr([span["name"] for span in provider_children])
         http_child = next(
-            span for span in provider_children if span["name"] == "freesearch.provider.http"
+            span for span in provider_children if span["name"] == "polyweb.provider.http"
         )
         assert http_child["kind"] == "client"
 
@@ -557,7 +557,7 @@ def step_then_error_trace_type(context: Any, error_type: str) -> None:
     roots = [span for span in detail["spans"] if span["parent_span_id"] is None]
     assert len(roots) == 1
     assert roots[0]["outcome"] == "error"
-    providers = grouped.get("freesearch.provider", [])
+    providers = grouped.get("polyweb.provider", [])
     assert len(providers) == 1
     assert providers[0]["outcome"] == "error"
     assert providers[0]["error"] is not None
@@ -579,7 +579,7 @@ def step_then_single_exception_event(context: Any) -> None:
         f"expected exactly one span with an exception event: "
         f"{[span['name'] for span in exception_holders]}"
     )
-    assert exception_holders[0]["name"] == "freesearch.provider"
+    assert exception_holders[0]["name"] == "polyweb.provider"
 
 
 @then("the traced fanout search should succeed with the surviving provider results")
@@ -608,13 +608,13 @@ def step_then_fanout_siblings(context: Any, count: int) -> None:
     assert len(roots) == 1, "fanout must produce a single root, never one trace per provider"
     assert roots[0]["name"] == "POST /search"
     grouped = _spans_by_name(detail)
-    assert len(grouped.get("freesearch.provider", [])) == count
-    assert len(grouped.get("freesearch.results", [])) == 1, "expected one assembly span"
-    providers = grouped["freesearch.provider"]
+    assert len(grouped.get("polyweb.provider", [])) == count
+    assert len(grouped.get("polyweb.results", [])) == 1, "expected one assembly span"
+    providers = grouped["polyweb.provider"]
     parents = {span["parent_span_id"] for span in providers}
     assert len(parents) == 1, "provider spans must be siblings under one parent"
     backend = next(span for span in spans if span["span_id"] in parents)
-    assert backend["name"] == "freesearch.backend"
+    assert backend["name"] == "polyweb.backend"
 
 
 @then('the fanout trace detail should show outcome "{outcome}" with the failed provider in ERROR')
@@ -625,9 +625,9 @@ def step_then_fanout_partial(context: Any, outcome: str) -> None:
     assert detail["outcome"] == outcome
     assert detail["error"] is None, "a partial request must not carry a request-level error"
     grouped = _spans_by_name(detail)
-    outcomes = sorted(span["outcome"] for span in grouped["freesearch.provider"])
+    outcomes = sorted(span["outcome"] for span in grouped["polyweb.provider"])
     assert outcomes == ["error", "success"], f"expected one failed child: {outcomes}"
-    failed = next(span for span in grouped["freesearch.provider"] if span["outcome"] == "error")
+    failed = next(span for span in grouped["polyweb.provider"] if span["outcome"] == "error")
     assert failed["error"] is not None
     exception_total = sum(
         1 for span in detail["spans"] for event in span["events"] if event["name"] == "exception"
@@ -651,7 +651,7 @@ def step_then_fanout_sibling_identities(
     assert context.otel_trace_id is not None
     detail = _trace_detail(context, context.otel_trace_id)
     grouped = _spans_by_name(detail)
-    providers = grouped.get("freesearch.provider", [])
+    providers = grouped.get("polyweb.provider", [])
     assert len(providers) == 2, f"expected 2 sibling provider spans: {providers}"
     by_outcome = {span["outcome"]: span.get("provider") for span in providers}
     assert by_outcome.get("error") == failed_provider, (

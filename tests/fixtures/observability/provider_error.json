@@ -4,7 +4,7 @@
   "operation": "fetch",
   "provider": "keenable",
   "outcome": "error",
-  "input_text": "https://docs.freesearch.dev/getting-started",
+  "input_text": "https://docs.polyweb.dev/getting-started",
   "result_count": null,
   "error": { "type": "http_error", "message": "HTTP 502" },
   "output": null,
@@ -27,7 +27,7 @@
     {
       "span_id": "2200000000000002",
       "parent_span_id": "2100000000000001",
-      "name": "freesearch.backend",
+      "name": "polyweb.backend",
       "kind": "internal",
       "stage": "Backend handling",
       "started_at": "2026-09-29T09:20:00.004000+00:00",
@@ -42,7 +42,7 @@
     {
       "span_id": "2300000000000003",
       "parent_span_id": "2200000000000002",
-      "name": "freesearch.provider",
+      "name": "polyweb.provider",
       "kind": "client",
       "stage": "Provider request",
       "provider": "keenable",
@@ -55,9 +55,9 @@
       "error": { "type": "http_error", "message": "HTTP 502" },
       "events": [
         {
-          "name": "freesearch.provider.request",
+          "name": "polyweb.provider.request",
           "timestamp": "2026-09-29T09:20:00.006000+00:00",
-          "attributes": { "url": "https://docs.freesearch.dev/getting-started" }
+          "attributes": { "url": "https://docs.polyweb.dev/getting-started" }
         },
         {
           "name": "exception",
@@ -72,7 +72,7 @@
     {
       "span_id": "2400000000000004",
       "parent_span_id": "2300000000000003",
-      "name": "freesearch.provider.http",
+      "name": "polyweb.provider.http",
       "kind": "client",
       "stage": "Provider HTTP call",
       "started_at": "2026-09-29T09:20:00.008000+00:00",

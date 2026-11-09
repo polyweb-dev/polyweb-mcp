@@ -8,13 +8,13 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from freesearch.models.project_permissions import (
+from polyweb.models.project_permissions import (
     DEVELOPER_BITS,
     PROVIDER_OWNER_BIT,
     STANDARD,
     ProjectPermission,
 )
-from freesearch.models.projects import (
+from polyweb.models.projects import (
     BUILTIN_ROLE_DEFINITIONS,
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
@@ -24,12 +24,12 @@ from freesearch.models.projects import (
     ProjectMemberAdd,
     ProjectMemberUpdate,
 )
-from freesearch.persistence.projects import ProjectRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserRow
-from freesearch.routers.api import create_app
-from freesearch.services.projects import LAST_PROJECT_ADMIN, ProjectConflict, ProjectService
-from freesearch.services.users import AuthLastSystemAdmin
+from polyweb.persistence.projects import ProjectRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserRow
+from polyweb.routers.api import create_app
+from polyweb.services.projects import LAST_PROJECT_ADMIN, ProjectConflict, ProjectService
+from polyweb.services.users import AuthLastSystemAdmin
 from tests.fixtures.alpha_fixtures import create_alpha_test_db
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
@@ -782,7 +782,7 @@ def _project_scoped_routes(app: object) -> list[tuple[str, str]]:
         if not isinstance(route, APIRoute) or "{project_id}" not in route.path:
             continue
         module = getattr(route.endpoint, "__module__", "")
-        if module not in {"freesearch.routers.projects", "freesearch.routers.api_keys"}:
+        if module not in {"polyweb.routers.projects", "polyweb.routers.api_keys"}:
             continue
         for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
             found.append((method, route.path))

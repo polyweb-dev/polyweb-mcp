@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import FallbackPolicy, RoutingConfigResponse, RoutingPreference
-from freesearch.services.provider_runtime import persist_routing_config
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import FallbackPolicy, RoutingConfigResponse, RoutingPreference
+from polyweb.services.provider_runtime import persist_routing_config
 from tests.fixtures.a2_execution import (
     PoolSpec,
     build_execution_world,
@@ -67,7 +67,7 @@ async def test_cancelling_parent_execution_awaits_both_fanout_children(
 ) -> None:
     from sqlalchemy import select
 
-    from freesearch.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
+    from polyweb.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
 
     world = await build_execution_world(
         tmp_path,
@@ -199,7 +199,7 @@ async def test_batchless_repository_fallback(
         from datetime import UTC, datetime
         from decimal import Decimal
 
-        from freesearch.models.contracts import QuotaSnapshot, QuotaSource
+        from polyweb.models.contracts import QuotaSnapshot, QuotaSource
 
         monkeypatch.setattr(world.repository, "latest_health_batch", None)
         monkeypatch.setattr(world.repository, "latest_health", real_health)
@@ -213,7 +213,7 @@ async def test_batchless_repository_fallback(
         )
         credential_id = world.credentials["a1"].credential_id
         await world.repository.record_quota(snapshot, credential_id=credential_id)
-        from freesearch.models.credentials import CredentialOperation
+        from polyweb.models.credentials import CredentialOperation
 
         legs = await world.service._usable_legs(world.context, CredentialOperation.SEARCH)
         try:
@@ -232,9 +232,9 @@ async def test_batchless_repository_fallback(
 @pytest.mark.parametrize("operation", ["search", "fetch"])
 async def test_require_filters_before_state_reads(tmp_path, monkeypatch, operation):
     """Origin tests/unit/routers/test_api.py: REQUIRE limits every state read."""
-    import freesearch.services.execution as execution
-    from freesearch.models.contracts import RoutingMode
-    from freesearch.services.execution import ExecutionBindingMissing
+    import polyweb.services.execution as execution
+    from polyweb.models.contracts import RoutingMode
+    from polyweb.services.execution import ExecutionBindingMissing
     from tests.fixtures.a2_execution import RecordingAdapter
     from tests.fixtures.execution import install_adapter_map, seed_provider_bindings
 
@@ -369,11 +369,11 @@ async def test_denied_requests_never_schedule_vendor_quota_io(tmp_path, monkeypa
     """AC7 includes request-triggered observers, not only search/fetch wire calls."""
     from uuid import uuid4
 
-    from freesearch.models.contracts import ProviderCapabilities, RoutingMode
-    from freesearch.models.provider_limits import AuthMode, LimitDeniedError, LimitOperation
-    from freesearch.persistence.bindings import ProjectBindingRepository
-    from freesearch.persistence.limit_repository import StrictAttemptSpec, StrictWindowSpec
-    from freesearch.services.execution import ExecutionBindingMissing
+    from polyweb.models.contracts import ProviderCapabilities, RoutingMode
+    from polyweb.models.provider_limits import AuthMode, LimitDeniedError, LimitOperation
+    from polyweb.persistence.bindings import ProjectBindingRepository
+    from polyweb.persistence.limit_repository import StrictAttemptSpec, StrictWindowSpec
+    from polyweb.services.execution import ExecutionBindingMissing
     from tests.fixtures.a2_execution import RecordingAdapter
 
     pool = PoolSpec(constraints=[{"window": 60, "limit": 1}], base_rate=1)
@@ -519,7 +519,7 @@ async def test_leg_chain_prepares_only_the_next_leg_while_one_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Daisy chain: the next leg resolves during an attempt, never two ahead."""
-    from freesearch.services.execution import ExecutionService
+    from polyweb.services.execution import ExecutionService
 
     world = await build_execution_world(tmp_path, monkeypatch, labels=_CHAIN_LABELS, limits=False)
     events: list[str] = []

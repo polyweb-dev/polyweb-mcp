@@ -1,4 +1,4 @@
-# FreeSearch explicit development override (never auto-loaded).
+# Polyweb explicit development override (never auto-loaded).
 #
 # Usage:
 #   docker compose -f compose.yaml -f compose.dev.yaml up --build -d
@@ -11,7 +11,7 @@
 #
 # Compose injects the worktree .env into api/mcp process environments at run
 # time; Dockerfile.dev never copies it. Provider credentials remain encrypted
-# vault data on the `freesearch-data` volume, not .env settings. Plain `down`
+# vault data on the `polyweb-data` volume, not .env settings. Plain `down`
 # preserves that vault and avoids key re-entry. `down -v` intentionally deletes
 # the database, master key, and provider vault, so credentials must be re-entered.
 # Keep one canonical laptop-only .env; worktree copies are convenience copies
@@ -25,7 +25,7 @@ services:
       dockerfile: Dockerfile.dev
       target: dev
     # dev-only: do not overwrite the production backend image tag.
-    image: ${COMPOSE_PROJECT_NAME:-freesearch}-backend-dev:latest
+    image: ${COMPOSE_PROJECT_NAME:-polyweb}-backend-dev:latest
     env_file:
       - path: .env
         required: true
@@ -33,7 +33,7 @@ services:
       # dev-only: make the bind-mounted src layout importable without installing it.
       PYTHONPATH: /app/src
     volumes:
-      - freesearch-data:/data
+      - polyweb-data:/data
       # dev-only: live backend edits; no source is baked into the image.
       - ./src:/app/src
     healthcheck:
@@ -51,7 +51,7 @@ services:
       dockerfile: Dockerfile.dev
       target: dev
     # dev-only: do not overwrite the production backend image tag.
-    image: ${COMPOSE_PROJECT_NAME:-freesearch}-backend-dev:latest
+    image: ${COMPOSE_PROJECT_NAME:-polyweb}-backend-dev:latest
     env_file:
       - path: .env
         required: true
@@ -59,7 +59,7 @@ services:
       # dev-only: make the bind-mounted src layout importable without installing it.
       PYTHONPATH: /app/src
     volumes:
-      - freesearch-data:/data
+      - polyweb-data:/data
       # dev-only: live backend edits; no source is baked into the image.
       - ./src:/app/src
     # dev-only: run the module directly without installing bind-mounted source.
@@ -70,7 +70,7 @@ services:
         "--no-sync",
         "python",
         "-m",
-        "freesearch.mcp.server",
+        "polyweb.mcp.server",
         "--transport",
         "streamable-http",
         "--host",

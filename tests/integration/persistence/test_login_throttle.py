@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest_asyncio
 
-from freesearch.persistence.login_throttle import (
+from polyweb.persistence.login_throttle import (
     LOGIN_PAIR_LIMIT,
     LOGIN_PEER_LIMIT,
     REGISTRATION_GLOBAL_LIMIT,
@@ -23,7 +23,7 @@ from freesearch.persistence.login_throttle import (
     reserve_attempt,
     reserve_registration_attempt,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 
 
 @pytest_asyncio.fixture

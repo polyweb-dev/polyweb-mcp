@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest_asyncio
 
-from freesearch.models.contracts import UnitKind
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import UnitKind
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.models.provider_limits import (
     AuthMode,
     BudgetBlock,
     BudgetModel,
@@ -29,12 +29,12 @@ from freesearch.models.provider_limits import (
     RateWindowName,
     UsageSyncRequest,
 )
-from freesearch.models.schema_enums import UpstreamScope
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.pools import UpstreamPoolRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.limits_sync import LimitSyncService
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.models.schema_enums import UpstreamScope
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.pools import UpstreamPoolRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.limits_sync import LimitSyncService
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.execution import seed_execution_user
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
@@ -216,7 +216,7 @@ async def _scoped_observation(  # type: ignore[no-untyped-def]
 ):
     """Store one credential-scoped funds observation of the synthetic pool."""
 
-    from freesearch.models.provider_limits import NativePool
+    from polyweb.models.provider_limits import NativePool
 
     pool_id = f"synth:keyed:USD#{scope}"
     await repository.limits.ensure_pool(
@@ -307,7 +307,7 @@ async def test_catalog_observation_wins_over_scoped_funds(repository) -> None:
 
 
 async def test_missing_adapter_delegates_to_credential_sync(repository) -> None:
-    from freesearch.models.provider_limits import SyncResult
+    from polyweb.models.provider_limits import SyncResult
 
     svc = await _synth_limits(repository)
     calls: list[str] = []
@@ -370,7 +370,7 @@ async def test_rate_progress_hour_day_only(repository) -> None:
 
 
 def _tavily_records():  # type: ignore[no-untyped-def]
-    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from polyweb.configuration.provider_limits import provider_limit_defaults
 
     return [r for r in provider_limit_defaults() if r.provider == "tavily"]
 
@@ -441,7 +441,7 @@ async def test_tavily_poll_at_60s_syncs_again(repository) -> None:
 
 
 async def test_tavily_same_owner_cannot_bypass_active_claim(repository) -> None:
-    from freesearch.models.provider_limits import SyncClaim
+    from polyweb.models.provider_limits import SyncClaim
 
     adapter = _TavilyVendorAdapter()
     svc, sync = _tavily_sync(repository, adapter)
@@ -479,8 +479,8 @@ async def test_tavily_force_sync_respects_cadence(repository) -> None:
 async def test_tavily_poll_failure_keeps_balance_and_marks_stale(repository) -> None:
     from datetime import timedelta
 
-    from freesearch.infrastructure.resilience import ProviderOperationError
-    from freesearch.models.contracts import ProviderError
+    from polyweb.infrastructure.resilience import ProviderOperationError
+    from polyweb.models.contracts import ProviderError
 
     class _Failing:
         name = "tavily"

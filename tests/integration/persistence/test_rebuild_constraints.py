@@ -8,9 +8,9 @@ from pathlib import Path
 from alembic import command
 from sqlalchemy import CheckConstraint
 
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.persistence.database_migrations import _config
-from freesearch.persistence.schema import load_all_rows
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.persistence.database_migrations import _config
+from polyweb.persistence.schema import load_all_rows
 
 
 def _normalize(expression: str) -> str:

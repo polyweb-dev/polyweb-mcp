@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from freesearch.models.project_permissions import STANDARD, ProjectPermission
-from freesearch.models.projects import (
+from polyweb.models.project_permissions import STANDARD, ProjectPermission
+from polyweb.models.projects import (
     BuiltinRole,
     MembershipStatus,
     ProjectCreate,
@@ -24,7 +24,7 @@ from freesearch.models.projects import (
     ProjectMembersBulkUpdate,
     ProjectMemberUpdate,
 )
-from freesearch.services.projects import LAST_PROJECT_ADMIN, ProjectConflict, ProjectService
+from polyweb.services.projects import LAST_PROJECT_ADMIN, ProjectConflict, ProjectService
 from tests.fixtures.alpha_fixtures import create_alpha_test_db
 from tests.fixtures.api_keys import audit_rows, database_dump
 from tests.fixtures.auth import TEMP_PASSWORD, create_temp_user, temp_email, temp_principal

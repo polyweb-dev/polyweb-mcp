@@ -10,14 +10,14 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from freesearch.infrastructure.trace_payloads import (
+from polyweb.infrastructure.trace_payloads import (
     _annotate_root,
     _annotate_root_error,
     _operation_name,
     _request_attributes,
     _search_results_payload,
 )
-from freesearch.models.contracts import (
+from polyweb.models.contracts import (
     FetchedDocument,
     FetchRequest,
     FetchResponse,
@@ -25,7 +25,7 @@ from freesearch.models.contracts import (
     SearchResponse,
     SearchResult,
 )
-from freesearch.models.observability import TraceAttribute, TraceOperation
+from polyweb.models.observability import TraceAttribute, TraceOperation
 
 
 class _RecordingRuntime:

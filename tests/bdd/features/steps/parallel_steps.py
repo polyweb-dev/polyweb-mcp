@@ -6,7 +6,7 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import HttpUrl
 
-from freesearch.models.contracts import FetchRequest, SearchRequest, UsageEvent
+from polyweb.models.contracts import FetchRequest, SearchRequest, UsageEvent
 
 
 def _assert_usage_event(usage: UsageEvent | None) -> None:
@@ -23,7 +23,7 @@ def _assert_usage_event(usage: UsageEvent | None) -> None:
 def step_given_parallel_adapter(context: Any) -> None:
     """Verify that a Parallel API key is resolved and the adapter is ready."""
     assert context.has_parallel_key, (
-        "FREESEARCH_PARALLEL_API_KEY is not configured in .env or environment. "
+        "POLYWEB_PARALLEL_API_KEY is not configured in .env or environment. "
         "Please provide a valid Parallel API key to run live BDD tests."
     )
     assert context.adapter is not None, "Parallel adapter was not initialized."

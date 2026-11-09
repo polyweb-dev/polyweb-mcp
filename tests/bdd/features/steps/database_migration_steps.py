@@ -14,7 +14,7 @@ from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
 
-from freesearch.persistence.database_migrations import (
+from polyweb.persistence.database_migrations import (
     DatabaseResetRequired,
     absolute_database_path,
     database_status,
@@ -72,14 +72,14 @@ def _assert_at_alpha_baseline(database: Path) -> None:
     assert status.schema_valid is True, status
 
 
-@given("no FreeSearch database exists at the selected path")
+@given("no Polyweb database exists at the selected path")
 def given_no_selected_database(context: Any) -> None:
-    database = _scenario_root(context) / "checkout with spaces" / "freesearch.db"
+    database = _scenario_root(context) / "checkout with spaces" / "polyweb.db"
     assert not database.exists()
     context.database_path = str(database)
 
 
-@when("FreeSearch prepares the selected database")
+@when("Polyweb prepares the selected database")
 def when_prepare_selected_database(context: Any) -> None:
     context.migration_result = upgrade_database(Path(context.database_path))
 
@@ -104,16 +104,16 @@ def then_selected_database_validates(context: Any) -> None:
         connection.close()
 
 
-@given('a FreeSearch database left at the unknown revision "{revision}"')
+@given('a Polyweb database left at the unknown revision "{revision}"')
 def given_older_selected_database(context: Any, revision: str) -> None:
-    database = _scenario_root(context) / "old checkout" / "freesearch.db"
+    database = _scenario_root(context) / "old checkout" / "polyweb.db"
     _create_older_database(database, revision)
     context.database_path = str(database)
     context.database_digest = _sha256(database)
     context.database_files = {entry.name for entry in database.parent.iterdir()}
 
 
-@when("FreeSearch tries to prepare the selected database")
+@when("Polyweb tries to prepare the selected database")
 def when_try_prepare_selected_database(context: Any) -> None:
     context.reset_error = None
     try:
@@ -122,7 +122,7 @@ def when_try_prepare_selected_database(context: Any) -> None:
         context.reset_error = error
 
 
-@then('FreeSearch refuses the database with a compatibility message naming "{revision}"')
+@then('Polyweb refuses the database with a compatibility message naming "{revision}"')
 def then_refused_with_reset_message(context: Any, revision: str) -> None:
     error = context.reset_error
     assert error is not None, "the older database was not rejected"
@@ -130,7 +130,7 @@ def then_refused_with_reset_message(context: Any, revision: str) -> None:
     assert str(absolute_database_path(context.database_path)) in message, message
     assert revision in message, message
     assert _MIGRATION_HEAD in message, message
-    assert "compatible FreeSearch version" in message, message
+    assert "compatible Polyweb version" in message, message
 
 
 @then("the refused database bytes are unchanged")
@@ -144,7 +144,7 @@ def then_refused_database_unchanged(context: Any) -> None:
 
 @given('a main checkout database at the unknown revision "{revision}"')
 def given_main_checkout_database(context: Any, revision: str) -> None:
-    main_database = _scenario_root(context) / "main" / "freesearch.db"
+    main_database = _scenario_root(context) / "main" / "polyweb.db"
     _create_older_database(main_database, revision)
     context.main_database_path = str(main_database)
     context.main_database_digest = _sha256(main_database)
@@ -152,14 +152,14 @@ def given_main_checkout_database(context: Any, revision: str) -> None:
     context.main_database_files = {entry.name for entry in main_database.parent.iterdir()}
 
 
-@given("no FreeSearch database exists at the worktree path")
+@given("no Polyweb database exists at the worktree path")
 def given_no_worktree_database(context: Any) -> None:
-    database = _scenario_root(context) / "freesearch_wt_1" / "freesearch.db"
+    database = _scenario_root(context) / "polyweb_wt_1" / "polyweb.db"
     assert not database.exists()
     context.database_path = str(database)
 
 
-@when("FreeSearch prepares the worktree database")
+@when("Polyweb prepares the worktree database")
 def when_prepare_worktree_database(context: Any) -> None:
     context.migration_result = upgrade_database(Path(context.database_path))
 

@@ -9,13 +9,13 @@ from uuid import uuid4
 
 import pytest
 
-from freesearch.models.contracts import UsageOperation
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.execution_failures import ExecutionBindingMissing
-from freesearch.models.provider_limits import LimitDeniedError, LimitOperation
-from freesearch.persistence.limit_repository import _strict_capacity_check
-from freesearch.persistence.pools import StoredAllocation
-from freesearch.services.execution import (
+from polyweb.models.contracts import UsageOperation
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.execution_failures import ExecutionBindingMissing
+from polyweb.models.provider_limits import LimitDeniedError, LimitOperation
+from polyweb.persistence.limit_repository import _strict_capacity_check
+from polyweb.persistence.pools import StoredAllocation
+from polyweb.services.execution import (
     ExecutionService,
     _allocation_scope,
     _AllocationScope,
@@ -86,9 +86,9 @@ async def test_search_debit_blocks_fetch_only_in_shared_scope(
     async def rate_used(_session, bucket_id, **_kwargs):
         return used.get(bucket_id, Decimal(0))
 
-    monkeypatch.setattr("freesearch.persistence.limit_repository._rate_used_in_window", rate_used)
+    monkeypatch.setattr("polyweb.persistence.limit_repository._rate_used_in_window", rate_used)
     monkeypatch.setattr(
-        "freesearch.persistence.limit_repository._window_retry_after_seconds",
+        "polyweb.persistence.limit_repository._window_retry_after_seconds",
         AsyncMock(return_value=1),
     )
     args = {

@@ -12,19 +12,19 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import func, select
 
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import (
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
     SecretSlotConflict,
 )
-from freesearch.models.credentials import (
+from polyweb.models.credentials import (
     ALL_CREDENTIAL_OPERATIONS,
     CredentialCreate,
     CredentialGrantUpsert,
     CredentialOperation,
     CredentialRotate,
 )
-from freesearch.models.projects import (
+from polyweb.models.projects import (
     BUILTIN_ROLE_DEFINITIONS,
     BuiltinRole,
     CredentialOwnerScope,
@@ -33,15 +33,15 @@ from freesearch.models.projects import (
     ProjectCreate,
     ProjectRead,
 )
-from freesearch.models.users import UserPrincipal
-from freesearch.models.vault import VaultKeyCreate
-from freesearch.persistence.credentials import (
+from polyweb.models.users import UserPrincipal
+from polyweb.models.vault import VaultKeyCreate
+from polyweb.persistence.credentials import (
     CredentialRepository,
 )
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.storage import RuntimeSettingRow, SQLiteRepository
-from freesearch.services.control_errors import ResourceConflict, ResourceNotFound
-from freesearch.services.credentials import (
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.storage import RuntimeSettingRow, SQLiteRepository
+from polyweb.services.control_errors import ResourceConflict, ResourceNotFound
+from polyweb.services.credentials import (
     CREDENTIAL_CONFLICT,
     CREDENTIAL_GENERATION_CONFLICT,
     CredentialConflict,
@@ -51,9 +51,9 @@ from freesearch.services.credentials import (
     ResolvedCredential,
     credential_secret_slot,
 )
-from freesearch.services.pool_materializer import materialize_pools
-from freesearch.services.projects import ProjectService
-from freesearch.services.vault_keys import VaultKeyService
+from polyweb.services.pool_materializer import materialize_pools
+from polyweb.services.projects import ProjectService
+from polyweb.services.vault_keys import VaultKeyService
 from tests.fixtures.alpha_fixtures import AlphaBootstrapResult, bootstrap_fresh_alpha
 from tests.fixtures.auth import create_temp_user, temp_email, temp_principal
 
@@ -798,7 +798,7 @@ async def test_ac8_master_key_rotation_keeps_credentials_usable(
 
         # Rekey moves every envelope onto the new primary key id.
         codec = SecretCodec(key_two, retired=[key_one])
-        from freesearch.infrastructure.encrypted_store import rekey_secrets
+        from polyweb.infrastructure.encrypted_store import rekey_secrets
 
         report = await rekey_secrets(boot.repository, codec)
         assert report.undecryptable == 0

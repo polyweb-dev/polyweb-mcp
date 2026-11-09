@@ -7,13 +7,13 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.execution_failures import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.execution_failures import (
     ExecutionAuthorityUnavailable,
     ExecutionQueueExpired,
     ExecutionQueueSaturated,
 )
-from freesearch.services.execution_authority import (
+from polyweb.services.execution_authority import (
     DispatchGrant,
     ExecutionAuthority,
     QueuePolicy,

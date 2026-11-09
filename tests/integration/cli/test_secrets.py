@@ -1,4 +1,4 @@
-"""CLI: freesearch-secrets status/rekey against tmp databases and key files."""
+"""CLI: polyweb-secrets status/rekey against tmp databases and key files."""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.configuration.config import get_settings
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
 from tests.fixtures.alpha_fixtures import create_alpha_test_db
 
 
 def _settings_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **extra: str) -> Path:
     key_file = tmp_path / ".secret_key"
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(key_file))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(key_file))
     for name, value in extra.items():
         monkeypatch.setenv(name, value)
     get_settings.cache_clear()
@@ -27,8 +27,8 @@ def test_status_and_rekey_round_trip(
     import asyncio
     import os
 
-    from freesearch.cli.secrets import _run
-    from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
+    from polyweb.cli.secrets import _run
+    from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
 
     db = tmp_path / "cli-secrets.db"
     retired_file = tmp_path / "retired.key"
@@ -48,7 +48,7 @@ def test_status_and_rekey_round_trip(
     key_file = _settings_env(
         monkeypatch,
         tmp_path,
-        FREESEARCH_ENCRYPTION_RETIRED_KEY_FILES=json.dumps([str(retired_file)]),
+        POLYWEB_ENCRYPTION_RETIRED_KEY_FILES=json.dumps([str(retired_file)]),
     )
     # New primary written to a fresh key file (no passphrase -> new random key).
     assert _run(["--database", str(db), "status"]) == 1

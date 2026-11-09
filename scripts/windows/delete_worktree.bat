@@ -2,14 +2,14 @@
 setlocal enabledelayedexpansion
 
 REM ==============================================================================
-REM FreeSearch Generic Worktree Cleanup Script
+REM Polyweb Generic Worktree Cleanup Script
 REM Usage:
 REM   delete_worktree.bat <branch-or-folder|--all> [--force|-f] [--keep-branch|-k] [--yes|-y]
 REM
 REM Examples:
 REM   delete_worktree.bat quota-fix
 REM   delete_worktree.bat ui-cq-refactor --force
-REM   delete_worktree.bat freesearch-quota-fix --keep-branch
+REM   delete_worktree.bat polyweb-quota-fix --keep-branch
 REM   delete_worktree.bat --all --force
 REM ==============================================================================
 
@@ -84,7 +84,7 @@ if /i "%TARGET%"=="master" (
 
 REM Determine Branch Name from Target
 set "BRANCH=%TARGET%"
-set "STRIPPED=%TARGET:freesearch-=%"
+set "STRIPPED=%TARGET:polyweb-=%"
 
 git show-ref --verify --quiet "refs/heads/%TARGET%"
 if not errorlevel 1 (
@@ -127,7 +127,7 @@ for /f "tokens=1,*" %%A in ('git worktree list --porcelain 2^>nul') do (
         ) else if /i "!CURR_WT!"=="!PARENT_DIR!\%TARGET%" (
             set "WORKTREE_PATH=!CURR_WT!"
             set "BRANCH=!CURR_BRANCH!"
-        ) else if /i "!CURR_WT!"=="!PARENT_DIR!\freesearch-%TARGET%" (
+        ) else if /i "!CURR_WT!"=="!PARENT_DIR!\polyweb-%TARGET%" (
             set "WORKTREE_PATH=!CURR_WT!"
             set "BRANCH=!CURR_BRANCH!"
         )
@@ -138,12 +138,12 @@ if defined WORKTREE_PATH (
     set "WORKTREE_PATH=!WORKTREE_PATH:/=\!"
 ) else (
     REM If not in git worktree list, check common directory conventions
-    if exist "!PARENT_DIR!\freesearch-%SAFE_NAME%" (
-        set "WORKTREE_PATH=!PARENT_DIR!\freesearch-%SAFE_NAME%"
+    if exist "!PARENT_DIR!\polyweb-%SAFE_NAME%" (
+        set "WORKTREE_PATH=!PARENT_DIR!\polyweb-%SAFE_NAME%"
     ) else if exist "!PARENT_DIR!\%TARGET%" (
         set "WORKTREE_PATH=!PARENT_DIR!\%TARGET%"
-    ) else if exist "!PARENT_DIR!\freesearch-%TARGET%" (
-        set "WORKTREE_PATH=!PARENT_DIR!\freesearch-%TARGET%"
+    ) else if exist "!PARENT_DIR!\polyweb-%TARGET%" (
+        set "WORKTREE_PATH=!PARENT_DIR!\polyweb-%TARGET%"
     )
 )
 
@@ -185,7 +185,7 @@ if defined WORKTREE_PATH (
 
 if "!AUTO_YES!"=="0" (
     echo ==============================================================================
-    echo  FreeSearch Worktree Deletion
+    echo  Polyweb Worktree Deletion
     echo ==============================================================================
     if defined WORKTREE_PATH (
         echo  Directory: !WORKTREE_PATH!
@@ -213,7 +213,7 @@ REM Handle Deletion of All Registered Worktrees
 REM ==============================================================================
 :handle_delete_all
 echo ==============================================================================
-echo  FreeSearch Bulk Worktree Deletion (--all)
+echo  Polyweb Bulk Worktree Deletion (--all)
 echo ==============================================================================
 
 if "!AUTO_YES!"=="0" (
@@ -225,7 +225,7 @@ if "!AUTO_YES!"=="0" (
 )
 
 set "WT_COUNT=0"
-set "TMP_WT_FILE=%TEMP%\freesearch_worktrees_%RANDOM%.txt"
+set "TMP_WT_FILE=%TEMP%\polyweb_worktrees_%RANDOM%.txt"
 if exist "!TMP_WT_FILE!" del /f /q "!TMP_WT_FILE!" >nul 2>&1
 
 set "T_WT="
@@ -444,7 +444,7 @@ echo.
 echo Examples:
 echo   delete_worktree.bat quota-fix
 echo   delete_worktree.bat ui-cq-refactor --force
-echo   delete_worktree.bat freesearch-quota-fix --keep-branch
+echo   delete_worktree.bat polyweb-quota-fix --keep-branch
 echo   delete_worktree.bat feature/AllSearchRanked --force --clean-images
 echo   delete_worktree.bat --all --force
 exit /b 1

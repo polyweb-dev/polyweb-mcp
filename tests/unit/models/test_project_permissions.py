@@ -2,7 +2,7 @@
 
 import pytest
 
-from freesearch.models.project_permissions import (
+from polyweb.models.project_permissions import (
     ADMIN_ACTIONS,
     BASE_ACTIONS,
     DEVELOPER_BITS,

@@ -18,9 +18,9 @@ from pathlib import Path
 import pytest_asyncio
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import _encrypted_store, create_server
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.mcp.server import _encrypted_store, create_server
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -32,9 +32,9 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import ActorType, ExecutionAttribution
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import ActorType, ExecutionAttribution
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.a2_execution import _seed_credential
 from tests.fixtures.api_keys import issue_project_key
 from tests.fixtures.auth import auth_service_for
@@ -138,7 +138,7 @@ async def test_concurrent_two_project_tool_calls_keep_full_ownership(
                 provider, fail_query="fail-me" if provider == "brave" else None
             )
 
-    import freesearch.services.execution as execution_module
+    import polyweb.services.execution as execution_module
 
     def adapter_factory(name: str):
         if name not in {"exa", "brave"}:

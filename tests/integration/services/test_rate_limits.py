@@ -13,7 +13,7 @@ from uuid import UUID
 import pytest
 import pytest_asyncio
 
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     AuthMode,
     CRDPriceProfile,
     LimitCallContext,
@@ -27,8 +27,8 @@ from freesearch.models.provider_limits import (
     RateWindow,
     RateWindowName,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.database_lifecycle import unlink_with_retries
 from tests.fixtures.execution import FIXTURE_ACTOR
 
@@ -335,13 +335,13 @@ async def test_window_reset_restores_capacity(repository) -> None:
 
 
 def _tavily_records():  # type: ignore[no-untyped-def]
-    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from polyweb.configuration.provider_limits import provider_limit_defaults
 
     return [r for r in provider_limit_defaults() if r.provider == "tavily"]
 
 
 async def test_tavily_rate_windows_expose_shared_bucket_headroom(repository) -> None:
-    from freesearch.configuration.provider_config import ProviderConfig
+    from polyweb.configuration.provider_config import ProviderConfig
 
     svc = ProviderLimitsService(
         repository.limits,
@@ -368,7 +368,7 @@ async def test_tavily_rate_windows_expose_shared_bucket_headroom(repository) -> 
 
 
 async def test_tavily_vendor_cooldown_exposes_retry_after(repository) -> None:
-    from freesearch.configuration.provider_config import ProviderConfig
+    from polyweb.configuration.provider_config import ProviderConfig
 
     svc = ProviderLimitsService(
         repository.limits,

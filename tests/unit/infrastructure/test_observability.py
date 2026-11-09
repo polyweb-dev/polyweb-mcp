@@ -16,8 +16,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-from freesearch.configuration.config import Settings
-from freesearch.infrastructure.observability import (
+from polyweb.configuration.config import Settings
+from polyweb.infrastructure.observability import (
     NO_OP_OBSERVABILITY,
     NO_OP_SPAN,
     NoOpObservability,
@@ -33,9 +33,9 @@ from freesearch.infrastructure.observability import (
     trace_content_attributes,
     use_observability,
 )
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.infrastructure.trace_payloads import _annotate_fetch_root, _annotate_search_root
-from freesearch.models.contracts import (
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.infrastructure.trace_payloads import _annotate_fetch_root, _annotate_search_root
+from polyweb.models.contracts import (
     FetchedDocument,
     FetchRequest,
     FetchResponse,
@@ -44,13 +44,13 @@ from freesearch.models.contracts import (
     SearchResponse,
     SearchResult,
 )
-from freesearch.models.observability import (
+from polyweb.models.observability import (
     ActorType,
     ExecutionAttribution,
     TraceAttribute,
 )
-from freesearch.models.projects import ProjectTracePolicy, TraceDetailPolicy
-from freesearch.services.execution import _provider_response_event
+from polyweb.models.projects import ProjectTracePolicy, TraceDetailPolicy
+from polyweb.services.execution import _provider_response_event
 
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -65,8 +65,8 @@ def _memory_runtime() -> tuple[OtelObservability, InMemorySpanExporter]:
 def test_noop_span_handle_records_nothing() -> None:
     assert NO_OP_SPAN.trace_id is None
     # None of these may raise; they record nothing.
-    NO_OP_SPAN.set_attributes({"freesearch.request.query": "q"})
-    NO_OP_SPAN.add_event("freesearch.provider.request", {"query": "q"})
+    NO_OP_SPAN.set_attributes({"polyweb.request.query": "q"})
+    NO_OP_SPAN.add_event("polyweb.provider.request", {"query": "q"})
     NO_OP_SPAN.record_exception(RuntimeError("boom"))
     NO_OP_SPAN.mark_error(RuntimeError("boom"))
 
@@ -74,11 +74,11 @@ def test_noop_span_handle_records_nothing() -> None:
 def test_noop_runtime_is_inert() -> None:
     runtime = NoOpObservability()
 
-    with runtime.span("freesearch.backend") as span:
+    with runtime.span("polyweb.backend") as span:
         assert span.trace_id is None
         span.set_attributes({"k": "v"})
         span.add_event("event")
-    runtime.annotate_root({"freesearch.request.query": "q"})
+    runtime.annotate_root({"polyweb.request.query": "q"})
 
     assert runtime.current_trace_id() is None
     assert runtime.force_flush() is True
@@ -89,7 +89,7 @@ def test_noop_runtime_propagates_exceptions_unchanged() -> None:
     runtime = NoOpObservability()
     marker = RuntimeError("propagate me")
 
-    with pytest.raises(RuntimeError) as raised, runtime.span("freesearch.backend"):
+    with pytest.raises(RuntimeError) as raised, runtime.span("polyweb.backend"):
         raise marker
 
     assert raised.value is marker
@@ -109,7 +109,7 @@ def test_nested_spans_share_one_stable_trace_id() -> None:
             assert root_id is not None
             assert _TRACE_ID_RE.match(root_id) is not None
             assert runtime.current_trace_id() == root_id
-            with runtime.span("freesearch.backend") as child:
+            with runtime.span("polyweb.backend") as child:
                 assert child.trace_id == root_id
                 assert runtime.current_trace_id() == root_id
         assert runtime.current_trace_id() is None
@@ -123,13 +123,13 @@ def test_exception_is_recorded_exactly_once_across_nesting() -> None:
         use_observability(runtime),
         pytest.raises(RuntimeError),
         runtime.span("POST /search", kind=SpanKindName.SERVER),
-        runtime.span("freesearch.provider"),
+        runtime.span("polyweb.provider"),
     ):
         raise marker
 
     spans = {span.name: span for span in exporter.get_finished_spans()}
-    assert set(spans) == {"POST /search", "freesearch.provider"}
-    assert spans["freesearch.provider"].status.status_code is StatusCode.ERROR
+    assert set(spans) == {"POST /search", "polyweb.provider"}
+    assert spans["polyweb.provider"].status.status_code is StatusCode.ERROR
     assert spans["POST /search"].status.status_code is StatusCode.ERROR
     exception_events = [
         event
@@ -138,7 +138,7 @@ def test_exception_is_recorded_exactly_once_across_nesting() -> None:
         if event.name == "exception"
     ]
     assert len(exception_events) == 1
-    assert spans["freesearch.provider"].attributes.get("error.type") == "RuntimeError"
+    assert spans["polyweb.provider"].attributes.get("error.type") == "RuntimeError"
     assert spans["POST /search"].attributes.get("error.type") == "RuntimeError"
 
 
@@ -148,7 +148,7 @@ def test_record_exception_marks_error_with_low_cardinality_type() -> None:
         ProviderError(provider="keenable", code="http_error", message="HTTP 502")
     )
 
-    with use_observability(runtime), runtime.span("freesearch.provider") as span:
+    with use_observability(runtime), runtime.span("polyweb.provider") as span:
         span.record_exception(error)
 
     (finished,) = exporter.get_finished_spans()
@@ -161,7 +161,7 @@ def test_cancelled_error_is_not_marked_failed() -> None:
     runtime, exporter = _memory_runtime()
 
     async def _cancel_inside_span() -> None:
-        with use_observability(runtime), runtime.span("freesearch.provider"):
+        with use_observability(runtime), runtime.span("polyweb.provider"):
             raise asyncio.CancelledError("gone")
 
     with pytest.raises(asyncio.CancelledError):
@@ -174,8 +174,8 @@ def test_cancelled_error_is_not_marked_failed() -> None:
 
 def test_trace_content_attributes_rejects_secrets_but_keeps_query_results() -> None:
     payload = {
-        "freesearch.request.query": "distributed consensus",
-        "freesearch.response.result_count": 2,
+        "polyweb.request.query": "distributed consensus",
+        "polyweb.response.result_count": 2,
         "credentials": "hunter2",
         "Authorization": "Bearer abc",
         "Cookie": "session=1",
@@ -188,8 +188,8 @@ def test_trace_content_attributes_rejects_secrets_but_keeps_query_results() -> N
 
     attributes = trace_content_attributes(payload)
 
-    assert attributes["freesearch.request.query"] == "distributed consensus"
-    assert attributes["freesearch.response.result_count"] == 2
+    assert attributes["polyweb.request.query"] == "distributed consensus"
+    assert attributes["polyweb.response.result_count"] == 2
     for rejected in (
         "credentials",
         "Authorization",
@@ -244,7 +244,7 @@ def test_full_capture_scrubs_json_documents_and_preserves_provider_results() -> 
             _annotate_fetch_root(runtime, FetchRequest(url="https://example.com"), fetch)
             with runtime.span("provider") as span:
                 span.add_event(
-                    "freesearch.provider.response",
+                    "polyweb.provider.response",
                     {"payload": document, **_provider_response_event(search)},
                 )
         with runtime.span("search", kind=SpanKindName.SERVER):
@@ -286,8 +286,8 @@ def test_json_text_scrubbing_preserves_non_json_and_bounds_large_json() -> None:
         ("secret", True),
         ("raw_secret_value", True),
         ("request_headers", True),
-        ("freesearch.request.query", False),
-        ("freesearch.response.result_count", False),
+        ("polyweb.request.query", False),
+        ("polyweb.response.result_count", False),
         ("query", False),
         ("result_count", False),
     ],
@@ -301,28 +301,28 @@ def test_set_attributes_and_events_apply_the_redaction_hook() -> None:
 
     with use_observability(runtime):
         bind_trace_capture(ProjectTracePolicy(detail=TraceDetailPolicy.FULL))
-        with runtime.span("freesearch.provider") as span:
+        with runtime.span("polyweb.provider") as span:
             _set_full_attributes(span)
 
     (finished,) = exporter.get_finished_spans()
-    assert finished.attributes.get("freesearch.request.query") == "kept query"
+    assert finished.attributes.get("polyweb.request.query") == "kept query"
     assert "X-API-Key" not in dict(finished.attributes or {})
     assert "Authorization" not in dict(finished.attributes or {})
     (event,) = finished.events or ()
-    assert event.name == "freesearch.provider.request"
+    assert event.name == "polyweb.provider.request"
     assert dict(event.attributes or {}) == {"query": "kept"}
 
 
 def _set_full_attributes(span: SpanHandle) -> None:
     span.set_attributes(
         {
-            "freesearch.request.query": "kept query",
+            "polyweb.request.query": "kept query",
             "X-API-Key": "keen_secret",
             "Authorization": "Bearer abc",
         }
     )
     span.add_event(
-        "freesearch.provider.request",
+        "polyweb.provider.request",
         {"query": "kept", "secret": "dropped"},
     )
 
@@ -334,13 +334,13 @@ def test_annotate_root_targets_the_server_span() -> None:
         bind_trace_capture(ProjectTracePolicy(detail=TraceDetailPolicy.FULL))
         with (
             runtime.span("POST /search", kind=SpanKindName.SERVER),
-            runtime.span("freesearch.backend"),
+            runtime.span("polyweb.backend"),
         ):
-            runtime.annotate_root({"freesearch.request.query": "annotated"})
+            runtime.annotate_root({"polyweb.request.query": "annotated"})
 
     spans = {span.name: span for span in exporter.get_finished_spans()}
-    assert spans["POST /search"].attributes.get("freesearch.request.query") == "annotated"
-    assert "freesearch.request.query" not in dict(spans["freesearch.backend"].attributes or {})
+    assert spans["POST /search"].attributes.get("polyweb.request.query") == "annotated"
+    assert "polyweb.request.query" not in dict(spans["polyweb.backend"].attributes or {})
 
 
 def test_error_type_of_prefers_provider_code() -> None:
@@ -392,7 +392,7 @@ def test_build_observability_database_runtime_has_no_trace_outside_spans(
 def test_span_initial_attributes_always_carry_schema_version() -> None:
     runtime, exporter = _memory_runtime()
 
-    with use_observability(runtime), runtime.span("freesearch.backend"):
+    with use_observability(runtime), runtime.span("polyweb.backend"):
         pass
 
     (finished,) = exporter.get_finished_spans()
@@ -402,7 +402,7 @@ def test_span_initial_attributes_always_carry_schema_version() -> None:
 def _attributed_memory_runtime() -> tuple[OtelObservability, InMemorySpanExporter]:
     """A real runtime with the ownership stamping processor plus in-memory export."""
 
-    from freesearch.infrastructure.observability import _AttributionSpanProcessor
+    from polyweb.infrastructure.observability import _AttributionSpanProcessor
 
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
@@ -431,15 +431,15 @@ def test_caller_supplied_ownership_attributes_are_ignored() -> None:
         TraceAttribute.ACTOR_TYPE: "project_api_key",
         TraceAttribute.ACTOR_ID: "22222222-2222-4222-8222-222222222222",
     }
-    from freesearch.infrastructure.observability import bind_execution_attribution
+    from polyweb.infrastructure.observability import bind_execution_attribution
 
     with use_observability(runtime):
         bind_execution_attribution(bound)
         with runtime.span("POST /search", kind=SpanKindName.SERVER):
             runtime.annotate_root(dict(forged))
-            with runtime.span("freesearch.provider", attributes=dict(forged)) as span:
+            with runtime.span("polyweb.provider", attributes=dict(forged)) as span:
                 span.set_attributes(dict(forged))
-                span.add_event("freesearch.provider.response", attributes=dict(forged))
+                span.add_event("polyweb.provider.response", attributes=dict(forged))
 
     finished = exporter.get_finished_spans()
     assert len(finished) == 2
@@ -447,7 +447,7 @@ def test_caller_supplied_ownership_attributes_are_ignored() -> None:
         assert span.attributes[TraceAttribute.PROJECT_ID] == str(bound.project_id)
         assert span.attributes[TraceAttribute.ACTOR_TYPE] == "human"
         assert span.attributes[TraceAttribute.ACTOR_ID] == str(bound.actor_id)
-    provider_span = next(s for s in finished if s.name == "freesearch.provider")
+    provider_span = next(s for s in finished if s.name == "polyweb.provider")
     for event in provider_span.events:
         assert TraceAttribute.PROJECT_ID not in (event.attributes or {})
 
@@ -481,7 +481,7 @@ def test_rebinding_a_different_attribution_fails_closed() -> None:
         project="33333333-3333-4333-8333-333333333333",
         actor="44444444-4444-4444-8444-444444444444",
     )
-    from freesearch.infrastructure.observability import bind_execution_attribution
+    from polyweb.infrastructure.observability import bind_execution_attribution
 
     with use_observability(runtime):
         bind_execution_attribution(first)
@@ -492,7 +492,7 @@ def test_rebinding_a_different_attribution_fails_closed() -> None:
 
 def test_bind_without_an_attribution_cell_is_a_noop() -> None:
     """Outside ``use_observability`` the binder does nothing and never raises."""
-    from freesearch.infrastructure.observability import bind_execution_attribution
+    from polyweb.infrastructure.observability import bind_execution_attribution
 
     bind_execution_attribution(_attr())
 
@@ -510,9 +510,9 @@ def test_metadata_provider_events_never_buffer_query_url_or_results(policy) -> N
             bind_trace_capture(policy)
         with runtime.span("POST /search", kind=SpanKindName.SERVER) as root:
             root.set_attributes({TraceAttribute.REQUEST_QUERY: marker})
-            with runtime.span("freesearch.provider") as child:
+            with runtime.span("polyweb.provider") as child:
                 child.add_event(
-                    "freesearch.provider.response",
+                    "polyweb.provider.response",
                     {
                         "query": marker,
                         "url": "https://private.invalid/" + marker,
@@ -528,7 +528,7 @@ def test_metadata_provider_events_never_buffer_query_url_or_results(policy) -> N
     for span in spans:
         assert marker not in span.to_json()
         assert span.status.description is None
-    child = next(span for span in spans if span.name == "freesearch.provider")
+    child = next(span for span in spans if span.name == "polyweb.provider")
     assert dict(child.events[0].attributes) == {"result_count": 2, "exception.type": "RuntimeError"}
     assert dict(child.events[1].attributes) == {"exception.type": "RuntimeError"}
 
@@ -540,7 +540,7 @@ def test_full_capture_redacts_nested_credentials_and_exception_messages_in_memor
         bind_trace_capture(ProjectTracePolicy(detail="full"))
         with runtime.span("POST /search", kind=SpanKindName.SERVER) as root:
             root.add_event(
-                "freesearch.provider.request",
+                "polyweb.provider.request",
                 {
                     "query": "explicitly allowed query",
                     "api_key": marker,
@@ -561,7 +561,7 @@ def test_capture_policy_cannot_be_rebound_mid_trace_and_children_keep_decision()
         with runtime.span("POST /search", kind=SpanKindName.SERVER):
             with pytest.raises(ValueError):
                 bind_trace_capture(ProjectTracePolicy(detail="full"))
-            with runtime.span("freesearch.provider"):
+            with runtime.span("polyweb.provider"):
                 pass
     for span in exporter.get_finished_spans():
         assert TraceAttribute.SAMPLED not in span.attributes

@@ -5,7 +5,7 @@ references, see [PROVIDER_API.md](PROVIDER_API.md). This document remains
 focused on provider limits and quota behavior.
 
 **Date:** 2026-10-05
-**Method:** `freesearch` MCP `search` + `fetch` with routing `prefer ["keenable","tinyfish"] allow_fallback true`, `firecrawl` as fetch backup. All authoritative pages below were fetched through the MCP (no plain-web fallback).
+**Method:** `polyweb` MCP `search` + `fetch` with routing `prefer ["keenable","tinyfish"] allow_fallback true`, `firecrawl` as fetch backup. All authoritative pages below were fetched through the MCP (no plain-web fallback).
 **Goal:** separate **rate limits** (how *fast* you may call — req/sec/min, concurrency, 429 + `Retry-After`) from **budget limits** (how *much* you may spend — credits / USD / requests per day-month, 402 / quota headers / usage API), per operation (**search** vs **fetch/extract/contents/scrape**), per auth mode (**keyless/free** vs **keyed/paid**). No code was changed for this doc.
 
 > Current code merges the two (some providers surface a rate number, others a budget number in the same field). The proposal at the bottom gives each its own settings block so free/keyless providers can have **rate-only** (no budget) and paid providers **rate + budget**.
@@ -56,7 +56,7 @@ keenable:
 
 ## 2. Tinyfish (`api.search.tinyfish.ai` GET, `api.fetch.tinyfish.ai` POST)
 
-Free Search + Fetch for every keyed account. Wallet exists but Search/Fetch never draw from it.
+Polyweb MCP Search + Fetch for every keyed account. Wallet exists but Search/Fetch never draw from it.
 
 ### Rate limits (throughput — search vs fetch SEPARATE)
 | Operation | Limit | Unit |
@@ -514,4 +514,4 @@ Rule of thumb: **SC answers "can we afford another call", USD answers "what did 
 
 ---
 
-*Research-only change. No source files modified. All fetches via freesearch MCP; per-claim URLs above.*
+*Research-only change. No source files modified. All fetches via polyweb MCP; per-claim URLs above.*

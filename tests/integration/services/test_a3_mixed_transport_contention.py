@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from freesearch.models.execution_failures import (
+from polyweb.models.execution_failures import (
     ExecutionAuthorityUnavailable,
     ExecutionQueueExpired,
     ExecutionQueueSaturated,

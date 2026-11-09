@@ -4,12 +4,12 @@ from decimal import Decimal
 
 import pytest
 
-from freesearch.configuration.provider_limits import PROVIDER_IDS
-from freesearch.models.project_routing import RoutingOperation, RoutingStrategy, StoredProjectOrder
-from freesearch.models.provider_limits import ProviderLimitRecord
-from freesearch.services import project_routing, routing_order
-from freesearch.services.project_routing import _order
-from freesearch.services.routing_order import (
+from polyweb.configuration.provider_limits import PROVIDER_IDS
+from polyweb.models.project_routing import RoutingOperation, RoutingStrategy, StoredProjectOrder
+from polyweb.models.provider_limits import ProviderLimitRecord
+from polyweb.services import project_routing, routing_order
+from polyweb.services.project_routing import _order
+from polyweb.services.routing_order import (
     call_cost_usd,
     catalog_call_costs,
     merge_order,

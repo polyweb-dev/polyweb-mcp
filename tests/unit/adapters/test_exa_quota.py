@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 from exa_py.api import CostDollars, Result, SearchResponse
 
-from freesearch.adapters.exa import ExaAdapter, _next_month_start
-from freesearch.models.contracts import (
+from polyweb.adapters.exa import ExaAdapter, _next_month_start
+from polyweb.models.contracts import (
     QuotaSnapshot,
     QuotaSource,
     SearchRequest,
@@ -513,7 +513,7 @@ async def test_measured_cost_beats_fallback_regardless_of_counts() -> None:
 
 @pytest.mark.asyncio
 async def test_contents_fallback_prices_single_text_page() -> None:
-    from freesearch.models.contracts import FetchRequest
+    from polyweb.models.contracts import FetchRequest
 
     adapter = _make_adapter(budget=Decimal("10.00"))
     sdk: _FakeSDK = adapter._sdk
@@ -531,7 +531,7 @@ async def test_contents_fallback_prices_single_text_page() -> None:
 
 @pytest.mark.asyncio
 async def test_contents_fallback_prices_every_returned_page() -> None:
-    from freesearch.models.contracts import FetchRequest
+    from polyweb.models.contracts import FetchRequest
 
     adapter = _make_adapter(budget=Decimal("10.00"))
     sdk: _FakeSDK = adapter._sdk
@@ -633,7 +633,7 @@ async def test_set_manual_credits_round_trip_preserves_spend() -> None:
 
 def test_exa_adapter_source_never_authoritative() -> None:
     root = Path(__file__).resolve().parents[3]
-    text = (root / "src" / "freesearch" / "adapters" / "exa.py").read_text(encoding="utf-8")
+    text = (root / "src" / "polyweb" / "adapters" / "exa.py").read_text(encoding="utf-8")
     assert "AUTHORITATIVE" not in text
 
 

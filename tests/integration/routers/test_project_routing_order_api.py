@@ -7,14 +7,14 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import ProviderConfigUpdate
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.projects import BuiltinRole
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.provider_runtime import patch_provider_config
+from polyweb.configuration.config import get_settings
+from polyweb.configuration.provider_config import ProviderConfigUpdate
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.models.projects import BuiltinRole
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.provider_runtime import patch_provider_config
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -42,7 +42,7 @@ async def repository(tmp_path: Path) -> AsyncIterator[SQLiteRepository]:
 async def test_order_presets_custom_restore_and_stale(
     repository: SQLiteRepository, auth_secret: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "routing-test-passphrase-9f31")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "routing-test-passphrase-9f31")
     get_settings.cache_clear()
     store = EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
     with TestClient(create_app([], repository=repository, secret_store=store)) as client:

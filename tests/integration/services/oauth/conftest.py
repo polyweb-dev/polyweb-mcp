@@ -3,7 +3,7 @@
 import pytest
 import pytest_asyncio
 
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.scoped_oauth import open_scoped_oauth
 from tests.integration.services.oauth.oauth_stubs import StubOAuthServer, install_network_guard
 

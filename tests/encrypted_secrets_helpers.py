@@ -42,10 +42,10 @@ def require_cryptography() -> Any:
     """Return the ``cryptography`` module or fail Red while it is missing."""
 
     try:
-        return import_module("freesearch.infrastructure.cryptography")
+        return import_module("polyweb.infrastructure.cryptography")
     except ImportError as exc:
         raise AssertionError(
-            "RED (AC-1/AC-2/AC-4): freesearch.infrastructure.cryptography "
+            "RED (AC-1/AC-2/AC-4): polyweb.infrastructure.cryptography "
             "is not implemented yet (PLAN.md section 2a)"
         ) from exc
 
@@ -58,8 +58,8 @@ def require_encrypted_store_module() -> Any:
     """
 
     for name in (
-        "freesearch.infrastructure.encrypted_store",
-        "freesearch.infrastructure.secrets",
+        "polyweb.infrastructure.encrypted_store",
+        "polyweb.infrastructure.secrets",
     ):
         try:
             module = import_module(name)
@@ -68,8 +68,8 @@ def require_encrypted_store_module() -> Any:
         if all(hasattr(module, attr) for attr in _STORE_ATTRS):
             return module
     raise AssertionError(
-        "RED (AC-3/AC-6): neither freesearch.infrastructure.encrypted_store "
-        "nor freesearch.infrastructure.secrets exposes ENCRYPTED_SECRET_PREFIX/"
+        "RED (AC-3/AC-6): neither polyweb.infrastructure.encrypted_store "
+        "nor polyweb.infrastructure.secrets exposes ENCRYPTED_SECRET_PREFIX/"
         "EncryptedDbSecretStore "
         "(PLAN.md section 2b/4)"
     )

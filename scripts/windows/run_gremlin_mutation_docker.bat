@@ -7,7 +7,7 @@ pushd "%REPO_ROOT%"
 
 REM Build the mutation test image
 echo [1/2] Building Docker image for mutation testing...
-docker build -f Dockerfile.test -t freesearch-mutation .
+docker build -f Dockerfile.test -t polyweb-mutation .
 if errorlevel 1 (
     echo [ERROR] Docker build failed. Make sure Docker Desktop is running.
     popd
@@ -23,7 +23,7 @@ echo [2/2] Running containerized mutation testing...
 docker run --rm ^
   -v "%cd%/coverage:/app/coverage" ^
   -v "%cd%/.gremlins_cache:/app/.gremlins_cache" ^
-  freesearch-mutation %*
+  polyweb-mutation %*
 
 echo.
 echo Reports written to coverage\gremlins\index.html

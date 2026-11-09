@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from freesearch.models.projects import (
+from polyweb.models.projects import (
     BuiltinRole,
     MembershipStatus,
     PermissionAction,
@@ -15,10 +15,10 @@ from freesearch.models.projects import (
     ProjectMemberAdd,
     ScopeType,
 )
-from freesearch.persistence.projects import ProjectMembershipRow, ProjectRepository
-from freesearch.routers.api import create_app
-from freesearch.services.authorization import ScopedAuthorizationService, human_principal
-from freesearch.services.projects import ProjectService
+from polyweb.persistence.projects import ProjectMembershipRow, ProjectRepository
+from polyweb.routers.api import create_app
+from polyweb.services.authorization import ScopedAuthorizationService, human_principal
+from polyweb.services.projects import ProjectService
 from tests.fixtures.alpha_fixtures import create_alpha_test_db
 from tests.fixtures.api_keys import audit_rows
 from tests.fixtures.auth import TEMP_PASSWORD, create_temp_user, temp_email, temp_principal
@@ -97,7 +97,7 @@ async def test_member_permissions_and_endpoint_gates(tmp_path: Path, auth_secret
             assert len(catalog.json()["presets"]) == 3
             contract_path = (
                 Path(__file__).resolve().parents[3]
-                / "freesearch-ui/src/domains/projects/model/permissionContract.json"
+                / "polyweb-ui/src/domains/projects/model/permissionContract.json"
             )
             contract = json.loads(contract_path.read_text(encoding="utf-8"))
             assert [

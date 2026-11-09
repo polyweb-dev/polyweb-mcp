@@ -14,17 +14,17 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import (
+from polyweb.configuration.config import get_settings
+from polyweb.configuration.provider_config import (
     ProviderConfig,
     ProviderConfigSettings,
     ProviderConfigUpdate,
     get_provider_configs,
 )
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.contracts import QuotaSource, UsageOperation
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.models.contracts import QuotaSource, UsageOperation
 
-OVERRIDES_ENV = "FREESEARCH_PROVIDER_CONFIG_OVERRIDES"
+OVERRIDES_ENV = "POLYWEB_PROVIDER_CONFIG_OVERRIDES"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 def isolate_environment(monkeypatch, tmp_path) -> None:
     """Isolate every test from ambient settings, cwd, and cache state.
 
-    A developer's ``.env`` or an exported ``FREESEARCH_PROVIDER_CONFIG_OVERRIDES``
+    A developer's ``.env`` or an exported ``POLYWEB_PROVIDER_CONFIG_OVERRIDES``
     must not change tests that expect defaults, so each test runs in a fresh
     directory with the override variable unset. All process-wide accessors are
     cleared before and after so sibling state cannot leak in.
@@ -222,7 +222,7 @@ def test_configuration_records_contain_no_secret_fields() -> None:
 def test_provider_config_has_no_resolver_seam() -> None:
     """Vault-only: adapters receive injected vault keys; no resolver lives here."""
 
-    import freesearch.configuration.provider_config as provider_config_module
+    import polyweb.configuration.provider_config as provider_config_module
 
     assert not hasattr(provider_config_module, "get_provider_secret_resolver")
 
@@ -545,7 +545,7 @@ def test_exa_credits_env_override_round_trip(monkeypatch) -> None:
 
 
 def test_default_masks_match_system_support_map() -> None:
-    from freesearch.configuration.provider_config import PROVIDER_SUPPORT_MASKS
+    from polyweb.configuration.provider_config import PROVIDER_SUPPORT_MASKS
 
     registry = get_provider_configs()
 
@@ -559,9 +559,9 @@ def test_default_masks_match_system_support_map() -> None:
 
 
 def test_support_map_matches_adapter_capabilities() -> None:
-    from freesearch.adapters import registry as adapter_registry
-    from freesearch.configuration.provider_config import PROVIDER_SUPPORT_MASKS
-    from freesearch.models.provider_access import support_mask_from_capabilities
+    from polyweb.adapters import registry as adapter_registry
+    from polyweb.configuration.provider_config import PROVIDER_SUPPORT_MASKS
+    from polyweb.models.provider_access import support_mask_from_capabilities
 
     for name, factory in adapter_registry._ADAPTERS.items():
         try:

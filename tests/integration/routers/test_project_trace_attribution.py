@@ -20,8 +20,8 @@ from uuid import UUID
 import httpx
 import pytest_asyncio
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -33,8 +33,8 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import TEMP_PASSWORD, temp_email
 from tests.fixtures.execution import seed_app_bound_project
 
@@ -228,7 +228,7 @@ async def test_concurrent_two_project_requests_keep_full_ownership(
     fanout_traces = {t for t, rows in by_trace.items() if _is_fanout(rows)}
     assert len(fanout_traces) == 2
     for trace_id in fanout_traces:
-        provider_count = sum(1 for row in by_trace[trace_id] if row[2] == "freesearch.provider")
+        provider_count = sum(1 for row in by_trace[trace_id] if row[2] == "polyweb.provider")
         assert provider_count >= 2
 
     # Usage rows carry the same project/actor and a trace owned by it.
@@ -252,4 +252,4 @@ async def test_concurrent_two_project_requests_keep_full_ownership(
 
 
 def _is_fanout(rows: list[tuple]) -> bool:
-    return sum(1 for row in rows if row[2] == "freesearch.provider") > 1
+    return sum(1 for row in rows if row[2] == "polyweb.provider") > 1

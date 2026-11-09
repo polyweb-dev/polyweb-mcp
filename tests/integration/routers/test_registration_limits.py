@@ -17,8 +17,8 @@ from uuid import uuid4
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -30,8 +30,8 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     login_http,

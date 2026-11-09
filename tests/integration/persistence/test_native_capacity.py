@@ -8,8 +8,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from freesearch.models.contracts import UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     LimitAdmission,
     LimitDeniedError,
@@ -25,8 +25,8 @@ from freesearch.models.provider_limits import (
     RateWindow,
     RateWindowName,
 )
-from freesearch.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import FIXTURE_ACTOR
 
 

@@ -8,7 +8,7 @@ repository. Clients call over loopback TCP from a third loop thread: httpx for
 REST and the MCP SDK streamable-http client plus one ``ClientSession`` for MCP.
 
 Each served app is wrapped in :class:`ServerTimer`, a timing middleware that
-records how long every HTTP request spends inside the FreeSearch app: from the
+records how long every HTTP request spends inside the Polyweb app: from the
 ``http`` scope reaching it until the final ``http.response.body`` (``more_body``
 false) is sent. Per sample the harness takes the one server request that served
 it (REST ``POST /search``/``/fetch``, MCP ``POST /mcp``) and reports:
@@ -17,7 +17,7 @@ it (REST ``POST /search``/``/fetch``, MCP ``POST /mcp``) and reports:
 - ``provider_ms``: the summed duration of the adapter ``search``/``fetch``
   calls during the request (each adapter *instance*'s bound methods are
   wrapped, so the adapter keeps its concrete type);
-- ``added_ms`` = ``server_ms - provider_ms``: the gated FreeSearch time;
+- ``added_ms`` = ``server_ms - provider_ms``: the gated Polyweb time;
 - ``wall_ms`` and ``client_overhead_ms`` = ``wall_ms - server_ms``: reported;
 - ``db_reads``: SELECTs on the server repository (a diagnostic, never asserted).
 
@@ -78,18 +78,18 @@ from tests.fixtures.latency import (
 )
 from tests.fixtures.latency_reports import ComboOutcome, LatencySample
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_limits import provider_limit_defaults
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.mcp.auth import STREAMABLE_HTTP_PATH, build_http_app
-from freesearch.mcp.server import create_server, shutdown_injected_observability
-from freesearch.models.provider_limits import LimitRecordUpdate, RateBlock, RateWindowName
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.monitoring import clear_quota_poll_cache
-from freesearch.services.provider_limits import ProviderLimitsService
-from freesearch.services.provider_runtime import clear_config_cache
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.configuration.config import get_settings
+from polyweb.configuration.provider_limits import provider_limit_defaults
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.mcp.auth import STREAMABLE_HTTP_PATH, build_http_app
+from polyweb.mcp.server import create_server, shutdown_injected_observability
+from polyweb.models.provider_limits import LimitRecordUpdate, RateBlock, RateWindowName
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.monitoring import clear_quota_poll_cache
+from polyweb.services.provider_limits import ProviderLimitsService
+from polyweb.services.provider_runtime import clear_config_cache
 
 if TYPE_CHECKING:
     from pyinstrument.session import Session
@@ -168,7 +168,7 @@ class ProviderClock:
 
 @dataclass(frozen=True)
 class ServerTiming:
-    """One HTTP request as seen inside the served FreeSearch app."""
+    """One HTTP request as seen inside the served Polyweb app."""
 
     method: str
     path: str
@@ -440,7 +440,7 @@ class RoutingLatencyHarness:
         self._started = True
         _secret, self._restore_secret = install_process_auth_secret()
         self._adapter_patch = pytest.MonkeyPatch()
-        self._tempdir = tempfile.mkdtemp(prefix="freesearch-latency-")
+        self._tempdir = tempfile.mkdtemp(prefix="polyweb-latency-")
         self._client_loop = BackgroundLoop("latency-client")
         self._client_loop.run(self._open_rest_client())
         for transport in TRANSPORTS:

@@ -16,10 +16,10 @@ import httpx
 import pytest_asyncio
 from pydantic import SecretStr
 
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.configuration.provider_limits import provider_limit_defaults
-from freesearch.models.contracts import SearchRequest, SearchResponse, UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.configuration.provider_limits import provider_limit_defaults
+from polyweb.models.contracts import SearchRequest, SearchResponse, UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     CRDState,
     LimitCallContext,
@@ -30,12 +30,12 @@ from freesearch.models.provider_limits import (
     ProviderLimitRecord,
     UsageSyncRequest,
 )
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     CRDGrantPayload as GrantPayload,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.limits_sync import LimitSyncService
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.limits_sync import LimitSyncService
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
@@ -186,7 +186,7 @@ async def test_zero_funds_deny_with_non_retryable_402(repository: SQLiteReposito
 
 
 async def test_manual_fallback_gives_estimated_5000(repository: SQLiteRepository) -> None:
-    from freesearch.services import credit_units as cu
+    from polyweb.services import credit_units as cu
 
     service = _service(repository)
     await service.initialize()

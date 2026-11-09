@@ -2,11 +2,11 @@
 """Live vault-backed You.com search+fetch (manual-only, @live).
 
 Skips gracefully without a harness key; never hardcodes a real key. The real
-You.com key comes only from the harness env (FREESEARCH_YOU_API_KEY) and is
+You.com key comes only from the harness env (POLYWEB_YOU_API_KEY) and is
 stored as an encrypted project credential through the credentials API, then
 bound to the project; search and fetch run through REST pinned to ``you``,
 so execution resolves the key from the vault. Encryption uses a passphrase
-(FREESEARCH_ENCRYPTION_KEY when present, else an auto-generated tmp key
+(POLYWEB_ENCRYPTION_KEY when present, else an auto-generated tmp key
 file). Search+fetch run against the live vendor; logs/responses/rows are
 swept for key material.
 """
@@ -23,10 +23,10 @@ from uuid import uuid4
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
-from freesearch.configuration.config import get_settings
-from freesearch.models.contracts import FetchResponse, SearchResponse
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.configuration.config import get_settings
+from polyweb.models.contracts import FetchResponse, SearchResponse
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.encrypted_secrets_helpers import assert_no_sentinels
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
@@ -37,9 +37,9 @@ from tests.fixtures.auth import (
 from tests.fixtures.execution import create_bound_provider, seed_member_project
 from tests.integration.services.oauth.oauth_stubs import collect_sqlite_texts
 
-YOU_ENV = "FREESEARCH_YOU_API_KEY"
-PASSPHRASE_ENV = "FREESEARCH_ENCRYPTION_KEY"
-KEY_FILE_ENV = "FREESEARCH_ENCRYPTION_KEY_FILE"
+YOU_ENV = "POLYWEB_YOU_API_KEY"
+PASSPHRASE_ENV = "POLYWEB_ENCRYPTION_KEY"
+KEY_FILE_ENV = "POLYWEB_ENCRYPTION_KEY_FILE"
 
 
 class _RecordHandler(logging.Handler):
@@ -72,7 +72,7 @@ def step_given_live_vault_youcom(context: Any) -> None:
 
     saved_cwd = Path.cwd()
     _push_cleanup(context, lambda: os.chdir(saved_cwd))
-    scenario_dir = saved_cwd / f"freesearch-live-you-{uuid4().hex}"
+    scenario_dir = saved_cwd / f"polyweb-live-you-{uuid4().hex}"
     scenario_dir.mkdir()
     context.scenario_dir = str(scenario_dir)
     _push_cleanup(context, lambda: shutil.rmtree(scenario_dir, ignore_errors=True))
@@ -89,13 +89,13 @@ def step_given_live_vault_youcom(context: Any) -> None:
     # Vault-only: drop provider env keys so only the stored credential resolves.
     # The live key itself was already captured above and is never re-exported.
     for var in (
-        "FREESEARCH_EXA_API_KEY",
-        "FREESEARCH_FIRECRAWL_API_KEY",
-        "FREESEARCH_TAVILY_API_KEY",
-        "FREESEARCH_PARALLEL_API_KEY",
+        "POLYWEB_EXA_API_KEY",
+        "POLYWEB_FIRECRAWL_API_KEY",
+        "POLYWEB_TAVILY_API_KEY",
+        "POLYWEB_PARALLEL_API_KEY",
         YOU_ENV,
-        "FREESEARCH_BRAVE_SEARCH_API_KEY",
-        "FREESEARCH_KEENABLE_API_KEY",
+        "POLYWEB_BRAVE_SEARCH_API_KEY",
+        "POLYWEB_KEENABLE_API_KEY",
     ):
         os.environ.pop(var, None)
     if passphrase:

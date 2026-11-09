@@ -23,13 +23,13 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
-from freesearch.models.contracts import QuotaSource, UnitKind
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.control_errors import ResourceConflict
-from freesearch.services.monitoring import refresh_quotas
-from freesearch.services.parallel_oauth import (
+from polyweb.models.contracts import QuotaSource, UnitKind
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.control_errors import ResourceConflict
+from polyweb.services.monitoring import refresh_quotas
+from polyweb.services.parallel_oauth import (
     BalancePayload,
     DeviceAccessDenied,
     DeviceAuthorizationPending,
@@ -436,7 +436,7 @@ async def test_client_uses_spec_paths_and_encodings() -> None:
     register = stub.calls_to("/getServiceKeys/register")[0]
     assert "application/json" in register.headers.get("content-type", "")
     register_body = json.loads(register.content.decode())
-    assert register_body["client_name"] == "freesearch"
+    assert register_body["client_name"] == "polyweb"
     assert set(register_body["platform"]) == {
         "machine",
         "os_name",
@@ -688,7 +688,7 @@ async def test_seed_ledger_suppressed_while_oauth_ready(repository):
     case = await open_scoped_oauth(repository)
     try:
         await case.connect()
-        from freesearch.models.contracts import QuotaSnapshot
+        from polyweb.models.contracts import QuotaSnapshot
 
         await case.repository.record_quota(
             QuotaSnapshot(
@@ -729,7 +729,7 @@ async def test_control_device_code_shape_and_presence(repository):
     try:
         response = case.client.post(case.path + "/device", headers=case.headers)
         assert response.status_code == 200
-        from freesearch.models.credentials import CredentialOAuthDeviceRead
+        from polyweb.models.credentials import CredentialOAuthDeviceRead
 
         assert set(response.json()) == set(CredentialOAuthDeviceRead.model_fields)
         await case.assert_no_leaks(response)
@@ -743,7 +743,7 @@ async def test_control_status_shape_and_terminal_views(repository):
     try:
         response = case.client.get(case.path, headers=case.headers)
         assert response.status_code == 200
-        from freesearch.models.credentials import CredentialOAuthStatusRead
+        from polyweb.models.credentials import CredentialOAuthStatusRead
 
         assert set(response.json()) == set(CredentialOAuthStatusRead.model_fields)
         assert response.json()["status"] == "disconnected"
@@ -877,7 +877,7 @@ async def test_unbound_store_resolves_fail_closed():
     from fastapi import FastAPI, HTTPException
     from starlette.requests import Request
 
-    from freesearch.routers.control_errors import control_secret_store
+    from polyweb.routers.control_errors import control_secret_store
 
     app = FastAPI()
     app.state.secret_store = None
@@ -907,7 +907,7 @@ async def test_clear_vault_deletes_four_slots_with_tombstones(repository):
         await case.connect()
         old = await case.grant()
         await case.disconnect()
-        from freesearch.persistence.oauth_grants import oauth_secret_slot
+        from polyweb.persistence.oauth_grants import oauth_secret_slot
 
         for kind in ("access", "refresh", "device", "client"):
             slot = oauth_secret_slot(case.credential.id, kind, old.token_generation)

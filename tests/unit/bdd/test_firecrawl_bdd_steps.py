@@ -44,9 +44,9 @@ from types import SimpleNamespace
 import pytest
 from pydantic import HttpUrl
 
-from freesearch.infrastructure import http as freesearch_http
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.models.contracts import (
+from polyweb.infrastructure import http as polyweb_http
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.models.contracts import (
     FetchedDocument,
     FetchRequest,
     FetchResponse,
@@ -126,7 +126,7 @@ class _RecordingAdapter:
 
 def _forbid_direct_httpx(*args: object, **kwargs: object) -> None:
     raise AssertionError(
-        "before_scenario must build the client via freesearch.http.create_async_client(), "
+        "before_scenario must build the client via polyweb.http.create_async_client(), "
         "not httpx.AsyncClient directly"
     )
 
@@ -201,7 +201,7 @@ def test_before_scenario_selects_firecrawl_adapter_for_firecrawl_tag(
 
     _clear_harness_provider_keys(monkeypatch)
     _set_harness_key(monkeypatch, ProviderName.FIRECRAWL, firecrawl_key)
-    monkeypatch.setattr(freesearch_http, "create_async_client", fake_factory)
+    monkeypatch.setattr(polyweb_http, "create_async_client", fake_factory)
     monkeypatch.setattr(environment, "create_async_client", fake_factory, raising=False)
     monkeypatch.setattr(environment.httpx, "AsyncClient", _forbid_direct_httpx)
     monkeypatch.setattr(environment, "TavilyAdapter", _FakeTavilyAdapter)
@@ -272,7 +272,7 @@ def test_before_all_resolves_firecrawl_key_from_harness_env(
     """before_all must resolve the Firecrawl flag from the harness env.
 
     The retired ``get_provider_secret_resolver`` seam is gone; the harness reads
-    ``FREESEARCH_FIRECRAWL_API_KEY`` directly and exposes the boolean flag the
+    ``POLYWEB_FIRECRAWL_API_KEY`` directly and exposes the boolean flag the
     Given step asserts on.
     """
     _clear_harness_provider_keys(monkeypatch)
@@ -327,7 +327,7 @@ def test_given_firecrawl_key_passes_with_resolved_key_and_firecrawl_adapter() ->
 def test_given_firecrawl_key_fails_without_resolved_key() -> None:
     context = SimpleNamespace(has_firecrawl_key=False, adapter=_FakeFirecrawlAdapter(None))
 
-    with pytest.raises(AssertionError, match="FREESEARCH_FIRECRAWL_API_KEY"):
+    with pytest.raises(AssertionError, match="POLYWEB_FIRECRAWL_API_KEY"):
         firecrawl_steps.step_given_firecrawl_key(context)
 
 

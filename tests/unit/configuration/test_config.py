@@ -5,11 +5,11 @@ import os
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from freesearch.configuration.config import Settings, get_settings, require_transport_port
+from polyweb.configuration.config import Settings, get_settings, require_transport_port
 
 
 def test_missing_secret_blocks_authentication() -> None:
-    with pytest.raises(ValueError, match="FREESEARCH_AUTH_JWT_SECRET"):
+    with pytest.raises(ValueError, match="POLYWEB_AUTH_JWT_SECRET"):
         Settings(auth_jwt_secret=None).require_auth_secret()
 
 
@@ -66,9 +66,9 @@ def test_override_urls_allow_plain_http_only_on_loopback() -> None:
 
 def test_require_transport_port_rejects_missing_port() -> None:
     settings = Settings(api_port=None, mcp_port=None)
-    with pytest.raises(ValueError, match="FREESEARCH_API_PORT"):
+    with pytest.raises(ValueError, match="POLYWEB_API_PORT"):
         require_transport_port(settings, transport="api")
-    with pytest.raises(ValueError, match="FREESEARCH_MCP_PORT"):
+    with pytest.raises(ValueError, match="POLYWEB_MCP_PORT"):
         require_transport_port(settings, transport="mcp")
 
 
@@ -81,9 +81,9 @@ def test_require_transport_port_returns_configured_port() -> None:
 def test_mcp_bearer_token_reads_process_environment_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("FREESEARCH_MCP_BEARER_TOKEN", "proc-token-123")
+    monkeypatch.setenv("POLYWEB_MCP_BEARER_TOKEN", "proc-token-123")
     assert Settings().mcp_bearer_token == SecretStr("proc-token-123")
-    monkeypatch.delenv("FREESEARCH_MCP_BEARER_TOKEN")
+    monkeypatch.delenv("POLYWEB_MCP_BEARER_TOKEN")
     assert Settings().mcp_bearer_token is None
 
 
@@ -91,13 +91,13 @@ def test_settings_repr_contains_no_secret_material() -> None:
     settings = Settings(auth_jwt_secret=SecretStr("s" * 32))
     text = repr(settings)
     assert "s" * 32 not in text
-    assert os.environ.get("FREESEARCH_AUTH_JWT_SECRET") != "s" * 32 or True
+    assert os.environ.get("POLYWEB_AUTH_JWT_SECRET") != "s" * 32 or True
 
 
 def test_browser_origins_default_to_empty_programmatic_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("FREESEARCH_AUTH_BROWSER_ORIGINS", raising=False)
+    monkeypatch.delenv("POLYWEB_AUTH_BROWSER_ORIGINS", raising=False)
     get_settings.cache_clear()
     try:
         assert Settings(_env_file=None).auth_browser_origins == []

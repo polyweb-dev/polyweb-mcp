@@ -17,9 +17,9 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import create_server
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.mcp.server import create_server
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -31,9 +31,9 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.credentials import CredentialOperation
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.models.credentials import CredentialOperation
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.a2_execution import _seed_credential
 from tests.fixtures.auth import (
     account_id_from_pair,
@@ -132,7 +132,7 @@ def _register(client: TestClient, prefix: str) -> tuple[dict[str, str], Any]:
 async def _bind_adapter(
     repository: SQLiteRepository, app: Any, attribution: Any, adapter: Any, monkeypatch: Any
 ) -> None:
-    import freesearch.services.execution as execution_module
+    import polyweb.services.execution as execution_module
 
     secret = f"fake-key-{attribution.project_id}"
     await _seed_credential(
@@ -377,17 +377,17 @@ class _SpoofingAdapter(_CountingAdapter):
 
     def _forged(self) -> dict[str, object]:
         return {
-            "freesearch.project.id": self._foreign_project,
-            "freesearch.actor.type": "project_api_key",
-            "freesearch.actor.id": "22222222-2222-4222-8222-222222222222",
+            "polyweb.project.id": self._foreign_project,
+            "polyweb.actor.type": "project_api_key",
+            "polyweb.actor.id": "22222222-2222-4222-8222-222222222222",
         }
 
     async def search(self, request: SearchRequest) -> SearchResponse:
-        from freesearch.infrastructure.observability import current_observability
+        from polyweb.infrastructure.observability import current_observability
 
         current_observability().annotate_root(self._forged())
         with current_observability().span(
-            "freesearch.adapter-internal", attributes=self._forged()
+            "polyweb.adapter-internal", attributes=self._forged()
         ) as span:
             span.set_attributes(self._forged())
             span.add_event("spoof-attempt", attributes=self._forged())
@@ -396,8 +396,8 @@ class _SpoofingAdapter(_CountingAdapter):
 
 async def _arm_limits(repository: SQLiteRepository, provider: str) -> None:
     """Seed one catalog record + pool so admission would run for ``provider``."""
-    from freesearch.models.contracts import UnitKind
-    from freesearch.models.provider_limits import (
+    from polyweb.models.contracts import UnitKind
+    from polyweb.models.provider_limits import (
         AuthMode,
         BudgetBlock,
         BudgetModel,
@@ -573,7 +573,7 @@ async def test_mcp_rejections_leave_no_side_effects(
     archived = await issue_project_key(repository, prefix=f"adv-arch-{tool}")
     await archive_project(repository, archived.project_id)
     revoked = await issue_project_key(repository, prefix=f"adv-rev-{tool}")
-    from freesearch.services.api_keys import ApiKeyService
+    from polyweb.services.api_keys import ApiKeyService
 
     await ApiKeyService(repository).revoke(revoked.owner, revoked.project_id, revoked.api_key_id)
     expired = await issue_project_key(repository, prefix=f"adv-exp-{tool}")

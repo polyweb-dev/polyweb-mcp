@@ -25,14 +25,15 @@ These rules for the orchestrator that are distilled from prior agent runs. Follo
 - **Local vs cloud**: run **unit tests locally**. All other suites (integration, BDD, latency, live, mutation) must run on Woodpecker CI — they execute on autoscaled GCP Spot workers so the VPS stays free.
 - **Triggering**: the `executor` MCP server exposes a `woodpecker` integration. Discover tools inside `execute` with `tools.search({ namespace: "woodpecker", query: "..." })` and inspect shapes via `tools.describe.tool({ path })` before calling.
 - **Single workflow**: `tools.woodpecker.org.agent.trigger_pipeline({ repo_id: 1, branch: "<branch>", workflow: "<name>" })` where `<name>` is a `.woodpecker/*.yaml` basename (e.g. `api-latency`). Omitting `workflow` runs ALL manual workflows — expensive (live provider calls, long mutation runs).
+- **UI workflows**: `ui-quality` runs dependency checks, lint, type checks, unit tests, and the production build. `ui-bdd` runs the critical smoke and visual Playwright-BDD scenarios; it does not run `@live`.
 - The branch must be **pushed to origin**; local-only branches cannot be triggered. Monitor with `get_pipeline`, debug with `get_step_logs`, stop with `cancel_pipeline`.
-- **Artifacts**: each workflow uploads `reports.zip` (log + `test_reports/`) to Gitea as generic package `freesearch-<workflow>` versioned `pipeline-<N>-r<reruns>-<ns>`. Download with `python3 scripts/gitea_packages.py download <pkg> <version> reports.zip` (lands in `.gitea-packages/`; `python` is unavailable — use `python3`).
-- **Live suite**: CI has no provider secrets, so `@live` scenarios skip there. Run them locally and sparingly (they spend API credits): `FREESEARCH_RUN_LIVE=1 uv run --no-sync --env-file .env behave --tags="@live"`. The harness reads keys from the process env only. Tinyfish reads `FREESEARCH_TINYFISH_API_KEY` (legacy `TINYFISH_API_KEY` also accepted); blank values count as absent. Keyless Keenable scenarios always run without a key; keyed ones need `FREESEARCH_KEENABLE_API_KEY`.
+- **Artifacts**: each workflow uploads `reports.zip` (log + `test_reports/`) to Gitea as generic package `polyweb-<workflow>` versioned `pipeline-<N>-r<reruns>-<ns>`. Download with `python3 scripts/gitea_packages.py download <pkg> <version> reports.zip` (lands in `.gitea-packages/`; `python` is unavailable — use `python3`).
+- **Live suite**: CI has no provider secrets, so `@live` scenarios skip there. Run them locally and sparingly (they spend API credits): `POLYWEB_RUN_LIVE=1 uv run --no-sync --env-file .env behave --tags="@live"`. The harness reads keys from the process env only. Tinyfish reads `POLYWEB_TINYFISH_API_KEY` (legacy `TINYFISH_API_KEY` also accepted); blank values count as absent. Keyless Keenable scenarios always run without a key; keyed ones need `POLYWEB_KEENABLE_API_KEY`.
 - **api-latency step order**: the workflow runs the Behave latency feature before `pytest tests/integration/latency` under `set -e`, so the pytest gate only runs when every Behave scenario passes. The gate is p95 added latency under 150 ms; reports also record mean, p90, and p99. Offline added latency on CI is about 65–85 ms p50 and varies by spot agent.
 
 ## UI unit tests
 - We only support desktop view, not the mobile view.
-- In `freesearch-ui/src`, colocate each unit/component test with its source as `<basename>.test.ts` or `<basename>.test.tsx`; keep one canonical test file per source and never add suffix variants.
+- In `polyweb-ui/src`, colocate each unit/component test with its source as `<basename>.test.ts` or `<basename>.test.tsx`; keep one canonical test file per source and never add suffix variants.
 - When consolidating historical suites, keep each origin traceable as `describe("<old filename>", ...)` and preserve test titles, bodies, and assertions.
 - Keep shared fixtures/helpers shared; deduplicate imports and change paths only when relocation requires it.
 - Preserve the before/after Vitest case count, then run `pnpm depcruise`, `pnpm knip`, `pnpm lint`, `pnpm typecheck`, and `pnpm build` with zero new findings.
@@ -41,23 +42,23 @@ These rules for the orchestrator that are distilled from prior agent runs. Follo
 
 Each workspace/worktree has fixed, isolated ports defined in its root `.env` to prevent port collisions between concurrently running agents:
 
-| Workspace | Worktree Directory | MCP Server (`FREESEARCH_MCP_PORT`) | Backend API (`FREESEARCH_API_PORT`) | UI Dev (`VITE_PORT`) |
+| Workspace | Worktree Directory | MCP Server (`POLYWEB_MCP_PORT`) | Backend API (`POLYWEB_API_PORT`) | UI Dev (`VITE_PORT`) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Main** | `freesearch` | `8000` | `8001` | `5174` |
-| **WT 1** | `freesearch_wt_1` | `8010` | `8011` | `5175` |
-| **WT 2** | `freesearch_wt_2` | `8020` | `8021` | `5176` |
-| **WT 3** | `freesearch_wt_3` | `8030` | `8031` | `5177` |
-| **WT 4** | `freesearch_wt_4` | `8040` | `8041` | `5178` |
+| **Main** | `polyweb-mcp` | `8000` | `8001` | `5174` |
+| **WT 1** | `polyweb_wt_1` | `8010` | `8011` | `5175` |
+| **WT 2** | `polyweb_wt_2` | `8020` | `8021` | `5176` |
+| **WT 3** | `polyweb_wt_3` | `8030` | `8031` | `5177` |
+| **WT 4** | `polyweb_wt_4` | `8040` | `8041` | `5178` |
 
-- **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run freesearch-api`, `uv run freesearch-mcp`, `pnpm dev`). They automatically read from the local `.env`.
-- **Landing app** (`landing/`): the marketing site's Vite dev server reads `FREESEARCH_LANDING_PORT` from the root `.env` and defaults to `5274` when unset.
+- **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run polyweb-api`, `uv run polyweb-mcp`, `pnpm dev`). They automatically read from the local `.env`.
+- **Landing app** (`polyweb-landing/`): the marketing site's Vite dev server reads `POLYWEB_LANDING_PORT` from the root `.env` and defaults to `5274` when unset.
 - **Zero merge conflicts**: Port configurations live in the local `.env` (gitignored), keeping committed files identical across all branches.
 
 ### Creating worktrees
 
-- `scripts\windows\create_worktree.bat projects/p04-usage-trace-writers freesearch_wt_1 backend --base main`
-- Ports are set from `--slot N` or the `freesearch_wt_N` folder name; new branches start from `--base` (default `main`).
-- The live `freesearch.db` is not copied unless `--copy-db` (it holds provider credentials; tests must use fresh databases).
+- `scripts\windows\create_worktree.bat projects/p04-usage-trace-writers polyweb_wt_1 backend --base main`
+- Ports are set from `--slot N` or the `polyweb_wt_N` folder name; new branches start from `--base` (default `main`).
+- The live `polyweb.db` is not copied unless `--copy-db` (it holds provider credentials; tests must use fresh databases).
 - Remove worktrees with `scripts\windows\delete_worktree.bat <branch>`.
 
 

@@ -1,6 +1,6 @@
 @control @oauth
 Feature: Parallel OAuth device flow and Account API balance
-  As a local FreeSearch operator
+  As a local Polyweb operator
   I want to pair Parallel through a browser device flow
   So that the dashboard shows an AUTHORITATIVE USD balance without API keys
 

@@ -1,7 +1,7 @@
 """Frontend/backend API contract check (T4).
 
 Every ``/api/v1/...`` route the UI can build must exist in the backend's
-OpenAPI schema. Extraction covers three shapes seen in ``freesearch-ui/src``:
+OpenAPI schema. Extraction covers three shapes seen in ``polyweb-ui/src``:
 
 1. literals — ```/api/v1/projects/${segment(projectId)}/credentials`` — where a
    ``${...}`` interpolation may contain nested braces and must be consumed
@@ -24,10 +24,10 @@ from pathlib import Path
 
 import pytest
 
-from freesearch.routers.api import create_app
+from polyweb.routers.api import create_app
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-UI_SRC = REPO_ROOT / "freesearch-ui" / "src"
+UI_SRC = REPO_ROOT / "polyweb-ui" / "src"
 
 PATH_START = re.compile(r"/api/v1/")
 STOP_CHARS = frozenset(" \t\n\"'`?#")
@@ -254,7 +254,7 @@ def test_ui_api_literals_match_openapi_paths(openapi_templates: frozenset[str]) 
     """Every UI ``/api/v1`` route resolves to a backend route."""
 
     observations = _ui_route_literals()
-    assert observations, "no /api/v1 routes found under freesearch-ui/src"
+    assert observations, "no /api/v1 routes found under polyweb-ui/src"
     missing = {
         observation: source
         for observation, source in observations.items()

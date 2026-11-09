@@ -4,7 +4,7 @@ Feature: Live Tinyfish search and fetch
   I want a live check of the Tinyfish provider adapter
   So that Tinyfish search and fetch are proven against the real vendor like the other providers
 
-  # Manual-only: default_tags excludes @live. Requires FREESEARCH_TINYFISH_API_KEY
+  # Manual-only: default_tags excludes @live. Requires POLYWEB_TINYFISH_API_KEY
   # (or the legacy TINYFISH_API_KEY) in the harness env; skipped without one.
 
   @search

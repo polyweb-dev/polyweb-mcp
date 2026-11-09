@@ -21,10 +21,10 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.tavily import TavilyAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.models.contracts import ProviderError
+from polyweb.adapters.tavily import TavilyAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.models.contracts import ProviderError
 
 # ``features`` is an uninstalled namespace package at the repo root; make it
 # importable regardless of pytest's sys.path manipulation.
@@ -32,7 +32,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from freesearch.adapters import youcom as youcom_module  # noqa: E402
+from polyweb.adapters import youcom as youcom_module  # noqa: E402
 from tests.bdd.features import environment  # noqa: E402
 
 
@@ -146,7 +146,7 @@ def test_youcom_scenario_skips_before_tavily_adapter_when_both_keys_absent(
     try:
         assert scenario.skipped is True
         assert scenario.skip_reason is not None
-        assert "FREESEARCH_YOU_API_KEY" in scenario.skip_reason
+        assert "POLYWEB_YOU_API_KEY" in scenario.skip_reason
         assert getattr(context, "adapter", None) is None
         assert getattr(context, "youcom_adapter", None) is None
     finally:
@@ -240,7 +240,7 @@ def test_tavily_scenario_without_harness_key_skips_before_fail_closed_constructi
     scenario = context.scenario
     try:
         assert scenario.skipped is True
-        assert "FREESEARCH_TAVILY_API_KEY" in (scenario.skip_reason or "")
+        assert "POLYWEB_TAVILY_API_KEY" in (scenario.skip_reason or "")
         assert getattr(context, "adapter", None) is None
         assert not hasattr(context, "loop"), "skip must precede event-loop setup"
         assert not hasattr(context, "http_client"), "skip must precede client setup"
@@ -251,7 +251,7 @@ def test_tavily_scenario_without_harness_key_skips_before_fail_closed_constructi
 def test_production_tavily_adapter_still_fails_closed_without_api_key() -> None:
     """Intentional Tavily replacement (PLAN 4.1, DTC 5.1): the explicit
     constructor builds the keyless public rail instead of failing closed."""
-    from freesearch.models.provider_limits import AuthMode
+    from polyweb.models.provider_limits import AuthMode
 
     client = httpx.AsyncClient()
     adapter: TavilyAdapter | None = None

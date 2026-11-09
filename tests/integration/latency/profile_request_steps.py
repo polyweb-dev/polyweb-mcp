@@ -3,7 +3,7 @@
 Measurement only. It drives the real FastAPI app in-process, records every SQL
 statement's duration from SQLAlchemy's cursor events, and reads back the app's
 own persisted span durations (``trace_spans``) for the same request. Nothing
-under ``src/freesearch`` is modified, monkeypatched, or re-implemented.
+under ``src/polyweb`` is modified, monkeypatched, or re-implemented.
 
 Two windows are reported, and they differ on purpose:
 
@@ -43,13 +43,13 @@ import httpx
 from sqlalchemy import event as sa_event
 from sqlalchemy import text as sa_text
 
-from freesearch.configuration.config import get_settings
-from freesearch.models.observability import TraceSpanName
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.routers.control import clear_config_cache
-from freesearch.services.monitoring import clear_quota_poll_cache
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.configuration.config import get_settings
+from polyweb.models.observability import TraceSpanName
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.routers.control import clear_config_cache
+from polyweb.services.monitoring import clear_quota_poll_cache
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.auth import TEMP_PASSWORD, temp_email
 from tests.fixtures.execution import seed_member_project
 from tests.fixtures.latency import (
@@ -82,7 +82,7 @@ STAGE_ORDER: tuple[str, ...] = (
     TraceSpanName.RESPONSE,
 )
 _WRITE_VERBS = frozenset({"INSERT", "UPDATE", "DELETE"})
-_JWT_ENV = "FREESEARCH_AUTH_JWT_SECRET"
+_JWT_ENV = "POLYWEB_AUTH_JWT_SECRET"
 
 
 # --------------------------------------------------------------------------- samples
@@ -431,7 +431,7 @@ async def _main(args: argparse.Namespace) -> None:
     clear_config_cache()
     clear_quota_poll_cache()
     recorder = QueryRecorder()
-    with tempfile.TemporaryDirectory(prefix="freesearch-profile-") as directory:
+    with tempfile.TemporaryDirectory(prefix="polyweb-profile-") as directory:
         repository = await SQLiteRepository.open(Path(directory) / "profile.db")
         try:
             await seed_repository(repository, PROVIDERS)

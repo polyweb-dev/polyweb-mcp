@@ -15,30 +15,30 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from freesearch.configuration.provider_config import ProviderConfig
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.contracts import HealthStatus, ProviderHealth, UsageEvent, UsageOperation
-from freesearch.models.observability import ActorType, ExecutionAttribution
-from freesearch.models.projects import (
+from polyweb.configuration.provider_config import ProviderConfig
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.models.contracts import HealthStatus, ProviderHealth, UsageEvent, UsageOperation
+from polyweb.models.observability import ActorType, ExecutionAttribution
+from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     CredentialOwnerScope,
     ProjectCreate,
     ProjectMemberAdd,
     ProjectRead,
 )
-from freesearch.models.provider_access import FETCH_BIT, GLOBAL_BIT, SEARCH_BIT
-from freesearch.models.users import UserPrincipal
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.storage import ProviderHealthRow
-from freesearch.routers.api import create_app
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.pool_materializer import keyless_credential_id, materialize_pools
-from freesearch.services.projects import ProjectService
-from freesearch.services.provider_runtime import persist_provider_config
+from polyweb.models.provider_access import FETCH_BIT, GLOBAL_BIT, SEARCH_BIT
+from polyweb.models.users import UserPrincipal
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.storage import ProviderHealthRow
+from polyweb.routers.api import create_app
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.pool_materializer import keyless_credential_id, materialize_pools
+from polyweb.services.projects import ProjectService
+from polyweb.services.provider_runtime import persist_provider_config
 from tests.fixtures.alpha_fixtures import (
     ALPHA_ADMIN_PASSWORD,
     AlphaBootstrapResult,

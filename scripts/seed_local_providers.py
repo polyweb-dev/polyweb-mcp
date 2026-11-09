@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed project-private provider API keys into a local FreeSearch backend.
+"""Seed project-private provider API keys into a local Polyweb backend.
 
 Stores real provider keys for the ``@live`` e2e scenarios through the REST API:
 log in, find or create the project, then keep one ``local-e2e-<provider>``
@@ -29,8 +29,8 @@ from typing import Any
 
 import httpx
 
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.secrets import ProviderName
+from polyweb.configuration.config import get_settings
+from polyweb.infrastructure.secrets import ProviderName
 
 LABEL_PREFIX = "local-e2e-"
 BINDING_PRIORITY = 100
@@ -260,7 +260,7 @@ def _base_url(parser: argparse.ArgumentParser, value: str | None) -> str:
         return value.rstrip("/")
     port = get_settings().api_port
     if port is None:
-        parser.error("--base-url is required: FREESEARCH_API_PORT is not set")
+        parser.error("--base-url is required: POLYWEB_API_PORT is not set")
     return f"http://127.0.0.1:{port}"
 
 
@@ -290,7 +290,7 @@ def main() -> int:
     parser.add_argument(
         "--base-url",
         default=None,
-        help="API base URL (default: http://127.0.0.1:$FREESEARCH_API_PORT)",
+        help="API base URL (default: http://127.0.0.1:$POLYWEB_API_PORT)",
     )
     args = parser.parse_args()
 

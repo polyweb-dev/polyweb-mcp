@@ -1,13 +1,13 @@
 import logging
 
-from freesearch.configuration.config import Settings
-from freesearch.infrastructure.http import create_async_client
-from freesearch.infrastructure.logging import redact_secrets
+from polyweb.configuration.config import Settings
+from polyweb.infrastructure.http import create_async_client
+from polyweb.infrastructure.logging import redact_secrets
 
 
 def test_settings_load_from_prefixed_environment(monkeypatch) -> None:
-    monkeypatch.setenv("FREESEARCH_LOG_LEVEL", "DEBUG")
-    monkeypatch.setenv("FREESEARCH_HTTP_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("POLYWEB_LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("POLYWEB_HTTP_TIMEOUT_SECONDS", "12")
 
     settings = Settings()
 
@@ -37,7 +37,7 @@ def test_redaction_masks_known_and_named_secrets() -> None:
 
 
 def test_logging_configuration_has_a_redaction_filter() -> None:
-    from freesearch.infrastructure.logging import SecretRedactionFilter
+    from polyweb.infrastructure.logging import SecretRedactionFilter
 
     record = logging.LogRecord("test", logging.INFO, "", 0, "secret=%s", ("value",), None)
     filter_ = SecretRedactionFilter(("value",))

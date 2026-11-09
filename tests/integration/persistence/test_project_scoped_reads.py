@@ -16,11 +16,11 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import (
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.models.contracts import UsageEvent, UsageOperation, UsageStatus
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import (
     ActorType,
     ExecutionAttribution,
     TraceOperation,
@@ -28,17 +28,17 @@ from freesearch.models.observability import (
     TraceSpanKind,
     TraceSpanRecord,
 )
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.models.schema_enums import UpstreamScope
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.oauth_grants import CredentialOAuthGrantRepository
-from freesearch.persistence.otel_exporter import write_trace_spans
-from freesearch.persistence.pools import UpstreamPoolRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.control_errors import ResourceNotFound
-from freesearch.services.credential_oauth import OAuthTarget
-from freesearch.services.vault_keys import VaultOAuthService
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.models.schema_enums import UpstreamScope
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.oauth_grants import CredentialOAuthGrantRepository
+from polyweb.persistence.otel_exporter import write_trace_spans
+from polyweb.persistence.pools import UpstreamPoolRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.control_errors import ResourceNotFound
+from polyweb.services.credential_oauth import OAuthTarget
+from polyweb.services.vault_keys import VaultOAuthService
 from tests.fixtures.auth import create_temp_user, temp_email, temp_principal
 from tests.fixtures.execution import seed_execution_project
 
@@ -221,11 +221,11 @@ def test_project_owned_repository_methods_require_project_id() -> None:
     keyword-only ``project_id``; only an explicit system-scope allowlist is exempt, and
     no method anywhere accepts an optional ``project_id`` that could widen a read."""
 
-    from freesearch.persistence.api_keys import ProjectApiKeyRepository
-    from freesearch.persistence.audit import AuditRepository
-    from freesearch.persistence.execution_authority import ExecutionAuthorityRepository
-    from freesearch.persistence.pools import PoolAllocationRepository
-    from freesearch.persistence.retention import RetentionRunRepository
+    from polyweb.persistence.api_keys import ProjectApiKeyRepository
+    from polyweb.persistence.audit import AuditRepository
+    from polyweb.persistence.execution_authority import ExecutionAuthorityRepository
+    from polyweb.persistence.pools import PoolAllocationRepository
+    from polyweb.persistence.retention import RetentionRunRepository
 
     repositories = (
         ProjectApiKeyRepository,

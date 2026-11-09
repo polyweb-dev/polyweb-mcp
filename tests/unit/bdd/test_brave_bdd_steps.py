@@ -26,7 +26,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from freesearch.models.contracts import (
+from polyweb.models.contracts import (
     SearchResponse,
     SearchResult,
     UsageEvent,

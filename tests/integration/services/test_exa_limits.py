@@ -14,12 +14,12 @@ import pytest
 import pytest_asyncio
 from pydantic import AnyHttpUrl
 
-from freesearch.configuration.provider_limits import (
+from polyweb.configuration.provider_limits import (
     provider_limit_defaults,
     provider_tier_defaults,
 )
-from freesearch.models.contracts import FetchRequest, SearchRequest, SearchResponse, UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import FetchRequest, SearchRequest, SearchResponse, UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     FundingMode,
     LimitCallContext,
@@ -31,8 +31,8 @@ from freesearch.models.provider_limits import (
     RateWindowName,
     ResetRule,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)

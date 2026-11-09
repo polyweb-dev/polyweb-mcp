@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from freesearch.configuration.provider_limits import provider_limit_defaults
-from freesearch.models.contracts import FetchRequest, SearchRequest, UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.configuration.provider_limits import provider_limit_defaults
+from polyweb.models.contracts import FetchRequest, SearchRequest, UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     LimitCallContext,
     LimitDeniedError,
@@ -24,8 +24,8 @@ from freesearch.models.provider_limits import (
     RateScope,
     RateWindowName,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)

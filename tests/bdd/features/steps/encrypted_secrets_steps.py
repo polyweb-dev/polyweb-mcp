@@ -24,10 +24,10 @@ import httpx
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.configuration.config import get_settings
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -41,8 +41,8 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.encrypted_secrets_helpers import (
     SENTINEL_PASSPHRASE,
     SENTINEL_PROVIDER_KEYS,
@@ -69,8 +69,8 @@ from tests.integration.services.oauth.oauth_stubs import (
     install_http_stub,
 )
 
-KEY_FILE_ENV = "FREESEARCH_ENCRYPTION_KEY_FILE"
-PASSPHRASE_ENV = "FREESEARCH_ENCRYPTION_KEY"
+KEY_FILE_ENV = "POLYWEB_ENCRYPTION_KEY_FILE"
+PASSPHRASE_ENV = "POLYWEB_ENCRYPTION_KEY"
 VAULT_KEYS = "/api/v1/account/vault/keys"
 
 
@@ -174,7 +174,7 @@ def _isolate_process_state(context: Any, *, passphrase: str | None) -> None:
 def _new_scenario_dir(context: Any) -> None:
     saved_cwd = Path.cwd()
     _push_cleanup(context, lambda: os.chdir(saved_cwd))
-    path = saved_cwd / f"freesearch-enc-cwd-{uuid4().hex}"
+    path = saved_cwd / f"polyweb-enc-cwd-{uuid4().hex}"
     path.mkdir()
     context.scenario_dir = str(path)
     _push_cleanup(context, lambda: shutil.rmtree(path, ignore_errors=True))
@@ -279,13 +279,13 @@ class _VaultOAuthCase:
         self.path = f"{VAULT_KEYS}/{credential_id}/oauth"
 
     async def grant(self) -> Any:
-        from freesearch.persistence.oauth_grants import CredentialOAuthGrantRow
+        from polyweb.persistence.oauth_grants import CredentialOAuthGrantRow
 
         async with self.context.repository.session() as session:
             return await session.get(CredentialOAuthGrantRow, str(self.credential_id))
 
     async def token(self, kind: str = "access") -> str | None:
-        from freesearch.persistence.oauth_grants import oauth_secret_slot
+        from polyweb.persistence.oauth_grants import oauth_secret_slot
 
         grant = await self.grant()
         if grant is None:
@@ -336,7 +336,7 @@ def _reopen_same_database(context: Any) -> None:
 
 
 def _credential_slot(context: Any, provider: str) -> str:
-    from freesearch.services.credentials import credential_secret_slot
+    from polyweb.services.credentials import credential_secret_slot
 
     body = context.enc_credentials[provider]
     return credential_secret_slot(UUID(body["id"]), body["generation"])
@@ -453,7 +453,7 @@ def step_when_pair_oauth(context: Any) -> None:
         start = client.post(f"{case.path}/device", headers=context.auth_headers)
         assert start.status_code == 200, start.text
         grant = _run(context, case.grant())
-        from freesearch.persistence.oauth_grants import oauth_secret_slot
+        from polyweb.persistence.oauth_grants import oauth_secret_slot
 
         for kind, expected in (("device", DEVICE_CODE_VALUE), ("client", CLIENT_SECRET_VALUE)):
             slot = oauth_secret_slot(case.credential_id, kind, grant.token_generation)
@@ -554,7 +554,7 @@ def step_when_update_and_rotate(context: Any) -> None:
 
 @then("the vault key response should contain only current metadata")
 def step_then_encrypted_source(context: Any) -> None:
-    from freesearch.models.vault import VaultKeyDetails
+    from polyweb.models.vault import VaultKeyDetails
 
     assert context.secret_response.status_code in (200, 201)
     body = context.secret_response.json()
@@ -781,7 +781,7 @@ def step_then_tombstone_missing(context: Any, provider: str) -> None:
 def step_then_oauth_slots_ciphertext(context: Any) -> None:
     case = context.oauth_case
     grant = _run(context, case.grant())
-    from freesearch.persistence.oauth_grants import oauth_secret_slot
+    from polyweb.persistence.oauth_grants import oauth_secret_slot
 
     for kind in ("access", "refresh", "device", "client"):
         slot = oauth_secret_slot(case.credential_id, kind, grant.token_generation)
@@ -796,7 +796,7 @@ def step_then_oauth_slots_ciphertext(context: Any) -> None:
 
 @then("the OAuth status should contain only non-secret metadata")
 def step_then_oauth_fingerprint_only(context: Any) -> None:
-    from freesearch.models.credentials import CredentialOAuthStatusRead
+    from polyweb.models.credentials import CredentialOAuthStatusRead
 
     body = context.oauth_status.json()
     assert set(body) == set(CredentialOAuthStatusRead.model_fields)
@@ -820,7 +820,7 @@ def step_then_disconnect_idempotent(context: Any) -> None:
 
 @then("the pool response should match the current vault contract")
 def step_then_pool_contract(context: Any) -> None:
-    from freesearch.models.vault import KeyPoolRead
+    from polyweb.models.vault import KeyPoolRead
 
     body = context.pool_response.json()
     assert set(body) == set(KeyPoolRead.model_fields)

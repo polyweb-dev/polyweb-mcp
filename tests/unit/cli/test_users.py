@@ -1,7 +1,7 @@
 """Unit tests for the operator account CLI (P1b, T18 parts).
 
 No test touches the database or the network. The password prompt seam
-``freesearch.cli.users._prompt_password`` is the only patched boundary, and
+``polyweb.cli.users._prompt_password`` is the only patched boundary, and
 only the prompt tests replace it. Every failure uses one fixed message, and
 no raw argument value reaches the output.
 """
@@ -12,7 +12,7 @@ import pytest
 from fastapi_users import exceptions
 from pydantic import SecretStr
 
-from freesearch.cli.users import (
+from polyweb.cli.users import (
     CliError,
     _is_password_argument,
     _parser,
@@ -22,7 +22,7 @@ from freesearch.cli.users import (
     _selected_database,
     main,
 )
-from freesearch.services.users import (
+from polyweb.services.users import (
     AuthLastSystemAdmin,
     AuthRoleAssignmentFailed,
     AuthServiceError,
@@ -123,7 +123,7 @@ def test_prompt_password_needs_a_terminal(monkeypatch: pytest.MonkeyPatch) -> No
 def test_prompt_password_rejects_empty_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
 
-    import freesearch.cli.users as users_module
+    import polyweb.cli.users as users_module
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(users_module.getpass, "getpass", lambda _prompt="": "")
@@ -135,7 +135,7 @@ def test_prompt_password_rejects_empty_entry(monkeypatch: pytest.MonkeyPatch) ->
 def test_prompt_password_returns_masked_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
 
-    import freesearch.cli.users as users_module
+    import polyweb.cli.users as users_module
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(users_module.getpass, "getpass", lambda _prompt="": "StrongPass123!x-Unit")
@@ -187,7 +187,7 @@ def test_report_role_failure_prints_agent_fallback_to_stdout(
 
 
 def test_main_returns_the_run_status_as_system_exit(monkeypatch: pytest.MonkeyPatch) -> None:
-    import freesearch.cli.users as users_module
+    import polyweb.cli.users as users_module
 
     async def _fake_run(arguments=None):  # type: ignore[no-untyped-def]
         assert arguments == ["create-admin", "--email", "ops@example.com"]

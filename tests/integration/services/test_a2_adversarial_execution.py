@@ -25,13 +25,13 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import select
 
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.models.contracts import RoutingPreference
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import ActorType, ExecutionAttribution
-from freesearch.models.projects import (
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from polyweb.models.contracts import RoutingPreference
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import ActorType, ExecutionAttribution
+from polyweb.models.projects import (
     API_KEY_SCOPES,
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     CredentialOwnerScope,
@@ -39,26 +39,26 @@ from freesearch.models.projects import (
     ProjectApiKeyPrincipal,
     ProjectContext,
 )
-from freesearch.models.provider_limits import LimitDeniedError, LimitStoreUnavailable
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
-from freesearch.persistence.settings import ProjectSettingsRepository
-from freesearch.persistence.storage import UsageEventRow
-from freesearch.services.api_keys import ApiKeyService
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.execution import (
+from polyweb.models.provider_limits import LimitDeniedError, LimitStoreUnavailable
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
+from polyweb.persistence.settings import ProjectSettingsRepository
+from polyweb.persistence.storage import UsageEventRow
+from polyweb.services.api_keys import ApiKeyService
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.execution import (
     ExecutionBindingMissing,
     ExecutionError,
     ExecutionNotPermitted,
 )
-from freesearch.services.execution_scope import (
+from polyweb.services.execution_scope import (
     ExecutionScopeError,
     execution_attribution,
     resolve_execution_scope,
 )
-from freesearch.services.pool_materializer import materialize_pools
+from polyweb.services.pool_materializer import materialize_pools
 from tests.fixtures.a2_execution import (
     ExecutionWorld,
     PoolSpec,
@@ -156,7 +156,7 @@ async def _two_binding_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 async def _two_vault_pool_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ExecutionWorld:
     """Build two provider candidates through assigned vault pools and routing order."""
-    import freesearch.services.execution as execution_module
+    import polyweb.services.execution as execution_module
 
     world = await build_execution_world(tmp_path, monkeypatch, labels=(), limits=False)
     async with world.repository.session() as session:
@@ -185,7 +185,7 @@ async def _two_vault_pool_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
             world.credentials[label] = SeededCredential(
                 label,
                 credential.id,
-                uuid5(NAMESPACE_URL, f"freesearch:binding:{pool.id}"),
+                uuid5(NAMESPACE_URL, f"polyweb:binding:{pool.id}"),
                 secret,
                 credential.generation,
             )
@@ -714,7 +714,7 @@ async def test_unhealthy_or_exhausted_credential_leaves_its_sibling_usable(
     from datetime import UTC, datetime
     from decimal import Decimal
 
-    from freesearch.models.contracts import (
+    from polyweb.models.contracts import (
         HealthStatus,
         ProviderHealth,
         QuotaSnapshot,

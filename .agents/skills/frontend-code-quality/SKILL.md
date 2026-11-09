@@ -1,17 +1,17 @@
 ---
 name: frontend-code-quality
-description: Use when you are working on frontend and want to verify PR readiness, review code changes, diagnose dependency-cruiser violations, fix ESLint complexity errors, or resolve Knip unused export and dependency reports. Audit architecture boundaries, circular imports, dead code, unused exports, cyclomatic complexity, nesting depth, and TypeScript type safety in freesearch-ui/src.
+description: Use when you are working on frontend and want to verify PR readiness, review code changes, diagnose dependency-cruiser violations, fix ESLint complexity errors, or resolve Knip unused export and dependency reports. Audit architecture boundaries, circular imports, dead code, unused exports, cyclomatic complexity, nesting depth, and TypeScript type safety in polyweb-ui/src.
 ---
 
 # Code Quality & Static Analysis
 
-Enforces architectural boundaries, dead-code elimination, cyclomatic complexity limits, and TypeScript type safety across `freesearch-ui/src`.
+Enforces architectural boundaries, dead-code elimination, cyclomatic complexity limits, and TypeScript type safety across `polyweb-ui/src`.
 
 ## 1. Audit Pipeline
 
 **Workflow**: `pnpm depcruise` ──> `pnpm knip` ──> `pnpm lint` ──> `pnpm typecheck`
 
-Run each command from `freesearch-ui/`:
+Run each command from `polyweb-ui/`:
 
 ```powershell
 pnpm depcruise
@@ -60,4 +60,4 @@ pnpm typecheck
 - [ ] `pnpm depcruise` exits 0 (`✔ no dependency violations found`).
 - [ ] `pnpm knip` exits 0 (0 unused files, exports, or deps).
 - [ ] `pnpm lint` exits 0 (0 errors, 0 warnings).
-- [ ] `pnpm typecheck` exits 0 across `freesearch-ui/src`.
+- [ ] `pnpm typecheck` exits 0 across `polyweb-ui/src`.

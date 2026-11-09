@@ -26,13 +26,13 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.mcp.server import create_server
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.monitoring import clear_quota_poll_cache
-from freesearch.services.provider_runtime import clear_config_cache
+from polyweb.configuration.config import get_settings
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.mcp.server import create_server
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.monitoring import clear_quota_poll_cache
+from polyweb.services.provider_runtime import clear_config_cache
 from tests.fixtures.api_keys import mcp_project_key
 from tests.fixtures.auth import TEMP_PASSWORD, temp_email
 from tests.fixtures.execution import (

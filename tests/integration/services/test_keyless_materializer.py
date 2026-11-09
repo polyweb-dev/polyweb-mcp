@@ -8,20 +8,20 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import ProviderConfigUpdate
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.key_pools import KeyPoolRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.pool_materializer import (
+from polyweb.configuration.config import get_settings
+from polyweb.configuration.provider_config import ProviderConfigUpdate
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.key_pools import KeyPoolRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.pool_materializer import (
     ensure_keyless_credentials,
     keyless_credential_id,
     materialize_pools,
 )
-from freesearch.services.provider_runtime import initialize_provider_configs, patch_provider_config
+from polyweb.services.provider_runtime import initialize_provider_configs, patch_provider_config
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -36,7 +36,7 @@ from tests.fixtures.project_order import seed_order_pools
 async def test_public_dispatch_pool_switch_kill_switch_and_vault(
     tmp_path: Path, auth_secret: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "keyless-integration-passphrase")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "keyless-integration-passphrase")
     get_settings.cache_clear()
     repository = await SQLiteRepository.open(tmp_path / "keyless.db")
     store = EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))

@@ -11,8 +11,8 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -28,8 +28,8 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
@@ -133,7 +133,7 @@ class _MonitoringStubAdapter(ProviderAdapter):
 
 def _open_repository(context: Any) -> None:
     with tempfile.NamedTemporaryFile(
-        prefix="freesearch-monitoring-",
+        prefix="polyweb-monitoring-",
         suffix=".db",
         dir=Path.cwd(),
         delete=False,
@@ -349,7 +349,7 @@ def step_then_mcp_telemetry(context: Any) -> None:
         async def scoped_health(provider: str = provider):
             from uuid import UUID
 
-            from freesearch.persistence.bindings import ProjectBindingRepository
+            from polyweb.persistence.bindings import ProjectBindingRepository
 
             async with context.repository.session() as session:
                 bindings = await ProjectBindingRepository(session).list_for_project(

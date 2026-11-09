@@ -47,7 +47,7 @@ The codebase uses Pydantic actively. `models/contracts.py` and `models/observabi
 ```
 
 1. **Strict Layering**: Upper layers may import from lower layers; lower layers must never import from upper layers. Never import from `routers/` or `mcp/` inside `services/` or `persistence/`.
-2. **Package Import Paths**: Use explicit, absolute package imports (e.g., `from freesearch.models.contracts import SearchRequest`). Avoid relative imports spanning across package boundaries (`../../`).
+2. **Package Import Paths**: Use explicit, absolute package imports (e.g., `from polyweb.models.contracts import SearchRequest`). Avoid relative imports spanning across package boundaries (`../../`).
 3. **Clean `__init__.py` Markers**: Keep package initializers lean. Avoid eager cascading imports that cause circular dependency chains.
 4. **Circular Dependency Handling**:
    - Prefer extracting shared contracts to `models/` or using dependency injection.
@@ -88,15 +88,15 @@ tests/
 ### Classification Criteria
 - **Unit (`tests/unit/`)**: Fast and fully isolated. External SDKs, HTTP calls, and database sessions are mocked/stubbed.
 - **Integration (`tests/integration/`)**: Uses a real SQLite database, executes Alembic migrations, or tests complete FastAPI/MCP transport lifecycles. If any test in a module touches real integration boundaries, classify the module under `integration/`.
-- **Mirroring Convention**: Name test files after the module they test (`src/freesearch/services/routing.py` $\rightarrow$ `tests/unit/services/test_routing.py`).
+- **Mirroring Convention**: Name test files after the module they test (`src/polyweb/services/routing.py` $\rightarrow$ `tests/unit/services/test_routing.py`).
 
 ---
 
 ## 4. Mocking & Path Seams
 
 - **Mock at the Consumer Lookup Site**: Always patch symbols where they are *imported and used*, not where they are defined.
-  - *Correct*: `patch("freesearch.routers.api.build_adapters")`
-  - *Incorrect*: `patch("freesearch.mcp.server.build_adapters")`
+  - *Correct*: `patch("polyweb.routers.api.build_adapters")`
+  - *Incorrect*: `patch("polyweb.mcp.server.build_adapters")`
 - **Stable Path Resolution**: Never calculate file paths using brittle relative levels. Always anchor using `Path(__file__).resolve().parents[N]` matched to directory depth, or use `Path.cwd()` when resolving workspace paths.
 
 ---

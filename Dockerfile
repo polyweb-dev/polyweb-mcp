@@ -1,4 +1,4 @@
-# FreeSearch production image (multi-target).
+# Polyweb production image (multi-target).
 #
 # Targets:
 #   backend — Python API + MCP server (default).
@@ -7,8 +7,8 @@
 #
 # The same file builds both Compose services, so `docker compose up --build`
 # just works:
-#   docker build --target backend -t freesearch:latest .
-#   docker build --target ui -t freesearch-ui:latest .
+#   docker build --target backend -t polyweb:latest .
+#   docker build --target ui -t polyweb-ui:latest .
 
 # --------------------------------------------------------------------------
 # Stage 1: build the React dashboard to static files.
@@ -22,17 +22,17 @@ WORKDIR /ui
 
 # Install pnpm, then dependencies first for optimal layer caching.
 RUN npm install -g pnpm@11
-COPY freesearch-ui/package.json freesearch-ui/pnpm-lock.yaml freesearch-ui/pnpm-workspace.yaml ./
+COPY polyweb-ui/package.json polyweb-ui/pnpm-lock.yaml polyweb-ui/pnpm-workspace.yaml ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir /pnpm/store
 
 # Build the static bundle (VITE_API_URL stays empty → same-origin calls,
 # so nginx can reverse-proxy /api/* to the backend with no rebuild per env).
-COPY freesearch-ui/ ./
+COPY polyweb-ui/ ./
 RUN pnpm build
 
 # --------------------------------------------------------------------------
-# Stage 2: Python runtime with the FreeSearch package installed.
+# Stage 2: Python runtime with the Polyweb package installed.
 # --------------------------------------------------------------------------
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS backend
 
@@ -51,7 +51,7 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 # Runtime source: package, migrations (alembic.ini points at
-# src/freesearch/persistence/migrations), and README (hatchling wheel metadata).
+# src/polyweb/persistence/migrations), and README (hatchling wheel metadata).
 COPY src/ ./src/
 COPY alembic.ini README.md ./
 
@@ -59,16 +59,16 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 # Persistent state (SQLite DB + master-key file) lives here in Compose via a
-# named volume; override with FREESEARCH_DB / FREESEARCH_ENCRYPTION_KEY_FILE.
+# named volume; override with POLYWEB_DB / POLYWEB_ENCRYPTION_KEY_FILE.
 RUN mkdir -p /data
-ENV FREESEARCH_DB=/data/freesearch.db
-ENV FREESEARCH_ENCRYPTION_KEY_FILE=/data/.secret_key
+ENV POLYWEB_DB=/data/polyweb.db
+ENV POLYWEB_ENCRYPTION_KEY_FILE=/data/.secret_key
 
 EXPOSE 8001 8000
 
 # Default: REST API. Compose overrides the mcp service command with
-# `freesearch-mcp --transport streamable-http --host 0.0.0.0 --port 8000`.
-CMD ["uv", "run", "freesearch-api", "--host", "0.0.0.0", "--port", "8001"]
+# `polyweb-mcp --transport streamable-http --host 0.0.0.0 --port 8000`.
+CMD ["uv", "run", "polyweb-api", "--host", "0.0.0.0", "--port", "8001"]
 
 # --------------------------------------------------------------------------
 # Stage 3: nginx serving the built dashboard + proxying the API.

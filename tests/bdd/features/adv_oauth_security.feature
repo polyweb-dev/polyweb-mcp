@@ -1,6 +1,6 @@
 @control @adv-oauth @oauth-security
 Feature: Parallel OAuth token confinement
-  As a FreeSearch operator
+  As a Polyweb operator
   I want bearer tokens confined to the encrypted vault
   So that logs, responses, and database rows stay fingerprint-only
 

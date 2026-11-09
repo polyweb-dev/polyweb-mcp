@@ -1,6 +1,6 @@
 ---
 name: mutation-testing
-description: "Evaluate unit test assertion strength, uncover untested edge cases, and run parallel mutation testing with pytest-gremlins. Use when verifying provider adapters, validating contracts/schemas, diagnosing surviving gremlins, strengthening assertions, or auditing test quality across src/freesearch."
+description: "Evaluate unit test assertion strength, uncover untested edge cases, and run parallel mutation testing with pytest-gremlins. Use when verifying provider adapters, validating contracts/schemas, diagnosing surviving gremlins, strengthening assertions, or auditing test quality across src/polyweb."
 ---
 
 # Mutation Testing with pytest-gremlins
@@ -11,7 +11,7 @@ Measures unit test assertion strength by injecting faults ("gremlins") into Pyth
 
 * **Inner Loop (Active Development / Single File)**: Mutate only the module under test for instant feedback:
   ```bash
-  uv run pytest --gremlins --gremlin-parallel --gremlin-targets=src/freesearch/routing.py
+  uv run pytest --gremlins --gremlin-parallel --gremlin-targets=src/polyweb/routing.py
   ```
 * **Diagnose Surviving Gremlin**: Inspect why a specific mutant survived:
   ```bash
@@ -19,7 +19,7 @@ Measures unit test assertion strength by injecting faults ("gremlins") into Pyth
   ```
 * **Outer Loop (Pre-PR / Full Suite)**: Run parallel mutation across the entire codebase with caching:
   ```bash
-  uv run pytest --gremlins --gremlin-parallel --gremlin-targets=src/freesearch --gremlin-report=console,html,json --gremlin-cache
+  uv run pytest --gremlins --gremlin-parallel --gremlin-targets=src/polyweb --gremlin-report=console,html,json --gremlin-cache
   ```
   * HTML Report: `coverage/gremlins/index.html`
   * JSON Report: `coverage/gremlins/gremlins.json`

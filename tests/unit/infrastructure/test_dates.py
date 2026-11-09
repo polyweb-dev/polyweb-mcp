@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from freesearch.infrastructure.dates import parse_iso_datetime
+from polyweb.infrastructure.dates import parse_iso_datetime
 
 
 def test_parse_iso_datetime_accepts_z_as_utc() -> None:

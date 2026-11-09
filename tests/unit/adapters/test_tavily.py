@@ -51,12 +51,12 @@ from tavily.errors import (
     TimeoutError as TavilyTimeoutError,
 )
 
-import freesearch.adapters.tavily as tavily_module
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.tavily import TavilyAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.models.contracts import FetchRequest, QuotaSource, SearchRequest, UsageOperation
-from freesearch.models.provider_options import FetchProviderOptions, SearchProviderOptions
+import polyweb.adapters.tavily as tavily_module
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.tavily import TavilyAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from polyweb.models.contracts import FetchRequest, QuotaSource, SearchRequest, UsageOperation
+from polyweb.models.provider_options import FetchProviderOptions, SearchProviderOptions
 
 
 class _FakeClient:
@@ -229,7 +229,7 @@ async def test_init_missing_resolver_credential_fails_closed(monkeypatch) -> Non
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
     monkeypatch.delenv("TAVILY_ORG_ID", raising=False)
 
-    from freesearch.models.provider_limits import AuthMode
+    from polyweb.models.provider_limits import AuthMode
 
     client = httpx.AsyncClient()
     adapter: TavilyAdapter | None = None
@@ -254,7 +254,7 @@ async def test_init_missing_credential_never_falls_back_to_ambient_key(monkeypat
     """
     monkeypatch.setenv("TAVILY_API_KEY", "ambient-sk-leak")
 
-    from freesearch.models.provider_limits import AuthMode
+    from polyweb.models.provider_limits import AuthMode
 
     client = httpx.AsyncClient()
     adapter: TavilyAdapter | None = None
@@ -1692,7 +1692,7 @@ async def test_quota_malformed_json_body_is_redacted_invalid_response(monkeypatc
 
     from datetime import UTC, datetime
 
-    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
     recorder = _UsageWireRecorder(
         responses=[httpx.Response(200, content=b'{"api_key": "super-secret", broken')]
@@ -1741,7 +1741,7 @@ async def test_quota_http_status_normalizes_once_through_shared_runner(
     """
     from datetime import UTC, datetime
 
-    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
     runner = _RecordingRunner()
     adapter = TavilyAdapter(
@@ -1780,7 +1780,7 @@ async def test_quota_mock_429_retry_after_reaches_runner_raw_path() -> None:
     """
     from datetime import UTC, datetime
 
-    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
     runner = _RecordingRunner()
     adapter = TavilyAdapter(
@@ -1823,7 +1823,7 @@ async def test_quota_real_path_429_retry_after_records_cooldown(monkeypatch) -> 
     """
     from datetime import UTC, datetime
 
-    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_PROJECT", raising=False)
@@ -1883,7 +1883,7 @@ def _real_sdk_recorder() -> _WireRecorder:
 
 async def test_keyless_rail_sends_access_mode_without_key(monkeypatch) -> None:
     """Keyless search and extract carry the access-mode header and no key."""
-    from freesearch.models.provider_limits import AuthMode
+    from polyweb.models.provider_limits import AuthMode
 
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     recorder = _WireRecorder()
@@ -1916,7 +1916,7 @@ async def test_keyless_rail_sends_access_mode_without_key(monkeypatch) -> None:
 
 async def test_keyless_rail_isolates_ambient_key_and_caller_headers(monkeypatch) -> None:
     """Ambient keys and shared secret headers never reach the keyless wire."""
-    from freesearch.models.provider_limits import AuthMode
+    from polyweb.models.provider_limits import AuthMode
 
     monkeypatch.setenv("TAVILY_API_KEY", "ambient-sk-leak")
     recorder = _WireRecorder()
@@ -1965,7 +1965,7 @@ async def test_keyed_rail_takes_precedence_with_both_headers(monkeypatch) -> Non
 
 async def test_identical_param_transfer_on_both_rails() -> None:
     """Keyed and keyless calls forward identical SDK parameter maps."""
-    from freesearch.models.tavily import TavilyExtractParams, TavilySearchParams
+    from polyweb.models.tavily import TavilyExtractParams, TavilySearchParams
 
     keyed_sdk, keyless_sdk = _FakeSDK(), _FakeSDK()
     keyed_sdk.search_response = _search_payload()
@@ -2018,7 +2018,7 @@ async def test_identical_param_transfer_on_both_rails() -> None:
 
 
 async def test_search_forwards_modeled_options_and_preserves_response_extras() -> None:
-    from freesearch.models.tavily import TavilySearchParams
+    from polyweb.models.tavily import TavilySearchParams
 
     sdk = _FakeSDK()
     sdk.search_response = _search_payload(
@@ -2097,7 +2097,7 @@ async def test_search_forwards_modeled_options_and_preserves_response_extras() -
 
 
 async def test_extract_forwards_modeled_options_but_keeps_shared_timeout() -> None:
-    from freesearch.models.tavily import TavilyExtractParams
+    from polyweb.models.tavily import TavilyExtractParams
 
     sdk = _FakeSDK()
     sdk.extract_response = _extract_payload(response_time=0.5, failed_results=[])
@@ -2138,7 +2138,7 @@ async def test_extract_forwards_modeled_options_but_keeps_shared_timeout() -> No
 
 async def test_nested_depth_overrides_common_mode_before_vendor_io() -> None:
     """Nested search depth overrides common mode and determines the cost."""
-    from freesearch.models.tavily import TavilySearchParams
+    from polyweb.models.tavily import TavilySearchParams
 
     sdk = _FakeSDK()
     sdk.search_response = _search_payload()
@@ -2228,7 +2228,7 @@ async def test_real_sdk_429_then_success_exact_retry_after_extract(monkeypatch) 
 
 def test_retry_after_variants_absent_malformed_zero() -> None:
     """Absent/malformed Retry-After yields None; zero stays zero."""
-    import freesearch.adapters.tavily as tavily_mod
+    import polyweb.adapters.tavily as tavily_mod
 
     def response(value: str | None) -> httpx.Response:
         headers = {} if value is None else {"Retry-After": value}
@@ -2250,7 +2250,7 @@ def test_retry_after_http_date_parses_to_delay() -> None:
     import email.utils
     import time
 
-    import freesearch.adapters.tavily as tavily_mod
+    import polyweb.adapters.tavily as tavily_mod
 
     future = email.utils.formatdate(time.time() + 60, usegmt=True)
     response = httpx.Response(
@@ -2288,7 +2288,7 @@ async def test_402_preserved_despite_positive_cached_balance() -> None:
     """The cached balance never softens a vendor 402 (PLAN 4.2)."""
     from datetime import UTC, datetime
 
-    from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+    from polyweb.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
 
     adapter = TavilyAdapter(
         _FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-402-cache")
@@ -2321,8 +2321,8 @@ async def test_quota_cache_only_without_vendor_io() -> None:
     """quota() returns cached snapshots and never issues GET /usage."""
     from datetime import UTC, datetime
 
-    from freesearch.models.contracts import QuotaSnapshot, UnitKind
-    from freesearch.models.provider_limits import AuthMode
+    from polyweb.models.contracts import QuotaSnapshot, UnitKind
+    from polyweb.models.provider_limits import AuthMode
 
     runner = _RecordingRunner()
     adapter = TavilyAdapter(
@@ -2353,7 +2353,7 @@ async def test_usage_snapshot_coalesces_within_60s() -> None:
     """Direct usage_snapshot calls coalesce: one GET per 60 seconds."""
     from datetime import UTC, datetime
 
-    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
     adapter = TavilyAdapter(
         _FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-coalesce")
@@ -2376,7 +2376,7 @@ async def test_keyless_usage_snapshot_issues_no_request() -> None:
     """Keyless usage_snapshot returns None without a usage GET."""
     from datetime import UTC, datetime
 
-    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
     adapter = TavilyAdapter(_FakeClient(), sdk_client=_FakeSDK(), api_key=None)
     owned = _FakeOwnedHTTP(httpx.Response(200, json=_usage_payload()))
@@ -2394,7 +2394,7 @@ async def test_keyless_usage_snapshot_issues_no_request() -> None:
 
 def test_usage_request_timeout_and_runner_key() -> None:
     """The background usage read uses a 30s outer timeout and its own key."""
-    import freesearch.adapters.tavily as tavily_mod
+    import polyweb.adapters.tavily as tavily_mod
 
     assert tavily_mod._USAGE_REQUEST_TIMEOUT_SECONDS == 30.0
     assert tavily_mod._USAGE_RUNNER_KEY == "tavily-usage"
@@ -2405,7 +2405,7 @@ async def test_quota_after_success_projects_local_debit() -> None:
     """quota_after_success subtracts reported Credits without a usage GET."""
     from datetime import UTC, datetime
 
-    from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+    from polyweb.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
 
     adapter = TavilyAdapter(_FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-project"))
     adapter._quota_cache = QuotaSnapshot(
@@ -2439,7 +2439,7 @@ async def test_quota_after_success_consecutive_calls_project_from_fresh_cache() 
     """Two successes from one cache project 8 then 6 with cache 6 (F2 re-anchor)."""
     from datetime import UTC, datetime
 
-    from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+    from polyweb.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
 
     adapter = TavilyAdapter(
         _FakeClient(),
@@ -2481,7 +2481,7 @@ async def test_usage_snapshot_after_terminal_clamps_positive_to_zero() -> None:
     """A usage poll with balance 500 after terminal 402 reports zero (F1 clamp)."""
     from datetime import UTC, datetime
 
-    from freesearch.models.provider_limits import AuthMode, UsageSyncRequest
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
     adapter = TavilyAdapter(
         _FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr("tvly-terminal-poll")

@@ -16,10 +16,10 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from fastapi_users.router.common import ErrorCode
 
-from freesearch.configuration.config import get_settings
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserDatabase, UserRow
-from freesearch.routers.api import create_app
+from polyweb.configuration.config import get_settings
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserDatabase, UserRow
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import TEMP_PASSWORD, raw_auth_headers, temp_email
 from tests.integration.routers.test_users_transport import _StubAdapter
 
@@ -34,7 +34,7 @@ def auth_secret(monkeypatch: pytest.MonkeyPatch) -> str:
     import secrets as secrets_module
 
     secret = secrets_module.token_urlsafe(32)
-    monkeypatch.setenv("FREESEARCH_AUTH_JWT_SECRET", secret)
+    monkeypatch.setenv("POLYWEB_AUTH_JWT_SECRET", secret)
     get_settings.cache_clear()
     yield secret
     get_settings.cache_clear()
@@ -58,7 +58,7 @@ def _login(client: TestClient, email: str, password: str = TEMP_PASSWORD):
 
 
 def _decode(token: str, secret: str) -> dict:
-    return pyjwt.decode(token, secret, algorithms=["HS256"], audience="freesearch:auth")
+    return pyjwt.decode(token, secret, algorithms=["HS256"], audience="polyweb:auth")
 
 
 def _craft(
@@ -66,7 +66,7 @@ def _craft(
     *,
     sub: object,
     sid: object,
-    audience: object = ("freesearch:auth",),
+    audience: object = ("polyweb:auth",),
     lifetime: int | None = _ACCESS_LIFETIME,
 ) -> str:
     now = datetime.now(UTC)
@@ -112,7 +112,7 @@ def test_register_creates_agent_and_login_returns_verified_pair(
 
     claims = _decode(pair["access_token"], auth_secret)
     assert claims["sub"] == body["id"]
-    assert claims["aud"] == ["freesearch:auth"]
+    assert claims["aud"] == ["polyweb:auth"]
     assert claims["sid"]
     remaining = claims["exp"] - int(datetime.now(UTC).timestamp())
     assert 890 <= remaining <= _ACCESS_LIFETIME
@@ -175,7 +175,7 @@ async def test_public_registration_creates_each_role_with_safe_projection(
 
     from sqlalchemy import func, select
 
-    from freesearch.persistence.projects import ProjectMembershipRow, SystemRoleAssignmentRow
+    from polyweb.persistence.projects import ProjectMembershipRow, SystemRoleAssignmentRow
 
     repository = await SQLiteRepository.open(tmp_path / "auth-signup.db")
     try:

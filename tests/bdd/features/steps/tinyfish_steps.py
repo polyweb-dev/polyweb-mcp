@@ -15,9 +15,9 @@ import httpx
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import SecretStr
 
-from freesearch.adapters.tinyfish import TinyfishAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import (
+from polyweb.adapters.tinyfish import TinyfishAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import (
     FetchRequest,
     SearchRequest,
     UnitKind,

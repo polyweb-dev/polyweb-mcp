@@ -29,14 +29,14 @@ from typing import Any
 
 import pytest
 
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.execution_failures import ExecutionBindingMissing
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.models.provider_limits import LimitStoreUnavailable
-from freesearch.models.schema_enums import PoolStatus, UpstreamScope
-from freesearch.persistence.pools import UpstreamPoolRepository
-from freesearch.services.execution import ExecutionService
-from freesearch.services.execution_authority import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.execution_failures import ExecutionBindingMissing
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.models.provider_limits import LimitStoreUnavailable
+from polyweb.models.schema_enums import PoolStatus, UpstreamScope
+from polyweb.persistence.pools import UpstreamPoolRepository
+from polyweb.services.execution import ExecutionService
+from polyweb.services.execution_authority import (
     ExecutionAuthority,
     ExecutionAuthorityUnavailable,
 )
@@ -360,7 +360,7 @@ async def test_binding_disabled_while_queued_never_dispatches(
         await world.wait_queued("A", 1)
 
         # The binding loses its search operation while the call is queued.
-        from freesearch.persistence.bindings import ProjectBindingRepository
+        from polyweb.persistence.bindings import ProjectBindingRepository
 
         async with world.repository.session() as session:
             binding = ProjectBindingRepository(session)

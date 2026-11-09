@@ -13,10 +13,10 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.models.contracts import QuotaSource, SearchRequest, SearchResponse, UsageOperation
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.models.contracts import QuotaSource, SearchRequest, SearchResponse, UsageOperation
 from tests.unit.adapters._brave_test_support import brave_adapter, brave_payload
 
 
@@ -338,7 +338,7 @@ async def test_llm_context_rejects_web_only_offset_without_sending_request() -> 
 async def test_missing_key_fails_closed_and_uses_planned_secret_name(monkeypatch) -> None:
     # An ambient environment credential must never satisfy construction: only an
     # explicitly injected key can, so this stays fail-closed.
-    monkeypatch.setenv("FREESEARCH_BRAVE_SEARCH_API_KEY", "ambient-env-key")
+    monkeypatch.setenv("POLYWEB_BRAVE_SEARCH_API_KEY", "ambient-env-key")
     client = httpx.AsyncClient()
     try:
         with pytest.raises(ProviderOperationError) as excinfo:
@@ -351,7 +351,7 @@ async def test_missing_key_fails_closed_and_uses_planned_secret_name(monkeypatch
     assert excinfo.value.error.code == "configuration_error"
     assert excinfo.value.error.retryable is False
     assert explicit_none.value.error.code == "configuration_error"
-    assert PROVIDER_ENV_VARS[ProviderName.BRAVE] == "FREESEARCH_BRAVE_SEARCH_API_KEY"
+    assert PROVIDER_ENV_VARS[ProviderName.BRAVE] == "POLYWEB_BRAVE_SEARCH_API_KEY"
 
 
 @pytest.mark.parametrize(

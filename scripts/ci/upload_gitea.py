@@ -19,7 +19,7 @@ from pathlib import Path
 
 HOST = "gitea.thiocyanate.dev"
 TAILNET_IP = "100.64.0.2"
-OWNER = "freesearch"
+OWNER = "polyweb"
 MAX_BYTES = 256 * 1024 * 1024
 MAX_FILES = 2000
 WORKFLOWS = {
@@ -29,7 +29,16 @@ WORKFLOWS = {
     "api-live": "live-provider-tests.log",
     "api-mutation": "mutation-tests.log",
     "api-latency": "routing-latency-tests.log",
+    "ui-quality": "ui-quality.log",
+    "ui-bdd": "ui-bdd-tests.log",
 }
+REPORT_DIRECTORIES = (
+    "coverage/gremlins",
+    "test_reports",
+    "polyweb-ui/coverage",
+    "polyweb-ui/playwright-report",
+    "polyweb-ui/test-results",
+)
 METADATA_KEYS = (
     "CI_REPO",
     "CI_COMMIT_SHA",
@@ -44,7 +53,7 @@ METADATA_KEYS = (
 def report_files(root: Path, workflow: str) -> list[Path]:
     """Select report trees and this workflow's log, never caches or credentials."""
     candidates = [root / WORKFLOWS[workflow]]
-    for name in ("coverage/gremlins", "test_reports"):
+    for name in REPORT_DIRECTORIES:
         directory = root / name
         if any(p.is_symlink() for p in (directory, *directory.parents)):
             continue
@@ -148,7 +157,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="gitea-ci-") as directory:
         archive = Path(directory) / "reports.zip"
         make_bundle(Path.cwd().resolve(), args.workflow, archive)
-        publish(archive, f"freesearch-{args.workflow}", version, token)
+        publish(archive, f"polyweb-{args.workflow}", version, token)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# FreeSearch backend development image.
+# Polyweb backend development image.
 #
 # Source is bind-mounted by compose.dev.yaml; this image contains dependency
 # manifests only. Runtime .env values are injected by Compose and never copied
@@ -20,4 +20,4 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 
 RUN mkdir -p /data
 
-CMD ["uv", "run", "--no-sync", "python", "-m", "freesearch.routers.api", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uv", "run", "--no-sync", "python", "-m", "polyweb.routers.api", "--host", "0.0.0.0", "--port", "8001"]

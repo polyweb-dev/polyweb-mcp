@@ -10,11 +10,11 @@ from uuid import uuid4
 
 from behave import given, then, when
 
-from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
-from freesearch.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.services.monitoring import refresh_quotas
-from freesearch.services.parallel_oauth import ParallelOAuthError
+from polyweb.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+from polyweb.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.services.monitoring import refresh_quotas
+from polyweb.services.parallel_oauth import ParallelOAuthError
 from tests.bdd.features.steps.vault_oauth_support import bdd_vault_oauth_setup
 from tests.fixtures.api_keys import database_dump
 from tests.integration.services.oauth.oauth_stubs import (

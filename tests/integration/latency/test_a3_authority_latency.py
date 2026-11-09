@@ -1,6 +1,6 @@
 """A3 authority routing-latency gate (TASK-000045 DoD #4).
 
-FreeSearch must add under 150 ms at p95 per provider, end to end, over REST
+Polyweb must add under 150 ms at p95 per provider, end to end, over REST
 and MCP, measured in-process exactly like the A2 routing-latency harness:
 REST drives the FastAPI app through ``httpx.ASGITransport``, MCP mixes call
 ``server.call_tool`` in-process, offline instant adapters carry fake-provider
@@ -29,20 +29,20 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.mcp.server import create_server
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.models.schema_enums import UpstreamScope
-from freesearch.persistence.pools import (
+from polyweb.configuration.config import get_settings
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.mcp.server import create_server
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.models.schema_enums import UpstreamScope
+from polyweb.persistence.pools import (
     PoolAllocationRepository,
     UpstreamPoolRepository,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.monitoring import clear_quota_poll_cache
-from freesearch.services.provider_runtime import clear_config_cache
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.monitoring import clear_quota_poll_cache
+from polyweb.services.provider_runtime import clear_config_cache
 from tests.fixtures.api_keys import mcp_project_key
 from tests.fixtures.auth import TEMP_PASSWORD, temp_email
 from tests.fixtures.execution import (

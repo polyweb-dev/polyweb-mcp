@@ -13,8 +13,8 @@ from datetime import timedelta
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.models.contracts import SearchRequest
+from polyweb.adapters.youcom import YoucomAdapter
+from polyweb.models.contracts import SearchRequest
 from tests.unit.adapters._youcom_test_support import (
     _TEST_KEY,
     _default_runner,

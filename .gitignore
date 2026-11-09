@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.stryker-tmp/
+.playwright-mcp/
 *.egg-info/
 .env
 .env.*
@@ -30,4 +32,4 @@ FEEDBACK/
 test_reports/
 
 # Vitest cache
-/freesearch-ui/.vitest/
+/polyweb-ui/.vitest/

@@ -15,10 +15,10 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import FetchRequest, SearchRequest
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.youcom import YoucomAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import FetchRequest, SearchRequest
 from tests.unit.adapters._youcom_test_support import (
     _TEST_KEY,
     _WIRE_TIMEOUT,
@@ -83,7 +83,7 @@ async def test_init_missing_resolver_credential_fails_closed() -> None:
 
 
 async def test_init_missing_credential_never_falls_back_to_ambient_key(monkeypatch) -> None:
-    monkeypatch.setenv("FREESEARCH_YOU_API_KEY", "ambient-you-leak")
+    monkeypatch.setenv("POLYWEB_YOU_API_KEY", "ambient-you-leak")
 
     client = httpx.AsyncClient()
     try:

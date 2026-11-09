@@ -1,29 +1,29 @@
 @live @latency
-Feature: FreeSearch routing latency against live providers
-  As a FreeSearch operator preparing a release
-  I want each real provider's time reported separately from the server-side time FreeSearch adds
-  So that I can prove FreeSearch adds under 150 ms at p95 on top of every live provider
+Feature: Polyweb routing latency against live providers
+  As a Polyweb operator preparing a release
+  I want each real provider's time reported separately from the server-side time Polyweb adds
+  So that I can prove Polyweb adds under 150 ms at p95 on top of every live provider
 
   # Opt-in only: the default behave run excludes @live (pyproject
   # [tool.behave] default_tags). Run with:
   #   uv run behave --tags="@live and @latency"
-  # Each provider runs only when its harness env key is set (FREESEARCH_*_API_KEY,
-  # FREESEARCH_TINYFISH_API_KEY); keyless Keenable runs only with FREESEARCH_RUN_LIVE=1.
+  # Each provider runs only when its harness env key is set (POLYWEB_*_API_KEY,
+  # POLYWEB_TINYFISH_API_KEY); keyless Keenable runs only with POLYWEB_RUN_LIVE=1.
   # Otherwise the scenario is skipped with a reason naming the env var, never
   # its value. Sample counts default to 1 warmup + 5 measured requests per row,
-  # overridable with FREESEARCH_LATENCY_LIVE_WARMUP and
-  # FREESEARCH_LATENCY_LIVE_SAMPLES. Reports are written to
+  # overridable with POLYWEB_LATENCY_LIVE_WARMUP and
+  # POLYWEB_LATENCY_LIVE_SAMPLES. Reports are written to
   # test_reports/routing_latency_live.{csv,md}. Gated value: server-side added =
-  # server_ms - provider_ms (request reaching the FreeSearch app until its
+  # server_ms - provider_ms (request reaching the Polyweb app until its
   # response is sent, minus the adapter call); client overhead is reported only.
 
-  Scenario Outline: Live warm <operation> pinned to <provider> over <transport> reports provider and FreeSearch time
+  Scenario Outline: Live warm <operation> pinned to <provider> over <transport> reports provider and Polyweb time
     Given the live "<provider>" adapter is enabled by the harness env for <operation> over <transport>
     And the routing latency servers are running with live adapters
     When I send warm <operation> requests pinned to "<provider>" over <transport>
     Then every measured <operation> request is served by "<provider>"
-    And provider time and server-side FreeSearch-added time are reported separately
-    And the p95 server-side FreeSearch-added latency is under 150 ms
+    And provider time and server-side Polyweb-added time are reported separately
+    And the p95 server-side Polyweb-added latency is under 150 ms
 
     Examples: REST
       | transport | operation | provider  |

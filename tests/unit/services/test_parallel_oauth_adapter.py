@@ -6,11 +6,11 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.models.provider_limits import AuthMode, Confidence, UsageSyncRequest
-from freesearch.services.credentials import ResolvedCredential
-from freesearch.services.execution import CredentialAdapterCache, ExecutionService
-from freesearch.services.parallel_oauth import OAuthUnpaired
-from freesearch.services.parallel_oauth_adapter import ParallelOAuthAdapter
+from polyweb.models.provider_limits import AuthMode, Confidence, UsageSyncRequest
+from polyweb.services.credentials import ResolvedCredential
+from polyweb.services.execution import CredentialAdapterCache, ExecutionService
+from polyweb.services.parallel_oauth import OAuthUnpaired
+from polyweb.services.parallel_oauth_adapter import ParallelOAuthAdapter
 
 
 def request() -> UsageSyncRequest:

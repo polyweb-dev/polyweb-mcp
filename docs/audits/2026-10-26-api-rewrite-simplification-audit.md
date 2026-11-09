@@ -43,7 +43,7 @@ Archived cards P00 (`TASK-000017`), P01 (`000018`), P02 (`000019`), P03 (`000020
 9. Preserve human session security: public registration cannot grant privileges; JWT/session validation, refresh rotation/replay revocation, browser-origin/cookie restrictions, login throttling, body caps and sanitized errors remain valuable when legacy account roles disappear.
 10. Preserve encrypted-vault confinement, secret-free logs/responses/traces, client header isolation, transport ownership and shutdown cleanup; temporary databases and fake providers remain mandatory for ordinary tests.
 
-Deliberately superseded behavior includes old database adoption/import/backfill, global admin/developer/agent account classifications, anonymous downstream execution, account-only visibility of project traces and provider-name singleton credentials. Upstream **keyless provider access is different from anonymous FreeSearch access**: retain supported keyless rails behind authenticated, scoped execution and applicable shared pools.
+Deliberately superseded behavior includes old database adoption/import/backfill, global admin/developer/agent account classifications, anonymous downstream execution, account-only visibility of project traces and provider-name singleton credentials. Upstream **keyless provider access is different from anonymous Polyweb MCP access**: retain supported keyless rails behind authenticated, scoped execution and applicable shared pools.
 
 Do not treat the old P03 preview-until-release acceptance wording as authority to keep an alternate anonymous/global execution workflow permanently. Preserve the coordinated release gate; remove preview branches only when their remaining callers and the new API contract have been accounted for.
 
@@ -53,7 +53,7 @@ The initial checkout was clean. CodeGraph was used before indexed source explora
 
 Inventory at the audited commit, counting physical lines including comments/blanks:
 
-- `src/freesearch`: **101 Python files, 43,591 lines**. Adapters: 6,772; services: 9,520; persistence: 11,596; routers: 4,444; MCP: 1,238; models: 4,463; infrastructure: 3,356; configuration: 1,781; CLI: 390; package root: 31.
+- `src/polyweb`: **101 Python files, 43,591 lines**. Adapters: 6,772; services: 9,520; persistence: 11,596; routers: 4,444; MCP: 1,238; models: 4,463; infrastructure: 3,356; configuration: 1,781; CLI: 390; package root: 31.
 - `tests`: **218 Python files, 91,516 lines**. These are source sizes, not collected test-case counts.
 - Backend Gherkin: **29 feature files, 214 Scenario definitions and 17 Scenario Outline definitions**. Outline rows and tags change executable counts; do not quote these as executed cases.
 - AST comparison found a few exact function-body clones. It excluded decorators and therefore cannot establish test redundancy by itself. A simple upward-import scan found no services/persistence/models/infrastructure imports of routers/MCP; this limited result does not prove every architecture boundary.

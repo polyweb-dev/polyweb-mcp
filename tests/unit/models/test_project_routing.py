@@ -3,8 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from freesearch.models.contracts import RoutingConfigResponse, RoutingConfigUpdate
-from freesearch.models.project_routing import OperationOrderUpdate, StoredProjectOrder
+from polyweb.models.contracts import RoutingConfigResponse, RoutingConfigUpdate
+from polyweb.models.project_routing import OperationOrderUpdate, StoredProjectOrder
 
 
 def test_missing_operations_default_to_lowest_cost() -> None:

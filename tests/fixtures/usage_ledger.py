@@ -14,8 +14,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from freesearch.models.contracts import UsageEvent, UsageOperation
-from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
+from polyweb.models.contracts import UsageEvent, UsageOperation
+from polyweb.persistence.storage import SQLiteRepository, UsageEventRow
 
 
 async def all_usage_events(

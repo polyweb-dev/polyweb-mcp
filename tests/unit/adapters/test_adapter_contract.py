@@ -1,4 +1,4 @@
-from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
+from polyweb.models.contracts import FetchRequest, SearchRequest, UsageOperation
 
 
 async def test_fake_adapter_implements_shared_contract(fake_adapter) -> None:

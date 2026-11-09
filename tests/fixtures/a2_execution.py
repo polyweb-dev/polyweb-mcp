@@ -21,11 +21,11 @@ from uuid import UUID, uuid4
 import pytest
 from tests.fixtures.execution import seed_execution_project
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -38,30 +38,30 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import ExecutionAttribution
-from freesearch.models.projects import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import ExecutionAttribution
+from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     CredentialOwnerScope,
     HumanPrincipal,
     PermissionAction,
     ProjectContext,
 )
-from freesearch.models.provider_limits import AuthMode
-from freesearch.models.schema_enums import UpstreamScope
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.pools import (
+from polyweb.models.provider_limits import AuthMode
+from polyweb.models.schema_enums import UpstreamScope
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.pools import (
     PoolAllocationRepository,
     StoredPool,
     UpstreamPoolRepository,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.execution import ExecutionService
-from freesearch.services.monitoring import clear_quota_poll_cache
-from freesearch.services.provider_limits import ProviderLimitsService
-from freesearch.services.provider_runtime import clear_config_cache
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.execution import ExecutionService
+from polyweb.services.monitoring import clear_quota_poll_cache
+from polyweb.services.provider_limits import ProviderLimitsService
+from polyweb.services.provider_runtime import clear_config_cache
 
 SearchHandler = Callable[["RecordingAdapter", SearchRequest], Awaitable[SearchResponse]]
 FetchHandler = Callable[["RecordingAdapter", FetchRequest], Awaitable[FetchResponse]]
@@ -279,7 +279,7 @@ async def build_execution_world(
 ) -> ExecutionWorld:
     """Seed one project and compose its real execution service over fakes."""
 
-    import freesearch.services.execution as execution_module
+    import polyweb.services.execution as execution_module
 
     repository = await SQLiteRepository.open(tmp_path / f"a2-{uuid4().hex[:8]}.db")
     project = await seed_execution_project(repository, name="A")

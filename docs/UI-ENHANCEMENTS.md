@@ -8,7 +8,7 @@
 | Branch | `chore/local-e2e-provider-seed` |
 | Reviewed commit | `e90f52a` |
 | Recommendation | Request changes. Retain the useful foundations. |
-| Review environment | Existing worktree, API 8011, UI 5175, disposable `freesearch.dev.db` |
+| Review environment | Existing worktree, API 8011, UI 5175, disposable `polyweb.dev.db` |
 | Source changes during review | None |
 | Document purpose | Review findings, evidence, decisions, and corrective work |
 
@@ -25,7 +25,7 @@ This document records review feedback, not implementation work. Dhruv retains au
 1. Invoke `unslop` before UI layout, style, or interaction changes.
 2. If the agent cannot invoke skills, read the skill file and its referenced guidance first.
 3. Follow its audit and direction-approval steps before visual changes.
-4. Preserve the established FreeSearch identity and reusable components. Do not replace working UI merely to make it different.
+4. Preserve the established Polyweb MCP identity and reusable components. Do not replace working UI merely to make it different.
 5. Correct the functional findings as well as the visual defects. The skill does not replace permission, isolation, or workflow checks.
 6. Retain the skill's original author credit and CC BY 4.0 license notice.
 
@@ -85,9 +85,9 @@ The overview shows status, roles, and usage. It does not guide a new administrat
 
 #### Sources
 
-- [`routes.ts`, lines 108–135](../freesearch-ui/src/app/routes.ts): available project sections.
-- [`ProjectOverviewPage.tsx`, lines 22–70](../freesearch-ui/src/features/projects/ui/ProjectOverviewPage.tsx): project overview.
-- [`ProjectCreateForm.tsx`](../freesearch-ui/src/features/projects/ui/ProjectCreateForm.tsx): creation and administrator handoff.
+- [`routes.ts`, lines 108–135](../polyweb-ui/src/app/routes.ts): available project sections.
+- [`ProjectOverviewPage.tsx`, lines 22–70](../polyweb-ui/src/features/projects/ui/ProjectOverviewPage.tsx): project overview.
+- [`ProjectCreateForm.tsx`](../polyweb-ui/src/features/projects/ui/ProjectCreateForm.tsx): creation and administrator handoff.
 - [`seed_dev.py`](../scripts/seed_dev.py): fixture credential grants and provider bindings.
 
 #### Evidence
@@ -131,9 +131,9 @@ The backend API migration and retained frontend workflow do not use the same con
 
 #### Sources
 
-- [`freesearchApi.ts`, lines 152–179](../freesearch-ui/src/services/api/freesearchApi.ts): old OAuth paths and the 404 fallback.
-- [`useOAuthPairing.ts`](../freesearch-ui/src/features/oauth/model/useOAuthPairing.ts): status consumption.
-- [`credential_oauth.py`](../src/freesearch/routers/credential_oauth.py): credential-scoped backend routes.
+- [`polywebApi.ts`, lines 152–179](../polyweb-ui/src/services/api/polywebApi.ts): old OAuth paths and the 404 fallback.
+- [`useOAuthPairing.ts`](../polyweb-ui/src/features/oauth/model/useOAuthPairing.ts): status consumption.
+- [`credential_oauth.py`](../src/polyweb/routers/credential_oauth.py): credential-scoped backend routes.
 
 #### Evidence
 
@@ -184,8 +184,8 @@ The access boundary works. The navigation data remains stale.
 
 #### Sources
 
-- [`ProjectsProvider.tsx`, lines 19–43](../freesearch-ui/src/domains/projects/state/ProjectsProvider.tsx): account-level snapshot and explicit reload.
-- [`ProjectScopeProvider.tsx`, lines 11–38](../freesearch-ui/src/domains/projects/state/ProjectScopeProvider.tsx): project access refresh policy.
+- [`ProjectsProvider.tsx`, lines 19–43](../polyweb-ui/src/domains/projects/state/ProjectsProvider.tsx): account-level snapshot and explicit reload.
+- [`ProjectScopeProvider.tsx`, lines 11–38](../polyweb-ui/src/domains/projects/state/ProjectScopeProvider.tsx): project access refresh policy.
 
 #### Evidence
 
@@ -221,9 +221,9 @@ The Preview badge also consumes much of the selector's fixed-width row.
 
 #### Sources
 
-- [`Sidebar.tsx`, lines 37–46](../freesearch-ui/src/app/layout/Sidebar.tsx): project selection from the URL.
-- [`ProjectSelectorTrigger.tsx`, lines 34–49](../freesearch-ui/src/features/projects/ui/ProjectSelectorTrigger.tsx): label truncation, badge, and tooltip behavior.
-- [`routes.ts`](../freesearch-ui/src/app/routes.ts): separate global and project routes.
+- [`Sidebar.tsx`, lines 37–46](../polyweb-ui/src/app/layout/Sidebar.tsx): project selection from the URL.
+- [`ProjectSelectorTrigger.tsx`, lines 34–49](../polyweb-ui/src/features/projects/ui/ProjectSelectorTrigger.tsx): label truncation, badge, and tooltip behavior.
+- [`routes.ts`](../polyweb-ui/src/app/routes.ts): separate global and project routes.
 
 #### Evidence
 
@@ -259,7 +259,7 @@ The page exposes a loading flag, but no provider error state or recovery action.
 
 #### Source
 
-- [`ProjectPlaygroundPage.tsx`, lines 21–42](../freesearch-ui/src/features/playground/ui/ProjectPlaygroundPage.tsx).
+- [`ProjectPlaygroundPage.tsx`, lines 21–42](../polyweb-ui/src/features/playground/ui/ProjectPlaygroundPage.tsx).
 
 #### Evidence
 
@@ -298,9 +298,9 @@ Local JSX and CSS classes implement individual controls. The project screens lac
 
 #### Sources
 
-- [`AddMemberForm.tsx`, lines 20–58](../freesearch-ui/src/features/projects/ui/AddMemberForm.tsx).
-- [`MemberRowActions.tsx`, lines 39–84](../freesearch-ui/src/features/projects/ui/MemberRowActions.tsx).
-- [`ProjectCreateForm.tsx`](../freesearch-ui/src/features/projects/ui/ProjectCreateForm.tsx): existing shared field and button reuse.
+- [`AddMemberForm.tsx`, lines 20–58](../polyweb-ui/src/features/projects/ui/AddMemberForm.tsx).
+- [`MemberRowActions.tsx`, lines 39–84](../polyweb-ui/src/features/projects/ui/MemberRowActions.tsx).
+- [`ProjectCreateForm.tsx`](../polyweb-ui/src/features/projects/ui/ProjectCreateForm.tsx): existing shared field and button reuse.
 
 #### Evidence
 
@@ -359,7 +359,7 @@ The test checks the selector button's bounding box and accessible name. Its fixt
 
 The test can pass when visible project text is clipped. It does not establish readable project identity or visual consistency.
 
-Source: [`project-api-keys.steps.ts`, lines 264–296](../freesearch-ui/tests/steps/project-api-keys.steps.ts).
+Source: [`project-api-keys.steps.ts`, lines 264–296](../polyweb-ui/tests/steps/project-api-keys.steps.ts).
 
 ### T2. Membership discovery uses an initial-snapshot test model
 
@@ -367,7 +367,7 @@ Provider tests cover initial load, failure, and explicit reload.
 
 They do not establish that another administrator's membership change becomes visible through normal navigation.
 
-Source: [`ProjectsProvider.test.tsx`](../freesearch-ui/src/domains/projects/state/ProjectsProvider.test.tsx).
+Source: [`ProjectsProvider.test.tsx`](../polyweb-ui/src/domains/projects/state/ProjectsProvider.test.tsx).
 
 ### T3. Playground tests omit the provider-read failure state
 
@@ -375,7 +375,7 @@ Cases cover provider choices, permission restrictions, session execution, sectio
 
 They do not cover the conversion of a failed provider read into an empty picker.
 
-Source: [`ProjectPlaygroundPage.test.tsx`](../freesearch-ui/src/features/playground/ui/ProjectPlaygroundPage.test.tsx).
+Source: [`ProjectPlaygroundPage.test.tsx`](../polyweb-ui/src/features/playground/ui/ProjectPlaygroundPage.test.tsx).
 
 ### T4. Frontend stubs can preserve obsolete API contracts
 

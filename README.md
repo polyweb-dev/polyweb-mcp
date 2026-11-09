@@ -1,6 +1,6 @@
-# FreeSearch
+# Polyweb MCP
 
-FreeSearch is a provider-neutral search, content extraction, and quota-orchestration platform. It aggregates multiple search and web-scraping providers behind a unified REST API, Model Context Protocol (MCP) server, and modern React dashboard.
+Polyweb MCP is a provider-neutral search, content extraction, and quota-orchestration platform. It aggregates multiple search and web-scraping providers behind a unified REST API, Model Context Protocol (MCP) server, and modern React dashboard.
 
 ---
 
@@ -33,8 +33,8 @@ Ensure you have the following installed on your system:
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
-cd freesearch
+git clone https://github.com/polyweb-dev/polyweb-mcp.git
+cd polyweb-mcp
 ```
 
 ### 2. Environment Configuration
@@ -51,7 +51,7 @@ Copy-Item .env.example .env
 
 Keep `.env` for non-secret runtime settings. Store provider credentials in the encrypted vault through the settings dashboard (the same encrypted-vault API the dashboard itself uses). Keenable can remain keyless.
 
-Local account authentication needs one more entry in that file: `FREESEARCH_AUTH_JWT_SECRET`. Supply at least 32 random bytes. A secret is required to log in, access protected routes, and validate an optional Bearer token on Search/Fetch; anonymous Search/Fetch does not need one. The gitignored `.env` file holds the real value, and `.env.example` holds an empty placeholder. The operator account CLI does not need that value.
+Local account authentication needs one more entry in that file: `POLYWEB_AUTH_JWT_SECRET`. Supply at least 32 random bytes. A secret is required to log in, access protected routes, and validate an optional Bearer token on Search/Fetch; anonymous Search/Fetch does not need one. The gitignored `.env` file holds the real value, and `.env.example` holds an empty placeholder. The operator account CLI does not need that value.
 
 Full account rules, limits, token lifetimes, and the rollback procedure: [docs/releases/local-users.md](docs/releases/local-users.md).
 
@@ -71,50 +71,50 @@ This installs both core runtime and development dependencies (FastAPI, Alembic, 
 
 ### 4. Database Setup & Migrations
 
-FreeSearch uses SQLite for telemetry, quota snapshots, runtime settings, and provider health. The default database path is `freesearch.db` (override with the `FREESEARCH_DB` environment variable).
+Polyweb MCP uses SQLite for telemetry, quota snapshots, runtime settings, and provider health. The default database path is `polyweb.db` (override with the `POLYWEB_DB` environment variable).
 
 For manual project testing, `uv run python scripts/seed_dev.py` creates a disposable
-`freesearch.dev.db` with five users, three projects, and encrypted provider credentials
-imported from `.env`. Set `FREESEARCH_DB=freesearch.dev.db` and restart the backend.
+`polyweb.dev.db` with five users, three projects, and encrypted provider credentials
+imported from `.env`. Set `POLYWEB_DB=polyweb.dev.db` and restart the backend.
 See [the development database guide](docs/development-database.md) for accounts,
 memberships, provider-key variables, and recreation instructions.
 
-FreeSearch includes a dedicated database management CLI tool (`freesearch-db`):
+Polyweb MCP includes a dedicated database management CLI tool (`polyweb-db`):
 
 - **Check migration & schema status:**
   ```bash
-  uv run freesearch-db status
+  uv run polyweb-db status
   ```
 
 - **Create or validate the database:**
   ```bash
-  uv run freesearch-db upgrade
+  uv run polyweb-db upgrade
   ```
   *(Note: a missing or empty database is created at the alpha baseline revision `0001_alpha_baseline`; a database already at the baseline is validated. There are no incremental migrations and no automatic backup.)*
 
-> **Alpha reset:** The alpha keeps no compatibility with databases from earlier revisions. The backend, MCP server, and CLIs refuse such a database without changing it and print reset steps: stop FreeSearch, move or delete the database file together with its `-wal`/`-shm` side files (or point `FREESEARCH_DB` at a new path), and start again. Accounts, provider credentials, and settings must then be entered again.
+> **Alpha reset:** The alpha keeps no compatibility with databases from earlier revisions. The backend, MCP server, and CLIs refuse such a database without changing it and print reset steps: stop Polyweb MCP, move or delete the database file together with its `-wal`/`-shm` side files (or point `POLYWEB_DB` at a new path), and start again. Accounts, provider credentials, and settings must then be entered again.
 
 #### Local account bootstrap
 
 Accounts have no role or account type. Public registration creates an ordinary human account with no system role and no project membership. System authority comes only from an explicit `system_admin` assignment, which the operator CLI creates and removes by explicit account UUID:
 
 ```bash
-uv run freesearch-users create-admin --email admin@example.com
-uv run freesearch-users grant-system-admin --user-id <account-uuid>
-uv run freesearch-users revoke-system-admin --user-id <account-uuid>
-uv run freesearch-users deactivate --user-id <account-uuid>
+uv run polyweb-users create-admin --email admin@example.com
+uv run polyweb-users grant-system-admin --user-id <account-uuid>
+uv run polyweb-users revoke-system-admin --user-id <account-uuid>
+uv run polyweb-users deactivate --user-id <account-uuid>
 ```
 
-`create-admin` reads the password from a masked terminal prompt, refuses a password argument, and prints only the account UUID and the system role outcome. The commands require a database file that is present, so run `freesearch-db upgrade` first. A failed grant leaves an ordinary account, and the command reports that state. `revoke-system-admin` and `deactivate` refuse to remove the last active system administrator. The CLI `deactivate` command also refuses to leave any project, including archived projects, without an active project administrator. Every system role change and deactivation writes a system audit event.
+`create-admin` reads the password from a masked terminal prompt, refuses a password argument, and prints only the account UUID and the system role outcome. The commands require a database file that is present, so run `polyweb-db upgrade` first. A failed grant leaves an ordinary account, and the command reports that state. `revoke-system-admin` and `deactivate` refuse to remove the last active system administrator. The CLI `deactivate` command also refuses to leave any project, including archived projects, without an active project administrator. Every system role change and deactivation writes a system audit event.
 
 ---
 
 ### 5. Frontend Setup
 
-The dashboard UI is located in the `freesearch-ui` directory.
+The dashboard UI is located in the `polyweb-ui` directory.
 
 ```bash
-cd freesearch-ui
+cd polyweb-ui
 pnpm install
 ```
 
@@ -125,8 +125,8 @@ pnpm install
 There is no prebuilt image on Docker Hub yet, so you clone the repo and build locally:
 
 ```bash
-git clone <repository-url>
-cd freesearch
+git clone https://github.com/polyweb-dev/polyweb-mcp.git
+cd polyweb-mcp
 cp .env.example .env   # optional, non-secret settings only
 
 # First build takes a few minutes (Python deps + UI bundle), later runs are cached.
@@ -143,7 +143,7 @@ docker compose logs -f   # Ctrl+C to detach from logs; containers keep running
   { "type": "streamable-http", "url": "http://<host>:8000/mcp" }
   ```
 
-  STDIO cannot be served over a network (the client must spawn the server), so remote agents must use the URL above. STDIO remains a local-only option on the Docker host itself: `docker exec -i freesearch-mcp uv run freesearch-mcp --transport stdio`.
+  STDIO cannot be served over a network (the client must spawn the server), so remote agents must use the URL above. STDIO remains a local-only option on the Docker host itself: `docker exec -i polyweb-mcp uv run polyweb-mcp --transport stdio`.
 
 To stop everything (state is kept): `docker compose down`.
 
@@ -159,7 +159,7 @@ Before you start:
 - Add provider API keys through the dashboard, not `.env`.
 
 Docker reads `.env` when it starts the containers. It does not copy the file into
-an image or store it in the `freesearch-data` volume.
+an image or store it in the `polyweb-data` volume.
 
 From the repository root, run:
 
@@ -203,29 +203,29 @@ Provider keys are encrypted in SQLite with a master key. On first start the cont
 Back it up once, so a lost volume doesn't mean re-entering every provider key:
 
 ```bash
-docker cp freesearch-api:/data/.secret_key ./freesearch-secret-key.bak
+docker cp polyweb-api:/data/.secret_key ./polyweb-secret-key.bak
 ```
 
 Keep that file somewhere safe (password manager / offline backup) — whoever holds it can decrypt your vault, and without it (or the volume) stored keys are unrecoverable and must be re-entered via the dashboard.
 
 ### Persistent data
 
-`api` and `mcp` share one SQLite database and the key file on the `freesearch-data` **named volume** (`/data/freesearch.db`, `/data/.secret_key`). Single-node only — do not scale replicas without moving off SQLite.
+`api` and `mcp` share one SQLite database and the key file on the `polyweb-data` **named volume** (`/data/polyweb.db`, `/data/.secret_key`). Single-node only — do not scale replicas without moving off SQLite.
 
 - `docker compose down` / rebuilds / image updates all **keep** the volume: your keys, quotas, and telemetry survive.
 - `docker compose down -v` **deletes** it. You will have to re-enter provider keys afterwards.
 - Back up any time (Linux/macOS):
   ```bash
-  docker run --rm -v freesearch_freesearch-data:/data -v "$(pwd):/backup" \
-    alpine tar czf /backup/freesearch-data-backup.tar.gz -C /data .
+  docker run --rm -v polyweb_polyweb-data:/data -v "$(pwd):/backup" \
+    alpine tar czf /backup/polyweb-data-backup.tar.gz -C /data .
   ```
   Windows PowerShell:
   ```powershell
-  docker run --rm -v freesearch_freesearch-data:/data -v "${PWD}:/backup" `
-    alpine tar czf /backup/freesearch-data-backup.tar.gz -C /data .
+  docker run --rm -v polyweb_polyweb-data:/data -v "${PWD}:/backup" `
+    alpine tar czf /backup/polyweb-data-backup.tar.gz -C /data .
   ```
   Restore into a fresh volume with the reverse (`tar xzf`), then `docker compose up -d`.
-  (The `freesearch_` volume prefix follows the project folder name — check yours with `docker volume ls` if you cloned into a different directory.)
+  (The `polyweb_` volume prefix follows the project folder name — check yours with `docker volume ls` if you cloned into a different directory.)
 
 Store provider keys in the encrypted vault via the dashboard — never in `.env` or the Compose file.
 
@@ -236,7 +236,7 @@ Store provider keys in the encrypted vault via the dashboard — never in `.env`
 From the project root:
 
 ```bash
-uv run freesearch-api
+uv run polyweb-api
 ```
 
 - **API URL:** `http://127.0.0.1:8001`
@@ -258,7 +258,7 @@ uv run freesearch-api
 - **Limits:** 5 pair attempts and 20 peer-address attempts per 900 seconds for login, 5 peer-address attempts and 100 deployment attempts per 900 seconds for registration, and a 4096-byte cap on a public auth body.
 - **Token lifetime:** 900 seconds for an access JWT and 604800 seconds for the absolute refresh family. An ordinary API call and an ordinary MCP call never extend a token.
 
-The API and the MCP transports read `FREESEARCH_API_PORT` and `FREESEARCH_MCP_PORT` from the gitignored `.env` file, so a launch command never hardcodes a port. The full account rules and the release procedure are in [docs/releases/local-users.md](docs/releases/local-users.md).
+The API and the MCP transports read `POLYWEB_API_PORT` and `POLYWEB_MCP_PORT` from the gitignored `.env` file, so a launch command never hardcodes a port. The full account rules and the release procedure are in [docs/releases/local-users.md](docs/releases/local-users.md).
 
 ### Project API keys
 
@@ -286,15 +286,15 @@ A provider type (for example `tavily`) can have several labelled credential inst
 
 ### Start the Frontend Dashboard
 
-In a separate terminal, navigate to `freesearch-ui` and start the Vite dev server:
+In a separate terminal, navigate to `polyweb-ui` and start the Vite dev server:
 
 ```bash
-cd freesearch-ui
+cd polyweb-ui
 pnpm dev
 ```
 
 - **Dashboard UI:** `http://localhost:5173`
-- The Vite development server automatically proxies API requests (`/search`, `/fetch`, `/dashboard`, `/stats`, `/api`) to the backend at `http://127.0.0.1:8001`. Set `VITE_BACKEND_URL` (shell environment or `freesearch-ui/.env`) to point the proxy at a different backend origin for a session, e.g. `VITE_BACKEND_URL=http://127.0.0.1:8003 pnpm dev -- --port 5175`.
+- The Vite development server automatically proxies API requests (`/search`, `/fetch`, `/dashboard`, `/stats`, `/api`) to the backend at `http://127.0.0.1:8001`. Set `VITE_BACKEND_URL` (shell environment or `polyweb-ui/.env`) to point the proxy at a different backend origin for a session, e.g. `VITE_BACKEND_URL=http://127.0.0.1:8003 pnpm dev -- --port 5175`.
 
 ### OpenTelemetry traces (Search / Fetch)
 
@@ -303,20 +303,20 @@ OpenTelemetry trace with a stable `trace_id`:
 
 ```text
 POST /search                SERVER root (selective ASGI middleware, X-Trace-Id header)
-├─ freesearch.backend       INTERNAL, request handling
-│  ├─ freesearch.route      INTERNAL, candidate planning
-│  ├─ freesearch.provider   CLIENT, one per attempted/fanout provider (request/response events)
-│  │  ├─ freesearch.provider.http   CLIENT, Keenable outbound request
-│  │  └─ freesearch.provider.parse  INTERNAL, Keenable JSON + normalization
-│  └─ freesearch.results    INTERNAL, result assembly (single projection or RRF fusion)
-└─ freesearch.response      INTERNAL, encoded response send
+├─ polyweb.backend       INTERNAL, request handling
+│  ├─ polyweb.route      INTERNAL, candidate planning
+│  ├─ polyweb.provider   CLIENT, one per attempted/fanout provider (request/response events)
+│  │  ├─ polyweb.provider.http   CLIENT, Keenable outbound request
+│  │  └─ polyweb.provider.parse  INTERNAL, Keenable JSON + normalization
+│  └─ polyweb.results    INTERNAL, result assembly (single projection or RRF fusion)
+└─ polyweb.response      INTERNAL, encoded response send
 ```
 
 Monitoring reads (`/stats`, `/dashboard`), the trace read API, health/control routes, and
 static UI requests are never traced. Fanout is always one trace with concurrent provider
 children; a handled provider failure marks that child `error` and the root `partial`.
 
-- **Instrumentation facade:** `src/freesearch/infrastructure/observability.py` is the only
+- **Instrumentation facade:** `src/polyweb/infrastructure/observability.py` is the only
   instrumentation module importing `opentelemetry.*`; the persistence exporter
   (`persistence/otel_exporter.py`) is the second and last permitted OTel boundary (PLAN §2.1)
   because it maps SDK span objects onto the trace table. Routes, services, and adapters never
@@ -324,14 +324,14 @@ children; a handled provider failure marks that child `error` and the root `part
   (never `trace.set_tracer_provider`), so repeated `create_app()` compositions and per-test
   databases stay isolated.
 - **Persistence:** finished spans are exported by
-  `src/freesearch/persistence/otel_exporter.py` into the SQLite `trace_spans` table
+  `src/polyweb/persistence/otel_exporter.py` into the SQLite `trace_spans` table
   (Alembic revision `0003_open_telemetry_spans`). Root rows double as the Activity summary.
   Exports are batched, so the middleware flushes once per traced request after the root span
   ends — that is what makes the row visible without a refresh.
 - **Read API:** `GET /api/v1/traces` returns the account's own summary rows only (no query,
   no results); `GET /api/v1/traces/{trace_id}` returns the full input, tagged output, and
   ordered stage timeline. An absent, foreign-owned, or historical unowned trace gives the
-  same `404`. Every root span carries the verified account UUID in `freesearch.user.id`.
+  same `404`. Every root span carries the verified account UUID in `polyweb.user.id`.
 - **Correlation:** every traced response carries `X-Trace-Id: <32-lowercase-hex>` (including
   handled error responses) matching the detail API's `trace_id`.
 - **Activity UI:** the Activity page lists those traces and discloses query in, results out,
@@ -341,18 +341,18 @@ children; a handled provider failure marks that child `error` and the root `part
 
 | Variable | Default | Meaning |
 | :--- | :--- | :--- |
-| `FREESEARCH_OTEL_PROCESSOR` | `database` | `database` persists spans locally; `none` disables tracing (no-op runtime, no `X-Trace-Id`). |
-| `FREESEARCH_OTEL_SERVICE_NAME` | `freesearch` | `service.name` resource attribute on every span. |
+| `POLYWEB_OTEL_PROCESSOR` | `database` | `database` persists spans locally; `none` disables tracing (no-op runtime, no `X-Trace-Id`). |
+| `POLYWEB_OTEL_SERVICE_NAME` | `polyweb` | `service.name` resource attribute on every span. |
 
 #### Future exporter seam (OTLP / Langfuse / LangSmith)
 
 `build_span_processors(settings, database)` in
-`src/freesearch/infrastructure/observability.py` is the single registration point for span
+`src/polyweb/infrastructure/observability.py` is the single registration point for span
 exporters. Adding an OTLP, Langfuse, or LangSmith exporter means appending a
 `SpanProcessor` there (optionally driven by the standard `OTEL_EXPORTER_OTLP_*` variables);
 no route, service, or adapter call site changes. Span attributes and events already use
-OpenTelemetry HTTP semantic conventions plus provider-neutral `freesearch.*` keys with a
-`freesearch.trace.schema_version` marker, so a vendor exporter can consume them unchanged.
+OpenTelemetry HTTP semantic conventions plus provider-neutral `polyweb.*` keys with a
+`polyweb.trace.schema_version` marker, so a vendor exporter can consume them unchanged.
 
 #### Local content and retention
 
@@ -371,20 +371,20 @@ If integrating with AI agents, IDE assistants, or tools supporting Model Context
 
 ```bash
 # Default: streamable HTTP transport on http://127.0.0.1:8000
-uv run freesearch-mcp
+uv run polyweb-mcp
 
 # Stateless HTTP mode (ideal for stateless proxies and microservices):
-uv run freesearch-mcp --transport streamable-http --stateless
+uv run polyweb-mcp --transport streamable-http --stateless
 
 # Stdio transport (ideal for desktop clients like Claude Desktop, Cursor, Gemini):
-uv run freesearch-mcp --transport stdio
+uv run polyweb-mcp --transport stdio
 ```
 
 - Exposes provider-neutral `search` and `fetch` tools with automatic route selection and quota tracking.
 - MCP accepts only [project API keys](#project-api-keys); human JWTs and anonymous calls are rejected. The tools' `project_id` is optional and, when given, must name the key's project.
 - The HTTP transport requires `Authorization: Bearer fs_live_...` on every `/mcp` request (HTTP 401 otherwise), and every tool call uses the key principal verified on the HTTP request that carried it, then re-reads the key at the execution boundary, so revocation, expiry, archive and scope changes stop a persistent session at its next call. Unknown paths remain guarded.
-- The stdio transport reads the project API key from `FREESEARCH_MCP_BEARER_TOKEN` (the process credential channel) and verifies it at each tool call; without it every tool call is rejected. The HTTP transport never reads this variable. Do not give the child a human or refresh credential.
-- Transports and flags can also be configured via `FREESEARCH_MCP_TRANSPORT` (`stdio` or `streamable-http`) and `FREESEARCH_MCP_STATELESS` (`true`/`false`).
+- The stdio transport reads the project API key from `POLYWEB_MCP_BEARER_TOKEN` (the process credential channel) and verifies it at each tool call; without it every tool call is rejected. The HTTP transport never reads this variable. Do not give the child a human or refresh credential.
+- Transports and flags can also be configured via `POLYWEB_MCP_TRANSPORT` (`stdio` or `streamable-http`) and `POLYWEB_MCP_STATELESS` (`true`/`false`).
 
 ---
 
@@ -409,9 +409,9 @@ uv run mypy src
 
 ### Routing Latency Checks
 
-FreeSearch must add under 80 ms at p95, per provider, for a warm search and a warm fetch
-over both REST and MCP. FreeSearch latency is measured server-side: from the request
-reaching the FreeSearch app until its response leaves it, minus provider time. The Behave
+Polyweb MCP must add under 80 ms at p95, per provider, for a warm search and a warm fetch
+over both REST and MCP. Polyweb MCP latency is measured server-side: from the request
+reaching the Polyweb MCP app until its response leaves it, minus provider time. The Behave
 latency scenarios serve the real REST app and the MCP Streamable HTTP app with uvicorn on
 `127.0.0.1` using OS-assigned ports, call them over TCP, and wrap each served app in a
 timing middleware. Each request pins one provider; per request the report lists
@@ -425,7 +425,7 @@ pass/fail). Brave has no fetch, so Brave fetch rows are reported as N/A (skipped
   so provider time is near zero. It runs in every default `uv run behave` run
   (5 warmup + 30 measured requests per row) and writes
   `test_reports/routing_latency_offline.{csv,md}`.
-- **Server-side profiles (opt-in):** set `FREESEARCH_LATENCY_PROFILE=1` to profile every
+- **Server-side profiles (opt-in):** set `POLYWEB_LATENCY_PROFILE=1` to profile every
   measured request with pyinstrument; combined sessions per transport are written to
   `test_reports/routing_latency_<mode>_<rest|mcp>_profile.{html,txt,pyisession}`. Profiling
   adds overhead, so use the unprofiled run for the latency numbers.
@@ -439,20 +439,20 @@ pass/fail). Brave has no fetch, so Brave fetch rows are reported as N/A (skipped
   ```
 
   Each provider runs only when its key is set in the process environment:
-  `FREESEARCH_BRAVE_SEARCH_API_KEY`, `FREESEARCH_EXA_API_KEY`,
-  `FREESEARCH_FIRECRAWL_API_KEY`, `FREESEARCH_PARALLEL_API_KEY`,
-  `FREESEARCH_TAVILY_API_KEY`, `TINYFISH_API_KEY`, `FREESEARCH_YOU_API_KEY`. Keenable is
-  keyless and runs only with `FREESEARCH_RUN_LIVE=1` (an optional
-  `FREESEARCH_KEENABLE_API_KEY` selects its keyed rail). A provider without its variable
+  `POLYWEB_BRAVE_SEARCH_API_KEY`, `POLYWEB_EXA_API_KEY`,
+  `POLYWEB_FIRECRAWL_API_KEY`, `POLYWEB_PARALLEL_API_KEY`,
+  `POLYWEB_TAVILY_API_KEY`, `TINYFISH_API_KEY`, `POLYWEB_YOU_API_KEY`. Keenable is
+  keyless and runs only with `POLYWEB_RUN_LIVE=1` (an optional
+  `POLYWEB_KEENABLE_API_KEY` selects its keyed rail). A provider without its variable
   is skipped with a reason naming the variable, never its value. Sample counts default to
   1 warmup + 5 measured requests per row; override them with
-  `FREESEARCH_LATENCY_LIVE_WARMUP` and `FREESEARCH_LATENCY_LIVE_SAMPLES`. Requests are
+  `POLYWEB_LATENCY_LIVE_WARMUP` and `POLYWEB_LATENCY_LIVE_SAMPLES`. Requests are
   spaced to each provider's documented per-second/per-minute rate windows. Results land in
   `test_reports/routing_latency_live.{csv,md}`.
 
 ### Frontend Checks
 
-Inside `freesearch-ui`:
+Inside `polyweb-ui`:
 
 ```bash
 # Run unit tests (Vitest)
@@ -473,8 +473,8 @@ pnpm build
 ## Project Structure
 
 ```
-freesearch/
-├── src/freesearch/          # Core backend package
+polyweb-mcp/
+├── src/polyweb/          # Core backend package
 │   ├── adapters/            # Search & fetch provider adapters
 │   ├── infrastructure/      # Foundation, resilience, secrets/keyring
 │   ├── mcp/                 # Model Context Protocol server & tools
@@ -482,7 +482,8 @@ freesearch/
 │   ├── persistence/         # SQLite storage, Alembic migrations & CLI
 │   ├── routers/             # FastAPI search, fetch, & control routes
 │   └── services/            # Routing policy, monitoring, quota tracking
-├── freesearch-ui/           # React 19 + Vite + Tailwind CSS dashboard
+├── polyweb-ui/           # React 19 + Vite + Tailwind CSS dashboard
+├── polyweb-landing/      # React + Vite marketing site
 ├── tests/                   # Test suite (unit, integration, and BDD features)
 ├── pyproject.toml           # Python dependencies and CLI entrypoints
 └── uv.lock                  # Pinned Python dependency graph

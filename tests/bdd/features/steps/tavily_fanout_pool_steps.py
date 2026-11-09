@@ -8,8 +8,8 @@ from uuid import UUID
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchRequest,
     FetchResponse,
@@ -17,9 +17,9 @@ from freesearch.models.contracts import (
     SearchRequest,
     SearchResponse,
 )
-from freesearch.models.provider_limits import LimitHistoryQuery
-from freesearch.routers.api import create_app
-from freesearch.services.provider_runtime import _BACKGROUND_TASKS
+from polyweb.models.provider_limits import LimitHistoryQuery
+from polyweb.routers.api import create_app
+from polyweb.services.provider_runtime import _BACKGROUND_TASKS
 from tests.bdd.features.steps.provider_limits_steps import _limits_repo, _tavily_pool_id
 from tests.fixtures.execution import _install_bdd_adapters, account_id_from_headers, bdd_project_id
 from tests.fixtures.project_order import seed_order_pools

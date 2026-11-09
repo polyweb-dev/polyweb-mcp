@@ -1,6 +1,6 @@
 @control @adv-oauth @oauth-device
 Feature: Parallel OAuth device flow contract
-  As a FreeSearch operator
+  As a Polyweb operator
   I want the Parallel device flow to follow the frozen OAuth shape
   So that account linking is strict, scoped, and leak-free
 

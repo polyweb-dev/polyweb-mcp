@@ -27,14 +27,14 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.auth import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.mcp.auth import (
     MCP_AUTH_ERROR,
     build_http_app,
     run_stdio_server,
 )
-from freesearch.mcp.server import create_server
-from freesearch.models.contracts import (
+from polyweb.mcp.server import create_server
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -46,11 +46,11 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.projects import BuiltinRole
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.api_keys import ApiKeyService
-from freesearch.services.projects import ProjectService
+from polyweb.models.projects import BuiltinRole
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.api_keys import ApiKeyService
+from polyweb.services.projects import ProjectService
 from tests.fixtures.api_keys import (
     ProjectKey,
     archive_project,
@@ -430,7 +430,7 @@ async def test_stdio_revoked_family_causes_no_provider_call(
     )
     assert _direct_payload(await server.call_tool("search", _search(pid, "before")))
 
-    from freesearch.models.projects import ProjectApiKeyRotate
+    from polyweb.models.projects import ProjectApiKeyRotate
 
     rotated = await ApiKeyService(repository).rotate(
         key.owner, key.project_id, key.api_key_id, ProjectApiKeyRotate(overlap_seconds=0)
@@ -515,7 +515,7 @@ async def test_run_stdio_server_allows_anonymous_tools_without_token(
     """The stdio runner owns only the store lifecycle; each tool call verifies a key."""
 
     database = tmp_path / "stdio-guard.db"
-    from freesearch.services.users import AuthService
+    from polyweb.services.users import AuthService
 
     service = AuthService(test_settings(), database=database)
     server = create_server([])
@@ -532,11 +532,11 @@ async def test_run_stdio_server_allows_anonymous_tools_without_token(
 def test_main_stdio_dispatch_reads_process_token(
     monkeypatch: pytest.MonkeyPatch, auth_secret: str, tmp_path: Path
 ) -> None:
-    import freesearch.mcp.server as server_module
-    from freesearch.mcp.server import main
+    import polyweb.mcp.server as server_module
+    from polyweb.mcp.server import main
 
-    monkeypatch.setenv("FREESEARCH_MCP_BEARER_TOKEN", "process-token-value")
-    monkeypatch.setenv("FREESEARCH_DB", str(tmp_path / "main-stdio.db"))
+    monkeypatch.setenv("POLYWEB_MCP_BEARER_TOKEN", "process-token-value")
+    monkeypatch.setenv("POLYWEB_DB", str(tmp_path / "main-stdio.db"))
     calls: list[tuple[str, bool]] = []
 
     async def fake_stdio(server: object, *, auth_service: object, settings: object) -> None:
@@ -581,7 +581,7 @@ async def test_creator_demotion_and_removal_neither_kill_nor_widen_the_key(
     )
     successor = temp_principal(await seed_execution_user(repository, "mcp-successor"))
     projects = ProjectService(repository)
-    from freesearch.models.projects import ProjectMemberAdd
+    from polyweb.models.projects import ProjectMemberAdd
 
     await projects.add_member(
         key.owner,
@@ -834,8 +834,8 @@ async def test_http_tool_call_does_not_verify_the_key_a_second_time(
 ) -> None:
     """Every ApiKeyVerifier run over HTTP is a guard run; the tool adds none."""
 
-    import freesearch.mcp.auth as mcp_auth_module
-    from freesearch.services.api_keys import ApiKeyVerifier
+    import polyweb.mcp.auth as mcp_auth_module
+    from polyweb.services.api_keys import ApiKeyVerifier
 
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix="r4-once")
@@ -889,8 +889,8 @@ async def test_http_tool_call_without_a_guard_key_principal_is_rejected(
 
     from uuid import uuid4
 
-    from freesearch.models.projects import ProjectApiKeyPrincipal
-    from freesearch.models.users import UserPrincipal
+    from polyweb.models.projects import ProjectApiKeyPrincipal
+    from polyweb.models.users import UserPrincipal
 
     adapter = _RecordingAdapter("stubby")
     key = await issue_project_key(repository, prefix=f"r4-{injected}")

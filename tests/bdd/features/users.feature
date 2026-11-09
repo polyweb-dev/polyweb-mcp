@@ -1,6 +1,6 @@
 @users
 Feature: Local user accounts, migration, and settings
-  As a FreeSearch operator
+  As a Polyweb operator
   I want local accounts, safe migration, and explicit settings
   So that later turns can guard API and MCP tools
 

@@ -1,6 +1,6 @@
 @control @adv-oauth @oauth-balance
 Feature: Parallel OAuth balance as authoritative USD quota
-  As a FreeSearch operator
+  As a Polyweb operator
   I want the OAuth balance to surface as exact USD remaining-only quota
   So that the dashboard never mixes floats, invoices, or stale seeds
 

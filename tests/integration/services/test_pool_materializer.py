@@ -7,23 +7,23 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import text
 
-from freesearch.models.contracts import UsageEvent, UsageOperation
-from freesearch.models.credentials import CredentialOperation, CredentialRotate
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.models.schema_enums import UpstreamScope
-from freesearch.models.users import UserPrincipal
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.pools import PoolAllocationRepository, UpstreamPoolRepository
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.pool_materializer import (
+from polyweb.models.contracts import UsageEvent, UsageOperation
+from polyweb.models.credentials import CredentialOperation, CredentialRotate
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.models.schema_enums import UpstreamScope
+from polyweb.models.users import UserPrincipal
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.pools import PoolAllocationRepository, UpstreamPoolRepository
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.pool_materializer import (
     KEYLESS_PROVIDERS,
     keyless_credential_id,
     materialize_pools,
 )
-from freesearch.services.provider_runtime import initialize_provider_configs
-from freesearch.services.vault_keys import VaultKeyService
+from polyweb.services.provider_runtime import initialize_provider_configs
+from polyweb.services.vault_keys import VaultKeyService
 from tests.fixtures.a2_execution import (
     ExecutionWorld,
     RecordingAdapter,

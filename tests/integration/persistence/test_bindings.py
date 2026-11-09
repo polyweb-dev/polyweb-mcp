@@ -14,11 +14,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.persistence.bindings import ProjectBindingRepository, StoredBinding
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.persistence.bindings import ProjectBindingRepository, StoredBinding
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
 _NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)

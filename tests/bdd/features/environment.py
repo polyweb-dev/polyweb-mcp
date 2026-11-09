@@ -1,4 +1,4 @@
-"""Behave environment hooks for FreeSearch BDD test execution."""
+"""Behave environment hooks for Polyweb BDD test execution."""
 
 import asyncio
 import gc
@@ -11,28 +11,28 @@ from typing import Any
 import httpx  # noqa: F401  # kept: locked BDD tests monkeypatch environment.httpx.AsyncClient
 from pydantic import SecretStr
 
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.adapters.exa import ExaAdapter
-from freesearch.adapters.firecrawl import FirecrawlAdapter
-from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.adapters.parallel import ParallelAdapter
-from freesearch.adapters.tavily import TavilyAdapter
-from freesearch.adapters.tinyfish import TinyfishAdapter
-from freesearch.infrastructure.http import create_async_client
-from freesearch.infrastructure.secrets import (
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.adapters.exa import ExaAdapter
+from polyweb.adapters.firecrawl import FirecrawlAdapter
+from polyweb.adapters.keenable import KeenableAdapter
+from polyweb.adapters.parallel import ParallelAdapter
+from polyweb.adapters.tavily import TavilyAdapter
+from polyweb.adapters.tinyfish import TinyfishAdapter
+from polyweb.infrastructure.http import create_async_client
+from polyweb.infrastructure.secrets import (
     PROVIDER_ENV_VARS,
     ProviderName,
     provider_env_var_names,
 )
 
-_LIVE_GATE = "FREESEARCH_RUN_LIVE"
+_LIVE_GATE = "POLYWEB_RUN_LIVE"
 
 
 def _harness_env_key(provider: ProviderName) -> str | None:
     """Read the operator's process env directly (harness-only live-gate).
 
     This is explicitly NOT production resolution: vault-only production code
-    never reads ``FREESEARCH_*`` at runtime. The harness reads the env only
+    never reads ``POLYWEB_*`` at runtime. The harness reads the env only
     to decide whether a ``@live`` scenario can run and to inject the key
     explicitly via the adapter ``api_key`` seam. The canonical variable wins
     over legacy spellings, and a blank value counts as absent.
@@ -70,7 +70,7 @@ def before_scenario(context: Any, scenario: Any) -> None:
        Routing-latency scenarios (``@latency``, offline and ``@live``) also
        take this path: they serve their own adapters from their steps, and
        ``@live @latency`` gates each provider on its own harness key there.
-    2. A ``@live @keenable`` scenario runs only when ``FREESEARCH_RUN_LIVE=1``;
+    2. A ``@live @keenable`` scenario runs only when ``POLYWEB_RUN_LIVE=1``;
        otherwise it is skipped before any resource setup, keeping offline BDD
        runs network-safe (Keenable is keyless, so no key check can gate it).
     3. Every live provider missing-key gate runs BEFORE the event loop and HTTP
@@ -111,7 +111,7 @@ def before_scenario(context: Any, scenario: Any) -> None:
         scenario.mark_skipped(f"live Keenable scenario requires {_LIVE_GATE}=1")
         return
     if _is_exa_scenario(scenario) and not context.has_exa_key:
-        scenario.skip("FREESEARCH_EXA_API_KEY is not configured")
+        scenario.skip("POLYWEB_EXA_API_KEY is not configured")
         return
     missing_key_reason = _missing_live_key_reason(context, scenario)
     if missing_key_reason is not None:
@@ -126,7 +126,7 @@ def before_scenario(context: Any, scenario: Any) -> None:
     # (the early return above keeps them away from default provider construction
     # and any live network call), and You.com scenarios were gated above.
     if _has_youcom_tag(scenario):
-        from freesearch.adapters.youcom import YoucomAdapter
+        from polyweb.adapters.youcom import YoucomAdapter
 
         context.youcom_adapter = YoucomAdapter(
             context.http_client, api_key=_explicit_api_key(ProviderName.YOU)
@@ -251,7 +251,7 @@ def after_scenario(context: Any, scenario: Any) -> None:
     """Close every client/session before disposing and deleting its temporary DB."""
     loop = getattr(context, "loop", None)
     if loop is not None:
-        from freesearch.mcp.server import shutdown_injected_observability
+        from polyweb.mcp.server import shutdown_injected_observability
 
         for session, server in reversed(getattr(context, "_bdd_mcp_sessions", [])):
             loop.run_until_complete(session.__aexit__(None, None, None))

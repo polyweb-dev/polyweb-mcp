@@ -2,7 +2,7 @@
 
 Step text is Brave-specific to avoid collisions with the Tavily suite. No
 secrets are asserted or logged; the ``given`` step only reports whether the
-FREESEARCH_BRAVE_SEARCH_API_KEY is resolvable.
+POLYWEB_BRAVE_SEARCH_API_KEY is resolvable.
 """
 
 import tempfile
@@ -13,10 +13,10 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import HttpUrl
 
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation, UsageStatus
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.monitoring import tracked_call
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import FetchRequest, SearchRequest, UsageOperation, UsageStatus
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.monitoring import tracked_call
 from tests.fixtures.execution import scenario_attribution
 
 
@@ -24,7 +24,7 @@ from tests.fixtures.execution import scenario_attribution
 def step_given_brave_adapter(context: Any) -> None:
     """Verify that a Brave API key is resolved and the adapter is ready."""
     assert getattr(context, "has_brave_key", False), (
-        "FREESEARCH_BRAVE_SEARCH_API_KEY is not configured in .env or environment. "
+        "POLYWEB_BRAVE_SEARCH_API_KEY is not configured in .env or environment. "
         "Please provide a valid Brave Search API key to run live Brave BDD tests."
     )
     assert context.adapter is not None, "Brave adapter was not initialized."

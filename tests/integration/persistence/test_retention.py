@@ -12,9 +12,9 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 
-from freesearch.models.schema_enums import RetentionDataClass, RetentionRunStatus
-from freesearch.persistence.retention import RetentionRunRepository, StoredRetentionRun
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.models.schema_enums import RetentionDataClass, RetentionRunStatus
+from polyweb.persistence.retention import RetentionRunRepository, StoredRetentionRun
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
 _NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)

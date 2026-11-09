@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from alembic import command
 
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.persistence import database_migrations as migrations
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.persistence import database_migrations as migrations
 
 
 def test_keyless_upgrade_preserves_credential_and_dependents(tmp_path: Path) -> None:

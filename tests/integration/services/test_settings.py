@@ -15,16 +15,16 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import update
 
-from freesearch.models.contracts import FallbackPolicy
-from freesearch.models.observability import (
+from polyweb.models.contracts import FallbackPolicy
+from polyweb.models.observability import (
     ActorType,
     TraceOperation,
     TraceOutcome,
     TraceSpanKind,
     TraceSpanRecord,
 )
-from freesearch.models.project_permissions import ProjectPermission
-from freesearch.models.projects import (
+from polyweb.models.project_permissions import ProjectPermission
+from polyweb.models.projects import (
     BuiltinRole,
     ExecutionSettings,
     MembershipStatus,
@@ -39,9 +39,9 @@ from freesearch.models.projects import (
     TraceDetailPolicy,
     TraceSettings,
 )
-from freesearch.models.retention import RetentionRunRequest
-from freesearch.models.schema_enums import RetentionDataClass
-from freesearch.models.settings import (
+from polyweb.models.retention import RetentionRunRequest
+from polyweb.models.schema_enums import RetentionDataClass
+from polyweb.models.settings import (
     COPY_FIELD_NOT_OVERRIDDEN,
     COPY_FIELD_SYSTEM_ONLY,
     ProjectSettingsUpdate,
@@ -53,32 +53,32 @@ from freesearch.models.settings import (
     SystemSettingsUpdate,
     SystemTraceDefaults,
 )
-from freesearch.models.users import UserPrincipal
-from freesearch.persistence.audit import AuditRepository
-from freesearch.persistence.bindings import StoredBinding
-from freesearch.persistence.otel_exporter import write_trace_spans
-from freesearch.persistence.projects import (
+from polyweb.models.users import UserPrincipal
+from polyweb.persistence.audit import AuditRepository
+from polyweb.persistence.bindings import StoredBinding
+from polyweb.persistence.otel_exporter import write_trace_spans
+from polyweb.persistence.projects import (
     AccountRow,
     ProjectMembershipRow,
     ProjectRepository,
 )
-from freesearch.persistence.scoped import ProjectScopedRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserRow
-from freesearch.services.authorization import (
+from polyweb.persistence.scoped import ProjectScopedRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserRow
+from polyweb.services.authorization import (
     AuthorizationDenied,
     ScopedAuthorizationService,
     human_principal,
 )
-from freesearch.services.control_errors import ResourceInvalid, ResourceNotFound
-from freesearch.services.observability import get_project_trace, list_project_traces
-from freesearch.services.projects import ProjectService
-from freesearch.services.retention import (
+from polyweb.services.control_errors import ResourceInvalid, ResourceNotFound
+from polyweb.services.observability import get_project_trace, list_project_traces
+from polyweb.services.projects import ProjectService
+from polyweb.services.retention import (
     RETENTION_CUTOFF_FUTURE,
     RETENTION_CUTOFF_REQUIRED,
     ProjectRetentionService,
 )
-from freesearch.services.settings import (
+from polyweb.services.settings import (
     PROJECT_ARCHIVED,
     SETTINGS_REVISION_CONFLICT,
     SettingsConflict,
@@ -823,17 +823,17 @@ _CHILD_SETTINGS_WRITER = textwrap.dedent(
     from pathlib import Path
     from uuid import UUID
 
-    from freesearch.models.projects import ExecutionSettings
-    from freesearch.models.settings import (
+    from polyweb.models.projects import ExecutionSettings
+    from polyweb.models.settings import (
         ProjectSettingsUpdate,
         SystemExecutionDefaults,
         SystemRoutingDefaults,
         SystemSafetyLimits,
         SystemSettingsUpdate,
     )
-    from freesearch.models.users import UserPrincipal
-    from freesearch.persistence.storage import SQLiteRepository
-    from freesearch.services.settings import SettingsService
+    from polyweb.models.users import UserPrincipal
+    from polyweb.persistence.storage import SQLiteRepository
+    from polyweb.services.settings import SettingsService
 
 
     async def main() -> None:
@@ -1858,7 +1858,7 @@ async def test_audit_failure_rolls_back_settings_revision_and_cached_resolution(
 ) -> None:
     from unittest.mock import AsyncMock
 
-    from freesearch.persistence.bindings import ProjectBindingRepository
+    from polyweb.persistence.bindings import ProjectBindingRepository
 
     boot = await bootstrap_fresh_alpha(tmp_path / "audit-rollback.db")
     try:
@@ -1882,7 +1882,7 @@ async def test_audit_failure_rolls_back_settings_revision_and_cached_resolution(
             )
         with monkeypatch.context() as patch:
             patch.setattr(
-                "freesearch.services.settings.record_project_event",
+                "polyweb.services.settings.record_project_event",
                 AsyncMock(side_effect=RuntimeError("injected audit failure")),
             )
             with pytest.raises(RuntimeError, match="injected audit failure"):
@@ -1939,10 +1939,10 @@ async def _copy_binding(
     target_grant: bool = True,
 ) -> StoredBinding:
     """Seed only nonsecret credential metadata and a source binding."""
-    from freesearch.models.credentials import CredentialOperation
-    from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-    from freesearch.persistence.bindings import ProjectBindingRepository
-    from freesearch.persistence.credentials import CredentialRepository
+    from polyweb.models.credentials import CredentialOperation
+    from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+    from polyweb.persistence.bindings import ProjectBindingRepository
+    from polyweb.persistence.credentials import CredentialRepository
 
     scope = CredentialOwnerScope.PROJECT if private else CredentialOwnerScope.SYSTEM
     async with repository.session() as session:
@@ -1982,9 +1982,9 @@ async def test_copy_only_explicitly_selected_binding_versions_and_never_authorit
 ) -> None:
     import sqlite3
 
-    from freesearch.models.contracts import UsageEvent, UsageOperation
-    from freesearch.models.observability import ExecutionAttribution
-    from freesearch.persistence.bindings import ProjectBindingRepository
+    from polyweb.models.contracts import UsageEvent, UsageOperation
+    from polyweb.models.observability import ExecutionAttribution
+    from polyweb.persistence.bindings import ProjectBindingRepository
     from tests.fixtures.api_keys import issue_project_key
 
     boot = await bootstrap_fresh_alpha(tmp_path / "copy-bindings.db")
@@ -2094,13 +2094,13 @@ async def test_copy_only_explicitly_selected_binding_versions_and_never_authorit
 async def test_copy_rechecks_binding_grant_status_and_private_ownership_at_apply(
     tmp_path: Path, reason: str
 ) -> None:
-    from freesearch.models.settings import (
+    from polyweb.models.settings import (
         COPY_CREDENTIAL_NOT_GRANTED,
         COPY_CREDENTIAL_PRIVATE,
         COPY_CREDENTIAL_UNAVAILABLE,
     )
-    from freesearch.persistence.bindings import ProjectBindingRepository
-    from freesearch.persistence.credentials import CredentialRepository, ProviderCredentialRow
+    from polyweb.persistence.bindings import ProjectBindingRepository
+    from polyweb.persistence.credentials import CredentialRepository, ProviderCredentialRow
 
     boot = await bootstrap_fresh_alpha(tmp_path / "copy-recheck.db")
     try:
@@ -2173,8 +2173,8 @@ async def test_copy_rechecks_binding_grant_status_and_private_ownership_at_apply
 async def test_copy_binding_edit_or_unknown_selection_conflicts_with_preview(
     tmp_path: Path,
 ) -> None:
-    from freesearch.models.credentials import CredentialOperation
-    from freesearch.persistence.bindings import ProjectBindingRepository
+    from polyweb.models.credentials import CredentialOperation
+    from polyweb.persistence.bindings import ProjectBindingRepository
 
     boot = await bootstrap_fresh_alpha(tmp_path / "copy-binding-revision.db")
     try:
@@ -2235,21 +2235,21 @@ async def test_consistent_read_snapshot_prevents_phantom_full_policy_interleavin
     established before authorization and settings reads, the reader never sees
     old PROJECT (full) + new SYSTEM (full).
     """
-    from freesearch.models.projects import (
+    from polyweb.models.projects import (
         PermissionAction,
         ProjectApiKeyPrincipal,
         TraceDetailPolicy,
     )
-    from freesearch.models.settings import (
+    from polyweb.models.settings import (
         ProjectSettingsUpdate,
         SystemSettingsUpdate,
         SystemTraceDefaults,
         TraceSettings,
     )
-    from freesearch.persistence.scoped import ScopedProjectSettings
-    from freesearch.services.authorization import human_principal
-    from freesearch.services.execution_scope import resolve_execution_boundary
-    from freesearch.services.settings import project_trace_policy
+    from polyweb.persistence.scoped import ScopedProjectSettings
+    from polyweb.services.authorization import human_principal
+    from polyweb.services.execution_scope import resolve_execution_boundary
+    from polyweb.services.settings import project_trace_policy
     from tests.fixtures.api_keys import issue_project_key
 
     boot = await bootstrap_fresh_alpha(tmp_path / f"snap-{reader_mode}.db")
@@ -2368,12 +2368,12 @@ async def test_commit_failure_after_computation_does_not_publish_stale_cache_for
     from sqlalchemy.exc import OperationalError
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from freesearch.models.settings import (
+    from polyweb.models.settings import (
         ExecutionSettings,
         ProjectSettingsUpdate,
         SettingsCopyRequest,
     )
-    from freesearch.services.settings import SETTINGS_NAMESPACE, SettingsStorageUnavailable
+    from polyweb.services.settings import SETTINGS_NAMESPACE, SettingsStorageUnavailable
 
     boot = await bootstrap_fresh_alpha(tmp_path / f"commit-cache-{operation_type}.db")
     try:
@@ -2434,8 +2434,8 @@ async def test_commit_failure_after_computation_does_not_publish_stale_cache_for
         monkeypatch.setattr(AsyncSession, "commit", real_commit)
 
         # Verify DB rollback: target project settings is still revision 0 (or absent)
-        from freesearch.models.settings import SETTINGS_SCHEMA_VERSION
-        from freesearch.persistence.settings import ProjectSettingsRepository
+        from polyweb.models.settings import SETTINGS_SCHEMA_VERSION
+        from polyweb.persistence.settings import ProjectSettingsRepository
 
         async with boot.repository.session() as session:
             stored = await ProjectSettingsRepository(session).get(

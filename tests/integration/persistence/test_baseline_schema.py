@@ -21,8 +21,8 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import URL, CheckConstraint, create_engine
 
-from freesearch.persistence.database_migrations import upgrade_database, validate_database_schema
-from freesearch.persistence.schema import load_all_rows
+from polyweb.persistence.database_migrations import upgrade_database, validate_database_schema
+from polyweb.persistence.schema import load_all_rows
 
 _ACCOUNT = "00000000-0000-4000-8000-000000000001"
 _T0 = "2026-01-01T00:00:00+00:00"

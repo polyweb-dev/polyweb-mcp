@@ -22,21 +22,21 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from freesearch.models.contracts import RoutingPreference, SearchResponse
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.execution_failures import (
+from polyweb.models.contracts import RoutingPreference, SearchResponse
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.execution_failures import (
     ExecutionAuthorityUnavailable,
     ExecutionNotPermitted,
     ExecutionQueueExpired,
     ExecutionQueueSaturated,
 )
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.models.schema_enums import UpstreamScope
-from freesearch.persistence.pools import (
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.models.schema_enums import UpstreamScope
+from polyweb.persistence.pools import (
     PoolAllocationRepository,
     UpstreamPoolRepository,
 )
-from freesearch.services.api_keys import ApiKeyService
+from polyweb.services.api_keys import ApiKeyService
 from tests.fixtures.a2_execution import RecordingAdapter
 from tests.fixtures.a3_authority import (
     PROVIDER,
@@ -852,7 +852,7 @@ async def test_authority_bytes_bound_is_authority_wide_across_pools(
             )
             await session.commit()
 
-        import freesearch.services.execution as execution_module
+        import polyweb.services.execution as execution_module
 
         forwarded_factory = execution_module.adapter_factory
 

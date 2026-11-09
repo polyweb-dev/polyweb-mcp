@@ -9,12 +9,12 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from freesearch.configuration.config import get_settings
-from freesearch.persistence.audit import ProjectAuditEventRow, SystemAuditEventRow
-from freesearch.persistence.credentials import ProviderCredentialRow
-from freesearch.persistence.key_pools import KeyPoolRow
-from freesearch.persistence.storage import RuntimeSettingRow, SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.configuration.config import get_settings
+from polyweb.persistence.audit import ProjectAuditEventRow, SystemAuditEventRow
+from polyweb.persistence.credentials import ProviderCredentialRow
+from polyweb.persistence.key_pools import KeyPoolRow
+from polyweb.persistence.storage import RuntimeSettingRow, SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -28,8 +28,8 @@ BASE = "/api/v1/account/vault"
 
 @pytest_asyncio.fixture
 async def repository(tmp_path, monkeypatch) -> AsyncIterator[SQLiteRepository]:
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "routing-audit-test-key")
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / "key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "routing-audit-test-key")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / "key"))
     get_settings.cache_clear()
     repo = await SQLiteRepository.open(tmp_path / "routing-audit.db")
     try:

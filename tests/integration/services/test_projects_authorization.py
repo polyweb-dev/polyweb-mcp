@@ -14,8 +14,8 @@ from uuid import UUID
 import pytest
 from sqlalchemy import select
 
-from freesearch.models.project_permissions import ProjectPermission
-from freesearch.models.projects import (
+from polyweb.models.project_permissions import ProjectPermission
+from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
     MembershipStatus,
@@ -29,20 +29,20 @@ from freesearch.models.projects import (
     ProjectStatus,
     ScopeType,
 )
-from freesearch.models.users import UserPrincipal
-from freesearch.persistence.projects import (
+from polyweb.models.users import UserPrincipal
+from polyweb.persistence.projects import (
     ProjectMembershipRow,
     ProjectRepository,
     bootstrap_fresh_installation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserRow
-from freesearch.services.authorization import (
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserRow
+from polyweb.services.authorization import (
     AuthorizationDenied,
     ScopedAuthorizationService,
     human_principal,
 )
-from freesearch.services.projects import (
+from polyweb.services.projects import (
     LAST_PROJECT_ADMIN,
     PROJECT_ARCHIVED,
     ProjectConflict,
@@ -948,7 +948,7 @@ async def test_cli_deactivation_races_service_self_removal_and_keeps_one_admin(
 ) -> None:
     """The operator CLI uses its own connection; it cannot bypass the invariant."""
 
-    from freesearch.cli.users import _run
+    from polyweb.cli.users import _run
 
     first, second, _setup, admin, peer, project_id = await _prepare_race(
         tmp_path, "race-cli-deactivate"
@@ -1038,7 +1038,7 @@ async def test_concurrent_deactivation_of_the_last_two_system_admins_keeps_one(
 ) -> None:
     """R2: two connections each deactivate a different one of the last two system admins."""
 
-    from freesearch.services.users import AuthLastSystemAdmin
+    from polyweb.services.users import AuthLastSystemAdmin
 
     first = await create_alpha_test_db(tmp_path / f"r2-race-{trusted}.db")
     second = await SQLiteRepository.open(first.database_path)

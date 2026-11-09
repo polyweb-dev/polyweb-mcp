@@ -3,8 +3,8 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from freesearch.models.projects import ProjectStatus
-from freesearch.persistence.projects import (
+from polyweb.models.projects import ProjectStatus
+from polyweb.persistence.projects import (
     AccountRow,
     ProjectMembershipRow,
     ProjectRoleAssignmentRow,

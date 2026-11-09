@@ -18,7 +18,7 @@ def test_development_compose_keeps_secrets_out_of_the_image() -> None:
     assert compose.count("- path: .env") == 2
     assert compose.count("required: true") == 2
     assert compose.count("- ./src:/app/src") == 2
-    assert compose.count("- freesearch-data:/data") == 2
+    assert compose.count("- polyweb-data:/data") == 2
 
     assert re.search(r"(?im)^\s*(?:COPY|ADD)\s+[^\n]*\.env", dockerfile) is None
     assert re.search(r"(?im)^\s*(?:COPY|ADD)\s+[^\n]*(?:\./)?src(?:/|\s|$)", dockerfile) is None

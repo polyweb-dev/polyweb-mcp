@@ -16,17 +16,17 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.models.users import AuthFamily
-from freesearch.persistence.auth_sessions import (
+from polyweb.models.users import AuthFamily
+from polyweb.persistence.auth_sessions import (
     AuthSessionRepository,
     AuthSessionRow,
     RefreshTokenRow,
     parse_timestamp,
     stored_timestamp,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserRow
-from freesearch.services.users import refresh_token_digest
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserRow
+from polyweb.services.users import refresh_token_digest
 from tests.fixtures.auth import create_temp_user, temp_email
 
 

@@ -1,4 +1,4 @@
-# FreeSearch homelab / LAN stack.
+# Polyweb homelab / LAN stack.
 #
 # Usage (from the repo root):
 #   cp .env.example .env      # non-secret runtime settings (optional)
@@ -13,11 +13,11 @@
 # STDIO note: stdio MCP requires the client to spawn the server process, so it
 # cannot be served over the network. Inside Docker it is a local-only escape
 # hatch on the same machine that runs the daemon, e.g.:
-#   docker exec -i freesearch-mcp uv run freesearch-mcp --transport stdio
+#   docker exec -i polyweb-mcp uv run polyweb-mcp --transport stdio
 # For every LAN / remote agent, use the streamable-http URL above.
 #
 # State: api + mcp share one SQLite DB and one master-key file on the
-# `freesearch-data` volume. Single-node only — do not scale replicas without
+# `polyweb-data` volume. Single-node only — do not scale replicas without
 # moving off SQLite. Provider keys are never in this file; store them in the
 # encrypted vault via the dashboard (http://<host>:3000).
 
@@ -27,7 +27,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: backend
-    image: ${COMPOSE_PROJECT_NAME:-freesearch}-backend:latest
+    image: ${COMPOSE_PROJECT_NAME:-polyweb}-backend:latest
     restart: unless-stopped
     ports:
       - "${API_PORT:-8001}:8001"
@@ -35,10 +35,10 @@ services:
       - path: .env
         required: false
     environment:
-      FREESEARCH_DB: /data/freesearch.db
-      FREESEARCH_ENCRYPTION_KEY_FILE: /data/.secret_key
+      POLYWEB_DB: /data/polyweb.db
+      POLYWEB_ENCRYPTION_KEY_FILE: /data/.secret_key
     volumes:
-      - freesearch-data:/data
+      - polyweb-data:/data
     healthcheck:
       test: [
         "CMD-SHELL",
@@ -54,13 +54,13 @@ services:
       context: .
       dockerfile: Dockerfile
       target: backend
-    image: ${COMPOSE_PROJECT_NAME:-freesearch}-backend:latest
+    image: ${COMPOSE_PROJECT_NAME:-polyweb}-backend:latest
     restart: unless-stopped
     command:
       [
         "uv",
         "run",
-        "freesearch-mcp",
+        "polyweb-mcp",
         "--transport",
         "streamable-http",
         "--host",
@@ -74,19 +74,19 @@ services:
       - path: .env
         required: false
     environment:
-      FREESEARCH_DB: /data/freesearch.db
-      FREESEARCH_ENCRYPTION_KEY_FILE: /data/.secret_key
+      POLYWEB_DB: /data/polyweb.db
+      POLYWEB_ENCRYPTION_KEY_FILE: /data/.secret_key
       # Uncomment for stateless mode behind a proxy / multiple replicas:
-      # FREESEARCH_MCP_STATELESS: "true"
+      # POLYWEB_MCP_STATELESS: "true"
     volumes:
-      - freesearch-data:/data
+      - polyweb-data:/data
 
   ui:
     build:
       context: .
       dockerfile: Dockerfile
       target: ui
-    image: ${COMPOSE_PROJECT_NAME:-freesearch}-ui:latest
+    image: ${COMPOSE_PROJECT_NAME:-polyweb}-ui:latest
     restart: unless-stopped
     ports:
       - "${UI_PORT:-3000}:80"
@@ -95,4 +95,4 @@ services:
         condition: service_healthy
 
 volumes:
-  freesearch-data:
+  polyweb-data:

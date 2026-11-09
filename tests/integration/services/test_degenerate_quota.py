@@ -2,11 +2,11 @@
 
 Offline only: temp-file SQLite repositories (``tmp_path``), fixed UTC
 timestamps, explicit ``Decimal`` values. No live network, no production
-``freesearch.db``, no port binds.
+``polyweb.db``, no port binds.
 
 Contract under test (FINAL REVIEW PLAN, RTC consensus):
   one shared pure backend helper
-  ``freesearch.monitoring.normalize_degenerate_quota(snapshot)``
+  ``polyweb.monitoring.normalize_degenerate_quota(snapshot)``
   mapping ``limit == Decimal("0")`` to remaining/limit/reset ``None``
   (else identity), used by BOTH ``effective_quota`` and the dashboard path
   (``_latest_quotas``/``collect_stats``).
@@ -25,8 +25,8 @@ from decimal import Decimal
 
 import pytest_asyncio
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -40,10 +40,10 @@ from freesearch.models.contracts import (
     SearchResponse,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services import monitoring as monitoring_module
-from freesearch.services.monitoring import collect_stats, effective_quota
-from freesearch.services.routing import select_route
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services import monitoring as monitoring_module
+from polyweb.services.monitoring import collect_stats, effective_quota
+from polyweb.services.routing import select_route
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -64,7 +64,7 @@ def _opt(target: object, name: str, *default: object) -> object:
 def _normalize():
     helper = _opt(monitoring_module, "normalize_degenerate_quota", None)
     assert helper is not None, (
-        "S4/AC-2: freesearch.monitoring.normalize_degenerate_quota missing — "
+        "S4/AC-2: polyweb.monitoring.normalize_degenerate_quota missing — "
         "expected a shared pure helper normalize_degenerate_quota(snapshot) "
         "mapping limit==Decimal('0') to remaining/limit/reset None (else "
         "identity), used by BOTH effective_quota and _latest_quotas/collect_stats"
@@ -73,10 +73,10 @@ def _normalize():
 
 
 def _unit_kind_request():
-    from freesearch.models import contracts as contracts_module
+    from polyweb.models import contracts as contracts_module
 
     kind = _opt(contracts_module, "UnitKind", None)
-    assert kind is not None, "AC-3 setup: freesearch.contracts.UnitKind missing"
+    assert kind is not None, "AC-3 setup: polyweb.contracts.UnitKind missing"
     return _opt(kind, "REQUEST")
 
 

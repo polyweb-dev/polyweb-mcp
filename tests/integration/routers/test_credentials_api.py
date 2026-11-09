@@ -16,23 +16,23 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, or_, select
 
-from freesearch.cli.secrets import _run as _cli_run
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.cryptography import (
+from polyweb.cli.secrets import _run as _cli_run
+from polyweb.configuration.config import get_settings
+from polyweb.infrastructure.cryptography import (
     MasterKey,
     SecretCodec,
     load_or_create_master_key,
 )
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.models.projects import BuiltinRole, ProjectCreate, ProjectMemberAdd, ProjectRead
-from freesearch.models.users import UserPrincipal
-from freesearch.persistence.credentials import CredentialRepository, ProviderCredentialRow
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.storage import RuntimeSettingRow
-from freesearch.routers.api import create_app
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.pool_materializer import materialize_pools
-from freesearch.services.projects import ProjectService
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.models.projects import BuiltinRole, ProjectCreate, ProjectMemberAdd, ProjectRead
+from polyweb.models.users import UserPrincipal
+from polyweb.persistence.credentials import CredentialRepository, ProviderCredentialRow
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.storage import RuntimeSettingRow
+from polyweb.routers.api import create_app
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.pool_materializer import materialize_pools
+from polyweb.services.projects import ProjectService
 from tests.fixtures.alpha_fixtures import (
     ALPHA_ADMIN_PASSWORD,
     AlphaBootstrapResult,
@@ -620,13 +620,13 @@ async def test_a4_slot_bound_ciphertext_and_cli_rekey_with_retired_key(
         retired_file.write_bytes(world.master_key.key)
         os.chmod(retired_file, 0o600)
         key_file = tmp_path / ".secret_key"
-        monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(key_file))
+        monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(key_file))
         monkeypatch.setenv(
-            "FREESEARCH_ENCRYPTION_RETIRED_KEY_FILES", json.dumps([str(retired_file)])
+            "POLYWEB_ENCRYPTION_RETIRED_KEY_FILES", json.dumps([str(retired_file)])
         )
-        monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY", raising=False)
+        monkeypatch.delenv("POLYWEB_ENCRYPTION_KEY", raising=False)
         database = str(world.boot.database_path)
-        monkeypatch.setenv("FREESEARCH_DB", database)
+        monkeypatch.setenv("POLYWEB_DB", database)
         get_settings.cache_clear()
         capsys.readouterr()
         try:

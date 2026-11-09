@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     CRD_PRICE_VERSION,
     AuthMode,
     CRDGrantsSummary,
@@ -23,7 +23,7 @@ from freesearch.models.provider_limits import (
     TierBalance,
     VaultKeyUsage,
 )
-from freesearch.models.quota_api import (
+from polyweb.models.quota_api import (
     USDBudgetPayload,
     USDGrantsSummary,
     USDHistoryPage,
@@ -31,7 +31,7 @@ from freesearch.models.quota_api import (
     USDUsageTotal,
     USDVaultKeyUsage,
 )
-from freesearch.routers.api import create_app
+from polyweb.routers.api import create_app
 
 
 def test_existing_budget_projects_to_usd_without_mutation() -> None:

@@ -29,13 +29,13 @@ from mcp.client.streamable_http import streamablehttp_client
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr
 
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.mcp.auth import build_http_app
-from freesearch.mcp.server import create_server
-from freesearch.models.credentials import CredentialOperation
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.configuration.config import get_settings
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.mcp.auth import build_http_app
+from polyweb.mcp.server import create_server
+from polyweb.models.credentials import CredentialOperation
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.a2_execution import RecordingAdapter, _seed_credential
 from tests.fixtures.api_keys import ProjectKey, issue_project_key, key_for_account
 from tests.fixtures.auth import TEMP_PASSWORD, auth_service_for, temp_email
@@ -60,7 +60,7 @@ class _AdapterBook:
         self.by_secret: dict[str, RecordingAdapter] = {}
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import freesearch.services.execution as execution_module
+        import polyweb.services.execution as execution_module
 
         def adapter_factory(name: str) -> Any:
             if name not in _PROVIDERS:
@@ -88,7 +88,7 @@ async def _bind_project(
 ) -> dict[str, RecordingAdapter]:
     """Bind one private credential per provider; return provider -> its adapter."""
 
-    from freesearch.models.observability import ActorType, ExecutionAttribution
+    from polyweb.models.observability import ActorType, ExecutionAttribution
 
     owner = ExecutionAttribution(
         project_id=project_id, actor_type=ActorType.HUMAN, actor_id=owner_id
@@ -301,7 +301,7 @@ async def test_rest_and_mcp_stdio_and_http_share_decisions_and_verified_attribut
         assert {(row[3], row[4], row[5]) for row in spans} == {expected[name]}, name
         roots = [row for row in spans if row[1] is None]
         assert len(roots) == len(traces) == 2, (name, roots)
-        children = [row for row in spans if row[1] is not None and row[2] == "freesearch.provider"]
+        children = [row for row in spans if row[1] is not None and row[2] == "polyweb.provider"]
         assert len(children) == 3, (name, children)
 
     # Project B's trace keeps exactly B's ownership; nothing else lands in it.

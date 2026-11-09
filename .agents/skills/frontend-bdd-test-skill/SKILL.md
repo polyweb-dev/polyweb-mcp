@@ -9,7 +9,7 @@ End-to-end Behavior-Driven Development (BDD) using `playwright-bdd`, TypeScript,
 
 ## 1. Workflow & Commands
 
-Run each command from `freesearch-ui/`.
+Run each command from `polyweb-ui/`.
 
 **Workflow**: Write `.feature` ──> Implement step definitions in `tests/steps/*.ts` ──> `pnpm bddgen` ──> `pnpm test:e2e`
 
@@ -32,10 +32,10 @@ Run `pnpm bddgen` before each direct `npx playwright test` command. The generate
 
 ---
 
-## 2. Directory Structure (`freesearch-ui`)
+## 2. Directory Structure (`polyweb-ui`)
 
 ```
-freesearch-ui/
+polyweb-ui/
 ├── playwright.config.ts          # defineBddConfig & webServer config
 └── tests/
     ├── features/                 # Declarative Gherkin (.feature) files

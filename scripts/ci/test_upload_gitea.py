@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -19,6 +20,12 @@ REPO = SCRIPT_DIR.parent.parent
 
 
 class ArtifactTests(unittest.TestCase):
+    def symlink_or_skip(self, link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=target_is_directory)
+        except OSError as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
     def test_reports_and_log_only_with_selected_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -36,7 +43,7 @@ class ArtifactTests(unittest.TestCase):
                 "test_reports/.private/token.json",
             ]:
                 (root / name).write_text("example")
-            (root / "test_reports/link.txt").symlink_to(root / ".env")
+            self.symlink_or_skip(root / "test_reports/link.txt", root / ".env")
             with patch.dict(os.environ, {"CI_PIPELINE_STATUS": "failure", "SECRET": "hidden"}):
                 uploader.make_bundle(root, "api-mutation", root / "bundle.zip")
             with zipfile.ZipFile(root / "bundle.zip") as archive:
@@ -59,8 +66,31 @@ class ArtifactTests(unittest.TestCase):
             root = Path(directory)
             (root / "outside/gremlins").mkdir(parents=True)
             (root / "outside/gremlins/secret.json").write_text("secret")
-            (root / "coverage").symlink_to(root / "outside", target_is_directory=True)
+            self.symlink_or_skip(
+                root / "coverage", root / "outside", target_is_directory=True
+            )
             self.assertEqual(uploader.report_files(root, "api-mutation"), [])
+
+    def test_ui_reports_include_playwright_output_and_exclude_test_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in [
+                "polyweb-ui/playwright-report/index.html",
+                "polyweb-ui/test-results/results.json",
+                "polyweb-ui/test-results/video.webm",
+                "polyweb-ui/coverage/index.html",
+            ]:
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("example")
+            files = uploader.report_files(root, "ui-bdd")
+            self.assertEqual(
+                {path.relative_to(root).as_posix() for path in files},
+                {
+                    "polyweb-ui/coverage/index.html",
+                    "polyweb-ui/playwright-report/index.html",
+                    "polyweb-ui/test-results/results.json",
+                },
+            )
 
     def test_size_and_file_count_limits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -108,7 +138,7 @@ class ArtifactTests(unittest.TestCase):
                         call.args[:2],
                         (
                             "PUT",
-                            "/api/packages/freesearch/generic/package/version/reports.zip",
+                            "/api/packages/polyweb/generic/package/version/reports.zip",
                         ),
                     )
                     self.assertEqual(call.kwargs["headers"]["Content-Length"], "8")
@@ -153,6 +183,8 @@ class ArtifactTests(unittest.TestCase):
                 )
 
     def test_log_wrapper_preserves_failure_and_progress(self) -> None:
+        if shutil.which("stdbuf") is None:
+            self.skipTest("GNU stdbuf is not available")
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "command.log"
             result = subprocess.run(

@@ -10,9 +10,9 @@ import asyncio
 import httpx
 from pydantic import SecretStr
 
-from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.models.contracts import FetchRequest, SearchRequest
+from polyweb.adapters.youcom import YoucomAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from polyweb.models.contracts import FetchRequest, SearchRequest
 from tests.unit.adapters._youcom_test_support import (
     _TEST_KEY,
     _CountingRunner,

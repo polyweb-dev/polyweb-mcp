@@ -6,7 +6,7 @@ These tests drive the real Behave step definitions
 monkeypatched factories. No live network calls or API keys are used.
 
 Contract under test (BDD fix contract):
-  AC-L1  With ``FREESEARCH_RUN_LIVE`` absent or not ``"1"``, a ``@live``
+  AC-L1  With ``POLYWEB_RUN_LIVE`` absent or not ``"1"``, a ``@live``
          scenario must be skipped by ``before_scenario`` before any
          loop/client/adapter setup; with the gate set to ``"1"`` the live
          scenario must run. Non-``@live`` scenarios are never gated, so
@@ -32,15 +32,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from freesearch.infrastructure import http as freesearch_http
-from freesearch.models.contracts import (
+from polyweb.infrastructure import http as polyweb_http
+from polyweb.models.contracts import (
     SearchResponse,
     SearchResult,
     UnitKind,
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.provider_limits import AuthMode
+from polyweb.models.provider_limits import AuthMode
 
 # ``features`` is an uninstalled namespace package at the repo root; make it
 # importable regardless of pytest's sys.path manipulation.
@@ -111,7 +111,7 @@ class _FakeScenario:
 
 def _forbid_direct_httpx(*args: object, **kwargs: object) -> None:
     raise AssertionError(
-        "before_scenario must build the client via freesearch.http.create_async_client(), "
+        "before_scenario must build the client via polyweb.http.create_async_client(), "
         "not httpx.AsyncClient directly"
     )
 
@@ -125,7 +125,7 @@ def _setup_fakes(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeClient, list[int
         factory_calls.append(1)
         return fake_client
 
-    monkeypatch.setattr(freesearch_http, "create_async_client", fake_factory)
+    monkeypatch.setattr(polyweb_http, "create_async_client", fake_factory)
     monkeypatch.setattr(environment, "create_async_client", fake_factory)
     monkeypatch.setattr(environment.httpx, "AsyncClient", _forbid_direct_httpx)
     monkeypatch.setattr(environment, "TavilyAdapter", _FakeAdapter)
@@ -138,8 +138,8 @@ def _setup_fakes(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeClient, list[int
 def test_live_scenario_is_skipped_before_setup_when_gate_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without FREESEARCH_RUN_LIVE=1 a @live scenario is skipped before setup."""
-    monkeypatch.delenv("FREESEARCH_RUN_LIVE", raising=False)
+    """Without POLYWEB_RUN_LIVE=1 a @live scenario is skipped before setup."""
+    monkeypatch.delenv("POLYWEB_RUN_LIVE", raising=False)
     _setup_fakes(monkeypatch)
 
     context = SimpleNamespace()
@@ -152,7 +152,7 @@ def test_live_scenario_is_skipped_before_setup_when_gate_absent(
             environment.after_scenario(context, None)
 
     assert scenario.should_skip, "live scenario was not marked skipped"
-    assert "FREESEARCH_RUN_LIVE" in (scenario.skip_reason or ""), (
+    assert "POLYWEB_RUN_LIVE" in (scenario.skip_reason or ""), (
         f"skip reason should mention the gate: {scenario.skip_reason!r}"
     )
     assert not hasattr(context, "http_client"), "skip must happen before client setup"
@@ -164,7 +164,7 @@ def test_live_scenario_is_skipped_before_setup_when_gate_not_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A non-"1" gate value (e.g. "yes") must also skip, not run, live scenarios."""
-    monkeypatch.setenv("FREESEARCH_RUN_LIVE", "yes")
+    monkeypatch.setenv("POLYWEB_RUN_LIVE", "yes")
     _setup_fakes(monkeypatch)
 
     context = SimpleNamespace()
@@ -181,8 +181,8 @@ def test_live_scenario_is_skipped_before_setup_when_gate_not_one(
 def test_live_scenario_runs_and_selects_keenable_adapter_when_gate_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With FREESEARCH_RUN_LIVE=1, @live @keenable selects KeenableAdapter."""
-    monkeypatch.setenv("FREESEARCH_RUN_LIVE", "1")
+    """With POLYWEB_RUN_LIVE=1, @live @keenable selects KeenableAdapter."""
+    monkeypatch.setenv("POLYWEB_RUN_LIVE", "1")
     fake_client, factory_calls = _setup_fakes(monkeypatch)
     keenable_adapter = _FakeKeenableAdapter(fake_client)
     monkeypatch.setattr(
@@ -210,7 +210,7 @@ def test_live_scenario_runs_and_selects_keenable_adapter_when_gate_enabled(
 
 def test_non_live_scenario_is_not_gated(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ordinary (non-@live) scenarios run regardless of the gate: offline-safe."""
-    monkeypatch.delenv("FREESEARCH_RUN_LIVE", raising=False)
+    monkeypatch.delenv("POLYWEB_RUN_LIVE", raising=False)
     _setup_fakes(monkeypatch)
 
     context = SimpleNamespace()

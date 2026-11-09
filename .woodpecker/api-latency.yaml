@@ -26,7 +26,7 @@ steps:
         bash scripts/ci/run-and-log.sh routing-latency-tests.log bash -euo pipefail -c '
           test -f .env || cp .env.example .env
           uv sync --frozen
-          uv run freesearch-db upgrade
+          uv run polyweb-db upgrade
           uv run behave tests/bdd/features/routing_latency.feature
           uv run pytest tests/integration/latency/ -q
           echo "=========================================================="

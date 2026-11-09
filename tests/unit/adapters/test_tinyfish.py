@@ -10,10 +10,10 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.tinyfish import TinyfishAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.tinyfish import TinyfishAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import (
     FetchRequest,
     HealthStatus,
     SearchRequest,
@@ -865,8 +865,8 @@ async def test_fetch_target_failures_map_to_retryable_provider_errors(
 
 
 def test_tinyfish_rate_catalog() -> None:
-    from freesearch.configuration.provider_limits import provider_limit_defaults
-    from freesearch.models.provider_limits import (
+    from polyweb.configuration.provider_limits import provider_limit_defaults
+    from polyweb.models.provider_limits import (
         AuthMode,
         LimitOperation,
         RateScope,
@@ -914,11 +914,11 @@ def test_tinyfish_rate_catalog() -> None:
 
 
 def test_tinyfish_budget_is_null() -> None:
-    from freesearch.configuration.provider_limits import (
+    from polyweb.configuration.provider_limits import (
         provider_limit_defaults,
         provider_tier_defaults,
     )
-    from freesearch.models.provider_limits import AuthMode, FundingMode, LimitOperation
+    from polyweb.models.provider_limits import AuthMode, FundingMode, LimitOperation
 
     records = [r for r in provider_limit_defaults() if r.provider == "tinyfish"]
     assert len(records) == 2

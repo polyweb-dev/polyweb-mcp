@@ -10,24 +10,24 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import ProviderConfigUpdate
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.project_routing import OperationOrderUpdate, RoutingOperation
-from freesearch.models.projects import CredentialOwnerScope
-from freesearch.persistence.audit import AuditRepository
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.settings import ProjectSettingsRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.execution import ExecutionService
-from freesearch.services.pool_materializer import materialize_pools
-from freesearch.services.project_routing import ProjectPoolOperations, ProjectRoutingService
-from freesearch.services.provider_runtime import patch_provider_config
+from polyweb.configuration.config import get_settings
+from polyweb.configuration.provider_config import ProviderConfigUpdate
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.project_routing import OperationOrderUpdate, RoutingOperation
+from polyweb.models.projects import CredentialOwnerScope
+from polyweb.persistence.audit import AuditRepository
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.settings import ProjectSettingsRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.execution import ExecutionService
+from polyweb.services.pool_materializer import materialize_pools
+from polyweb.services.project_routing import ProjectPoolOperations, ProjectRoutingService
+from polyweb.services.provider_runtime import patch_provider_config
 from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
 from tests.fixtures.auth import (
     account_id_from_pair,
@@ -57,7 +57,7 @@ async def repository(tmp_path: Path) -> AsyncIterator[SQLiteRepository]:
 async def test_execution_uses_separate_project_and_operation_orders(
     repository: SQLiteRepository, auth_secret: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "routing-execution-test-passphrase")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "routing-execution-test-passphrase")
     get_settings.cache_clear()
     store = EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
     exa, keenable = ControlAdapter("exa"), ControlAdapter("keenable")

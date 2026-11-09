@@ -18,9 +18,9 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import QuotaSource, SearchRequest
+from polyweb.adapters.youcom import YoucomAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import QuotaSource, SearchRequest
 from tests.unit.adapters._youcom_test_support import (
     _TEST_KEY,
     _WIRE_TIMEOUT,

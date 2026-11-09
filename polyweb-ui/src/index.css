@@ -1,0 +1,423 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/plus-jakarta-sans";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --surface: #1e1e1e;
+  --elevated: #252526;
+  --border-subtle: #3e3e42;
+  --muted: #8B94A7;
+  --text: #A7AEBD;
+  --text-strong: #E8EBF1;
+  --signal: #007acc;
+  --signal-muted: rgba(0, 122, 204, 0.14);
+
+  /* Supporting steps of the Carbon Black scale. Raised is the hover and
+     active-row step above a card; the hairline separates rows inside a
+     panel more quietly than the chrome border; signal ink is the readable
+     text tone of the signal on dark surfaces (links, selected labels). */
+  --raised: #2d2d30;
+  --raised-hover: #333337;
+  --hairline: rgba(255, 255, 255, 0.06);
+  --signal-ink: #3ea6f0;
+  /* The on-state track of operational switches: a neutral step, so a table of
+     switches never becomes a wall of accent. Blue stays for focus and primary. */
+  --control-on: #5d6575;
+
+  /* Three restrained accents: provider/time keys and JSON keys (cyan),
+     Polyweb processing and JSON strings (seafoam), rank/score emphasis and
+     JSON numbers/booleans (gold). Providers are never colored per-vendor. */
+  --accent-cyan: #4FC1FF;
+  --accent-seafoam: #4EC9B0;
+  --accent-gold: #D7BA7D;
+
+  /* Functional status — used only on actual status indicators */
+  --status-healthy: #22c55e;
+  --status-warning: #eab308;
+  --status-danger: #ef4444;
+
+  --sans: 'Plus Jakarta Sans Variable', system-ui, sans-serif;
+  --mono: 'JetBrains Mono Variable', ui-monospace, 'Cascadia Code', Consolas, monospace;
+
+  font: 15px/1.6 var(--sans);
+  color-scheme: dark;
+  color: var(--text);
+  background: var(--surface);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* shadcn token mappings — kept functional */
+  --background: #1e1e1e;
+  --foreground: #E8EBF1;
+  --card: #252526;
+  --card-foreground: #E8EBF1;
+  --popover: #252526;
+  --popover-foreground: #E8EBF1;
+  --primary: #007acc;
+  --primary-foreground: #ffffff;
+  --secondary: #2d2d30;
+  --secondary-foreground: #E8EBF1;
+  --muted-bg: #2d2d30;
+  --muted-foreground: #8B94A7;
+  --accent: #2d2d30;
+  --accent-foreground: #E8EBF1;
+  --destructive: #ef4444;
+  --border: #3e3e42;
+  --input: #3e3e42;
+  --ring: #007acc;
+  --radius: 0.5rem;
+
+  --chart-1: #007acc;
+  --chart-2: #22c55e;
+  --chart-3: #eab308;
+  --chart-4: #ef4444;
+  --chart-5: #8B94A7;
+
+  --sidebar: #252526;
+  --sidebar-foreground: #E8EBF1;
+  --sidebar-primary: #007acc;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #2d2d30;
+  --sidebar-accent-foreground: #E8EBF1;
+  --sidebar-border: #3e3e42;
+  --sidebar-ring: #007acc;
+
+  /* Minimalist scrollbar illumination tokens */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.16);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.48);
+  --scrollbar-thumb-active: rgba(255, 255, 255, 0.85);
+}
+
+#root {
+  width: 100%;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+/* Typography — Plus Jakarta Sans, sentence case, no all-caps. These element
+   defaults sit in the base layer so a utility on the element (a size, a
+   margin) always wins over them. */
+@layer base {
+  h1, h2, h3, h4 {
+    font-family: var(--sans);
+    font-weight: 500;
+    color: var(--text-strong);
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+
+  h1 { font-size: 24px; }
+  h2 { font-size: 18px; }
+  h3 { font-size: 16px; }
+  h4 { font-size: 14px; }
+
+  p { margin: 0; }
+
+  /* Monospace only for raw query/URL strings, JSON blobs, masked key
+     fingerprints, and baseUrl endpoints. Everything else stays sans. */
+  code, .mono {
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+}
+
+/* Tabular numerals for aligned metrics (latency, quota, cost) */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: var(--sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted-bg);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+  *:hover {
+    scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+  }
+
+  /* Ultra-thin minimalist scrollbars with hover illumination */
+  *::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border-radius: 9999px;
+    transition: background-color 0.15s ease-in-out;
+  }
+  *:hover::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-active);
+  }
+  *::-webkit-scrollbar-thumb:active {
+    background-color: #ffffff;
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* Shared workspace patterns. Every page builds its panels, tables and form
+   controls from these classes, so one change restyles the whole product.
+   They sit in the components layer, so a utility can still adjust width or
+   spacing at the call site. */
+@layer components {
+  .fs-panel {
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background: var(--elevated);
+  }
+
+  .fs-section-title {
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 500;
+    color: var(--text-strong);
+  }
+
+  .fs-section-description {
+    margin-top: 2px;
+    font-size: 13px;
+    line-height: 20px;
+    color: var(--muted);
+  }
+
+  .fs-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 13px;
+    line-height: 20px;
+  }
+  .fs-table th {
+    height: 36px;
+    padding: 0 16px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .fs-table td {
+    padding: 10px 16px;
+    color: var(--text);
+    vertical-align: middle;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .fs-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .fs-table tbody tr:hover td {
+    background: rgba(255, 255, 255, 0.015);
+  }
+  .fs-table .fs-cell-strong {
+    color: var(--text-strong);
+  }
+  .fs-table .fs-cell-actions {
+    width: 1%;
+    padding-right: 8px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .fs-table .fs-cell-empty {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  .fs-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .fs-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--muted);
+  }
+  .fs-field-error {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--status-danger);
+  }
+
+  .fs-input,
+  .fs-select,
+  .fs-select-trigger {
+    display: block;
+    width: 100%;
+    /* 2rem matches the h-8 form button on the 15px root scale. */
+    height: 2rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--surface);
+    padding: 0 10px;
+    font-size: 13px;
+    color: var(--text-strong);
+    outline: none;
+    transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
+  }
+  .fs-input::placeholder {
+    color: var(--muted);
+  }
+  .fs-input:focus-visible,
+  .fs-select:focus-visible,
+  .fs-select-trigger:focus-visible,
+  .fs-select-trigger[aria-expanded="true"] {
+    border-color: var(--signal);
+    box-shadow: 0 0 0 2px var(--signal-muted);
+  }
+  .fs-input:disabled,
+  .fs-select:disabled,
+  .fs-select-trigger:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+  .fs-input[aria-invalid="true"],
+  .fs-select[aria-invalid="true"],
+  .fs-select-trigger[aria-invalid="true"] {
+    border-color: var(--status-danger);
+  }
+  .fs-select-trigger {
+    padding-right: 8px;
+  }
+  .fs-select {
+    appearance: none;
+    padding-right: 28px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238B94A7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 14px;
+  }
+
+  .fs-keycap {
+    display: inline-grid;
+    min-width: 22px;
+    height: 20px;
+    place-items: center;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .fs-link {
+    color: var(--signal-ink);
+    text-underline-offset: 3px;
+  }
+  .fs-link:hover {
+    text-decoration: underline;
+  }
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--signal);
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  &::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  &:hover::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-active);
+  }
+}

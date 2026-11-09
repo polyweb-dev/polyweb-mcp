@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import AnyHttpUrl
 
-from freesearch.models.contracts import SearchResponse, SearchResult
-from freesearch.services.aggregation import canonicalize_url, reciprocal_rank_fusion
+from polyweb.models.contracts import SearchResponse, SearchResult
+from polyweb.services.aggregation import canonicalize_url, reciprocal_rank_fusion
 
 
 class TestCanonicalizeUrl:

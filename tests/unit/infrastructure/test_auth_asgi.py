@@ -14,14 +14,14 @@ from typing import Any
 
 import pytest
 
-from freesearch.infrastructure.auth_asgi import (
+from polyweb.infrastructure.auth_asgi import (
     MAX_PUBLIC_AUTH_BODY_BYTES,
     MAX_PUBLIC_OPERATION_BODY_BYTES,
     OPERATION_ROUTES,
     BearerAuthMiddleware,
 )
-from freesearch.models.projects import ProjectApiKeyPrincipal
-from freesearch.models.users import UserPrincipal
+from polyweb.models.projects import ProjectApiKeyPrincipal
+from polyweb.models.users import UserPrincipal
 
 
 def _principal() -> UserPrincipal:
@@ -345,8 +345,8 @@ _BROWSER_ORIGIN = "http://localhost:5177"
 def _browser_cookie_headers(token: str = "good-refresh") -> list[tuple[bytes, bytes]]:
     return [
         (b"origin", _BROWSER_ORIGIN.encode("ascii")),
-        (b"x-freesearch-client", b"browser"),
-        (b"cookie", f"__Secure-freesearch_refresh={token}".encode("ascii")),
+        (b"x-polyweb-client", b"browser"),
+        (b"cookie", f"__Secure-polyweb_refresh={token}".encode("ascii")),
     ]
 
 
@@ -390,7 +390,7 @@ def test_cookie_evidence_failure_returns_403_without_cookie_deletion() -> None:
         guard,
         method="POST",
         path="/auth/jwt/refresh",
-        headers=[(b"cookie", b"__Secure-freesearch_refresh=good-refresh")],
+        headers=[(b"cookie", b"__Secure-polyweb_refresh=good-refresh")],
     )
     assert status == 403
 
@@ -406,7 +406,7 @@ def test_invalid_cookie_returns_401_and_expires_cookie() -> None:
     assert status == 401
     assert headers[b"www-authenticate"] == b"Bearer"
     deletion = headers[b"set-cookie"].decode("ascii")
-    assert deletion.startswith("__Secure-freesearch_refresh=; ")
+    assert deletion.startswith("__Secure-polyweb_refresh=; ")
     assert "Max-Age=0" in deletion
     assert "Path=/auth/jwt/refresh" in deletion
 

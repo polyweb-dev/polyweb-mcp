@@ -15,9 +15,9 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import FetchRequest, SearchRequest, SearchResponse, UsageOperation
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import FetchRequest, SearchRequest, SearchResponse, UsageOperation
 from tests.unit.adapters._brave_test_support import brave_adapter, brave_payload
 
 _payload = brave_payload

@@ -21,9 +21,9 @@ _PROBE = textwrap.dedent(
     import sys
     from pathlib import Path
 
-    import freesearch.routers.api  # noqa: F401  (the REST transport)
-    import freesearch.mcp.server  # noqa: F401  (the MCP transport)
-    from freesearch.persistence.storage import Base, SQLiteRepository
+    import polyweb.routers.api  # noqa: F401  (the REST transport)
+    import polyweb.mcp.server  # noqa: F401  (the MCP transport)
+    from polyweb.persistence.storage import Base, SQLiteRepository
 
     database = Path(sys.argv[1])
 
@@ -56,9 +56,9 @@ _PROBE = textwrap.dedent(
             connection.commit()
             connection.close()
 
-            from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-            from freesearch.models.schema_enums import UpstreamScope
-            from freesearch.persistence.pools import UpstreamPoolRepository
+            from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+            from polyweb.models.schema_enums import UpstreamScope
+            from polyweb.persistence.pools import UpstreamPoolRepository
 
             async with repository.session() as session:
                 pool = await UpstreamPoolRepository(session).create_pool(

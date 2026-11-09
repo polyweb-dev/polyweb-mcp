@@ -10,19 +10,19 @@ from uuid import uuid4
 
 from opentelemetry.sdk.trace.export import SpanExportResult
 
-from freesearch.models.observability import (
+from polyweb.models.observability import (
     ActorType,
     TraceAttribute,
     TraceEventDetail,
     TraceSpanKind,
     TraceSpanRecord,
 )
-from freesearch.models.projects import (
+from polyweb.models.projects import (
     ProjectTracePolicy,
     TraceDetailPolicy,
 )
-from freesearch.persistence.otel_exporter import SQLiteSpanExporter
-from freesearch.persistence.trace_policy import apply_trace_policy
+from polyweb.persistence.otel_exporter import SQLiteSpanExporter
+from polyweb.persistence.trace_policy import apply_trace_policy
 
 
 def _record(**overrides: Any) -> TraceSpanRecord:
@@ -32,7 +32,7 @@ def _record(**overrides: Any) -> TraceSpanRecord:
     payload: dict[str, Any] = {
         "span_id": "span-1",
         "trace_id": "0" * 32,
-        "name": "freesearch.backend",
+        "name": "polyweb.backend",
         "kind": TraceSpanKind.INTERNAL,
         "started_at": now,
         "ended_at": now,
@@ -46,7 +46,7 @@ def _record(**overrides: Any) -> TraceSpanRecord:
         },
         "events": [
             TraceEventDetail(
-                name="freesearch.provider.response",
+                name="polyweb.provider.response",
                 timestamp=now,
                 attributes={
                     TraceAttribute.RESPONSE_OUTPUT_JSON: '{"results": []}',
@@ -93,7 +93,7 @@ def test_exporter_does_not_drop_legacy_unsampled_spans(monkeypatch: Any, tmp_pat
     span.attributes = {TraceAttribute.SAMPLED: False, TraceAttribute.CAPTURE_PAYLOAD: True}
     record = _record(project_id=uuid4(), actor_type=ActorType.HUMAN, actor_id=uuid4())
     collect = Mock(return_value=[])
-    monkeypatch.setattr("freesearch.persistence.otel_exporter.span_record", lambda _: record)
-    monkeypatch.setattr("freesearch.persistence.otel_exporter._record_rows", collect)
+    monkeypatch.setattr("polyweb.persistence.otel_exporter.span_record", lambda _: record)
+    monkeypatch.setattr("polyweb.persistence.otel_exporter._record_rows", collect)
     assert SQLiteSpanExporter(tmp_path / "unused.db").export([span]) is SpanExportResult.SUCCESS
     collect.assert_called_once_with([record])
