@@ -12,13 +12,13 @@ from alembic.operations import Operations
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection
 
-from freesearch.models.project_permissions import PROVIDER_OWNER_BIT
-from freesearch.persistence.database_migrations import _config
-from freesearch.persistence.migrations.vault_rbac_conversion import (
+from polyweb.models.project_permissions import PROVIDER_OWNER_BIT
+from polyweb.persistence.database_migrations import _config
+from polyweb.persistence.migrations.vault_rbac_conversion import (
     convert_memberships,
     run_vault_rbac_conversion,
 )
-from freesearch.persistence.migrations.vault_rbac_schema import (
+from polyweb.persistence.migrations.vault_rbac_schema import (
     add_vault_schema,
     finalize_vault_schema,
 )

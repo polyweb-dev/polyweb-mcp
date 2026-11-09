@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from freesearch.infrastructure.secrets import ProviderName
+from polyweb.infrastructure.secrets import ProviderName
 from tests.encrypted_secrets_helpers import (
     SENTINEL_PROVIDER_KEYS,
     assert_no_sentinels,
@@ -39,7 +39,7 @@ def _store(store_module: Any, repository: Any, codec: Any) -> Any:
 
 @pytest_asyncio.fixture
 async def repository(tmp_path: Path):  # type: ignore[no-untyped-def]
-    from freesearch.persistence.storage import SQLiteRepository
+    from polyweb.persistence.storage import SQLiteRepository
 
     repo = await SQLiteRepository.open(tmp_path / "enc-store.db")
     try:

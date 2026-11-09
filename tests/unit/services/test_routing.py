@@ -12,8 +12,8 @@ from decimal import Decimal
 import pytest
 from pydantic import AnyHttpUrl
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -28,7 +28,7 @@ from freesearch.models.contracts import (
     SearchRequest,
     SearchResponse,
 )
-from freesearch.services.routing import RouteCandidate, RoutingError, select_route
+from polyweb.services.routing import RouteCandidate, RoutingError, select_route
 
 FIXED_AT = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
 

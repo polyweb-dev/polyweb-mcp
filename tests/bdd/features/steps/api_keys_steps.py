@@ -18,9 +18,9 @@ from fastapi.testclient import TestClient
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import create_server, shutdown_injected_observability
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.mcp.server import create_server, shutdown_injected_observability
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -32,8 +32,8 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
     auth_service_for,
@@ -116,7 +116,7 @@ async def _call_mcp(context: Any, query: str) -> Any:
 def step_given_key_api(context: Any) -> None:
     configure_bdd_secret(context)
     with tempfile.NamedTemporaryFile(
-        prefix="freesearch-keys-", suffix=".db", dir=Path.cwd(), delete=False
+        prefix="polyweb-keys-", suffix=".db", dir=Path.cwd(), delete=False
     ) as handle:
         context.database_path = Path(handle.name)
     context.repository = context.loop.run_until_complete(

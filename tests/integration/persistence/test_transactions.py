@@ -20,12 +20,12 @@ import pytest_asyncio
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.persistence import transactions
-from freesearch.persistence.storage import RuntimeSettingRow, SQLiteRepository
-from freesearch.persistence.transactions import is_sqlite_lock_error, run_serialized
-from freesearch.services.control_access import run_control_write
-from freesearch.services.control_errors import ControlStorageUnavailable, ResourceConflict
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.persistence import transactions
+from polyweb.persistence.storage import RuntimeSettingRow, SQLiteRepository
+from polyweb.persistence.transactions import is_sqlite_lock_error, run_serialized
+from polyweb.services.control_access import run_control_write
+from polyweb.services.control_errors import ControlStorageUnavailable, ResourceConflict
 from tests.fixtures.alpha_fixtures import create_alpha_test_db
 from tests.fixtures.api_keys import audit_rows
 
@@ -210,7 +210,7 @@ async def test_audit_append_rolls_back_with_a_failed_mutation(
 ) -> None:
     """An audit row appended inside a mutation that later fails is never committed."""
 
-    from freesearch.services.audit_events import record_project_event, record_system_event
+    from polyweb.services.audit_events import record_project_event, record_system_event
     from tests.fixtures.auth import create_temp_user, temp_email, temp_principal
     from tests.fixtures.execution import seed_execution_project
 
@@ -253,16 +253,16 @@ async def test_binding_mutation_and_its_audit_roll_back_together(
 
     import os
 
-    from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-    from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-    from freesearch.models.projects import CredentialOwnerScope
-    from freesearch.models.vault import KeyPoolCreate
-    from freesearch.persistence.bindings import ProjectBindingRepository
-    from freesearch.persistence.credentials import CredentialRepository
-    from freesearch.persistence.key_pools import KeyPoolRepository
-    from freesearch.services import key_pools
-    from freesearch.services.credentials import credential_secret_slot
-    from freesearch.services.key_pools import KeyPoolService
+    from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+    from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+    from polyweb.models.projects import CredentialOwnerScope
+    from polyweb.models.vault import KeyPoolCreate
+    from polyweb.persistence.bindings import ProjectBindingRepository
+    from polyweb.persistence.credentials import CredentialRepository
+    from polyweb.persistence.key_pools import KeyPoolRepository
+    from polyweb.services import key_pools
+    from polyweb.services.credentials import credential_secret_slot
+    from polyweb.services.key_pools import KeyPoolService
     from tests.fixtures.auth import create_temp_user, temp_email, temp_principal
     from tests.fixtures.execution import seed_execution_project
 
@@ -313,11 +313,11 @@ async def test_concurrent_allocations_on_independent_engines_never_overcommit(
 ) -> None:
     """Two engines racing base rates onto one pool: the sum never exceeds the limit."""
 
-    from freesearch.models.credentials import CredentialOperation
-    from freesearch.models.providers import AllocationPut, PoolCreate, RateConstraint
-    from freesearch.models.schema_enums import UpstreamScope
-    from freesearch.services.control_errors import ResourceConflict as Conflict
-    from freesearch.services.pools import PoolService
+    from polyweb.models.credentials import CredentialOperation
+    from polyweb.models.providers import AllocationPut, PoolCreate, RateConstraint
+    from polyweb.models.schema_enums import UpstreamScope
+    from polyweb.services.control_errors import ResourceConflict as Conflict
+    from polyweb.services.pools import PoolService
     from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
     from tests.fixtures.auth import temp_principal
     from tests.fixtures.execution import seed_execution_project

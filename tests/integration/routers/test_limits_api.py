@@ -13,16 +13,16 @@ from pathlib import Path
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-from freesearch.models.contracts import UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     NativeUsageSnapshot,
     SyncClaim,
     UsageSyncRequest,
     native_pool_id,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -216,7 +216,7 @@ async def test_sync_polls_system_credential_and_dashboard_card_reports_funds(
 ) -> None:
     """Regression: Refresh Limits reads the vault credential and fills the card."""
 
-    import freesearch.services.execution as execution_module
+    import polyweb.services.execution as execution_module
 
     adapter = _FirecrawlUsageAdapter()
 
@@ -283,7 +283,7 @@ async def test_usd_budget_round_trip_preserves_existing_ledger_values(
 ) -> None:
     """Existing stored grants keep their value through a USD API edit."""
 
-    from freesearch.models.provider_limits import CRDGrantPayload
+    from polyweb.models.provider_limits import CRDGrantPayload
 
     with TestClient(_client(repository)) as client:
         pair = await register_system_admin_login(client, repository, temp_email("usd-admin"))

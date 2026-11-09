@@ -9,8 +9,8 @@ from decimal import Decimal
 
 from pydantic import SecretStr
 
-from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
+from polyweb.adapters.youcom import YoucomAdapter
+from polyweb.models.contracts import FetchRequest, SearchRequest, UsageOperation
 from tests.unit.adapters._youcom_test_support import (
     _TEST_KEY,
     _FakeClient,

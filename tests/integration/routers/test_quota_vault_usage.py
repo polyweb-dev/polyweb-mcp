@@ -7,17 +7,17 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
-from freesearch.configuration.config import get_settings
-from freesearch.models.contracts import UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.configuration.config import get_settings
+from polyweb.models.contracts import UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     NativeUsageSnapshot,
     UsageSyncRequest,
     native_pool_id,
 )
-from freesearch.persistence.projects import SystemRoleAssignmentRow
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.projects import SystemRoleAssignmentRow
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -36,11 +36,11 @@ from tests.integration.services.oauth.oauth_stubs import (
 
 @pytest.mark.asyncio
 async def test_key_reads_and_refresh_are_owner_scoped(tmp_path, monkeypatch, auth_secret) -> None:
-    import freesearch.routers.limits as limits_router
-    import freesearch.services.execution as execution_module
+    import polyweb.routers.limits as limits_router
+    import polyweb.services.execution as execution_module
 
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "quota-vault-test-encryption-key")
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / "encryption-key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "quota-vault-test-encryption-key")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / "encryption-key"))
     get_settings.cache_clear()
     calls = []
 
@@ -226,8 +226,8 @@ async def test_key_reads_and_refresh_are_owner_scoped(tmp_path, monkeypatch, aut
 async def test_parallel_oauth_state_is_only_visible_to_owner(
     tmp_path, monkeypatch, auth_secret
 ) -> None:
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "quota-oauth-test-encryption-key")
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / "encryption-key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "quota-oauth-test-encryption-key")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / "encryption-key"))
     get_settings.cache_clear()
     repository = await SQLiteRepository.open(tmp_path / "oauth-quota.db")
     server = StubOAuthServer(poll_script=["success"])

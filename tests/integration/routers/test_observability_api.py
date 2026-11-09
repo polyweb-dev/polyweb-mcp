@@ -14,7 +14,7 @@ from uuid import UUID
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-from freesearch.models.observability import (
+from polyweb.models.observability import (
     ActorType,
     TraceEventDetail,
     TraceOperation,
@@ -22,10 +22,10 @@ from freesearch.models.observability import (
     TraceSpanRecord,
     TraceStatusCode,
 )
-from freesearch.models.observability import TraceOutcome as _Outcome
-from freesearch.persistence.otel_exporter import write_trace_spans
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.models.observability import TraceOutcome as _Outcome
+from polyweb.persistence.otel_exporter import write_trace_spans
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -255,8 +255,8 @@ async def test_detail_returns_full_input_output_and_spans(
     assert detail["input"] == "distributed consensus algorithms"
     assert detail["output"]["kind"] == "search_results"
     assert [item["url"] for item in detail["output"]["results"]] == [
-        "https://docs.freesearch.dev/consensus",
-        "https://docs.freesearch.dev/raft-vs-paxos",
+        "https://docs.polyweb.dev/consensus",
+        "https://docs.polyweb.dev/raft-vs-paxos",
     ]
     first_result = detail["output"]["results"][0]
     assert first_result["title"] == "Consensus algorithms explained"
@@ -292,8 +292,8 @@ async def test_detail_returns_full_input_output_and_spans(
     # (Assumes the span fixture carries a span-level `provider` field per
     # PLAN §6.1 item 6; `provider_error.json` already does.)
     by_name = {span["name"]: span for span in detail["spans"]}
-    assert by_name["freesearch.provider"]["provider"] == "keenable"
-    assert by_name["freesearch.backend"]["provider"] is None
+    assert by_name["polyweb.provider"]["provider"] == "keenable"
+    assert by_name["polyweb.backend"]["provider"] is None
     assert root["provider"] == "keenable"
 
 
@@ -312,7 +312,7 @@ async def test_detail_error_trace_has_error_without_output(
     detail = response.json()
     assert detail["outcome"] == "error"
     assert detail["error"] == {"type": "http_error", "message": "HTTP 502"}
-    assert detail["input"] == "https://docs.freesearch.dev/getting-started"
+    assert detail["input"] == "https://docs.polyweb.dev/getting-started"
     assert detail["output"] is None
     assert detail["result_count"] is None
 
@@ -441,8 +441,8 @@ async def test_project_dashboard_omits_other_private_credentials_quota_and_healt
 ) -> None:
     from datetime import UTC
 
-    from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UsageEvent, UsageOperation
-    from freesearch.models.observability import ExecutionAttribution
+    from polyweb.models.contracts import QuotaSnapshot, QuotaSource, UsageEvent, UsageOperation
+    from polyweb.models.observability import ExecutionAttribution
 
     with _client(repository) as client:
         pair = register_and_login(client, temp_email("dashboard-scope"))

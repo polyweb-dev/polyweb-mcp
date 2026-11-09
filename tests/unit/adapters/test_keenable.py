@@ -12,12 +12,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import SpanKind, StatusCode
 from pydantic import SecretStr, ValidationError
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.infrastructure.observability import OtelObservability, use_observability
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import FetchRequest, SearchRequest, UnitKind, UsageOperation
-from freesearch.models.observability import TraceSpanName
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.keenable import KeenableAdapter
+from polyweb.infrastructure.observability import OtelObservability, use_observability
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import FetchRequest, SearchRequest, UnitKind, UsageOperation
+from polyweb.models.observability import TraceSpanName
 
 
 class _Runner:
@@ -779,7 +779,7 @@ async def test_caller_client_default_api_key_does_not_leak_into_keyless_requests
     ]
     for request in transport.requests:
         assert "X-API-Key" not in request.headers
-        assert request.headers["X-Keenable-Title"] == "freesearch"
+        assert request.headers["X-Keenable-Title"] == "polyweb"
 
 
 @pytest.mark.asyncio
@@ -818,7 +818,7 @@ async def test_caller_client_basic_auth_does_not_leak_into_keyless_requests() ->
     for request in transport.requests:
         assert "Authorization" not in request.headers
         assert "X-API-Key" not in request.headers
-        assert request.headers["X-Keenable-Title"] == "freesearch"
+        assert request.headers["X-Keenable-Title"] == "polyweb"
 
 
 @pytest.mark.asyncio
@@ -953,8 +953,8 @@ class TestKeenableTraceSpans:
         assert http_span.attributes["http.response.status_code"] == 200
         assert http_span.status.status_code is StatusCode.UNSET
         assert parse_span.kind is SpanKind.INTERNAL
-        assert parse_span.attributes["freesearch.operation.name"] == "search"
-        assert parse_span.attributes["freesearch.response.result_count"] == 1
+        assert parse_span.attributes["polyweb.operation.name"] == "search"
+        assert parse_span.attributes["polyweb.response.result_count"] == 1
         assert parse_span.status.status_code is StatusCode.UNSET
         assert _exception_event_count(exporter) == 0
         assert _trace_hex(http_span) == _trace_hex(parse_span) == _trace_hex(provider_span)
@@ -996,8 +996,8 @@ class TestKeenableTraceSpans:
         assert http_span.attributes["server.address"] == "api.keenable.ai"
         assert http_span.attributes["http.response.status_code"] == 200
         assert http_span.status.status_code is StatusCode.UNSET
-        assert parse_span.attributes["freesearch.operation.name"] == "fetch"
-        assert parse_span.attributes["freesearch.response.content_length"] == 6
+        assert parse_span.attributes["polyweb.operation.name"] == "fetch"
+        assert parse_span.attributes["polyweb.response.content_length"] == 6
         assert parse_span.status.status_code is StatusCode.UNSET
         assert _exception_event_count(exporter) == 0
 

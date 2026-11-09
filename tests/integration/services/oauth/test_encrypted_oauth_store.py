@@ -4,8 +4,8 @@ All original encryption, deletion, revocation, refresh and no-leak assertions
 now address the credential's actual slots. No provider-wide vault is involved.
 """
 
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.persistence.oauth_grants import oauth_secret_slot
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.persistence.oauth_grants import oauth_secret_slot
 from tests.integration.services.oauth.oauth_stubs import (
     ACCESS_TOKEN_VALUE,
     CLIENT_SECRET_VALUE,

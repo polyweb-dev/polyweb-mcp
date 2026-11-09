@@ -6,9 +6,9 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import HttpUrl
 
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
-from freesearch.models.provider_limits import AuthMode
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.models.contracts import FetchRequest, SearchRequest, UsageOperation
+from polyweb.models.provider_limits import AuthMode
 from tests.bdd.features.environment import _harness_env_key
 
 
@@ -92,7 +92,7 @@ def step_then_keenable_public_request(context: Any) -> None:
     """Verify the live wire request used Keenable's unauthenticated endpoint."""
     request = context.live_request
     assert request.url.path == "/v1/search/public"
-    assert request.headers["X-Keenable-Title"] == "freesearch"
+    assert request.headers["X-Keenable-Title"] == "polyweb"
     assert "X-API-Key" not in request.headers
     assert "Authorization" not in request.headers
 
@@ -105,7 +105,7 @@ def step_given_keenable_keyed_adapter(context: Any) -> None:
         f"Expected Keenable adapter, got '{context.adapter.name}'"
     )
     assert _harness_env_key(ProviderName.KEENABLE) is not None, (
-        "Keyed live scenario requires FREESEARCH_KEENABLE_API_KEY to be configured."
+        "Keyed live scenario requires POLYWEB_KEENABLE_API_KEY to be configured."
     )
     assert context.adapter.limit_auth_mode is AuthMode.KEYED, (
         "Keyed live scenario must run on the keyed private tier."
@@ -169,7 +169,7 @@ def step_then_keenable_fetch_public_request(context: Any) -> None:
     """Verify the live fetch wire request used Keenable's unauthenticated endpoint."""
     request = context.live_fetch_request
     assert request.url.path == "/v1/fetch/public"
-    assert request.headers["X-Keenable-Title"] == "freesearch"
+    assert request.headers["X-Keenable-Title"] == "polyweb"
     assert "X-API-Key" not in request.headers
     assert "Authorization" not in request.headers
 

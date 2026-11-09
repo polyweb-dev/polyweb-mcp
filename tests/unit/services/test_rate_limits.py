@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     AuthMode,
     LimitCallContext,
     LimitOperation,
@@ -21,7 +21,7 @@ from freesearch.models.provider_limits import (
     RateWindow,
     RateWindowName,
 )
-from freesearch.services.rate_limits import RateLimitService
+from polyweb.services.rate_limits import RateLimitService
 from tests.fixtures.execution import FIXTURE_ACTOR
 
 FIXED = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)

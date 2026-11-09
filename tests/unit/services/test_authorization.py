@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from freesearch.models.projects import (
+from polyweb.models.projects import (
     BUILTIN_ROLE_DEFINITIONS,
     AuthorizationQuery,
     BuiltinRole,

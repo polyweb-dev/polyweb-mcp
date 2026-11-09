@@ -17,8 +17,8 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.models.project_permissions import ProjectPermission
-from freesearch.models.projects import (
+from polyweb.models.project_permissions import ProjectPermission
+from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
     MembershipStatus,
@@ -26,12 +26,12 @@ from freesearch.models.projects import (
     ProjectStatus,
     ScopeType,
 )
-from freesearch.persistence.database_migrations import (
+from polyweb.persistence.database_migrations import (
     migration_head,
     upgrade_database,
     validate_database_schema,
 )
-from freesearch.persistence.projects import (
+from polyweb.persistence.projects import (
     AccountRow,
     ProjectMembershipRow,
     ProjectRepository,
@@ -39,7 +39,7 @@ from freesearch.persistence.projects import (
     ProjectRow,
     bootstrap_fresh_installation,
 )
-from freesearch.persistence.users import UserDatabase, UserRow
+from polyweb.persistence.users import UserDatabase, UserRow
 from tests.fixtures.alpha_fixtures import (
     bootstrap_fresh_alpha,
     create_alpha_test_db,
@@ -275,7 +275,7 @@ async def test_atomic_project_creation_rollback_on_inactive_or_missing_user(tmp_
             user_db = UserDatabase(session, UserRow)
             inactive_user = await user_db.create(
                 {
-                    "email": "inactive@freesearch.local",
+                    "email": "inactive@polyweb.local",
                     "hashed_password": "hash",
                     "is_active": True,
                     "is_superuser": False,
@@ -340,7 +340,7 @@ async def test_trusted_bootstrap_idempotency_and_public_registration_privilege_i
     repo = await create_alpha_test_db(db_path)
     try:
         # 1. Trusted bootstrap assigns system_admin
-        admin_user, _ = await seed_alpha_system_admin(repo, email="super@freesearch.local")
+        admin_user, _ = await seed_alpha_system_admin(repo, email="super@polyweb.local")
         async with repo.session() as session:
             role1 = await bootstrap_fresh_installation(session, admin_user.id)
             await session.commit()
@@ -407,7 +407,7 @@ async def test_full_project_member_addition_and_role_management(tmp_path: Path) 
     db_path = tmp_path / "project_membership_flow.db"
     result = await bootstrap_fresh_alpha(
         db_path,
-        admin_email="org_admin@freesearch.local",
+        admin_email="org_admin@polyweb.local",
         project_name="Workspace Delta",
     )
     try:
@@ -419,7 +419,7 @@ async def test_full_project_member_addition_and_role_management(tmp_path: Path) 
             user_db = UserDatabase(session, UserRow)
             member_user = await user_db.create(
                 {
-                    "email": "teammate@freesearch.local",
+                    "email": "teammate@polyweb.local",
                     "hashed_password": "teammate_hash",
                     "is_active": True,
                     "is_superuser": False,

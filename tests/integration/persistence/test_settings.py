@@ -8,9 +8,9 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.models.projects import ProjectCreate
-from freesearch.persistence.projects import ProjectRepository
-from freesearch.persistence.settings import (
+from polyweb.models.projects import ProjectCreate
+from polyweb.persistence.projects import ProjectRepository
+from polyweb.persistence.settings import (
     ProjectSettingsRepository,
     SystemSettingsRepository,
 )

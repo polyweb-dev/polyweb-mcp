@@ -11,11 +11,11 @@ from fastapi_users.password import PasswordHelper
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, BuiltinRole
-from freesearch.models.users import AuthProvider, normalize_email
-from freesearch.persistence.projects import ProjectRepository, SystemRoleAssignmentRow
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import (
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, BuiltinRole
+from polyweb.models.users import AuthProvider, normalize_email
+from polyweb.persistence.projects import ProjectRepository, SystemRoleAssignmentRow
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import (
     LoginThrottleRow,
     UserDatabase,
     UserRow,

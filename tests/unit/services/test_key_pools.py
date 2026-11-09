@@ -5,10 +5,10 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.vault import KeyPoolCreate, KeyPoolRead, PoolBudget
-from freesearch.services.control_errors import ResourceInvalid
-from freesearch.services.key_pools import pool_budget, pool_values, validate_operations
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.vault import KeyPoolCreate, KeyPoolRead, PoolBudget
+from polyweb.services.control_errors import ResourceInvalid
+from polyweb.services.key_pools import pool_budget, pool_values, validate_operations
 
 _BOTH = frozenset({CredentialOperation.SEARCH, CredentialOperation.FETCH})
 

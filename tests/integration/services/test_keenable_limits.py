@@ -18,9 +18,9 @@ import httpx
 import pytest_asyncio
 from pydantic import SecretStr
 
-from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.configuration.provider_limits import provider_limit_defaults
-from freesearch.models.contracts import (
+from polyweb.adapters.keenable import KeenableAdapter
+from polyweb.configuration.provider_limits import provider_limit_defaults
+from polyweb.models.contracts import (
     FetchRequest,
     SearchRequest,
     SearchResponse,
@@ -28,7 +28,7 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     AuthMode,
     CRDState,
     LimitCallContext,
@@ -38,9 +38,9 @@ from freesearch.models.provider_limits import (
     ProviderLimitRecord,
     UsageSyncRequest,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.limits_sync import LimitSyncService
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.limits_sync import LimitSyncService
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.execution import FIXTURE_ACTOR, seed_execution_project
 from tests.fixtures.execution import attributed_tracked_call as tracked_call
 
@@ -282,7 +282,7 @@ async def test_actual_sku_cost_does_not_consume_extra_rate(
 ) -> None:
     from datetime import datetime as _dt
 
-    from freesearch.models.provider_limits import RateWindowName
+    from polyweb.models.provider_limits import RateWindowName
 
     service = _service(repository)
     await _seed_full(service, repository)
@@ -311,7 +311,7 @@ async def test_actual_sku_cost_does_not_consume_extra_rate(
 async def test_failures_release_funds_reservations(
     repository: SQLiteRepository,
 ) -> None:
-    from freesearch.models.contracts import ProviderError
+    from polyweb.models.contracts import ProviderError
 
     service = _service(repository)
     await _seed_full(service, repository)
@@ -599,7 +599,7 @@ async def test_stale_generation_cannot_replace_newer_snapshot(
 async def test_rebuild_restores_counters_and_paid_before_402(
     repository: SQLiteRepository,
 ) -> None:
-    from freesearch.models.contracts import UsageStatus
+    from polyweb.models.contracts import UsageStatus
 
     now = datetime.now(UTC)
     await repository.record_usage(
@@ -628,7 +628,7 @@ async def test_rebuild_restores_counters_and_paid_before_402(
         ),
         attribution=await seed_execution_project(repository),
     )
-    from freesearch.models.contracts import QuotaSnapshot, QuotaSource
+    from polyweb.models.contracts import QuotaSnapshot, QuotaSource
 
     await repository.record_quota(
         QuotaSnapshot(

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from freesearch.adapters.exa import ExaAdapter
-from freesearch.infrastructure import http as freesearch_http
+from polyweb.adapters.exa import ExaAdapter
+from polyweb.infrastructure import http as polyweb_http
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
@@ -52,7 +52,7 @@ def test_step_given_exa_adapter_fails_without_exa_key() -> None:
     try:
         context = SimpleNamespace(has_exa_key=False, adapter=adapter)
 
-        with pytest.raises(AssertionError, match="FREESEARCH_EXA_API_KEY is not configured"):
+        with pytest.raises(AssertionError, match="POLYWEB_EXA_API_KEY is not configured"):
             exa_steps.step_given_exa_adapter(context)
     finally:
         asyncio.run(adapter.aclose())
@@ -79,7 +79,7 @@ def test_missing_exa_key_skips_live_scenario_before_adapter_construction(
         factory_called = True
         return object()
 
-    monkeypatch.setattr(freesearch_http, "create_async_client", fake_factory)
+    monkeypatch.setattr(polyweb_http, "create_async_client", fake_factory)
     monkeypatch.setattr(environment, "create_async_client", fake_factory)
     scenario = SimpleNamespace(feature=SimpleNamespace(name="Exa Provider Adapter Integration"))
     scenario.skip = lambda reason: setattr(scenario, "skip_reason", reason)
@@ -88,5 +88,5 @@ def test_missing_exa_key_skips_live_scenario_before_adapter_construction(
     environment.before_scenario(context, scenario)
 
     assert not factory_called
-    assert "FREESEARCH_EXA_API_KEY" in scenario.skip_reason
+    assert "POLYWEB_EXA_API_KEY" in scenario.skip_reason
     assert "sk-" not in scenario.skip_reason

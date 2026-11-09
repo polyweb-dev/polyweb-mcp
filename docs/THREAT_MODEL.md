@@ -21,7 +21,7 @@ Frozen contract under test:
    is useful alone for decrypting all existing envelopes.
 2. With the old key available, export each secret through an operator-approved source
    and record only its replacement input; do not copy ciphertext into a new install.
-3. Stop the service, switch `FREESEARCH_ENCRYPTION_KEY` (or the configured key file),
+3. Stop the service, switch `POLYWEB_ENCRYPTION_KEY` (or the configured key file),
    restart and clear process configuration caches, then re-encrypt by re-PUTting every
    provider secret and re-pairing OAuth. Each write creates a new AES-GCM envelope.
 4. Verify the new database decrypts with the new key, then retire the old key and salt.
@@ -58,7 +58,7 @@ internals (opportunistic `importlib` probes only, and only to sharpen failure
 messages). If a finding below turns out to be a contract flaw rather than an
 implementation bug, it will be reported as such instead of forcing green.
 
-## Round-1 findings (implementation: src/freesearch/parallel_oauth.py)
+## Round-1 findings (implementation: src/polyweb/parallel_oauth.py)
 
 Status after realignment: pytest 42 passed / 4 failed, Behave adv-oauth 24/24
 passed. The 4 failures are genuine implementation behaviors, each reproduced

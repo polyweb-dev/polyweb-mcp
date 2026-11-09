@@ -2,7 +2,7 @@
 
 Every test uses an isolated database file that already exists, so the
 missing-file refusal stays covered. The password prompt seam
-``freesearch.cli.users._prompt_password`` supplies each password. No test
+``polyweb.cli.users._prompt_password`` supplies each password. No test
 passes a password argument, and no password, token, or hash reaches the
 captured output.
 """
@@ -17,20 +17,20 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users.password import PasswordHelper
 from pydantic import SecretStr
 
-from freesearch.cli.users import _run
-from freesearch.models.observability import (
+from polyweb.cli.users import _run
+from polyweb.models.observability import (
     ActorType,
     TraceOperation,
     TraceSpanKind,
     TraceSpanRecord,
 )
-from freesearch.models.projects import BuiltinRole, ProjectCreate, ProjectMemberAdd
-from freesearch.persistence.audit import SystemAuditEventRow
-from freesearch.persistence.otel_exporter import write_trace_spans
-from freesearch.persistence.projects import ProjectRepository, SystemRoleAssignmentRow
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserDatabase, UserRow
-from freesearch.services.projects import ProjectService
+from polyweb.models.projects import BuiltinRole, ProjectCreate, ProjectMemberAdd
+from polyweb.persistence.audit import SystemAuditEventRow
+from polyweb.persistence.otel_exporter import write_trace_spans
+from polyweb.persistence.projects import ProjectRepository, SystemRoleAssignmentRow
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserDatabase, UserRow
+from polyweb.services.projects import ProjectService
 from tests.fixtures.alpha_fixtures import create_alpha_test_db
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
@@ -45,7 +45,7 @@ _PASSWORD = "StrongPass123!x-CliBDD"
 
 
 def _prompt(monkeypatch: pytest.MonkeyPatch, password: str = _PASSWORD) -> None:
-    monkeypatch.setattr("freesearch.cli.users._prompt_password", lambda: SecretStr(password))
+    monkeypatch.setattr("polyweb.cli.users._prompt_password", lambda: SecretStr(password))
 
 
 async def _account(repository: SQLiteRepository, email: str) -> object:
@@ -538,12 +538,12 @@ async def _pending_flows(tmp_path: Path) -> tuple[Path, dict[str, object]]:
 
     import httpx
 
-    from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-    from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-    from freesearch.models.credentials import CredentialAuthMode
-    from freesearch.models.vault import VaultKeyCreate
-    from freesearch.services.credential_oauth import OAuthTarget
-    from freesearch.services.vault_keys import VaultKeyService, VaultOAuthService
+    from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+    from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+    from polyweb.models.credentials import CredentialAuthMode
+    from polyweb.models.vault import VaultKeyCreate
+    from polyweb.services.credential_oauth import OAuthTarget
+    from polyweb.services.vault_keys import VaultKeyService, VaultOAuthService
     from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
     from tests.fixtures.parallel_oauth_vendor import FakeParallelVendor
 
@@ -635,16 +635,16 @@ async def _grant_state(database: Path, credential_id: object) -> tuple[str, str 
 
 
 def _isolated_key_location(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    from freesearch.configuration.config import get_settings
+    from polyweb.configuration.config import get_settings
 
     home = tmp_path / "empty-home"
     home.mkdir()
     for variable in ("HOME", "USERPROFILE"):
         monkeypatch.setenv(variable, str(home))
-    key_file = home / ".local" / "share" / "freesearch" / ".secret_key"
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(key_file))
-    monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY", raising=False)
-    monkeypatch.delenv("FREESEARCH_ENCRYPTION_RETIRED_KEY_FILES", raising=False)
+    key_file = home / ".local" / "share" / "polyweb" / ".secret_key"
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(key_file))
+    monkeypatch.delenv("POLYWEB_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("POLYWEB_ENCRYPTION_RETIRED_KEY_FILES", raising=False)
     get_settings.cache_clear()
     return home
 
@@ -655,8 +655,8 @@ async def test_cli_deactivate_creates_no_key_and_ends_the_initiators_flow_fail_c
     auth_secret: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from freesearch.configuration.config import get_settings
-    from freesearch.infrastructure.cryptography import DEFAULT_KEY_FILE
+    from polyweb.configuration.config import get_settings
+    from polyweb.infrastructure.cryptography import DEFAULT_KEY_FILE
 
     database, ids = await _pending_flows(tmp_path)
     home = _isolated_key_location(monkeypatch, tmp_path)
@@ -682,8 +682,8 @@ async def test_cli_revoke_system_admin_creates_no_key_and_ends_system_flows_only
     auth_secret: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from freesearch.configuration.config import get_settings
-    from freesearch.infrastructure.cryptography import DEFAULT_KEY_FILE
+    from polyweb.configuration.config import get_settings
+    from polyweb.infrastructure.cryptography import DEFAULT_KEY_FILE
 
     database, ids = await _pending_flows(tmp_path)
     home = _isolated_key_location(monkeypatch, tmp_path)

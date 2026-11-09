@@ -8,17 +8,17 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from freesearch.configuration.config import Settings
-from freesearch.models.project_permissions import ProjectPermission
-from freesearch.models.projects import (
+from polyweb.configuration.config import Settings
+from polyweb.models.project_permissions import ProjectPermission
+from polyweb.models.projects import (
     ProjectCreate,
     ProjectMemberAdd,
     ProjectRead,
     ProjectRolloutState,
 )
-from freesearch.models.users import UserPrincipal
-from freesearch.routers.api import create_app
-from freesearch.services.projects import ProjectService
+from polyweb.models.users import UserPrincipal
+from polyweb.routers.api import create_app
+from polyweb.services.projects import ProjectService
 from tests.fixtures.alpha_fixtures import (
     ALPHA_ADMIN_PASSWORD,
     AlphaBootstrapResult,

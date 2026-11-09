@@ -9,10 +9,10 @@ from decimal import Decimal
 
 import pytest
 
-from freesearch.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.services.monitoring import refresh_quotas
-from freesearch.services.parallel_oauth import OAuthUnpaired, ParallelOAuthError
+from polyweb.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.services.monitoring import refresh_quotas
+from polyweb.services.parallel_oauth import OAuthUnpaired, ParallelOAuthError
 from tests.fixtures.vault_oauth import vault_oauth_case as vault_oauth_case
 from tests.integration.services.oauth.oauth_stubs import (
     cents_to_usd,

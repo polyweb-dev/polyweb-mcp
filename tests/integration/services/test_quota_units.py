@@ -2,7 +2,7 @@
 
 Offline only: temp-file SQLite repositories (``tmp_path``), mocked HTTPX
 transports, and one fixed fake API key injected explicitly at every keyed
-adapter constructor. No live network, no production ``freesearch.db``, no
+adapter constructor. No live network, no production ``polyweb.db``, no
 port binds. Decimal assertions throughout — never float.
 
 Red-state contract: tests probe new seams with ``getattr`` and fail as clean
@@ -18,16 +18,16 @@ import pytest
 import pytest_asyncio
 from pydantic import SecretStr
 
-import freesearch.adapters.brave as brave_module
-import freesearch.adapters.exa as exa_module
-from freesearch.adapters._youcom_support import _estimated_quota
-from freesearch.adapters.exa import ExaAdapter
-from freesearch.adapters.firecrawl import FirecrawlAdapter, fetch_credits
-from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.adapters.parallel import ParallelAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models import contracts as contracts_module
-from freesearch.models.contracts import (
+import polyweb.adapters.brave as brave_module
+import polyweb.adapters.exa as exa_module
+from polyweb.adapters._youcom_support import _estimated_quota
+from polyweb.adapters.exa import ExaAdapter
+from polyweb.adapters.firecrawl import FirecrawlAdapter, fetch_credits
+from polyweb.adapters.keenable import KeenableAdapter
+from polyweb.adapters.parallel import ParallelAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models import contracts as contracts_module
+from polyweb.models.contracts import (
     HealthStatus,
     ProviderCapabilities,
     ProviderError,
@@ -39,10 +39,10 @@ from freesearch.models.contracts import (
     UsageOperation,
     UsageStatus,
 )
-from freesearch.persistence.storage import LegacyUsageTotal, SQLiteRepository
-from freesearch.services import monitoring as monitoring_module
-from freesearch.services.monitoring import effective_quota, refresh_quotas, tracked_call
-from freesearch.services.routing import select_route
+from polyweb.persistence.storage import LegacyUsageTotal, SQLiteRepository
+from polyweb.services import monitoring as monitoring_module
+from polyweb.services.monitoring import effective_quota, refresh_quotas, tracked_call
+from polyweb.services.routing import select_route
 from tests.fixtures.execution import seed_execution_project
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
@@ -76,7 +76,7 @@ def _opt(target: object, name: str, *default: object) -> object:
 def _unit_kind():  # type: ignore[no-untyped-def]
     unit_kind = _opt(contracts_module, "UnitKind", None)
     assert unit_kind is not None, (
-        "AC-3: freesearch.contracts.UnitKind missing (REQUEST|CREDIT|USD|FREE)"
+        "AC-3: polyweb.contracts.UnitKind missing (REQUEST|CREDIT|USD|FREE)"
     )
     return unit_kind
 
@@ -195,7 +195,7 @@ class TestDecimalRules:
         # SEAM PROBE: strict vendor-input Decimal validation shared helper.
         parser = _opt(contracts_module, "parse_decimal", None)
         assert parser is not None, (
-            "AC-3/2.3: freesearch.contracts.parse_decimal missing — vendor "
+            "AC-3/2.3: polyweb.contracts.parse_decimal missing — vendor "
             "numeric/string inputs must parse through strict Decimal validation "
             "(reject NaN, infinities, booleans, negatives unless contracted)"
         )
@@ -203,7 +203,7 @@ class TestDecimalRules:
     @pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity", "-5", True, "abc", None])
     def test_strict_parser_rejects_bad_inputs(self, bad: object) -> None:
         parser = _opt(contracts_module, "parse_decimal", None)
-        assert parser is not None, "AC-3/2.3: freesearch.contracts.parse_decimal missing"
+        assert parser is not None, "AC-3/2.3: polyweb.contracts.parse_decimal missing"
         try:
             value = parser(bad)
         except (ValueError, TypeError):
@@ -216,7 +216,7 @@ class TestDecimalRules:
     )
     def test_strict_parser_accepts_good_inputs(self, raw: object, expected: Decimal) -> None:
         parser = _opt(contracts_module, "parse_decimal", None)
-        assert parser is not None, "AC-3/2.3: freesearch.contracts.parse_decimal missing"
+        assert parser is not None, "AC-3/2.3: polyweb.contracts.parse_decimal missing"
         assert parser(raw) == expected, f"strict parser mangled {raw!r}"
 
     async def test_totals_stay_decimal_exact(self, repo: SQLiteRepository) -> None:
@@ -380,7 +380,7 @@ def _brave_monthly() -> object:
     if parser is None:
         parser = _opt(brave_module, "parse_monthly_element", None)
     assert parser is not None, (
-        "AC-2: no Brave comma-pair parser found on freesearch.adapters.brave "
+        "AC-2: no Brave comma-pair parser found on polyweb.adapters.brave "
         "(expected e.g. monthly_header_value: split on ',', index [1], strip, "
         "int >= 0 else None; per-second index [0] ignored)"
     )
@@ -464,7 +464,7 @@ class TestYoucomQuota:
     def test_gap_marker_stays_off_wire(self) -> None:
         # Critic caveat: usage_gap is an in-memory marker; it must never leak
         # into serialized payloads.
-        from freesearch.models.contracts import SearchResponse
+        from polyweb.models.contracts import SearchResponse
 
         response = SearchResponse(
             query="q",
@@ -512,7 +512,7 @@ class TestFirecrawlEstimates:
         )
 
     async def test_fetch_base_one_credit(self) -> None:
-        from freesearch.models.contracts import FetchRequest as FetchReq
+        from polyweb.models.contracts import FetchRequest as FetchReq
 
         client = httpx.AsyncClient(timeout=30.0)
         try:
@@ -543,7 +543,7 @@ class TestFirecrawlEstimates:
     ) -> None:
         # T-6 (estimate≡executed options): the estimate must read the same
         # FetchRequest options an executed fetch would bill.
-        from freesearch.models.contracts import FetchRequest as FetchReq
+        from polyweb.models.contracts import FetchRequest as FetchReq
 
         client = httpx.AsyncClient(timeout=30.0)
         try:
@@ -631,7 +631,7 @@ class TestCostEstimates:
         self, mode: str | None, bundles: int, expected: str
     ) -> None:
         # T-5: the documented pricing function prices every mode directly.
-        from freesearch.adapters.parallel import search_cost_usd
+        from polyweb.adapters.parallel import search_cost_usd
 
         assert search_cost_usd(mode, bundles) == Decimal(expected), (
             f"AC-PA-2: search_cost_usd({mode!r}, {bundles}) must be USD {expected}"
@@ -641,7 +641,7 @@ class TestCostEstimates:
     def test_parallel_extract_price_projection(self, urls: int, expected: str) -> None:
         # T-3: url_count prices per URL; counts above 1 are projection-only
         # until a batch fetch path exists (executable path is 1 URL).
-        from freesearch.adapters.parallel import extract_cost_usd
+        from polyweb.adapters.parallel import extract_cost_usd
 
         assert extract_cost_usd(urls) == Decimal(expected), (
             f"AC-PA-2: extract_cost_usd({urls}) must be USD {expected}"
@@ -651,7 +651,7 @@ class TestCostEstimates:
         # T-5: estimate_cost driven with the P1-6 mode-aware request contract.
         from pydantic import ValidationError
 
-        from freesearch.adapters.parallel import search_cost_usd
+        from polyweb.adapters.parallel import search_cost_usd
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={})
@@ -810,8 +810,8 @@ def _health(name: str, status: HealthStatus) -> ProviderHealth:
 
 def _parallel_route_adapter() -> object:
     """Offline routable stand-in named exactly 'parallel'."""
-    from freesearch.adapters.base import ProviderAdapter
-    from freesearch.models.contracts import (
+    from polyweb.adapters.base import ProviderAdapter
+    from polyweb.models.contracts import (
         CostEstimate,
         FetchedDocument,
         FetchRequest,
@@ -828,7 +828,7 @@ def _parallel_route_adapter() -> object:
             return ProviderCapabilities(search=True, fetch=True)
 
         async def search(self, request: SearchRequest):  # type: ignore[no-untyped-def]
-            from freesearch.models.contracts import SearchResponse as SR
+            from polyweb.models.contracts import SearchResponse as SR
 
             return SR(query=request.query, provider="parallel", results=[])
 
@@ -851,8 +851,8 @@ def _parallel_route_adapter() -> object:
 
 class TestRoutingSemantics:
     def _adapters(self) -> list:
-        from freesearch.adapters.base import ProviderAdapter
-        from freesearch.models.contracts import (
+        from polyweb.adapters.base import ProviderAdapter
+        from polyweb.models.contracts import (
             CostEstimate,
             FetchedDocument,
             FetchRequest,
@@ -872,7 +872,7 @@ class TestRoutingSemantics:
                 return ProviderCapabilities(search=True, fetch=True)
 
             async def search(self, request: SearchRequest):  # type: ignore[no-untyped-def]
-                from freesearch.models.contracts import SearchResponse as SR
+                from polyweb.models.contracts import SearchResponse as SR
 
                 return SR(query=request.query, provider=self._name, results=[])
 
@@ -1158,7 +1158,7 @@ class TestCompatibilityPrivacy:
             poller = _opt(monitoring_module, "QuotaPoller", None)
             ttl = _opt(poller, "ttl_seconds", None) if poller is not None else None
         assert ttl is not None, (
-            "AC-8: no bounded quota-poll TTL found on freesearch.monitoring "
+            "AC-8: no bounded quota-poll TTL found on polyweb.monitoring "
             "(expected e.g. QUOTA_POLL_TTL_SECONDS within 60-300s; polling must "
             "be on-demand/cached, never per request)"
         )
@@ -1178,7 +1178,7 @@ class _QuotaStub:
     """Offline quota-capable adapter double for poll failure-safety."""
 
     def __init__(self, name: str, snapshot: QuotaSnapshot) -> None:
-        from freesearch.adapters.base import ProviderAdapter
+        from polyweb.adapters.base import ProviderAdapter
 
         class Stub(ProviderAdapter):
             @property
@@ -1190,7 +1190,7 @@ class _QuotaStub:
                 return ProviderCapabilities(search=True, fetch=True, quota=True)
 
             async def search(self, request: SearchRequest):  # type: ignore[no-untyped-def]
-                from freesearch.models.contracts import SearchResponse as SR
+                from polyweb.models.contracts import SearchResponse as SR
 
                 return SR(query=request.query, provider=name, results=[])
 
@@ -1200,7 +1200,7 @@ class _QuotaStub:
                 raise NotImplementedError
 
             async def estimate_cost(self, request):  # type: ignore[no-untyped-def]
-                from freesearch.models.contracts import CostEstimate as CE
+                from polyweb.models.contracts import CostEstimate as CE
 
                 operation = (
                     UsageOperation.SEARCH
@@ -1341,8 +1341,8 @@ class TestParallelFetchUsagePersistence:
         # R2 guard: the executed-fetch usage event carries url_count in
         # metadata, and the metadata filter must let it through — otherwise
         # persisted spend ledgers silently lose the batch dimension.
-        from freesearch.models.contracts import FetchRequest as FetchReq
-        from freesearch.services.monitoring import tracked_call as tracked
+        from polyweb.models.contracts import FetchRequest as FetchReq
+        from polyweb.services.monitoring import tracked_call as tracked
 
         client = httpx.AsyncClient(
             transport=httpx.MockTransport(_parallel_extract_handler), timeout=30.0
@@ -1415,7 +1415,7 @@ async def _keenable_hydrated(adapter: object, repo: SQLiteRepository) -> object:
 
 class TestKeenableRebuildPersistence:
     async def test_hydration_restores_spend_across_rebuild(self, repo: SQLiteRepository) -> None:
-        from freesearch.services.monitoring import tracked_call as tracked
+        from polyweb.services.monitoring import tracked_call as tracked
 
         client = httpx.AsyncClient(
             transport=httpx.MockTransport(_keenable_search_handler()), timeout=30.0
@@ -1447,8 +1447,8 @@ class TestKeenableRebuildPersistence:
         )
 
     async def test_402_exhaustion_survives_rebuild(self, repo: SQLiteRepository) -> None:
-        from freesearch.infrastructure.resilience import ProviderOperationError as OpError
-        from freesearch.services.monitoring import tracked_call as tracked
+        from polyweb.infrastructure.resilience import ProviderOperationError as OpError
+        from polyweb.services.monitoring import tracked_call as tracked
 
         client = httpx.AsyncClient(
             transport=httpx.MockTransport(_keenable_search_handler(status=402)),
@@ -1595,8 +1595,8 @@ class TestQuotaPollBackoffAndEviction:
         # Failure backoff through the public ResilientRunner seams (injected
         # clock/sleeper, deterministic jitter): two 429s on the quota poll
         # sleep capped exponential backoff, then the poll succeeds.
-        from freesearch.adapters.youcom import YoucomAdapter
-        from freesearch.infrastructure.resilience import ResilientRunner
+        from polyweb.adapters.youcom import YoucomAdapter
+        from polyweb.infrastructure.resilience import ResilientRunner
 
         sleeps: list[float] = []
 
@@ -1644,7 +1644,7 @@ class TestQuotaPollBackoffAndEviction:
     async def test_poll_state_eviction_forces_repoll(self, repo: SQLiteRepository) -> None:
         # Lock/cache eviction through the public seam: after eviction the next
         # bounded poll must hit vendors again instead of serving stale state.
-        from freesearch.services.monitoring import clear_quota_poll_cache, refresh_quotas
+        from polyweb.services.monitoring import clear_quota_poll_cache, refresh_quotas
 
         calls: list[str] = []
 
@@ -1805,7 +1805,7 @@ class TestBraveDerivedSpend:
             spend(bad)  # type: ignore[arg-type]
 
     async def test_snapshot_keeps_throttle_but_carries_cost_metadata(self) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         headers = {"X-RateLimit-Remaining": "49, 0", "X-RateLimit-Limit": "50, 0"}
         client = httpx.AsyncClient(
@@ -1836,7 +1836,7 @@ class TestBraveDerivedSpend:
         )
 
     async def test_collect_stats_projects_176_requests_to_088(self, repo: SQLiteRepository) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         kind = _unit_kind()
         for index in range(175):
@@ -1902,7 +1902,7 @@ class TestBraveDerivedSpend:
         )
 
     async def test_per_second_headroom_in_usage_metadata(self) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         headers = {"X-RateLimit-Remaining": "49, 0"}
         client = httpx.AsyncClient(
@@ -1950,7 +1950,7 @@ class TestBraveDerivedSpend:
             transport=httpx.MockTransport(_brave_search_handler(headers)), timeout=30.0
         )
         try:
-            from freesearch.adapters.brave import BraveAdapter
+            from polyweb.adapters.brave import BraveAdapter
 
             adapter = BraveAdapter(client, api_key=TEST_API_KEY)
             await tracked_call(
@@ -1978,7 +1978,7 @@ class TestBraveExhaustionMapping:
     @staticmethod
     @pytest.mark.parametrize("code", ["CREDIT_EXHAUSTED", "QUOTA_LIMITED", "USAGE_LIMIT_EXCEEDED"])
     async def test_body_code_maps_to_quota_exhausted(code: str) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(402, json={"code": code})
@@ -2001,7 +2001,7 @@ class TestBraveExhaustionMapping:
         assert exc_info.value.error.status_code == 402
 
     async def test_429_quota_limited_never_retries_as_exhaustion(self) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         calls: list[object] = []
 
@@ -2029,7 +2029,7 @@ class TestBraveExhaustionMapping:
         assert len(calls) == 1, f"budget 429 must not retry, saw {len(calls)} attempts"
 
     async def test_429_rate_limited_retries_as_rate_pressure(self) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         calls: list[object] = []
 
@@ -2055,7 +2055,7 @@ class TestBraveExhaustionMapping:
     async def test_quota_after_error_402_records_exhaustion_without_limit(
         self, repo: SQLiteRepository
     ) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(402, json={"code": "CREDIT_EXHAUSTED"})
@@ -2086,9 +2086,9 @@ class TestBraveExhaustionMapping:
         assert latest.remaining_percent is None, "AC-7a: percent stays None"
 
     async def test_genuine_throttle_zero_still_excludes(self, repo: SQLiteRepository) -> None:
-        from freesearch.adapters.base import ProviderAdapter
-        from freesearch.adapters.brave import BraveAdapter
-        from freesearch.models.contracts import (
+        from polyweb.adapters.base import ProviderAdapter
+        from polyweb.adapters.brave import BraveAdapter
+        from polyweb.models.contracts import (
             CostEstimate,
             FetchedDocument,
             FetchRequest,
@@ -2171,7 +2171,7 @@ class TestBraveExhaustionMapping:
 
 class TestBraveMonthlyCounterLedger:
     async def test_tracked_bare_search_persists_bounded_quota(self, repo: SQLiteRepository) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         client = httpx.AsyncClient(
             transport=httpx.MockTransport(_brave_search_handler({"X-RateLimit-Remaining": "49"})),
@@ -2200,7 +2200,7 @@ class TestBraveMonthlyCounterLedger:
         assert latest.remaining_percent == Decimal("99.9")
 
     async def test_hydrate_restores_counter_after_restart(self, repo: SQLiteRepository) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         client = httpx.AsyncClient(
             transport=httpx.MockTransport(_brave_search_handler({})), timeout=30.0
@@ -2229,7 +2229,7 @@ class TestBraveMonthlyCounterLedger:
         assert snapshot.limit == Decimal("1000")
 
     async def test_header_limit_preferred_over_implied(self, repo: SQLiteRepository) -> None:
-        from freesearch.adapters.brave import BraveAdapter
+        from polyweb.adapters.brave import BraveAdapter
 
         headers = {
             "X-RateLimit-Remaining": "5, 1990",
@@ -2715,7 +2715,7 @@ class _TavilyFakeSDK:
 
 class TestTavilyQuotaCoexistence:
     async def test_failed_call_records_zero_debit(self, repo: SQLiteRepository) -> None:
-        from freesearch.adapters.tavily import TavilyAdapter
+        from polyweb.adapters.tavily import TavilyAdapter
 
         sdk = _TavilyFakeSDK()
         sdk.search_error = ValueError("boom")
@@ -2744,7 +2744,7 @@ class TestTavilyQuotaCoexistence:
         assert all(t.normalized_crd == Decimal("0") for t in totals)
 
     async def test_empty_valid_documents_debit_reported_only(self, repo: SQLiteRepository) -> None:
-        from freesearch.adapters.tavily import TavilyAdapter
+        from polyweb.adapters.tavily import TavilyAdapter
 
         sdk = _TavilyFakeSDK()
         sdk.search_response = {"results": []}
@@ -2772,8 +2772,8 @@ class TestTavilyQuotaCoexistence:
         assert response.usage is None
 
     async def test_stale_positive_cache_loses_to_vendor_402(self, repo: SQLiteRepository) -> None:
-        from freesearch.adapters.tavily import TavilyAdapter
-        from freesearch.models.contracts import UnitKind
+        from polyweb.adapters.tavily import TavilyAdapter
+        from polyweb.models.contracts import UnitKind
 
         sdk = _TavilyFakeSDK()
         sdk.search_response = {"results": []}

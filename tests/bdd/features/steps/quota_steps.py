@@ -1,7 +1,7 @@
 """Offline Behave steps for the QUOTA.md acceptance suite (features/quota.feature).
 
 Every scenario runs against an isolated temp-file SQLite repository and
-mocked HTTP transports: no live network, no production ``freesearch.db``,
+mocked HTTP transports: no live network, no production ``polyweb.db``,
 and no binds to the developer-occupied ports 8000/8001.
 
 Red-state contract: steps assert through ``getattr`` probes with AC-tagged
@@ -25,18 +25,18 @@ import httpx
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import SecretStr, ValidationError
 
-import freesearch.adapters.firecrawl as firecrawl_module
-from freesearch.adapters._youcom_support import _estimated_quota
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.adapters.exa import ExaAdapter
-from freesearch.adapters.firecrawl import FirecrawlAdapter, fetch_credits
-from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.adapters.parallel import ParallelAdapter, extract_cost_usd, search_cost_usd
-from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models import contracts as contracts_module
-from freesearch.models.contracts import (
+import polyweb.adapters.firecrawl as firecrawl_module
+from polyweb.adapters._youcom_support import _estimated_quota
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.adapters.exa import ExaAdapter
+from polyweb.adapters.firecrawl import FirecrawlAdapter, fetch_credits
+from polyweb.adapters.keenable import KeenableAdapter
+from polyweb.adapters.parallel import ParallelAdapter, extract_cost_usd, search_cost_usd
+from polyweb.adapters.youcom import YoucomAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models import contracts as contracts_module
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -53,10 +53,10 @@ from freesearch.models.contracts import (
     UsageOperation,
     UsageStatus,
 )
-from freesearch.persistence.storage import LegacyUsageTotal, SQLiteRepository
-from freesearch.services import monitoring as monitoring_module
-from freesearch.services.monitoring import collect_stats, refresh_quotas, tracked_call
-from freesearch.services.routing import select_route
+from polyweb.persistence.storage import LegacyUsageTotal, SQLiteRepository
+from polyweb.services import monitoring as monitoring_module
+from polyweb.services.monitoring import collect_stats, refresh_quotas, tracked_call
+from polyweb.services.routing import select_route
 from tests.fixtures.execution import scenario_attribution
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
@@ -200,10 +200,10 @@ def _refresh_or_fail(context: Any, adapters: list[Any]) -> Any:
     """Invoke the bounded quota poll seam, failing Red with its contract."""
 
     # SEAM PROBE (AC-1/AC-8): QUOTA.md requires a bounded TTL/on-demand polling
-    # orchestrator in freesearch.monitoring that reaches record_quota.
+    # orchestrator in polyweb.monitoring that reaches record_quota.
     refresh = _opt(monitoring_module, "refresh_quotas", None)
     assert refresh is not None, (
-        "AC-1: freesearch.monitoring.refresh_quotas missing — expected a bounded "
+        "AC-1: polyweb.monitoring.refresh_quotas missing — expected a bounded "
         "TTL/on-demand poll refresh_quotas(repository, adapters) that calls "
         "adapter.quota() and persists every valid result via record_quota "
         "(QUOTA.md R1/AC-1)"
@@ -222,7 +222,7 @@ def _require_unit_kind_model() -> Any:
 
     unit_kind = _opt(contracts_module, "UnitKind", None)
     assert unit_kind is not None, (
-        "AC-3: freesearch.contracts.UnitKind missing "
+        "AC-3: polyweb.contracts.UnitKind missing "
         "(expected REQUEST|CREDIT|USD|FREE per QUOTA.md section 2.1)"
     )
     assert "unit_kind" in UsageEvent.model_fields, (
@@ -259,7 +259,7 @@ def step_given_isolated_quota_repository(context: Any) -> None:
     context.database_path = str(db_path)
     context.repository = _run(context, SQLiteRepository.open(db_path))
     assert Path(context.database_path).exists(), "temp quota database was not created"
-    assert "freesearch.db" not in str(db_path), "must never use the production database file"
+    assert "polyweb.db" not in str(db_path), "must never use the production database file"
     context.quota_vendor_calls = []
     context.brave_headers = None
     context.search_response = None
@@ -1363,7 +1363,7 @@ def step_when_parallel_soft_then_success(context: Any) -> None:
     # zero while the provider is already healthy again.
     effective = _opt(monitoring_module, "effective_quota", None)
     assert effective is not None, (
-        "AC-6: freesearch.monitoring.effective_quota missing — routing needs an "
+        "AC-6: polyweb.monitoring.effective_quota missing — routing needs an "
         "effective-quota view where a Parallel soft 402 zero expires after the "
         "next successful billed operation (QUOTA.md AC-6/AC-PA-5)"
     )
@@ -1834,7 +1834,7 @@ def step_when_firecrawl_malformed(context: Any, remaining: str, plan: str) -> No
         parser = _opt(firecrawl_module, "validate_credits", None)
     context.firecrawl_parser = parser
     assert parser is not None, (
-        "AC-FC-2: no strict credit parser found on freesearch.adapters.firecrawl "
+        "AC-FC-2: no strict credit parser found on polyweb.adapters.firecrawl "
         "(expected e.g. parse_credit: reject NaN/inf/negative/bool, absent "
         "optionals become None, remainingCredits stays truth above baseline)"
     )
@@ -2188,7 +2188,7 @@ def step_then_parallel_soft_zero(context: Any) -> None:
     # month-long exhaustion and must expire on later success/reconciliation.
     effective = _opt(monitoring_module, "effective_quota", None)
     assert effective is not None, (
-        "AC-PA-5: freesearch.monitoring.effective_quota missing — a Parallel 402 "
+        "AC-PA-5: polyweb.monitoring.effective_quota missing — a Parallel 402 "
         "soft zero must read as temporary (cleared by later billed success), "
         "never as a hard lockout (same seam as AC-6)"
     )
@@ -2223,7 +2223,7 @@ def step_when_parallel_success_after_soft(context: Any) -> None:
 @then("the Parallel soft zero should be cleared")
 def step_then_parallel_soft_cleared(context: Any) -> None:
     effective = _opt(monitoring_module, "effective_quota", None)
-    assert effective is not None, "AC-PA-5: freesearch.monitoring.effective_quota missing"
+    assert effective is not None, "AC-PA-5: polyweb.monitoring.effective_quota missing"
     view = _run(context, effective(context.repository, "parallel"))
     adapter = _StubAdapter("parallel")
     health = {
@@ -2719,7 +2719,7 @@ def _require_normalize_helper() -> Any:
 
     helper = _opt(monitoring_module, "normalize_degenerate_quota", None)
     assert helper is not None, (
-        "S4/AC-2: freesearch.monitoring.normalize_degenerate_quota missing — "
+        "S4/AC-2: polyweb.monitoring.normalize_degenerate_quota missing — "
         "expected a shared pure helper normalize_degenerate_quota(snapshot) "
         "mapping limit==Decimal('0') to remaining/limit/reset None (else "
         "identity), used by BOTH effective_quota and the dashboard path "
@@ -2775,7 +2775,7 @@ def step_then_effective_matches_normalized(context: Any) -> None:
     helper = _require_normalize_helper()
     effective = _opt(monitoring_module, "effective_quota", None)
     assert effective is not None, (
-        "S4/AC-2: freesearch.monitoring.effective_quota missing — routing needs "
+        "S4/AC-2: polyweb.monitoring.effective_quota missing — routing needs "
         "the effective-quota view over the normalized degenerate snapshot"
     )
     view = _run(context, effective(context.repository, "brave"))

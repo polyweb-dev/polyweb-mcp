@@ -5,8 +5,8 @@ from decimal import Decimal
 
 import pytest
 
-from freesearch.configuration.provider_limits import provider_limit_defaults
-from freesearch.models.contracts import (
+from polyweb.configuration.provider_limits import provider_limit_defaults
+from polyweb.models.contracts import (
     ProviderError,
     SearchRequest,
     SearchResponse,
@@ -14,8 +14,8 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.provider_limits import AuthMode, LimitOperation
-from freesearch.services.pool_budget import actual_price, failure_price, request_price, window_start
+from polyweb.models.provider_limits import AuthMode, LimitOperation
+from polyweb.services.pool_budget import actual_price, failure_price, request_price, window_start
 
 
 @pytest.mark.parametrize(

@@ -13,9 +13,9 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -27,8 +27,8 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -335,21 +335,21 @@ async def test_search_emits_trace_header_matching_detail_hierarchy(
     spans = {span["name"]: span for span in detail["spans"]}
     assert set(spans) == {
         "POST /search",
-        "freesearch.backend",
-        "freesearch.route",
-        "freesearch.provider",
-        "freesearch.results",
-        "freesearch.response",
+        "polyweb.backend",
+        "polyweb.route",
+        "polyweb.provider",
+        "polyweb.results",
+        "polyweb.response",
     }
     root = spans["POST /search"]
-    backend = spans["freesearch.backend"]
+    backend = spans["polyweb.backend"]
     assert root["parent_span_id"] is None
     assert backend["parent_span_id"] == root["span_id"]
-    assert spans["freesearch.route"]["parent_span_id"] == backend["span_id"]
-    assert spans["freesearch.provider"]["parent_span_id"] == backend["span_id"]
-    assert spans["freesearch.results"]["parent_span_id"] == backend["span_id"]
-    assert spans["freesearch.response"]["parent_span_id"] == root["span_id"]
-    assert spans["freesearch.provider"]["error"] is None
+    assert spans["polyweb.route"]["parent_span_id"] == backend["span_id"]
+    assert spans["polyweb.provider"]["parent_span_id"] == backend["span_id"]
+    assert spans["polyweb.results"]["parent_span_id"] == backend["span_id"]
+    assert spans["polyweb.response"]["parent_span_id"] == root["span_id"]
+    assert spans["polyweb.provider"]["error"] is None
 
 
 async def test_fetch_route_mirrors_search_tracing(

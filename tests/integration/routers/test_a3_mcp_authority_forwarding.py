@@ -31,39 +31,39 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import select, update
 
-from freesearch.configuration.config import Settings, get_settings
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.mcp.server import create_server, shutdown_injected_observability
-from freesearch.models.contracts import (
+from polyweb.configuration.config import Settings, get_settings
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.mcp.server import create_server, shutdown_injected_observability
+from polyweb.models.contracts import (
     SearchRequest,
     SearchResponse,
     SearchResult,
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import TraceRootSpan
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.models.provider_limits import AuthMode, NativeUsageSnapshot, UnitKind
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.execution_authority import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import TraceRootSpan
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.models.provider_limits import AuthMode, NativeUsageSnapshot, UnitKind
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.execution_authority import (
     ExecutionAuthorityRepository,
     ExecutionDispatchRow,
 )
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.pools import (
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.pools import (
     ProjectPoolAllocationRow,
     UpstreamPoolRepository,
     UpstreamQuotaPoolRow,
 )
-from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
-from freesearch.routers.api import create_app
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.execution_forward import (
+from polyweb.persistence.storage import SQLiteRepository, UsageEventRow
+from polyweb.routers.api import create_app
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.execution_forward import (
     DEADLINE_HEADER,
     TRACE_HEADER,
 )
-from freesearch.services.pool_materializer import materialize_pools
+from polyweb.services.pool_materializer import materialize_pools
 from tests.fixtures.a2_execution import RecordingAdapter
 from tests.fixtures.a3_authority import PROVIDER
 from tests.fixtures.api_keys import issue_project_key
@@ -120,7 +120,7 @@ async def seed_key_project_with_pool(
             ),
         )
         await materialize_pools(session, project_id=key.project_id)
-        pool_id = uuid5(NAMESPACE_URL, f"freesearch:credential-pool:{credential.id}")
+        pool_id = uuid5(NAMESPACE_URL, f"polyweb:credential-pool:{credential.id}")
         # Queue rails are internal authority settings, not vault pool fields.
         await session.execute(
             update(UpstreamQuotaPoolRow)
@@ -394,7 +394,7 @@ def forwarding_settings(
         execution_authority_url=authority_url,
         execution_forward_timeout_seconds=forward_timeout_seconds,
     )
-    monkeypatch.setattr("freesearch.mcp.server.get_settings", lambda: settings)
+    monkeypatch.setattr("polyweb.mcp.server.get_settings", lambda: settings)
     return settings
 
 
@@ -403,7 +403,7 @@ def install_asgi_hop(monkeypatch: pytest.MonkeyPatch, api_app: Any) -> Recording
 
     recording = RecordingApi(api_app)
     transport = httpx.ASGITransport(app=recording)
-    module = importlib.import_module("freesearch.mcp.server")
+    module = importlib.import_module("polyweb.mcp.server")
     original = module.ExecutionForwarder
 
     class _HopForwarder(original):

@@ -9,8 +9,8 @@ the shared runner, 429 exhausting retries remapped to ``rate_limited``.
 import httpx
 import pytest
 
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import SearchRequest
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import SearchRequest
 from tests.unit.adapters._youcom_test_support import (
     _assert_no_secret_leak,
     _FakeSleeper,

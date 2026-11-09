@@ -13,8 +13,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import insert, select
 
-from freesearch.models.contracts import UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     BudgetBlock,
     BudgetModel,
@@ -31,12 +31,12 @@ from freesearch.models.provider_limits import (
     RateWindow,
     RateWindowName,
 )
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     CRDGrantPayload as GrantPayload,
 )
-from freesearch.persistence.limit_rows import RateAttemptRow
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.persistence.limit_rows import RateAttemptRow
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.database_lifecycle import unlink_with_retries
 from tests.fixtures.execution import FIXTURE_ACTOR
 
@@ -131,7 +131,7 @@ async def test_exact_depletion_058_vs_0599(repository) -> None:
 
 
 async def test_success_debits_exact_crd(repository) -> None:
-    from freesearch.models.contracts import SearchResponse
+    from polyweb.models.contracts import SearchResponse
 
     svc = await _seed(repository, _record(cost="0.005"), "5.000")
     admission = await svc.admit(_ctx(attempt="ok-1"))
@@ -267,8 +267,8 @@ async def test_manual_anchor_delete_clears_to_unknown(repository) -> None:
 
 
 def _tavily_service(repo, at=FIXED_AT):  # type: ignore[no-untyped-def]
-    from freesearch.configuration.provider_config import ProviderConfig
-    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from polyweb.configuration.provider_config import ProviderConfig
+    from polyweb.configuration.provider_limits import provider_limit_defaults
 
     svc = ProviderLimitsService(
         repo.limits,
@@ -361,7 +361,7 @@ def _assert_production_attempt_shape(rows: list[dict[str, object]], limit: Decim
 async def test_tavily_bucket_mixed_ops_deny_first_over_limit(
     repository, environment: str, limit: Decimal, denied_operation: LimitOperation
 ) -> None:
-    from freesearch.configuration.provider_config import ProviderConfig
+    from polyweb.configuration.provider_config import ProviderConfig
 
     svc, _ = _tavily_service(repository)
     await svc.initialize()
@@ -430,7 +430,7 @@ async def test_tavily_bucket_race_across_independent_connections_never_overspend
     attempt and leave exactly 100 durable bucket attempts.
     """
 
-    from freesearch.configuration.provider_config import ProviderConfig
+    from polyweb.configuration.provider_config import ProviderConfig
 
     db_path = tmp_path / "limit-race.db"
     first_repo = await SQLiteRepository.open(db_path)
@@ -492,7 +492,7 @@ async def test_tavily_unknown_balance_stays_eligible(repository) -> None:
 
 
 async def test_tavily_shared_pool_both_views_after_debit(repository) -> None:
-    from freesearch.models.contracts import SearchRequest, SearchResponse
+    from polyweb.models.contracts import SearchRequest, SearchResponse
 
     svc, config = _tavily_service(repository)
     await svc.initialize()

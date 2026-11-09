@@ -20,7 +20,7 @@ Read the [main audit](2026-10-26-api-rewrite-simplification-audit.md) for accept
 
 **Action:** optionally move it to `cli/database.py`, updating the console entrypoint, test imports and docs together. Keep migration operations in persistence. Do not retain an alpha internal-import redirect or prioritize this move over runtime invariants.
 
-**Preserve/verify:** executable name `freesearch-db`, read-only status, atomic creation/validation, byte-preserving rejection with actionable stderr/exit 1. Existing tests include `tests/integration/persistence/test_database_migrations.py:481::test_cli_reports_reset_required_without_traceback`; CLI reset tests are not wholly absent.
+**Preserve/verify:** executable name `polyweb-db`, read-only status, atomic creation/validation, byte-preserving rejection with actionable stderr/exit 1. Existing tests include `tests/integration/persistence/test_database_migrations.py:481::test_cli_reports_reset_required_without_traceback`; CLI reset tests are not wholly absent.
 
 ## SUP-03 — P3: share small CLI mechanics without a command framework
 
@@ -66,7 +66,7 @@ Read the [main audit](2026-10-26-api-rewrite-simplification-audit.md) for accept
 
 ## SUP-08 — P2 support issue: align backend containers with ports and authority topology
 
-**Evidence:** `compose.yaml:33` publishes `${API_PORT:-8001}:8001`, `:72` publishes `${MCP_PORT:-8000}:8000`; `.env.example:60–62` documents `FREESEARCH_API_PORT`/`FREESEARCH_MCP_PORT`. Docker CMD and Compose MCP commands bind fixed internal ports. Base/dev healthchecks call `/stats?limit=1` without credentials; `/stats` is protected data rather than a dedicated readiness contract.
+**Evidence:** `compose.yaml:33` publishes `${API_PORT:-8001}:8001`, `:72` publishes `${MCP_PORT:-8000}:8000`; `.env.example:60–62` documents `POLYWEB_API_PORT`/`POLYWEB_MCP_PORT`. Docker CMD and Compose MCP commands bind fixed internal ports. Base/dev healthchecks call `/stats?limit=1` without credentials; `/stats` is protected data rather than a dedicated readiness contract.
 
 **Action:** distinguish host publication from internal listening. Define one convention and verify custom worktree host ports, actual listening targets and healthchecks together. Simply removing `--port` without supplying process ports/updating mappings can break the stack. Avoid another chain of legacy aliases. Fixed internal ports alone do not prove host collision.
 

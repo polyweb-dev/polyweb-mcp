@@ -11,11 +11,11 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from freesearch.models.project_permissions import ALLOWED_BITS
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, ProjectCreate
-from freesearch.persistence import database_migrations as migrations
-from freesearch.persistence.migrations import vault_rbac_conversion
-from freesearch.persistence.projects import ProjectRepository
+from polyweb.models.project_permissions import ALLOWED_BITS
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, ProjectCreate
+from polyweb.persistence import database_migrations as migrations
+from polyweb.persistence.migrations import vault_rbac_conversion
+from polyweb.persistence.projects import ProjectRepository
 
 _OLD = "0002_capacity_actor"
 _VAULT = "0003_vault_rbac"

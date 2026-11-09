@@ -11,7 +11,7 @@ import pytest_asyncio
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from freesearch.models.contracts import (
+from polyweb.models.contracts import (
     FallbackPolicy,
     RoutingConfigResponse,
     SearchResponse,
@@ -19,16 +19,16 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.models.provider_limits import AuthMode, LimitStoreUnavailable
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.settings import ProjectSettingsRepository
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.execution import _AttemptSeam
-from freesearch.services.pool_budget import pool_budget_used_micros, release, reserve, settle_actual
-from freesearch.services.pool_materializer import materialize_pools
-from freesearch.services.provider_runtime import initialize_provider_configs, persist_routing_config
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.models.provider_limits import AuthMode, LimitStoreUnavailable
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.settings import ProjectSettingsRepository
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.execution import _AttemptSeam
+from polyweb.services.pool_budget import pool_budget_used_micros, release, reserve, settle_actual
+from polyweb.services.pool_materializer import materialize_pools
+from polyweb.services.provider_runtime import initialize_provider_configs, persist_routing_config
 from tests.fixtures.a2_execution import RecordingAdapter, build_execution_world, search_request
 
 
@@ -186,7 +186,7 @@ async def _routing_world(
         await materialize_pools(session, project_id=world.project.project_id)
         await session.commit()
     monkeypatch.setattr(
-        "freesearch.services.execution.adapter_factory",
+        "polyweb.services.execution.adapter_factory",
         lambda name: (
             (lambda _client, api_key=None: world.adapters_by_secret[api_key.get_secret_value()])
             if name in pools
@@ -331,7 +331,7 @@ async def test_unknown_cost_is_admitted_without_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     world, pools = await _routing_world(tmp_path, monkeypatch, 0)
-    monkeypatch.setattr("freesearch.services.execution.request_price", lambda *_: None)
+    monkeypatch.setattr("polyweb.services.execution.request_price", lambda *_: None)
     try:
         response = await world.service.search(
             search_request(world), attribution=world.project, context=world.context
@@ -357,7 +357,7 @@ async def test_unsent_dispatch_refunds_budget(
     async def fail_record(*_args, **_kwargs):
         raise RuntimeError("dispatch record failed")
 
-    monkeypatch.setattr("freesearch.services.execution._AttemptSeam._record_dispatch", fail_record)
+    monkeypatch.setattr("polyweb.services.execution._AttemptSeam._record_dispatch", fail_record)
     try:
         with pytest.raises(LimitStoreUnavailable, match="limit store is unavailable"):
             await world.service.search(

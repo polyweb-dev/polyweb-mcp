@@ -37,16 +37,16 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.models.provider_limits import LimitDeniedError
-from freesearch.models.schema_enums import PoolStatus, UpstreamScope
-from freesearch.persistence.pools import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.models.provider_limits import LimitDeniedError
+from polyweb.models.schema_enums import PoolStatus, UpstreamScope
+from polyweb.persistence.pools import (
     AllocationInfeasibleError,
     PoolAllocationRepository,
     UpstreamPoolRepository,
 )
-from freesearch.services.execution_authority import ExecutionQueueExpired, QueuePolicy
+from polyweb.services.execution_authority import ExecutionQueueExpired, QueuePolicy
 from tests.fixtures.a3_authority import (
     AllocationSpec,
     AuthorityPoolSpec,
@@ -241,7 +241,7 @@ async def test_pool_queue_weighted_drr_unit_shares_under_continuous_backlog() ->
     correct weighted scheduler must produce -- never a 1:1 race.
     """
 
-    from freesearch.services.execution_authority import DispatchGrant, _PoolQueue
+    from polyweb.services.execution_authority import DispatchGrant, _PoolQueue
 
     queue = _PoolQueue(
         pool_id=uuid4(),

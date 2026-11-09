@@ -45,10 +45,10 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.parallel import ParallelAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.models.contracts import FetchRequest, SearchRequest, UsageOperation
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.parallel import ParallelAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from polyweb.models.contracts import FetchRequest, SearchRequest, UsageOperation
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "parallel"
 
@@ -196,13 +196,13 @@ async def test_init_missing_resolver_credential_fails_closed() -> None:
 
 
 async def test_init_missing_credential_never_falls_back_to_ambient_key(monkeypatch) -> None:
-    """No ambient ``FREESEARCH_PARALLEL_API_KEY`` fallback.
+    """No ambient ``POLYWEB_PARALLEL_API_KEY`` fallback.
 
     Substitution note: the retired resolver's ``requested`` bookkeeping is gone;
     the surviving guarantee is fail-closed construction that leaks neither the
     ambient key into the error nor into the caller's client.
     """
-    monkeypatch.setenv("FREESEARCH_PARALLEL_API_KEY", "ambient-pk-leak")
+    monkeypatch.setenv("POLYWEB_PARALLEL_API_KEY", "ambient-pk-leak")
     caller = make_client()
     try:
         with pytest.raises(ProviderOperationError) as excinfo:

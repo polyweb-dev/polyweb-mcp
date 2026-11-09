@@ -5,12 +5,12 @@ One harness per adapter mode (``offline`` fake adapters, ``live`` real
 adapters) is started lazily by the first scenario that needs it, reused by
 every later scenario of the feature, and torn down by a feature-layer cleanup
 that also writes ``test_reports/routing_latency_<mode>.{csv,md}`` (plus the
-pyinstrument profiles when ``FREESEARCH_LATENCY_PROFILE=1``) and prints the
+pyinstrument profiles when ``POLYWEB_LATENCY_PROFILE=1``) and prints the
 compact per-provider summary. A failed harness start is remembered: every later
 scenario of the run fails immediately with that error instead of retrying.
 
 The gated value is server-side: ``added_ms = server_ms - provider_ms`` where
-``server_ms`` runs from the request reaching the FreeSearch app until its
+``server_ms`` runs from the request reaching the Polyweb app until its
 response leaves it. Client wall time and client overhead are reported only.
 
 Live adapters receive their key only through the explicit ``api_key``
@@ -31,17 +31,17 @@ from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.adapters.exa import ExaAdapter
-from freesearch.adapters.firecrawl import FirecrawlAdapter
-from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.adapters.parallel import ParallelAdapter
-from freesearch.adapters.tavily import TavilyAdapter
-from freesearch.adapters.tinyfish import TinyfishAdapter
-from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.infrastructure.http import create_async_client
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.adapters.exa import ExaAdapter
+from polyweb.adapters.firecrawl import FirecrawlAdapter
+from polyweb.adapters.keenable import KeenableAdapter
+from polyweb.adapters.parallel import ParallelAdapter
+from polyweb.adapters.tavily import TavilyAdapter
+from polyweb.adapters.tinyfish import TinyfishAdapter
+from polyweb.adapters.youcom import YoucomAdapter
+from polyweb.infrastructure.http import create_async_client
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 from tests.bdd.features.environment import _LIVE_GATE, _explicit_api_key, _harness_env_key
 from tests.fixtures.latency import CANONICAL_PROVIDERS, fake_adapter_for, git_commit
 from tests.fixtures.latency_reports import (
@@ -59,13 +59,13 @@ OFFLINE_WARMUP = 5
 OFFLINE_MEASURED = 30
 
 #: Live sample-count overrides (real credits: keep them small).
-LIVE_WARMUP_ENV = "FREESEARCH_LATENCY_LIVE_WARMUP"
-LIVE_SAMPLES_ENV = "FREESEARCH_LATENCY_LIVE_SAMPLES"
+LIVE_WARMUP_ENV = "POLYWEB_LATENCY_LIVE_WARMUP"
+LIVE_SAMPLES_ENV = "POLYWEB_LATENCY_LIVE_SAMPLES"
 LIVE_WARMUP_DEFAULT = 1
 LIVE_SAMPLES_DEFAULT = 5
 
 #: Opt-in server-side pyinstrument profiling of measured requests.
-PROFILE_ENV = "FREESEARCH_LATENCY_PROFILE"
+PROFILE_ENV = "POLYWEB_LATENCY_PROFILE"
 
 #: A stable public page for live fetches, and a one-result live search.
 LIVE_FETCH_URL = "https://example.com/"
@@ -171,7 +171,7 @@ def live_sample_counts() -> tuple[int, int]:
 
 
 def profile_enabled() -> bool:
-    """Return whether ``FREESEARCH_LATENCY_PROFILE=1`` asks for profiles."""
+    """Return whether ``POLYWEB_LATENCY_PROFILE=1`` asks for profiles."""
 
     return os.environ.get(PROFILE_ENV) == "1"
 
@@ -384,7 +384,7 @@ def step_all_ok(context: Any, operation: str, provider: str) -> None:
     )
 
 
-@then("the p95 server-side FreeSearch-added latency is under {budget_ms:d} ms")
+@then("the p95 server-side Polyweb-added latency is under {budget_ms:d} ms")
 def step_p95_budget(context: Any, budget_ms: int) -> None:
     outcome: ComboOutcome = context.latency_outcome
     assert float(budget_ms) == ADDED_P95_BUDGET_MS, (
@@ -410,7 +410,7 @@ def step_p95_budget(context: Any, budget_ms: int) -> None:
     print(summary_line(outcome))
     assert passed, (
         f"{outcome.transport} {outcome.operation} pinned to {outcome.provider} "
-        f"({outcome.adapter_mode}): p95 server-side FreeSearch-added latency "
+        f"({outcome.adapter_mode}): p95 server-side Polyweb-added latency "
         f"(server_ms - provider_ms) {shown} is not under {budget_ms} ms "
         f"({summary_line(outcome)})"
     )
@@ -430,7 +430,7 @@ def step_reads_reported(context: Any) -> None:
         print("db reads per request: unavailable (no SELECT listener on the engine)")
 
 
-@then("provider time and server-side FreeSearch-added time are reported separately")
+@then("provider time and server-side Polyweb-added time are reported separately")
 def step_times_reported(context: Any) -> None:
     outcome: ComboOutcome = context.latency_outcome
     for sample in outcome.ok_measured:

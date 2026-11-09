@@ -9,13 +9,13 @@ from unittest.mock import patch
 import httpx
 from fastapi.testclient import TestClient
 
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
-from freesearch.models.vault import VaultKeyDetails
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.vault_keys import VaultOAuthService
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
+from polyweb.models.vault import VaultKeyDetails
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.vault_keys import VaultOAuthService
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
@@ -123,7 +123,7 @@ def bdd_vault_oauth_setup(context):
         cases = []
         context._bdd_oauth_cases = cases
     cases.append(case)
-    patcher = patch("freesearch.routers.vault_keys._oauth", lambda request, actor: case.service())
+    patcher = patch("polyweb.routers.vault_keys._oauth", lambda request, actor: case.service())
     patcher.start()
     cleanups = getattr(context, "enc_cleanups", [])
     cleanups.append(patcher.stop)

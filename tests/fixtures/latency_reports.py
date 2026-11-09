@@ -2,7 +2,7 @@
 
 Definitions used everywhere in the reports:
 
-- ``server_ms``: time from the HTTP request scope reaching the FreeSearch ASGI
+- ``server_ms``: time from the HTTP request scope reaching the Polyweb ASGI
   app until its final response body (``more_body`` false) is sent.
 - ``provider_ms``: summed duration of the adapter ``search``/``fetch`` calls
   made while serving the request.
@@ -26,7 +26,7 @@ from pathlib import Path
 
 from tests.fixtures.latency import default_report_dir, percentile
 
-#: Acceptance budget: server-side FreeSearch-added time per request at p95.
+#: Acceptance budget: server-side Polyweb-added time per request at p95.
 ADDED_P95_BUDGET_MS = 150.0
 
 CSV_COLUMNS: tuple[str, ...] = (
@@ -274,12 +274,12 @@ def _markdown(
         "ClientSession for MCP). Each request pins exactly one provider with",
         '`routing: {"mode": "require", "providers": [<provider>]}`.',
         "",
-        "- server_ms: from the HTTP request reaching the FreeSearch ASGI app until its",
+        "- server_ms: from the HTTP request reaching the Polyweb ASGI app until its",
         "  final response body is sent (timing middleware around the served app; for",
         "  MCP the one POST /mcp carrying the tool call).",
         "- provider_ms: summed duration of the adapter search/fetch calls during",
         "  the request (bound instance methods wrapped; adapter type unchanged).",
-        "- added_ms (gated): server_ms - provider_ms, the server-side FreeSearch time.",
+        "- added_ms (gated): server_ms - provider_ms, the server-side Polyweb time.",
         "- wall_ms / client_overhead_ms: client-observed time and wall_ms - server_ms",
         "  (client stack, loopback TCP, uvicorn parsing). Reported, not gated.",
         "- db_reads: SELECT statements on the server repository engine during the",

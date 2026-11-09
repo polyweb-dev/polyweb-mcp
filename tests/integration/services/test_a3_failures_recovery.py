@@ -30,25 +30,25 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.models.execution_failures import ExecutionNotPermitted
-from freesearch.models.provider_limits import (
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.models.execution_failures import ExecutionNotPermitted
+from polyweb.models.provider_limits import (
     LOCAL_RATE_DENIAL_CODE,
     AuthMode,
     LimitDeniedError,
     NativeUsageSnapshot,
     UnitKind,
 )
-from freesearch.persistence.limit_rows import LimitAdmissionRow
-from freesearch.services.execution import ExecutionService
-from freesearch.services.execution_authority import (
+from polyweb.persistence.limit_rows import LimitAdmissionRow
+from polyweb.services.execution import ExecutionService
+from polyweb.services.execution_authority import (
     AUTHORITY_KEY,
     ExecutionAuthority,
     ExecutionAuthorityUnavailable,
     ExecutionQueueExpired,
 )
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.a3_authority import (
     AllocationSpec,
     AuthorityPoolSpec,
@@ -141,7 +141,7 @@ async def _run(world: Any, label: str, count: int) -> tuple[int, list[BaseExcept
 async def test_lost_credentials_stay_distinct_from_capacity_refusals(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from freesearch.services.api_keys import ApiKeyService
+    from polyweb.services.api_keys import ApiKeyService
 
     spec = small_pool()
     world = await build_authority_world(tmp_path, monkeypatch, spec=spec)
@@ -513,7 +513,7 @@ async def test_restart_never_refills_the_bucket_or_settles_twice(
         native_before = await _exa_pool_remaining(world, pool_id=funds_scope)
 
         # A crash: the fence expires without any dispatch row being resolved.
-        from freesearch.persistence.execution_authority import (
+        from polyweb.persistence.execution_authority import (
             ExecutionAuthorityRepository,
         )
 
@@ -534,7 +534,7 @@ async def test_restart_never_refills_the_bucket_or_settles_twice(
 
         # The restarted authority over the same durable store.
         limits_service = await build_limits(world.repository)
-        from freesearch.services.execution_authority import ExecutionAuthority
+        from polyweb.services.execution_authority import ExecutionAuthority
 
         restarted = ExecutionAuthority(
             repository=world.repository,
@@ -638,7 +638,7 @@ async def _admission_rows(world: Any) -> list[LimitAdmissionRow]:
 
 
 async def _uncertain_rows(repository: Any, project_id: Any) -> list[Any]:
-    from freesearch.persistence.execution_authority import ExecutionAuthorityRepository
+    from polyweb.persistence.execution_authority import ExecutionAuthorityRepository
 
     async with repository.session() as session:
         return await ExecutionAuthorityRepository(session).list_uncertain(project_id=project_id)
@@ -704,7 +704,7 @@ async def test_takeover_with_unresolved_work_stays_in_recovery_before_dispatch(
         # authority keeps renewing until expiry), so the takeover acquires a
         # vacated fence -- the predecessor's token is still the last token
         # any dispatch was recorded under.
-        from freesearch.persistence.execution_authority import ExecutionAuthorityRepository
+        from polyweb.persistence.execution_authority import ExecutionAuthorityRepository
 
         async with world.repository.session() as session:
             lease = await ExecutionAuthorityRepository(session).current(
@@ -838,7 +838,7 @@ async def test_takeover_with_unresolved_work_stays_in_recovery_before_dispatch(
 async def SQLiteRepository_open(path: Path) -> Any:
     """Open a SQLite repository (kept local to keep the crash semantics obvious)."""
 
-    from freesearch.persistence.storage import SQLiteRepository
+    from polyweb.persistence.storage import SQLiteRepository
 
     return await SQLiteRepository.open(path)
 

@@ -1,6 +1,6 @@
 @quota
 Feature: Quota and usage accounting (QUOTA.md acceptance)
-  As a FreeSearch operator
+  As a Polyweb operator
   I want quota snapshots and usage totals with honest units and confidence
   So that the dashboard and routing never mix requests, credits, and dollars
 
@@ -338,7 +338,7 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
   # Direct record_quota of Brave OBSERVED REQUEST 0/0 (bypassing the adapter's
   # own zero-limit guard) must still normalize on the dashboard path
   # (_latest_quotas/collect_stats) exactly like effective_quota, and routing
-  # must stay eligible. RED until freesearch.monitoring.normalize_degenerate_quota
+  # must stay eligible. RED until polyweb.monitoring.normalize_degenerate_quota
   # exists and is used by BOTH paths.
   @quota @ac2
   Scenario: Degenerate zero-limit quota normalizes through both read paths and stays routable

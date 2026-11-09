@@ -23,9 +23,9 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import create_server
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.mcp.server import create_server
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -36,7 +36,7 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import bound_mcp_credentials
 
 
@@ -423,7 +423,7 @@ async def test_capability_gate_blocks_without_call_even_when_masks_allow(
 async def test_mask_gate_blocks_without_call_even_when_capability_allows(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from freesearch.persistence.storage import SQLiteRepository
+    from polyweb.persistence.storage import SQLiteRepository
 
     repository = await SQLiteRepository.open(tmp_path / "capability-mask.db")
     try:
@@ -442,7 +442,7 @@ async def test_mask_gate_blocks_without_call_even_when_capability_allows(
 
 
 async def test_unsupported_brave_fetch_never_calls_adapter(tmp_path: Path, monkeypatch) -> None:
-    from freesearch.persistence.storage import SQLiteRepository
+    from polyweb.persistence.storage import SQLiteRepository
 
     repository = await SQLiteRepository.open(tmp_path / "brave-fetch.db")
     try:

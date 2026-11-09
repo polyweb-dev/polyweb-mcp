@@ -12,14 +12,14 @@
     "results": [
       {
         "title": "Consensus algorithms explained",
-        "url": "https://docs.freesearch.dev/consensus",
+        "url": "https://docs.polyweb.dev/consensus",
         "snippet": "Raft, Paxos, and where each applies.",
         "source": "keenable",
         "score": 0.94
       },
       {
         "title": "Raft vs Paxos",
-        "url": "https://docs.freesearch.dev/raft-vs-paxos",
+        "url": "https://docs.polyweb.dev/raft-vs-paxos",
         "snippet": "A practical comparison.",
         "source": "keenable",
         "score": 0.81
@@ -45,7 +45,7 @@
     {
       "span_id": "bb00000000000002",
       "parent_span_id": "aa00000000000001",
-      "name": "freesearch.backend",
+      "name": "polyweb.backend",
       "kind": "internal",
       "stage": "Backend handling",
       "started_at": "2026-09-29T09:15:00.004000+00:00",
@@ -60,7 +60,7 @@
     {
       "span_id": "cc00000000000003",
       "parent_span_id": "bb00000000000002",
-      "name": "freesearch.provider",
+      "name": "polyweb.provider",
       "kind": "client",
       "stage": "Provider request",
       "provider": "keenable",
@@ -73,12 +73,12 @@
       "error": null,
       "events": [
         {
-          "name": "freesearch.provider.request",
+          "name": "polyweb.provider.request",
           "timestamp": "2026-09-29T09:15:00.020000+00:00",
           "attributes": { "query": "distributed consensus algorithms", "limit": 10 }
         },
         {
-          "name": "freesearch.provider.response",
+          "name": "polyweb.provider.response",
           "timestamp": "2026-09-29T09:15:00.228000+00:00",
           "attributes": { "result_count": 2 }
         }
@@ -87,7 +87,7 @@
     {
       "span_id": "dd00000000000004",
       "parent_span_id": "cc00000000000003",
-      "name": "freesearch.provider.http",
+      "name": "polyweb.provider.http",
       "kind": "client",
       "stage": "Provider HTTP call",
       "started_at": "2026-09-29T09:15:00.022000+00:00",
@@ -102,7 +102,7 @@
     {
       "span_id": "ee00000000000005",
       "parent_span_id": "cc00000000000003",
-      "name": "freesearch.provider.parse",
+      "name": "polyweb.provider.parse",
       "kind": "internal",
       "stage": "Provider response parse",
       "started_at": "2026-09-29T09:15:00.224000+00:00",
@@ -117,7 +117,7 @@
     {
       "span_id": "ff00000000000006",
       "parent_span_id": "bb00000000000002",
-      "name": "freesearch.results",
+      "name": "polyweb.results",
       "kind": "internal",
       "stage": "Results assembly",
       "started_at": "2026-09-29T09:15:00.230000+00:00",
@@ -132,7 +132,7 @@
     {
       "span_id": "1200000000000007",
       "parent_span_id": "aa00000000000001",
-      "name": "freesearch.response",
+      "name": "polyweb.response",
       "kind": "internal",
       "stage": "Response to caller",
       "started_at": "2026-09-29T09:15:00.240000+00:00",

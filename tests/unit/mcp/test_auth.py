@@ -17,9 +17,9 @@ from uuid import uuid4
 import pytest
 from pydantic import SecretStr
 
-import freesearch.mcp.auth as mcp_auth
-from freesearch.infrastructure.auth_asgi import BearerAuthMiddleware
-from freesearch.mcp.auth import (
+import polyweb.mcp.auth as mcp_auth
+from polyweb.infrastructure.auth_asgi import BearerAuthMiddleware
+from polyweb.mcp.auth import (
     MCP_AUTH_ERROR,
     MCP_ROUTES,
     McpAuthenticationError,
@@ -29,8 +29,8 @@ from freesearch.mcp.auth import (
     run_stdio_server,
     tool_credential,
 )
-from freesearch.mcp.server import create_server
-from freesearch.models.projects import ProjectApiKeyPrincipal
+from polyweb.mcp.server import create_server
+from polyweb.models.projects import ProjectApiKeyPrincipal
 from tests.fixtures.auth import test_settings
 
 _STDIO_KEY = "fs_live_stdiostdiostd_" + "s" * 43

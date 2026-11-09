@@ -15,8 +15,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.persistence.api_keys import ProjectApiKeyRepository, StoredApiKey
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.api_keys import ProjectApiKeyRepository, StoredApiKey
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project, seed_execution_user
 
 _NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)

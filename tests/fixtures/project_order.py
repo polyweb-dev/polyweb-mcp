@@ -2,14 +2,14 @@
 
 from uuid import UUID, uuid4
 
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.pool_materializer import materialize_pools
-from freesearch.services.provider_bindings import provider_capability
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.pool_materializer import materialize_pools
+from polyweb.services.provider_bindings import provider_capability
 
 
 async def seed_order_pools(

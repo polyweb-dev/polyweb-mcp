@@ -7,8 +7,8 @@ polls make at most one vendor attempt. Monitoring never polls OAuth implicitly.
 
 import pytest
 
-from freesearch.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
-from freesearch.models.schema_enums import OAuthGrantStatus
+from polyweb.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
+from polyweb.models.schema_enums import OAuthGrantStatus
 from tests.fixtures.vault_oauth import vault_oauth_case as vault_oauth_case
 from tests.integration.services.oauth.conftest import NON_PARALLEL_IDS
 from tests.integration.services.oauth.oauth_stubs import (

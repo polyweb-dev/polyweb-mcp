@@ -24,13 +24,13 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import ActorType, ExecutionAttribution
-from freesearch.models.projects import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import ActorType, ExecutionAttribution
+from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     CredentialOwnerScope,
 )
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     AuthMode,
     LimitAdmission,
     LimitDeniedError,
@@ -39,20 +39,20 @@ from freesearch.models.provider_limits import (
     RateReservation,
     RateWindowName,
 )
-from freesearch.models.schema_enums import UpstreamScope
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.limit_repository import (
+from polyweb.models.schema_enums import UpstreamScope
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.limit_repository import (
     LimitRepository,
     StrictAttemptSpec,
     StrictWindowSpec,
 )
-from freesearch.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
-from freesearch.persistence.pools import (
+from polyweb.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
+from polyweb.persistence.pools import (
     PoolAllocationRepository,
     UpstreamPoolRepository,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import FIXTURE_ACTOR, seed_execution_project
 from tests.integration.persistence import _strict_capacity_worker as worker_module
 

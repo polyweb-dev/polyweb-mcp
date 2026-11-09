@@ -13,7 +13,7 @@ from sqlalchemy import event as sa_event
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from freesearch.models.contracts import (
+from polyweb.models.contracts import (
     HealthStatus,
     ProviderHealth,
     QuotaSnapshot,
@@ -23,10 +23,10 @@ from freesearch.models.contracts import (
     UsageOperation,
     UsageStatus,
 )
-from freesearch.persistence.database_migrations import DatabaseMigrationError
-from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
-from freesearch.services.monitoring import clear_quota_poll_cache, effective_quotas_batch
-from freesearch.services.provider_runtime import clear_config_cache
+from polyweb.persistence.database_migrations import DatabaseMigrationError
+from polyweb.persistence.storage import SQLiteRepository, UsageEventRow
+from polyweb.services.monitoring import clear_quota_poll_cache, effective_quotas_batch
+from polyweb.services.provider_runtime import clear_config_cache
 from tests.fixtures.execution import seed_execution_project
 from tests.fixtures.usage_ledger import all_usage_events
 

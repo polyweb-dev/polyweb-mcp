@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     AuthMode,
     LimitAdmission,
     LimitDeniedError,
@@ -17,7 +17,7 @@ from freesearch.models.provider_limits import (
     RateWindow,
     RateWindowName,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import FIXTURE_ACTOR
 
 

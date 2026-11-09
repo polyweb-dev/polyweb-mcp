@@ -21,10 +21,10 @@ from sqlalchemy import select
 from tests.fixtures.alpha_fixtures import seed_alpha_system_admin
 from tests.fixtures.auth import temp_email
 
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import ActorType, ExecutionAttribution
-from freesearch.models.projects import (
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import ActorType, ExecutionAttribution
+from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
     CredentialOwnerScope,
@@ -32,11 +32,11 @@ from freesearch.models.projects import (
     ProjectCreate,
     ProjectRead,
 )
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.projects import ProjectMembershipRow, ProjectRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.credentials import credential_secret_slot
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.projects import ProjectMembershipRow, ProjectRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.credentials import credential_secret_slot
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
@@ -176,14 +176,14 @@ def install_adapter_map(
     monkeypatch: Any, adapters: Any, *, secrets: dict[str, str] | None = None
 ) -> None:
     """Construct fakes only for exact keys issued by this test's fixture maps."""
-    import freesearch.services.execution as execution_module
+    import polyweb.services.execution as execution_module
 
     if secrets is None:
         raise ValueError("fake adapters require an exact fixture secret map")
-    maps = getattr(monkeypatch, "_freesearch_adapter_maps", None)
+    maps = getattr(monkeypatch, "_polyweb_adapter_maps", None)
     if maps is None:
         maps = []
-        monkeypatch._freesearch_adapter_maps = maps
+        monkeypatch._polyweb_adapter_maps = maps
     maps.append(({adapter.name: adapter for adapter in adapters}, secrets))
 
     def adapter_factory(name: str) -> Any:
@@ -225,9 +225,9 @@ async def attributed_tracked_call(
 
     from datetime import UTC, datetime
 
-    from freesearch.models.contracts import UsageOperation
-    from freesearch.models.provider_limits import AuthMode, LimitCallContext, LimitOperation
-    from freesearch.services.monitoring import tracked_call
+    from polyweb.models.contracts import UsageOperation
+    from polyweb.models.provider_limits import AuthMode, LimitCallContext, LimitOperation
+    from polyweb.services.monitoring import tracked_call
 
     owner = attribution or test_attribution()
     if (
@@ -396,7 +396,7 @@ def _install_bdd_adapters(context: Any, adapters: Any, secrets: dict[str, str]) 
     """Keep every issued scenario key exact across concurrent REST/MCP projects."""
     import pytest
 
-    import freesearch.services.execution as execution
+    import polyweb.services.execution as execution
 
     patcher = getattr(context, "_execution_patcher", None)
     if patcher is None:
@@ -561,9 +561,9 @@ async def allow_full_trace_capture(repository: SQLiteRepository) -> None:
     """Authorize full capture explicitly in one disposable repository only."""
     from tests.fixtures.auth import create_temp_user, temp_principal
 
-    from freesearch.models.projects import TraceDetailPolicy
-    from freesearch.models.settings import SystemSettingsUpdate, SystemTraceDefaults
-    from freesearch.services.settings import SettingsService
+    from polyweb.models.projects import TraceDetailPolicy
+    from polyweb.models.settings import SystemSettingsUpdate, SystemTraceDefaults
+    from polyweb.services.settings import SettingsService
 
     user = await create_temp_user(repository, temp_email("trace-policy"), system_admin=True)
     admin = temp_principal(user)
@@ -612,7 +612,7 @@ async def bdd_mcp_server(context: Any, adapters: Any, prefix: str) -> tuple[Any,
     from pydantic import SecretStr
     from tests.fixtures.api_keys import mcp_project_key
 
-    from freesearch.mcp.server import _encrypted_store, create_server
+    from polyweb.mcp.server import _encrypted_store, create_server
 
     service, key = await mcp_project_key(context.repository, prefix)
     patcher = getattr(context, "_execution_patcher", None)
@@ -654,7 +654,7 @@ async def bind_existing_project(
     store: Any = None,
 ) -> Any:
     """Add explicit A4 credentials to one existing A1 execution test project."""
-    from freesearch.mcp.server import _encrypted_store
+    from polyweb.mcp.server import _encrypted_store
 
     secrets: dict[str, str] = {}
     identities = await seed_provider_bindings(

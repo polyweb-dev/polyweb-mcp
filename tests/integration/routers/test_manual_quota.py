@@ -14,17 +14,17 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.contracts import (
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.models.contracts import (
     ManualQuota,
     ManualQuotaUpdate,
     QuotaSource,
     manual_quota_remaining,
     manual_quota_remaining_percent,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.monitoring import effective_quota
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.monitoring import effective_quota
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,

@@ -10,7 +10,7 @@ Contract under test (BDD fix contract):
         ``units == Decimal('0')`` must pass ``Then the fetch response should
         report observed usage credits``; an absent usage event must still fail.
   AC-2  ``before_scenario`` must build the HTTP client via
-        ``freesearch.http.create_async_client()`` (never direct
+        ``polyweb.http.create_async_client()`` (never direct
         ``httpx.AsyncClient``), and ``after_scenario`` must close both the
         adapter and the factory-created client.
 """
@@ -25,8 +25,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import HttpUrl
 
-from freesearch.infrastructure import http as freesearch_http
-from freesearch.models.contracts import (
+from polyweb.infrastructure import http as polyweb_http
+from polyweb.models.contracts import (
     FetchedDocument,
     FetchResponse,
     UsageEvent,
@@ -75,7 +75,7 @@ class _FakeAdapter:
 
 def _forbid_direct_httpx(*args: object, **kwargs: object) -> None:
     raise AssertionError(
-        "before_scenario must build the client via freesearch.http.create_async_client(), "
+        "before_scenario must build the client via polyweb.http.create_async_client(), "
         "not httpx.AsyncClient directly"
     )
 
@@ -131,8 +131,8 @@ def test_before_scenario_uses_create_async_client(monkeypatch: pytest.MonkeyPatc
         factory_calls.append(1)
         return fake_client
 
-    monkeypatch.setattr(freesearch_http, "create_async_client", fake_factory)
-    # Also cover the ``from freesearch.http import create_async_client`` style.
+    monkeypatch.setattr(polyweb_http, "create_async_client", fake_factory)
+    # Also cover the ``from polyweb.http import create_async_client`` style.
     monkeypatch.setattr(environment, "create_async_client", fake_factory, raising=False)
     monkeypatch.setattr(environment.httpx, "AsyncClient", _forbid_direct_httpx)
     monkeypatch.setattr(environment, "TavilyAdapter", _FakeAdapter)

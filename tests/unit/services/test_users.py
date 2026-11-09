@@ -12,10 +12,10 @@ from fastapi_users import exceptions
 from fastapi_users.password import PasswordHelper
 from pydantic import SecretStr
 
-import freesearch.services.users as users_service
-from freesearch.models.users import AuthFamily
-from freesearch.persistence.users import UserRow
-from freesearch.services.users import (
+import polyweb.services.users as users_service
+from polyweb.models.users import AuthFamily
+from polyweb.persistence.users import UserRow
+from polyweb.services.users import (
     AUTH_TOKEN_ALGORITHM,
     AUTH_TOKEN_AUDIENCE,
     PASSWORD_RULE_MESSAGE,
@@ -170,14 +170,14 @@ def test_get_jwt_strategy_shares_api_mcp_vocabulary() -> None:
 
 
 def test_get_jwt_strategy_rejects_missing_secret() -> None:
-    from freesearch.configuration.config import Settings
+    from polyweb.configuration.config import Settings
 
     with pytest.raises(AuthConfigurationError):
         get_jwt_strategy(Settings(auth_jwt_secret=None), None)  # type: ignore[arg-type]
 
 
 def test_auth_token_constants() -> None:
-    assert AUTH_TOKEN_AUDIENCE == "freesearch:auth"
+    assert AUTH_TOKEN_AUDIENCE == "polyweb:auth"
     assert AUTH_TOKEN_ALGORITHM == "HS256"
     assert SecretStr("x").get_secret_value() == "x"
 
@@ -202,8 +202,8 @@ async def test_provision_account_uses_safe_manager_and_returns_projection() -> N
 
     from contextlib import asynccontextmanager
 
-    from freesearch.models.users import UserAccount
-    from freesearch.services.users import AuthService
+    from polyweb.models.users import UserAccount
+    from polyweb.services.users import AuthService
 
     created_id = uuid4()
     created_row = _row()
@@ -249,7 +249,7 @@ async def test_provision_account_maps_storage_failure() -> None:
 
     from contextlib import asynccontextmanager
 
-    from freesearch.services.users import AuthService, AuthStorageUnavailable
+    from polyweb.services.users import AuthService, AuthStorageUnavailable
 
     @asynccontextmanager
     async def _manager_ctx(**kwargs: object):  # type: ignore[no-untyped-def]
@@ -270,7 +270,7 @@ async def test_provision_account_propagates_library_errors() -> None:
 
     from contextlib import asynccontextmanager
 
-    from freesearch.services.users import AuthService
+    from polyweb.services.users import AuthService
 
     for failure in (
         exceptions.UserAlreadyExists(),

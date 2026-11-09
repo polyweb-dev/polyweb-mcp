@@ -13,18 +13,18 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.brave import (
+from polyweb.adapters.brave import (
     BraveAdapter,
     monthly_header_value,
 )
-from freesearch.models.contracts import SearchRequest, UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import SearchRequest, UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     CRDState,
     LimitOperation,
     UsageSyncRequest,
 )
-from freesearch.services import credit_units as cu
+from polyweb.services import credit_units as cu
 
 
 def _adapter(
@@ -92,7 +92,7 @@ def test_burst_takes_first_element() -> None:
 
 
 def test_brave_catalog_holds_two_keyed_records() -> None:
-    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from polyweb.configuration.provider_limits import provider_limit_defaults
 
     records = [r for r in provider_limit_defaults() if r.provider == "brave"]
     assert len(records) == 2
@@ -106,7 +106,7 @@ def test_brave_catalog_holds_two_keyed_records() -> None:
 
 
 def test_brave_search_costs_five_crds() -> None:
-    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from polyweb.configuration.provider_limits import provider_limit_defaults
 
     search = next(
         r
@@ -199,7 +199,7 @@ def test_http_error_429_rate_stays_retryable() -> None:
 
 
 def test_brave_fetch_view_is_unavailable() -> None:
-    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from polyweb.configuration.provider_limits import provider_limit_defaults
 
     fetch = next(
         r

@@ -15,11 +15,11 @@ from __future__ import annotations
 import ast
 import pathlib
 
-SRC_ROOT = pathlib.Path(__file__).resolve().parents[3] / "src" / "freesearch"
+SRC_ROOT = pathlib.Path(__file__).resolve().parents[3] / "src" / "polyweb"
 SERVICES_ROOT = SRC_ROOT / "services"
 MCP_SERVER = SRC_ROOT / "mcp" / "server.py"
 
-_TRANSPORT_MODULES = ("fastapi", "starlette", "mcp", "fastmcp", "freesearch.routers")
+_TRANSPORT_MODULES = ("fastapi", "starlette", "mcp", "fastmcp", "polyweb.routers")
 
 
 def _execution_modules() -> list[pathlib.Path]:
@@ -52,7 +52,7 @@ def test_shared_execution_service_exists_beyond_scope() -> None:
     shared = [name for name in names if name != "execution_scope.py"]
     assert shared, (
         "missing shared execution service: expected a new "
-        "src/freesearch/services/*execut*.py beyond execution_scope.py "
+        "src/polyweb/services/*execut*.py beyond execution_scope.py "
         f"(found only {names})"
     )
 
@@ -77,7 +77,7 @@ def test_mcp_does_not_import_rest_router() -> None:
     router_imports = sorted(
         module
         for module in imported
-        if module == "freesearch.routers" or module.startswith("freesearch.routers.")
+        if module == "polyweb.routers" or module.startswith("polyweb.routers.")
     )
     assert not router_imports, (
         "mcp/server.py still imports a REST router module "

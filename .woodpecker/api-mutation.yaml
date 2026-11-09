@@ -27,7 +27,7 @@ steps:
         bash scripts/ci/run-and-log.sh mutation-tests.log bash -euo pipefail -c '
           test -f .env || cp .env.example .env
           uv sync --frozen
-          uv run pytest --gremlins -n auto --gremlin-workers=auto --gremlin-targets=src/freesearch --gremlin-report=console,html,json --gremlin-cache
+          uv run pytest --gremlins -n auto --gremlin-workers=auto --gremlin-targets=src/polyweb --gremlin-report=console,html,json --gremlin-cache
         '
 
   upload-artifacts:

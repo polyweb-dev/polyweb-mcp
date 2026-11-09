@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 from sqlalchemy import func, select
 
-from freesearch.configuration.provider_config import ProviderConfigError
-from freesearch.models.contracts import UsageEvent, UsageOperation
-from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
-from freesearch.services.provider_runtime import (
+from polyweb.configuration.provider_config import ProviderConfigError
+from polyweb.models.contracts import UsageEvent, UsageOperation
+from polyweb.persistence.storage import SQLiteRepository, UsageEventRow
+from polyweb.services.provider_runtime import (
     clear_config_cache,
     effective_config_for_name,
     routing_policy,

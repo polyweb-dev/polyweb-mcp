@@ -12,9 +12,9 @@ becoming ``None``, and the AC-11/R3 ``_same_url`` unit behavior.
 import httpx
 import pytest
 
-from freesearch.adapters.youcom import _same_url
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import FetchRequest
+from polyweb.adapters.youcom import _same_url
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import FetchRequest
 from tests.unit.adapters._youcom_test_support import (
     _fetch_payload,
     _wired,

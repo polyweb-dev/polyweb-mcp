@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from freesearch.models.tavily import (
+from polyweb.models.tavily import (
     TavilyExtractParams,
     TavilySearchParams,
     tavily_extract_credits,

@@ -7,8 +7,8 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.projects import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.projects import (
     API_KEY_ACTIONS,
     API_KEY_SCOPES,
     BUILTIN_ROLE_DEFINITIONS,
@@ -50,9 +50,9 @@ from freesearch.models.projects import (
     SettingsResolution,
     evaluate_authorization,
 )
-from freesearch.models.providers import AllocationRead, PoolRead
-from freesearch.models.schema_enums import PoolStatus, UpstreamScope
-from freesearch.models.users import AuthProvider, UserAccount, UserAccountCreate
+from polyweb.models.providers import AllocationRead, PoolRead
+from polyweb.models.schema_enums import PoolStatus, UpstreamScope
+from polyweb.models.users import AuthProvider, UserAccount, UserAccountCreate
 from tests.fixtures.alpha_fixtures import (
     alpha_test_db_context,
     bootstrap_fresh_alpha,
@@ -787,13 +787,13 @@ async def test_alpha_bootstrap_procedure() -> None:
 
         result = await bootstrap_fresh_alpha(
             Path(db_path.parent) / "another_fresh.db",
-            admin_email="test_alpha_admin@freesearch.local",
+            admin_email="test_alpha_admin@polyweb.local",
             project_name="Isolated Alpha Workspace",
         )
         try:
             assert result.database_path.exists()
             assert result.account_id == DEFAULT_INSTALLATION_ACCOUNT_ID
-            assert result.admin_user.email == "test_alpha_admin@freesearch.local"
+            assert result.admin_user.email == "test_alpha_admin@polyweb.local"
             # A1: the account row carries no role; authority is the assignment.
             assert result.admin_user.is_superuser is False
             assert not hasattr(result.admin_user, "role")
@@ -819,13 +819,13 @@ async def test_alpha_bootstrap_runbook_clean_cleanup_on_windows(tmp_path: Path) 
     db_path = tmp_path / "runbook_alpha.db"
     result = await bootstrap_fresh_alpha(
         db_path,
-        admin_email="runbook_admin@freesearch.local",
+        admin_email="runbook_admin@polyweb.local",
         project_name="Runbook Alpha Project",
     )
     try:
         assert result.database_path.exists()
         assert result.account_id == DEFAULT_INSTALLATION_ACCOUNT_ID
-        assert result.admin_user.email == "runbook_admin@freesearch.local"
+        assert result.admin_user.email == "runbook_admin@polyweb.local"
         assert result.admin_user.is_superuser is False
         assert not hasattr(result.admin_user, "role")
         assert result.default_project.name == "Runbook Alpha Project"

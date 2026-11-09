@@ -9,9 +9,9 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-from freesearch.configuration.config import get_settings
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.configuration.config import get_settings
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     raw_auth_headers,
@@ -27,7 +27,7 @@ def auth_secret(monkeypatch: pytest.MonkeyPatch) -> str:
     import secrets as secrets_module
 
     secret = secrets_module.token_urlsafe(32)
-    monkeypatch.setenv("FREESEARCH_AUTH_JWT_SECRET", secret)
+    monkeypatch.setenv("POLYWEB_AUTH_JWT_SECRET", secret)
     get_settings.cache_clear()
     yield secret
     get_settings.cache_clear()
@@ -95,7 +95,7 @@ def _headers(token: object) -> dict[str, str]:
 async def _system_roles(repository: SQLiteRepository, user_id: str) -> set[str]:
     from sqlalchemy import select
 
-    from freesearch.persistence.projects import SystemRoleAssignmentRow
+    from polyweb.persistence.projects import SystemRoleAssignmentRow
 
     async with repository.session() as session:
         rows = await session.execute(

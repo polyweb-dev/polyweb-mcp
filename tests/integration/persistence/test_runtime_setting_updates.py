@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 
 
 async def _open(database: Path) -> SQLiteRepository:
@@ -130,8 +130,8 @@ async def test_unrelated_keys_survive_provider_update(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def _reset_caches_for_runtime_case() -> None:
-    from freesearch.services.monitoring import clear_quota_poll_cache
-    from freesearch.services.provider_runtime import clear_config_cache
+    from polyweb.services.monitoring import clear_quota_poll_cache
+    from polyweb.services.provider_runtime import clear_config_cache
 
     clear_config_cache()
     clear_quota_poll_cache()
@@ -139,7 +139,7 @@ async def _reset_caches_for_runtime_case() -> None:
 
 async def test_runtime_setting_notification_invalidates_cache(tmp_path: Path) -> None:
     """Supported writes invalidate config/policy caches so the next read is fresh."""
-    from freesearch.services.provider_runtime import (
+    from polyweb.services.provider_runtime import (
         clear_config_cache,
         effective_config_for_name,
         routing_policy,
@@ -195,7 +195,7 @@ async def test_runtime_setting_notification_invalidates_cache(tmp_path: Path) ->
         assert second_policy.fallback_policy.value == "first_only"
     finally:
         clear_config_cache()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _clear_q
+        from polyweb.services.monitoring import clear_quota_poll_cache as _clear_q
 
         _clear_q()
         await repository.close()
@@ -207,7 +207,7 @@ async def test_direct_sql_requires_explicit_cache_clear(tmp_path: Path) -> None:
 
     from sqlalchemy import text
 
-    from freesearch.services.provider_runtime import (
+    from polyweb.services.provider_runtime import (
         clear_config_cache,
         effective_config_for_name,
         routing_policy,
@@ -272,7 +272,7 @@ async def test_direct_sql_requires_explicit_cache_clear(tmp_path: Path) -> None:
         assert (await effective_config_for_name(repository, "exa")).priority == 7
     finally:
         clear_config_cache()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _clear_q
+        from polyweb.services.monitoring import clear_quota_poll_cache as _clear_q
 
         _clear_q()
         await repository.close()

@@ -13,15 +13,15 @@ If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is 
 
 Each workspace/worktree has fixed, isolated ports defined in its root `.env` to prevent port collisions between concurrently running agents:
 
-| Workspace | Worktree Directory | MCP Server (`FREESEARCH_MCP_PORT`) | Backend API (`FREESEARCH_API_PORT`) | UI Dev (`VITE_PORT`) |
+| Workspace | Worktree Directory | MCP Server (`POLYWEB_MCP_PORT`) | Backend API (`POLYWEB_API_PORT`) | UI Dev (`VITE_PORT`) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Main** | `freesearch` | `8000` | `8001` | `5174` |
-| **WT 1** | `freesearch_wt_1` | `8010` | `8011` | `5175` |
-| **WT 2** | `freesearch_wt_2` | `8020` | `8021` | `5176` |
-| **WT 3** | `freesearch_wt_3` | `8030` | `8031` | `5177` |
-| **WT 4** | `freesearch_wt_4` | `8040` | `8041` | `5178` |
+| **Main** | `polyweb` | `8000` | `8001` | `5174` |
+| **WT 1** | `polyweb_wt_1` | `8010` | `8011` | `5175` |
+| **WT 2** | `polyweb_wt_2` | `8020` | `8021` | `5176` |
+| **WT 3** | `polyweb_wt_3` | `8030` | `8031` | `5177` |
+| **WT 4** | `polyweb_wt_4` | `8040` | `8041` | `5178` |
 
-- **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run freesearch-api`, `uv run freesearch-mcp`, `pnpm dev`). They automatically read from the local `.env`.
+- **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run polyweb-api`, `uv run polyweb-mcp`, `pnpm dev`). They automatically read from the local `.env`.
 - **Zero merge conflicts**: Port configurations live in the local `.env` (gitignored), keeping committed files identical across all branches.
 
 <!-- BACKLOG.MD GUIDELINES START -->

@@ -1,7 +1,7 @@
 """Unit tests for the REST launch path (port resolution).
 
 Route planning and single-attempt dispatch moved out of ``routers.api`` into
-the shared :class:`freesearch.services.execution.ExecutionService`. Their
+the shared :class:`polyweb.services.execution.ExecutionService`. Their
 behavioral coverage now lives in
 ``tests/integration/services/test_execution_routing.py`` (the five original
 router case names, search/fetch/policy matrices, read budget and tolerant reads)
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from freesearch.configuration.config import Settings
+from polyweb.configuration.config import Settings
 
 
 # --- Merged from release/wt_3: API launch path (port handling) ---
@@ -24,15 +24,15 @@ def _isolate_database(monkeypatch: pytest.MonkeyPatch) -> None:
     from pathlib import Path
     from uuid import uuid4
 
-    from freesearch.configuration.config import get_settings
+    from polyweb.configuration.config import get_settings
 
-    target = Path(tempfile.gettempdir()) / f"freesearch-main-{uuid4().hex}" / "main.db"
-    monkeypatch.setenv("FREESEARCH_DB", str(target))
+    target = Path(tempfile.gettempdir()) / f"polyweb-main-{uuid4().hex}" / "main.db"
+    monkeypatch.setenv("POLYWEB_DB", str(target))
     get_settings.cache_clear()
 
 
 def _run_main(monkeypatch: pytest.MonkeyPatch, argv: list[str], settings: Settings) -> object:
-    import freesearch.routers.api as api_module
+    import polyweb.routers.api as api_module
 
     _isolate_database(monkeypatch)
 
@@ -48,14 +48,14 @@ def _run_main(monkeypatch: pytest.MonkeyPatch, argv: list[str], settings: Settin
 
 
 def test_main_stops_launch_when_port_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    import freesearch.routers.api as api_module
+    import polyweb.routers.api as api_module
 
     _isolate_database(monkeypatch)
 
     monkeypatch.setattr(api_module, "get_settings", lambda: Settings(api_port=None, mcp_port=None))
     monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: None)
 
-    with pytest.raises(ValueError, match="FREESEARCH_API_PORT"):
+    with pytest.raises(ValueError, match="POLYWEB_API_PORT"):
         api_module.main([])
 
 

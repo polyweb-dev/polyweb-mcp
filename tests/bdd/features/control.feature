@@ -1,6 +1,6 @@
 @control
 Feature: Provider control plane and routing settings
-  As a local FreeSearch operator
+  As a local Polyweb operator
   I want to configure providers, secrets, and routing without network access
   So that runtime behavior is explicit and durable
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a disposable freesearch.dev.db for manual project workflow testing.
+"""Create a disposable polyweb.dev.db for manual project workflow testing.
 
 Run from the repository root: uv run python scripts/seed_dev.py
 Existing files are never overwritten. Stop the backend and delete the dev DB
@@ -20,15 +20,15 @@ from uuid import uuid4
 from dotenv import dotenv_values
 from pydantic import SecretStr
 
-from freesearch.configuration.config import Settings
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.infrastructure.secrets import (
+from polyweb.configuration.config import Settings
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.infrastructure.secrets import (
     PROVIDER_ENV_VARS,
     ProviderName,
     provider_env_var_names,
 )
-from freesearch.models.project_permissions import STANDARD
-from freesearch.models.projects import (
+from polyweb.models.project_permissions import STANDARD
+from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
     CredentialOwnerScope,
@@ -36,20 +36,20 @@ from freesearch.models.projects import (
     ProjectMemberAdd,
     ProjectRead,
 )
-from freesearch.models.users import UserPrincipal
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.projects import ProjectRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.pool_materializer import materialize_pools
-from freesearch.services.projects import ProjectService
-from freesearch.services.provider_bindings import provider_capability
-from freesearch.services.users import AuthService
+from polyweb.models.users import UserPrincipal
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.projects import ProjectRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.pool_materializer import materialize_pools
+from polyweb.services.projects import ProjectService
+from polyweb.services.provider_bindings import provider_capability
+from polyweb.services.users import AuthService
 
-DEV_DATABASE = "freesearch.dev.db"
+DEV_DATABASE = "polyweb.dev.db"
 # Deliberately public fixture password, for this disposable local database only.
-DEV_PASSWORD = "FreeSearchDev123!"
+DEV_PASSWORD = "PolywebDev123!"
 USER_EMAILS = (
     "admin1@example.com",
     "admin2@example.com",
@@ -210,9 +210,9 @@ async def seed_database(
     """Seed only a new dev database; errors leave it available for diagnosis/removal."""
 
     if settings.environment != "development":
-        raise ValueError("The dev seed requires FREESEARCH_ENVIRONMENT=development.")
+        raise ValueError("The dev seed requires POLYWEB_ENVIRONMENT=development.")
     database = reserve_database(database)
-    # Do not use resolve_database_path: FREESEARCH_DB may still point at the normal DB.
+    # Do not use resolve_database_path: POLYWEB_DB may still point at the normal DB.
     async with await SQLiteRepository.open(database) as repository:
         auth = AuthService(settings, repository=repository)
         users = await seed_users(auth, password)
@@ -234,8 +234,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         values = dotenv_values(args.env_file, interpolate=False)
         password = SecretStr(
-            os.environ.get("FREESEARCH_DEV_PASSWORD")
-            or values.get("FREESEARCH_DEV_PASSWORD")
+            os.environ.get("POLYWEB_DEV_PASSWORD")
+            or values.get("POLYWEB_DEV_PASSWORD")
             or DEV_PASSWORD
         )
         keys = read_provider_keys(args.env_file)
@@ -263,8 +263,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         "Brave Answers has no separate credential/adapter in this runtime; its env key is unused."
     )
-    print("Set FREESEARCH_DB=freesearch.dev.db in .env, then restart the API and MCP.")
-    print("Login password: docs/development-database.md, or your FREESEARCH_DEV_PASSWORD override.")
+    print("Set POLYWEB_DB=polyweb.dev.db in .env, then restart the API and MCP.")
+    print("Login password: docs/development-database.md, or your POLYWEB_DEV_PASSWORD override.")
     return 0
 
 

@@ -10,14 +10,14 @@ from decimal import Decimal
 import httpx
 from pydantic import SecretStr
 
-from freesearch.configuration.provider_limits import (
+from polyweb.configuration.provider_limits import (
     TAVILY_DEFAULT_BUCKET_ID,
     provider_limit_defaults,
 )
-from freesearch.models.contracts import FetchRequest, SearchRequest, UnitKind
-from freesearch.models.provider_limits import AuthMode, LimitOperation
-from freesearch.models.tavily import TavilyExtractParams, TavilySearchParams
-from freesearch.services import credit_units as cu
+from polyweb.models.contracts import FetchRequest, SearchRequest, UnitKind
+from polyweb.models.provider_limits import AuthMode, LimitOperation
+from polyweb.models.tavily import TavilyExtractParams, TavilySearchParams
+from polyweb.services import credit_units as cu
 
 
 class _FakeSDK:
@@ -49,7 +49,7 @@ def test_tavily_catalog_holds_four_records() -> None:
 
 
 def test_tavily_keyed_records_share_default_bucket() -> None:
-    from freesearch.adapters.tavily import TavilyAdapter  # noqa: F401  # seam anchor
+    from polyweb.adapters.tavily import TavilyAdapter  # noqa: F401  # seam anchor
 
     keyed = [r for r in _records() if r.auth_mode is AuthMode.KEYED]
     assert len(keyed) == 2
@@ -130,7 +130,7 @@ def test_tavily_keyless_rate_unpublished_without_numeric_window() -> None:
 
 
 def test_tavily_reset_metadata_targets_monthly_first() -> None:
-    from freesearch.configuration.provider_limits import provider_tier_defaults
+    from polyweb.configuration.provider_limits import provider_tier_defaults
 
     tiers = provider_tier_defaults()["tavily:keyed"]
     free = next(t for t in tiers if t.tier == "free")
@@ -141,14 +141,14 @@ def test_tavily_reset_metadata_targets_monthly_first() -> None:
 
 
 def test_tavily_dev_limit_100_prod_limit_1000() -> None:
-    from freesearch.configuration.provider_limits import TAVILY_RPM_DEV, TAVILY_RPM_PROD
+    from polyweb.configuration.provider_limits import TAVILY_RPM_DEV, TAVILY_RPM_PROD
 
     assert Decimal("100") == TAVILY_RPM_DEV
     assert Decimal("1000") == TAVILY_RPM_PROD
 
 
 def _keyless_adapter() -> tuple[object, httpx.AsyncClient]:
-    from freesearch.adapters.tavily import TavilyAdapter
+    from polyweb.adapters.tavily import TavilyAdapter
 
     async def _noop(request: httpx.Request) -> httpx.Response:  # pragma: no cover
         return httpx.Response(200, json={})
@@ -159,7 +159,7 @@ def _keyless_adapter() -> tuple[object, httpx.AsyncClient]:
 
 
 def _keyed_adapter() -> tuple[object, httpx.AsyncClient]:
-    from freesearch.adapters.tavily import TavilyAdapter
+    from polyweb.adapters.tavily import TavilyAdapter
 
     async def _noop(request: httpx.Request) -> httpx.Response:  # pragma: no cover
         return httpx.Response(200, json={})
@@ -186,10 +186,10 @@ async def test_concurrent_mixed_ops_share_bucket_seam() -> None:
     # shared mutable depth state between search and extract paths.
     async def _depth(kind: str) -> str:
         if kind == "search":
-            from freesearch.models.tavily import tavily_search_depth
+            from polyweb.models.tavily import tavily_search_depth
 
             return tavily_search_depth("advanced", TavilySearchParams(search_depth="advanced"))
-        from freesearch.models.tavily import tavily_extract_depth
+        from polyweb.models.tavily import tavily_extract_depth
 
         return tavily_extract_depth(TavilyExtractParams(extract_depth="advanced"))
 

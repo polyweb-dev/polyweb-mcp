@@ -18,13 +18,13 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.config import get_settings
-from freesearch.configuration.provider_config import ProviderConfigUpdate
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.mcp.server import create_server
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.configuration.config import get_settings
+from polyweb.configuration.provider_config import ProviderConfigUpdate
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.mcp.server import create_server
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -40,10 +40,10 @@ from freesearch.models.contracts import (
     UsageOperation,
     UsageStatus,
 )
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, ProjectCreate
-from freesearch.persistence.projects import ProjectRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, ProjectCreate
+from polyweb.persistence.projects import ProjectRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.api_keys import key_for_account
 from tests.fixtures.auth import (
     account_id_from_pair,
@@ -206,8 +206,8 @@ def vault_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):  # type: ignore[
     """Hermetic vault wiring: passphrase-mode encryption, tmp key file, vault-only."""
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", _VAULT_PASSPHRASE)
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", _VAULT_PASSPHRASE)
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
     for var in PROVIDER_ENV_VARS.values():
         monkeypatch.delenv(var, raising=False)
     get_settings.cache_clear()
@@ -321,10 +321,10 @@ async def test_get_providers_reports_the_newest_credential_scoped_health(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
 ) -> None:
     """A call through a live credential is the last real result; an unbacked wide fact is not."""
-    from freesearch.models.projects import CredentialOwnerScope
-    from freesearch.persistence.credentials import CredentialRepository
-    from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-    from freesearch.services.pool_materializer import materialize_pools
+    from polyweb.models.projects import CredentialOwnerScope
+    from polyweb.persistence.credentials import CredentialRepository
+    from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+    from polyweb.services.pool_materializer import materialize_pools
     from tests.fixtures.a2_execution import PoolSpec, build_execution_world
 
     world = await build_execution_world(
@@ -846,8 +846,8 @@ async def test_secret_put_writes_vault_and_never_exposes_raw_key(
     auth_secret,
 ):
     """Original singleton security case now covers the actual A4 credential endpoint."""
-    from freesearch.models.vault import VaultKeyDetails
-    from freesearch.services.credentials import credential_secret_slot
+    from polyweb.models.vault import VaultKeyDetails
+    from polyweb.services.credentials import credential_secret_slot
 
     raw_key = "secret-value-that-must-not-leak"
     with caplog.at_level("INFO"), TestClient(create_app([], repository=repository)) as client:
@@ -879,7 +879,7 @@ async def test_secret_put_rejects_empty_key(repository, auth_secret):
     """Empty key is rejected by A4 without any vault write."""
     from sqlalchemy import select
 
-    from freesearch.persistence.storage import RuntimeSettingRow
+    from polyweb.persistence.storage import RuntimeSettingRow
 
     with TestClient(create_app([], repository=repository)) as client:
         pair = await register_system_admin_login(client, repository, temp_email("control-empty"))
@@ -910,7 +910,7 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
     auth_secret,
 ):
     """A4 credential deletion is idempotent and removes its encrypted generation."""
-    from freesearch.services.credentials import credential_secret_slot
+    from polyweb.services.credentials import credential_secret_slot
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
@@ -942,7 +942,7 @@ async def test_secret_delete_ejects_global_adapter_and_keeps_project_credential(
     auth_secret: str,
 ) -> None:
     """Deleting one vault key leaves another key's project pool usable."""
-    from freesearch.services.credentials import credential_secret_slot
+    from polyweb.services.credentials import credential_secret_slot
 
     adapter = ControlAdapter("exa")
     install_adapter_map(monkeypatch, [adapter], secrets={"exa": "project-only-key"})
@@ -997,7 +997,7 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
     """Origin: keyless transition; deletion cannot silently bypass a project binding."""
     import httpx
 
-    from freesearch.adapters.keenable import KeenableAdapter
+    from polyweb.adapters.keenable import KeenableAdapter
 
     async with httpx.AsyncClient() as http:
         assert KeenableAdapter(http, api_key=SecretStr("keyed-capability")).capabilities.quota
@@ -1034,7 +1034,7 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
 
             return build
 
-        monkeypatch.setattr("freesearch.services.execution.adapter_factory", keyless_factory)
+        monkeypatch.setattr("polyweb.services.execution.adapter_factory", keyless_factory)
         assert client.post("/search", headers=headers, json=payload).status_code == 200
         assert adapter.search_calls == 2
         _create_bound_provider(client, pid, "keenable", "keenable-key-rotated", headers)
@@ -1050,7 +1050,7 @@ async def test_env_key_is_ignored_empty_vault_reports_missing_and_503(
     monkeypatch: pytest.MonkeyPatch,
     auth_secret: str,
 ) -> None:
-    """AC-V3: a FREESEARCH_* env key with an empty vault is unconfigured.
+    """AC-V3: a POLYWEB_* env key with an empty vault is unconfigured.
 
     Only the status/source are pinned, never the exact 503 wording — the
     vault-only copy is owned by the Developer (plan Q2). Vendor egress is
@@ -1644,7 +1644,7 @@ async def test_provider_config_update_shape_remains_strict_and_partial() -> None
 def test_settings_has_no_secret_service_name() -> None:
     """AC-1: configuration/config.py must delete secret_service_name."""
 
-    from freesearch.configuration.config import Settings
+    from polyweb.configuration.config import Settings
 
     assert "secret_service_name" not in Settings.model_fields, (
         "RED (AC-1): Settings.secret_service_name must be deleted (vault-only)"
@@ -1656,7 +1656,7 @@ def test_settings_has_no_secret_service_name() -> None:
 def test_provider_config_has_no_resolver_seam() -> None:
     """AC-1: configuration/provider_config.py must delete the resolver seam."""
 
-    import freesearch.configuration.provider_config as provider_config_module
+    import polyweb.configuration.provider_config as provider_config_module
 
     assert not hasattr(provider_config_module, "get_provider_secret_resolver"), (
         "RED (AC-1): get_provider_secret_resolver must be deleted; "
@@ -1667,7 +1667,7 @@ def test_provider_config_has_no_resolver_seam() -> None:
 def test_control_secret_backend_is_async_vault_only() -> None:
     """AC-1: routers/control.py SecretBackend must be AsyncSecretStore only."""
 
-    from freesearch.routers import control as control_module
+    from polyweb.routers import control as control_module
 
     assert control_module.SecretBackend is not None
     backend_name = repr(control_module.SecretBackend)
@@ -1675,8 +1675,8 @@ def test_control_secret_backend_is_async_vault_only() -> None:
         f"RED: SecretBackend must be AsyncSecretStore, got {backend_name}"
     )
     assert callable(getattr(control_module, "_resolve_secret", None))
-    from freesearch.services.credentials import CredentialService
-    from freesearch.services.provider_runtime import build_adapter_with_secret
+    from polyweb.services.credentials import CredentialService
+    from polyweb.services.provider_runtime import build_adapter_with_secret
 
     assert callable(CredentialService.resolve_material)
     assert callable(build_adapter_with_secret)
@@ -1687,7 +1687,7 @@ def test_api_module_has_no_keyring_or_environ_snapshot() -> None:
 
     from pathlib import Path as _Path
 
-    api_path = _Path(__file__).resolve().parents[3] / "src" / "freesearch" / "routers" / "api.py"
+    api_path = _Path(__file__).resolve().parents[3] / "src" / "polyweb" / "routers" / "api.py"
     source = api_path.read_text(encoding="utf-8")
     assert "KeyringSecretStore" not in source, "RED (AC-1): api.py must not use KeyringSecretStore"
     assert "environ_snapshot" not in source, "RED (AC-1): api.py must not snapshot environ"
@@ -1707,8 +1707,8 @@ def test_pyproject_has_no_keyring_or_dotenv() -> None:
 
 
 async def _reset_control_caches() -> None:
-    from freesearch.services.monitoring import clear_quota_poll_cache
-    from freesearch.services.provider_runtime import clear_config_cache
+    from polyweb.services.monitoring import clear_quota_poll_cache
+    from polyweb.services.provider_runtime import clear_config_cache
 
     clear_config_cache()
     clear_quota_poll_cache()
@@ -1720,9 +1720,9 @@ async def test_supported_admin_writes_invalidate_warm_cache(
     auth_secret: str,
 ) -> None:
     """M3: every supported admin write refreshes the next read without restart."""
-    from freesearch.configuration.provider_config import ProviderConfigUpdate
-    from freesearch.models.contracts import RoutingConfigResponse
-    from freesearch.services.provider_runtime import (
+    from polyweb.configuration.provider_config import ProviderConfigUpdate
+    from polyweb.models.contracts import RoutingConfigResponse
+    from polyweb.services.provider_runtime import (
         _CONFIG_CACHE,
         _POLICY_CACHE,
         _reconcile_provider_config,
@@ -1840,7 +1840,7 @@ async def test_supported_admin_writes_invalidate_warm_cache(
         assert (await routing_policy(repository)).fallback_policy.value == "first_only"
     finally:
         clear_config_cache()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _clear_q
+        from polyweb.services.monitoring import clear_quota_poll_cache as _clear_q
 
         _clear_q()
 
@@ -1848,7 +1848,7 @@ async def test_supported_admin_writes_invalidate_warm_cache(
 @pytest.mark.asyncio
 async def test_rest_lifespan_clears_config_cache(repository: SQLiteRepository) -> None:
     """M3: REST lifespan exit clears repo entries; scopes narrow and widen correctly."""
-    from freesearch.services.provider_runtime import (
+    from polyweb.services.provider_runtime import (
         _CONFIG_CACHE,
         _POLICY_CACHE,
         clear_config_cache,
@@ -1921,7 +1921,7 @@ async def test_rest_lifespan_clears_config_cache(repository: SQLiteRepository) -
         assert id(repository) not in _POLICY_CACHE
     finally:
         clear_config_cache()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _clear_q
+        from polyweb.services.monitoring import clear_quota_poll_cache as _clear_q
 
         _clear_q()
 
@@ -1934,7 +1934,7 @@ async def test_tavily_patch_persists_key_environment_and_paygo(
     repository: SQLiteRepository, auth_secret: str, vault_env: None
 ) -> None:
     """PATCH stores the non-secret Tavily values through the persisted path."""
-    from freesearch.services.provider_runtime import effective_config_for_name
+    from polyweb.services.provider_runtime import effective_config_for_name
 
     app = create_app([], repository=repository)
     with TestClient(app) as client:
@@ -1959,7 +1959,7 @@ async def test_tavily_patch_survives_repository_reopen(
     tmp_path: Path, auth_secret: str, vault_env: None
 ) -> None:
     """The Tavily values travel the persisted JSON path across a reopen."""
-    from freesearch.services.provider_runtime import effective_config_for_name
+    from polyweb.services.provider_runtime import effective_config_for_name
 
     db_path = tmp_path / "control-tavily.db"
     first = await SQLiteRepository.open(db_path)
@@ -1994,10 +1994,10 @@ async def test_tavily_keyless_secret_presence_and_rebuild(
     """Missing Tavily key reports keyless_public; PUT rebuilds the adapter."""
     import httpx
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.configuration.provider_config import ProviderConfig
-    from freesearch.models.provider_limits import AuthMode
-    from freesearch.services.provider_runtime import (
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.configuration.provider_config import ProviderConfig
+    from polyweb.models.provider_limits import AuthMode
+    from polyweb.services.provider_runtime import (
         build_adapter_with_secret as _build_with_resolved_secret,
     )
 
@@ -2125,7 +2125,7 @@ async def test_tavily_env_patch_denied_for_project_scoped_admin(
         )
         assert denied.status_code == 403
 
-    from freesearch.services.provider_runtime import effective_config_for_name
+    from polyweb.services.provider_runtime import effective_config_for_name
 
     assert (await effective_config_for_name(repository, "tavily")).tavily_key_environment == "dev"
 
@@ -2164,19 +2164,19 @@ async def test_tavily_env_switch_keeps_shared_bucket_with_zero_vendor_calls(
 
     import httpx
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.configuration.provider_config import ProviderConfig
-    from freesearch.configuration.provider_limits import provider_limit_defaults
-    from freesearch.infrastructure.borrowed_transport import BorrowedTransport
-    from freesearch.models.contracts import UnitKind
-    from freesearch.models.provider_limits import (
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.configuration.provider_config import ProviderConfig
+    from polyweb.configuration.provider_limits import provider_limit_defaults
+    from polyweb.infrastructure.borrowed_transport import BorrowedTransport
+    from polyweb.models.contracts import UnitKind
+    from polyweb.models.provider_limits import (
         AuthMode,
         CRDGrantPayload,
         LimitOperation,
         NativeUsageSnapshot,
     )
-    from freesearch.services.provider_limits import ProviderLimitsService
-    from freesearch.services.provider_runtime import effective_config_for_name
+    from polyweb.services.provider_limits import ProviderLimitsService
+    from polyweb.services.provider_runtime import effective_config_for_name
 
     pool_id = "tavily:keyed:credit"
 
@@ -2360,7 +2360,7 @@ async def test_secret_delete_ejects_adapter_and_disables_routing(
     repository: SQLiteRepository, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, auth_secret: str
 ) -> None:
     """HEAD origin: deleting the execution credential blocks subsequent search and probing."""
-    from freesearch.services.credentials import credential_secret_slot
+    from polyweb.services.credentials import credential_secret_slot
 
     adapter = ControlAdapter("exa")
     install_adapter_map(monkeypatch, [adapter], secrets={"exa": "private-delete-proof"})

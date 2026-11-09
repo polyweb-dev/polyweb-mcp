@@ -19,7 +19,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS  # noqa: E402
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS  # noqa: E402
 from tests.bdd.features import environment  # noqa: E402
 
 
@@ -28,7 +28,7 @@ class _FakeScenario:
 
     def __init__(self, tags: list[str], feature_tags: list[str]) -> None:
         self.tags = tags
-        self.feature = SimpleNamespace(name="FreeSearch routing latency", tags=feature_tags)
+        self.feature = SimpleNamespace(name="Polyweb routing latency", tags=feature_tags)
         self.effective_tags = {*tags, *feature_tags}
         self.skipped = False
         self.skip_reason: str | None = None

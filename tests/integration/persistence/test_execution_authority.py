@@ -12,16 +12,16 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import ActorType
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.models.schema_enums import AuthorityState, DispatchState, UpstreamScope
-from freesearch.persistence.execution_authority import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import ActorType
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.models.schema_enums import AuthorityState, DispatchState, UpstreamScope
+from polyweb.persistence.execution_authority import (
     ExecutionAuthorityRepository,
     StoredLease,
 )
-from freesearch.persistence.pools import UpstreamPoolRepository
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.pools import UpstreamPoolRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
 _T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)

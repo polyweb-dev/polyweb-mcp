@@ -14,15 +14,15 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.oauth_grants import (
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.oauth_grants import (
     CredentialOAuthGrantRepository,
     StoredOAuthGrant,
     oauth_secret_slot,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
 _NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)

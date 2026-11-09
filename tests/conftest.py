@@ -5,9 +5,9 @@ from decimal import Decimal
 import pytest
 import pytest_asyncio
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.configuration.config import get_settings
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.configuration.config import get_settings
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,

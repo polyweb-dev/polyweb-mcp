@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 REM ==============================================================================
-REM FreeSearch Generic Worktree Setup Script
+REM Polyweb Generic Worktree Setup Script
 REM Usage:
 REM   create_worktree.bat <branch-name> [mode|folder-name] [mode] [options]
 REM ==============================================================================
@@ -101,7 +101,7 @@ if /i not "%MODE%"=="full" (
 if "%FOLDER%"=="" (
     REM Strip standard prefix slashes if present in branch name for folder safety
     set "SAFE_NAME=%BRANCH:/=-%"
-    set "FOLDER=freesearch-!SAFE_NAME!"
+    set "FOLDER=polyweb-!SAFE_NAME!"
 )
 
 REM ------------------------------------------------------------------------------
@@ -116,9 +116,9 @@ if defined SLOT (
     )
 )
 
-REM Detect the slot implied by a 'freesearch_wt_N' folder name (N = digit 1-9)
+REM Detect the slot implied by a 'polyweb_wt_N' folder name (N = digit 1-9)
 set "FOLDER_SLOT="
-if /i "%FOLDER:~0,14%"=="freesearch_wt_" (
+if /i "%FOLDER:~0,14%"=="polyweb_wt_" (
     set "SLOT_REST=%FOLDER:~14%"
     for %%D in (1 2 3 4 5 6 7 8 9) do if "!SLOT_REST!"=="%%D" set "FOLDER_SLOT=%%D"
 )
@@ -205,7 +205,7 @@ if exist ".env" (
         set /a "MCP_PORT=8000+SLOT*10"
         set /a "API_PORT=8000+SLOT*10+1"
         set /a "VITE_PORT=5174+SLOT"
-        echo [2/6] Assigning slot !SLOT! ports: FREESEARCH_MCP_PORT=!MCP_PORT!, FREESEARCH_API_PORT=!API_PORT!, VITE_PORT=!VITE_PORT!
+        echo [2/6] Assigning slot !SLOT! ports: POLYWEB_MCP_PORT=!MCP_PORT!, POLYWEB_API_PORT=!API_PORT!, VITE_PORT=!VITE_PORT!
         powershell -NoProfile -Command ^
             "$p = '!TARGET_PATH!\.env'; " ^
             "$b = [IO.File]::ReadAllBytes($p); " ^
@@ -213,7 +213,7 @@ if exist ".env" (
             "$t = [IO.File]::ReadAllText($p); " ^
             "$nl = [Environment]::NewLine; " ^
             "$caret = [char]94; " ^
-            "$map = [ordered]@{ FREESEARCH_MCP_PORT = '!MCP_PORT!'; FREESEARCH_API_PORT = '!API_PORT!'; VITE_PORT = '!VITE_PORT!' }; " ^
+            "$map = [ordered]@{ POLYWEB_MCP_PORT = '!MCP_PORT!'; POLYWEB_API_PORT = '!API_PORT!'; VITE_PORT = '!VITE_PORT!' }; " ^
             "foreach ($k in $map.Keys) { " ^
             "  $pat = '(?m)' + $caret + $k + '=' + '[' + $caret + '\r\n]*'; " ^
             "  if ([regex]::IsMatch($t, $pat)) { " ^
@@ -233,7 +233,7 @@ if exist ".env" (
     ) else (
         echo [WARNING] No slot resolved for folder '%TARGET_FOLDER%': .env ports were copied
         echo           unchanged from the main checkout and will collide if both run at once.
-        echo           Re-run with '--slot N' or use a 'freesearch_wt_N' folder name.
+        echo           Re-run with '--slot N' or use a 'polyweb_wt_N' folder name.
     )
 ) else (
     echo [2/6] Warning: No .env file found in root repository. Skipping copy.
@@ -241,20 +241,20 @@ if exist ".env" (
 )
 
 if "%COPY_DB%"=="1" (
-    if exist "freesearch.db" (
-        echo [2/6] Copying freesearch.db to '%TARGET_PATH%\freesearch.db'...
-        copy /Y "freesearch.db" "%TARGET_PATH%\freesearch.db" >nul
+    if exist "polyweb.db" (
+        echo [2/6] Copying polyweb.db to '%TARGET_PATH%\polyweb.db'...
+        copy /Y "polyweb.db" "%TARGET_PATH%\polyweb.db" >nul
         set "DB_USED=copied"
-        echo [WARNING] The copied freesearch.db contains stored provider credentials
+        echo [WARNING] The copied polyweb.db contains stored provider credentials
         echo           and real request history - treat it as sensitive.
         echo [INFO] The copy opens only if it is at the alpha baseline revision;
         echo        an older database is refused with reset instructions.
     ) else (
-        echo [2/6] [INFO] --copy-db given but no freesearch.db found in main checkout. Skipping copy.
+        echo [2/6] [INFO] --copy-db given but no polyweb.db found in main checkout. Skipping copy.
     )
 ) else (
-    echo [2/6] [INFO] freesearch.db is NOT copied - use --copy-db to opt in;
-    echo           a fresh database will be created by 'freesearch-db upgrade'.
+    echo [2/6] [INFO] polyweb.db is NOT copied - use --copy-db to opt in;
+    echo           a fresh database will be created by 'polyweb-db upgrade'.
 )
 
 REM 3. Backend Setup (uv sync + database migration)
@@ -271,8 +271,8 @@ if /i "%TARGET_MODE%"=="ui" (
         popd
         exit /b 1
     )
-    echo [3/6] Ensuring database schema is current with 'uv run freesearch-db upgrade'...
-    call uv run freesearch-db upgrade
+    echo [3/6] Ensuring database schema is current with 'uv run polyweb-db upgrade'...
+    call uv run polyweb-db upgrade
     if errorlevel 1 (
         echo [WARNING] Database upgrade reported an issue in '%TARGET_PATH%'.
     )
@@ -284,22 +284,22 @@ if /i "%TARGET_MODE%"=="backend" (
     echo [4/6] [SKIP] Mode is 'backend' - skipping UI dependency setup.
 ) else if /i "%TARGET_MODE%"=="docker" (
     echo [4/6] [SKIP] Mode is 'docker' - skipping UI dependencies.
-    if exist "%TARGET_PATH%\freesearch-ui" (
-        if exist "%~dp0..\..\freesearch-ui\.env.local" (
-            echo [4/6] Copying UI .env.local to '%TARGET_PATH%\freesearch-ui\.env.local'...
-            copy /Y "%~dp0..\..\freesearch-ui\.env.local" "%TARGET_PATH%\freesearch-ui\.env.local" >nul
+    if exist "%TARGET_PATH%\polyweb-ui" (
+        if exist "%~dp0..\..\polyweb-ui\.env.local" (
+            echo [4/6] Copying UI .env.local to '%TARGET_PATH%\polyweb-ui\.env.local'...
+            copy /Y "%~dp0..\..\polyweb-ui\.env.local" "%TARGET_PATH%\polyweb-ui\.env.local" >nul
         )
     )
 ) else (
-    if exist "%TARGET_PATH%\freesearch-ui\package.json" (
-        echo [4/6] Setting up UI dependencies in '%TARGET_PATH%\freesearch-ui'...
-        pushd "%TARGET_PATH%\freesearch-ui"
-        if exist "%~dp0..\..\freesearch-ui\.env.local" (
-            copy /Y "%~dp0..\..\freesearch-ui\.env.local" ".env.local" >nul
+    if exist "%TARGET_PATH%\polyweb-ui\package.json" (
+        echo [4/6] Setting up UI dependencies in '%TARGET_PATH%\polyweb-ui'...
+        pushd "%TARGET_PATH%\polyweb-ui"
+        if exist "%~dp0..\..\polyweb-ui\.env.local" (
+            copy /Y "%~dp0..\..\polyweb-ui\.env.local" ".env.local" >nul
         )
         call pnpm install --store-dir "%~dp0..\..\.pnpm-store"
         if errorlevel 1 (
-            echo [ERROR] 'pnpm install' failed in '%TARGET_PATH%\freesearch-ui'.
+            echo [ERROR] 'pnpm install' failed in '%TARGET_PATH%\polyweb-ui'.
             popd
             exit /b 1
         )
@@ -307,7 +307,7 @@ if /i "%TARGET_MODE%"=="backend" (
         call pnpm bddgen
         popd
     ) else (
-        echo [4/6] [INFO] No freesearch-ui directory found on this branch. Skipping UI setup.
+        echo [4/6] [INFO] No polyweb-ui directory found on this branch. Skipping UI setup.
     )
 )
 
@@ -348,20 +348,20 @@ echo   create_worktree.bat ^<branch-name^> [mode^|folder-name] [mode] [options]
 echo.
 echo Modes:
 echo   docker (or bare, none)    - Fast passthrough: git checkout + .env only (skips uv ^& pnpm)
-echo   backend (or be)           - Setup backend only (uv sync + freesearch-db upgrade)
+echo   backend (or be)           - Setup backend only (uv sync + polyweb-db upgrade)
 echo   ui (or frontend, fe)      - Setup UI only (pnpm install + bddgen)
 echo   full (or fullstack)       - Setup both backend and UI [default]
 echo.
 echo Options:
 echo   --base ^<ref^>   Base ref for a NEW branch (default: main; ignored if the branch exists)
 echo   --slot ^<N^>     Worktree slot 1-9; sets .env ports MCP 80N0 / API 80N1 / VITE 5174+N
-echo   --copy-db      Copy the main checkout's freesearch.db (contains credentials/history).
+echo   --copy-db      Copy the main checkout's polyweb.db (contains credentials/history).
 echo                  A copy works only if the main database is already at the alpha
 echo                  baseline; otherwise the new worktree refuses it with reset steps.
 echo.
 echo Examples:
 echo   create_worktree.bat my-feature docker
 echo   create_worktree.bat my-feature backend --base develop
-echo   create_worktree.bat my-feature freesearch_wt_1 backend
+echo   create_worktree.bat my-feature polyweb_wt_1 backend
 echo   create_worktree.bat my-feature custom-folder-name docker --slot 3
 exit /b 1

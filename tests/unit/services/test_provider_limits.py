@@ -1,9 +1,9 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from freesearch.models.contracts import UnitKind
-from freesearch.models.provider_limits import AuthMode, NativePool
-from freesearch.services.provider_limits import _with_scoped_observations
+from polyweb.models.contracts import UnitKind
+from polyweb.models.provider_limits import AuthMode, NativePool
+from polyweb.services.provider_limits import _with_scoped_observations
 
 IDENTITIES = {"cred:1": ("cred:1", {0})}
 

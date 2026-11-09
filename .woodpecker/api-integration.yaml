@@ -26,7 +26,7 @@ steps:
         bash scripts/ci/run-and-log.sh integration-tests.log bash -euo pipefail -c '
           test -f .env || cp .env.example .env
           uv sync --frozen
-          uv run freesearch-db upgrade
+          uv run polyweb-db upgrade
           uv run pytest tests/integration --ignore=tests/integration/latency -n auto -q
         '
 

@@ -5,7 +5,7 @@ with a fake Behave context.  No live network calls or API keys are used.
 
 Contract under test (locked Brave BDD contract):
   given   ``Given a configured Brave search adapter`` must require a resolved
-          FREESEARCH_BRAVE_SEARCH_API_KEY and a ready adapter.
+          POLYWEB_BRAVE_SEARCH_API_KEY and a ready adapter.
   when    ``When I perform a live Brave search ...`` must forward the query and
           limit to the adapter via ``SearchRequest``.
   AC-L3   ``When I check the Brave adapter capabilities and search cost estimate``,
@@ -26,7 +26,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from freesearch.models.contracts import (
+from polyweb.models.contracts import (
     CostEstimate,
     ProviderCapabilities,
     SearchRequest,
@@ -86,7 +86,7 @@ def test_given_step_requires_brave_key() -> None:
     """The given step must fail clearly when the Brave key is absent."""
     context = SimpleNamespace(has_brave_key=False, adapter=object())
 
-    with pytest.raises(AssertionError, match="FREESEARCH_BRAVE_SEARCH_API_KEY"):
+    with pytest.raises(AssertionError, match="POLYWEB_BRAVE_SEARCH_API_KEY"):
         brave_steps.step_given_brave_adapter(context)
 
 

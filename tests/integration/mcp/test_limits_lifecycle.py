@@ -17,9 +17,9 @@ import pytest_asyncio
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr
 
-from freesearch.mcp.server import create_server, shutdown_injected_observability
-from freesearch.models.contracts import SearchRequest, SearchResponse
-from freesearch.models.provider_limits import (
+from polyweb.mcp.server import create_server, shutdown_injected_observability
+from polyweb.models.contracts import SearchRequest, SearchResponse
+from polyweb.models.provider_limits import (
     LOCAL_RATE_DENIAL_CODE,
     AuthMode,
     LimitOperation,
@@ -27,9 +27,9 @@ from freesearch.models.provider_limits import (
     RateBlock,
     RateWindowName,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.api_keys import mcp_project_key
 from tests.fixtures.auth import TEMP_PASSWORD, raw_auth_headers, temp_email
 from tests.fixtures.execution import (
@@ -71,7 +71,7 @@ def _stub_only(monkeypatch: pytest.MonkeyPatch) -> None:
     from tests.integration.services.test_monitoring import _StubAdapter
 
     monkeypatch.setattr(
-        "freesearch.mcp.server.adapter_factory",
+        "polyweb.mcp.server.adapter_factory",
         lambda name: (
             (lambda client, api_key=None: _StubAdapter("x")) if name == "keenable" else None
         ),
@@ -317,8 +317,8 @@ async def test_injected_last_exit_stop_cannot_wipe_a_session_entering_meanwhile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Origin schedule race: an old teardown cannot close fresh scoped execution."""
-    import freesearch.mcp.server as module
-    from freesearch.services.execution import ExecutionService
+    import polyweb.mcp.server as module
+    from polyweb.services.execution import ExecutionService
 
     repository = await SQLiteRepository.open(tmp_path / "race.db")
     release, started = asyncio.Event(), asyncio.Event()

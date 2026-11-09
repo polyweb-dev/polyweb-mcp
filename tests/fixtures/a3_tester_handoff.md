@@ -7,7 +7,7 @@ is a substitute for the task notes; the orchestrator decides who acts next.
 
 ## Where this work lives
 
-- Workspace: `C:\Sharath\Computer Programming\Programs\Python\freesearch_d1`
+- Workspace: `C:\Sharath\Computer Programming\Programs\Python\polyweb_d1`
 - Branch: `projects/api-layer-rewrite`
 - Git head: `ef6b07bcac04a0624c524a172946f3552ff01db3` (`skill updates`)
 - All test changes are working-tree only (git: none committed; the eight A3
@@ -81,7 +81,7 @@ Modified files (all preserved from call 2; nothing deleted):
        exchange: headers, statuses, request/response bodies capped 4KB);
      - `forwarding_settings` (settings with `execution_authority_url` +
        `execution_forward_timeout_seconds`, patched into
-       `freesearch.mcp.server.get_settings`);
+       `polyweb.mcp.server.get_settings`);
      - `install_asgi_hop` (subclasses the module's `ExecutionForwarder` so it
        rides `httpx.ASGITransport` over the real `create_app` API);
      - `_wait_until`, `_tool_refusal`, `_tool_success`, `_queue_depth`,
@@ -148,7 +148,7 @@ Not executed this call (avoid re-running before any edit you make):
 Expected production failures (leave FAILING for developer round 2; the tests
 are the specification):
 
-1. P4 default wait: `_PoolQueue._wait_seconds` (src/freesearch/services/
+1. P4 default wait: `_PoolQueue._wait_seconds` (src/polyweb/services/
    execution_authority.py line ~280) only considers
    `policy.max_queue_wait_ms` and `policy.deadline`; the queue's
    `default_max_wait_ms` (authority-level, stored at line 183/592, threaded
@@ -263,11 +263,11 @@ Verified behavior (tests PASS, keep as locks; no fix needed):
 
 ## Established seams, helpers, and pitfalls (learned by runs)
 
-- Settings: `freesearch.configuration.config` URL validator accepts plain
+- Settings: `polyweb.configuration.config` URL validator accepts plain
   http only for LOOPBACK hosts; use `https://api-authority.test` style URLs
   for the chain tests (the ASGI transport intercepts anyway). Build settings
   with `tests.fixtures.auth.test_settings(execution_authority_url=...)` and
-  patch `freesearch.mcp.server.get_settings` (or import once as
+  patch `polyweb.mcp.server.get_settings` (or import once as
   `rig_test_settings` - do NOT import `test_settings` unaliased at module
   level, pytest would collect it as a test).
 - MCP tool results: `server.call_tool` returns a TUPLE `(content, payload)`
@@ -295,7 +295,7 @@ Verified behavior (tests PASS, keep as locks; no fix needed):
 - Flush seam for trace assertions: `await shutdown_injected_observability(
   server)` (public mcp.server seam) before closing the repository, then read
   `trace_spans` with plain `sqlite3` (helper `_trace_root_rows`).
-- Adapter registry: `freesearch.services.execution.adapter_factory` is a
+- Adapter registry: `polyweb.services.execution.adapter_factory` is a
   CHECKER `(name) -> builder | None`; production calls
   `build_adapter_with_secret(factory, client, secret, ...)` which invokes the
   builder as `factory(client, api_key=<SecretStr>)`. To add a synthetic
@@ -327,7 +327,7 @@ Verified behavior (tests PASS, keep as locks; no fix needed):
   call; the developer call 2 has NOT been started.
 
 Checkpoint absolute path:
-`C:\Sharath\Computer Programming\Programs\Python\freesearch_d1\tests\fixtures\a3_tester_handoff.md`
+`C:\Sharath\Computer Programming\Programs\Python\polyweb_d1\tests\fixtures\a3_tester_handoff.md`
 
 STOPPED AT SAFE POINT; TESTS FROZEN
 
@@ -389,7 +389,7 @@ production/Backlog edits, no latency work, no commits, no new subagents.
    `test_pool_capacity_tightening_refuses_infeasible_promises`,
    `test_zero_share_requires_the_explicit_best_effort_flag`) use the REAL
    repository seams with MATCHING signatures, verified against
-   `src/freesearch/persistence/pools.py` (create 639, update 684
+   `src/polyweb/persistence/pools.py` (create 639, update 684
    `_require_feasible` 794, update_pool 425, schema CHECK
    `project_pool_allocations_zero_rate_best_effort` line 184). NO fixture-side
    invalidity found; nothing corrected. Adjudication: `create` and
@@ -504,7 +504,7 @@ non-flaky production-defect reproductions (run twice; stable):
   (rows -> `uncertain` under the old token), the during-recovery send is
   served by the reopened authority (`refusal is None`, search_calls becomes
   2) -- i.e. the recovery pause DOES NOT hold. SOURCE ROOT CAUSE (direct
-  read evidence, `src/freesearch/persistence/execution_authority.py`):
+  read evidence, `src/polyweb/persistence/execution_authority.py`):
   `_acquire` decides the RECOVERING state from
   `if await self._mark_uncertain(authority_key=authority_key,
   ...)` (line ~309) where `authority_key` = `key =
@@ -704,7 +704,7 @@ Command: uv run --no-sync pytest tests/unit/services/test_execution_authority.py
 Result: 1 failed in 1.99s; pending 4 > bound 1. Lint and format pass for this file.
 No provider I/O or DB, bounded synchronization and task cleanup.
 
-Next correction: src/freesearch/services/execution_authority.py::_enqueue,
+Next correction: src/polyweb/services/execution_authority.py::_enqueue,
 _would_dispatch_now, _sync_budget and _QueueBudget. Exempt a pending head from
 queued accounting only when it OWNS dispatch capacity. A hypothetical free
 slot cannot be exempted for every independently enqueuing pool. Ownership must
@@ -723,7 +723,7 @@ as independently verified. Latency is unverified, not passed.
 # A3 TESTER EXTRA-LOOP VERIFICATION (user-authorized one extra tester call, 2026-10-30)
 
 Written by the extra-loop tester call. Scope and rules held exactly: workspace
-`C:\Sharath\Computer Programming\Programs\Python\freesearch_d1`, branch
+`C:\Sharath\Computer Programming\Programs\Python\polyweb_d1`, branch
 `projects/api-layer-rewrite` head `ef6b07b` (production frozen at the
 developer handoff). Tests-only edits: `tests/unit/services/
 test_execution_authority.py` (manifest) and `tests/integration/services/

@@ -1,4 +1,4 @@
-"""Tinyfish integration: free search and fetch preserve rate plus null budget split.
+"""Tinyfish integration: Polyweb MCP and fetch preserve rate plus null budget split.
 
 Tinyfish slice only. Real adapter with real catalog records and mock-transport
 HTTP. No vendor I/O, no live keys, no wallet calls.
@@ -13,10 +13,10 @@ from typing import Any, cast
 import httpx
 from pydantic import SecretStr
 
-from freesearch.adapters.tinyfish import TinyfishAdapter
-from freesearch.configuration.provider_limits import provider_limit_defaults, provider_tier_defaults
-from freesearch.models.contracts import FetchRequest, SearchRequest
-from freesearch.models.provider_limits import (
+from polyweb.adapters.tinyfish import TinyfishAdapter
+from polyweb.configuration.provider_limits import provider_limit_defaults, provider_tier_defaults
+from polyweb.models.contracts import FetchRequest, SearchRequest
+from polyweb.models.provider_limits import (
     AuthMode,
     FundingMode,
     LimitOperation,

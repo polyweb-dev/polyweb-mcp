@@ -11,8 +11,8 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from freesearch.models.contracts import UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     BudgetBlock,
     CRDGrantPayload,
@@ -34,7 +34,7 @@ from freesearch.models.provider_limits import (
     parse_exact_decimal,
     unpriced_ceiling_error,
 )
-from freesearch.routers.limits import _validate_usage_url
+from polyweb.routers.limits import _validate_usage_url
 
 FIXED = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
 
@@ -219,7 +219,7 @@ def test_history_limit_accepts_one_to_one_hundred() -> None:
 
 def test_usage_url_decode_preserves_router_enforces() -> None:
     # The model only decodes; _validate_usage_url owns https/no-credentials.
-    from freesearch.models.provider_limits import ProviderLimitRecord
+    from polyweb.models.provider_limits import ProviderLimitRecord
 
     record = ProviderLimitRecord(
         provider="synth",

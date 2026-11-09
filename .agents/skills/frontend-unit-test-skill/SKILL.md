@@ -1,15 +1,15 @@
 ---
 name: "frontend-unit-test-skill"
-description: "Write, run, and debug fast unit and component tests with Vitest and React Testing Library in freesearch-ui/src. Use when you verify domain models and data contracts, test React components, mock asynchronous adapters, check test coverage, or fix unit test failures."
+description: "Write, run, and debug fast unit and component tests with Vitest and React Testing Library in polyweb-ui/src. Use when you verify domain models and data contracts, test React components, mock asynchronous adapters, check test coverage, or fix unit test failures."
 ---
 
 # Vitest Unit & Component Testing
 
-Fast unit and component testing of `freesearch-ui/src` with Vitest and React Testing Library.
+Fast unit and component testing of `polyweb-ui/src` with Vitest and React Testing Library.
 
 ## 1. Execution Path: Choose the Lightest Path
 
-Run each command from `freesearch-ui/`.
+Run each command from `polyweb-ui/`.
 
 * **Inner Loop (Active Development)**: Run only the specific test file:
   ```bash

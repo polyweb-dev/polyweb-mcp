@@ -11,7 +11,7 @@ fetch half (contents ``metadata`` normalizes into document metadata). The
 import json
 from datetime import timedelta
 
-from freesearch.models.contracts import FetchRequest
+from polyweb.models.contracts import FetchRequest
 from tests.unit.adapters._youcom_test_support import (
     _fetch_payload,
     _wired,

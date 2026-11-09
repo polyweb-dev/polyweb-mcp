@@ -21,9 +21,9 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-import freesearch.persistence.database_migrations as migration_module
-from freesearch.persistence.database_cli import _run
-from freesearch.persistence.database_migrations import (
+import polyweb.persistence.database_migrations as migration_module
+from polyweb.persistence.database_cli import _run
+from polyweb.persistence.database_migrations import (
     DatabaseMigrationError,
     DatabaseResetRequired,
     MigrationResult,
@@ -33,7 +33,7 @@ from freesearch.persistence.database_migrations import (
     upgrade_database,
     validate_database_schema,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 
 _BASELINE = "0001_alpha_baseline"
 _CAPACITY = "0002_capacity_actor"
@@ -43,7 +43,7 @@ _POOL_BUDGET = "0005_pool_budget"
 _KEYLESS = "0006_keyless_credentials"
 _HEAD = "0007_provider_budget_period"
 _OLDER_REVISION = "0009_provider_credentials"
-_UNKNOWN_REVISION = "ffffffffffff_not_a_freesearch_revision"
+_UNKNOWN_REVISION = "ffffffffffff_not_a_polyweb_revision"
 
 
 # --------------------------------------------------------------------------- helpers
@@ -206,7 +206,7 @@ def _assert_reset_message(
     assert "stop" in lowered, message
     assert "move" in lowered or "delete" in lowered, message
     assert "-wal" in message and "-shm" in message, message
-    assert "FREESEARCH_DB" in message, message
+    assert "POLYWEB_DB" in message, message
     assert "start" in lowered, message
     # Operators must know what has to be re-entered.
     assert "account" in lowered, message
@@ -217,7 +217,7 @@ def _assert_reset_message(
 @pytest.fixture
 def rejected_database(tmp_path: Path, request: pytest.FixtureRequest) -> tuple[Path, str | None]:
     builder, found = _REJECTED_CASES[request.param]
-    database = tmp_path / "rejected dir" / "freesearch old.db"
+    database = tmp_path / "rejected dir" / "polyweb old.db"
     builder(database)
     return database, found
 
@@ -296,7 +296,7 @@ def test_legacy_adoption_machinery_is_removed() -> None:
 
 
 def test_upgrade_database_fresh_path_with_spaces_reaches_head(tmp_path: Path) -> None:
-    database = tmp_path / "worktree data" / "freesearch data.db"
+    database = tmp_path / "worktree data" / "polyweb data.db"
 
     result = upgrade_database(database)
 
@@ -391,7 +391,7 @@ def test_cross_process_upgrades_are_serialized(tmp_path: Path) -> None:
     database = tmp_path / "processes.db"
     code = (
         "import sys; from pathlib import Path; "
-        "from freesearch.persistence.database_migrations import upgrade_database; "
+        "from polyweb.persistence.database_migrations import upgrade_database; "
         "print(int(upgrade_database(Path(sys.argv[1])).changed))"
     )
     processes = [
@@ -553,7 +553,7 @@ def test_cli_reports_reset_required_without_traceback(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     database, found = rejected_database
-    monkeypatch.delenv("FREESEARCH_DB", raising=False)
+    monkeypatch.delenv("POLYWEB_DB", raising=False)
     digest_before = _sha256(database)
 
     exit_code = _run(["--database", str(database), command])
@@ -562,7 +562,7 @@ def test_cli_reports_reset_required_without_traceback(
     output = captured.out + captured.err
     assert exit_code == 1
     assert "Traceback" not in output
-    # rework_1 M4: freesearch-db prints the reset message to stderr.
+    # rework_1 M4: polyweb-db prints the reset message to stderr.
     _assert_reset_message(captured.err, database=database, found=found)
     if command == "status":
         assert "Schema: reset required" in captured.out
@@ -574,7 +574,7 @@ def test_cli_status_and_upgrade_on_fresh_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     database = tmp_path / "cli fresh.db"
-    monkeypatch.delenv("FREESEARCH_DB", raising=False)
+    monkeypatch.delenv("POLYWEB_DB", raising=False)
 
     assert _run(["--database", str(database), "upgrade"]) == 0
     upgraded = capsys.readouterr().out
@@ -599,7 +599,7 @@ def test_cli_status_on_a_database_that_is_not_created_yet(
     database = tmp_path / "not created.db"
     if state == "empty":
         database.write_bytes(b"")
-    monkeypatch.delenv("FREESEARCH_DB", raising=False)
+    monkeypatch.delenv("POLYWEB_DB", raising=False)
 
     assert _run(["--database", str(database), "status"]) == 1
 
@@ -616,7 +616,7 @@ def test_cli_status_on_a_database_that_is_not_created_yet(
 
 _CREATOR = (
     "import sys; from pathlib import Path; "
-    "from freesearch.persistence.database_migrations import upgrade_database; "
+    "from polyweb.persistence.database_migrations import upgrade_database; "
     "upgrade_database(Path(sys.argv[1]))"
 )
 
@@ -630,7 +630,7 @@ def test_concurrent_fresh_creation_is_never_reported_as_reset(tmp_path: Path) ->
 
     false_resets: list[str] = []
     for trial in range(3):
-        database = tmp_path / f"race {trial}" / "freesearch.db"
+        database = tmp_path / f"race {trial}" / "polyweb.db"
         database.parent.mkdir()
         creator = subprocess.Popen(
             [sys.executable, "-c", _CREATOR, str(database)],
@@ -768,8 +768,8 @@ def test_rejection_only_opens_read_only_connections(
 async def test_repository_open_targets_only_selected_worktree_database(
     tmp_path: Path,
 ) -> None:
-    main_database = tmp_path / "main" / "freesearch.db"
-    worktree_database = tmp_path / "worktree" / "freesearch.db"
+    main_database = tmp_path / "main" / "polyweb.db"
+    worktree_database = tmp_path / "worktree" / "polyweb.db"
     worktree_database.parent.mkdir()
     _create_legacy(main_database, _OLDER_REVISION)
     main_hash = _sha256(main_database)
@@ -1073,9 +1073,9 @@ def test_stale_hot_wal_is_never_replayed_into_a_fresh_database(
     # The operator deleted the old main file but its side files were left behind.
     target_dir = tmp_path / "checkout"
     target_dir.mkdir()
-    target = target_dir / "freesearch.db"
-    shutil.copyfile(captured / "old.db-wal", target_dir / "freesearch.db-wal")
-    shutil.copyfile(captured / "old.db-shm", target_dir / "freesearch.db-shm")
+    target = target_dir / "polyweb.db"
+    shutil.copyfile(captured / "old.db-wal", target_dir / "polyweb.db-wal")
+    shutil.copyfile(captured / "old.db-shm", target_dir / "polyweb.db-shm")
     assert not target.exists()
 
     result = upgrade_database(target)
@@ -1106,7 +1106,7 @@ def test_stale_hot_wal_is_never_replayed_into_a_fresh_database(
 def test_stale_rollback_journal_is_removed_before_creation(tmp_path: Path) -> None:
     """A leftover ``-journal`` next to an absent path is deleted, never rolled back in."""
 
-    target = tmp_path / "freesearch.db"
+    target = tmp_path / "polyweb.db"
     Path(f"{target}-journal").write_bytes(b"stale hot journal from a deleted database" * 32)
 
     result = upgrade_database(target)
@@ -1142,14 +1142,14 @@ def test_replace_blocked_by_another_process_reports_and_cleans_up(
 def test_stale_creation_cleanup_only_touches_staging_files(tmp_path: Path) -> None:
     """rework_2 NIT: only ``<name>.creating-<8 hex>`` (and its side files) are stale."""
 
-    target = tmp_path / "freesearch.db"
-    notes = tmp_path / "freesearch.db.creating-notes.txt"
+    target = tmp_path / "polyweb.db"
+    notes = tmp_path / "polyweb.db.creating-notes.txt"
     notes.write_text("operator notes, keep me", encoding="utf-8")
-    not_hex = tmp_path / "freesearch.db.creating-0123abcz"
+    not_hex = tmp_path / "polyweb.db.creating-0123abcz"
     not_hex.write_bytes(b"not hex, keep me")
-    longer = tmp_path / "freesearch.db.creating-0123abcd9"
+    longer = tmp_path / "polyweb.db.creating-0123abcd9"
     longer.write_bytes(b"nine hex digits, keep me")
-    stale = tmp_path / "freesearch.db.creating-0123abcd"
+    stale = tmp_path / "polyweb.db.creating-0123abcd"
     stale.write_bytes(b"stale staging file")
     stale_sides = [Path(f"{stale}{suffix}") for suffix in ("-wal", "-shm", "-journal")]
     for side in stale_sides:

@@ -7,8 +7,8 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from freesearch.models.contracts import FallbackPolicy
-from freesearch.models.projects import (
+from polyweb.models.contracts import FallbackPolicy
+from polyweb.models.projects import (
     TRACE_DETAIL_CONSTRAINT_ORDER,
     ExecutionSettings,
     ProjectSettingsDocument,
@@ -16,7 +16,7 @@ from freesearch.models.projects import (
     TraceDetailPolicy,
     TraceSettings,
 )
-from freesearch.models.settings import (
+from polyweb.models.settings import (
     SETTINGS_FIELD_CATALOG,
     SETTINGS_NAMESPACE,
     SETTINGS_SCHEMA_VERSION,

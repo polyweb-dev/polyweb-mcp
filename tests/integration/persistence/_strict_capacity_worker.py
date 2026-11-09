@@ -10,14 +10,14 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID, uuid4
 
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     AuthMode,
     LimitDeniedError,
     LimitOperation,
     LimitStoreUnavailable,
 )
-from freesearch.persistence.limit_repository import StrictAttemptSpec, StrictWindowSpec
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.limit_repository import StrictAttemptSpec, StrictWindowSpec
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import FIXTURE_ACTOR
 
 _WINDOW_SECONDS = 3600

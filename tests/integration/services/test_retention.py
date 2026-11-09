@@ -5,27 +5,27 @@ from pathlib import Path
 
 import pytest
 
-from freesearch.models.contracts import UsageEvent, UsageOperation
-from freesearch.models.observability import (
+from polyweb.models.contracts import UsageEvent, UsageOperation
+from polyweb.models.observability import (
     ActorType,
     ExecutionAttribution,
     TraceOperation,
     TraceSpanKind,
     TraceSpanRecord,
 )
-from freesearch.models.projects import TraceSettings
-from freesearch.models.retention import RetentionRunRequest
-from freesearch.models.schema_enums import (
+from polyweb.models.projects import TraceSettings
+from polyweb.models.retention import RetentionRunRequest
+from polyweb.models.schema_enums import (
     AuditActorType,
     AuditCategory,
     AuditOutcome,
     RetentionDataClass,
 )
-from freesearch.models.settings import ProjectSettingsUpdate
-from freesearch.persistence.audit import AuditRepository
-from freesearch.persistence.otel_exporter import write_trace_spans
-from freesearch.services.retention import ProjectRetentionService
-from freesearch.services.settings import SettingsService
+from polyweb.models.settings import ProjectSettingsUpdate
+from polyweb.persistence.audit import AuditRepository
+from polyweb.persistence.otel_exporter import write_trace_spans
+from polyweb.services.retention import ProjectRetentionService
+from polyweb.services.settings import SettingsService
 from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
 from tests.fixtures.auth import temp_principal
 from tests.fixtures.execution import seed_execution_project

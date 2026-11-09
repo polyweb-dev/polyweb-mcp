@@ -23,7 +23,7 @@ from typing import ClassVar
 
 import pytest
 
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 
 # ``features`` is an uninstalled namespace package at the repo root; make it
 # importable regardless of pytest's sys.path manipulation.
@@ -31,11 +31,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from freesearch.adapters import youcom as youcom_module  # noqa: E402
+from polyweb.adapters import youcom as youcom_module  # noqa: E402
 from tests.bdd.features import environment  # noqa: E402
 
-_TAVILY_REASON_KEY = "FREESEARCH_TAVILY_API_KEY"
-_FIRECRAWL_REASON_KEY = "FREESEARCH_FIRECRAWL_API_KEY"
+_TAVILY_REASON_KEY = "POLYWEB_TAVILY_API_KEY"
+_FIRECRAWL_REASON_KEY = "POLYWEB_FIRECRAWL_API_KEY"
 
 
 class _FakeClient:
@@ -322,7 +322,7 @@ def test_is_tavily_scenario_false_for_every_other_provider_selection() -> None:
             f"{scenario.tags} must be gated on its own provider key, not Tavily's"
         )
 
-    # Plain (keyless) Keenable is gated on FREESEARCH_RUN_LIVE, not on a key, and
+    # Plain (keyless) Keenable is gated on POLYWEB_RUN_LIVE, not on a key, and
     # Exa is identified by feature name: neither may reach the Tavily gate.
     for scenario in (
         _FakeScenario(["live", "keenable", "search"]),
@@ -335,11 +335,11 @@ def test_is_tavily_scenario_false_for_every_other_provider_selection() -> None:
 def test_harness_env_key_prefers_canonical_and_accepts_legacy_tinyfish(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Tinyfish reads FREESEARCH_TINYFISH_API_KEY first, then the legacy spelling."""
-    monkeypatch.delenv("FREESEARCH_TINYFISH_API_KEY", raising=False)
+    """Tinyfish reads POLYWEB_TINYFISH_API_KEY first, then the legacy spelling."""
+    monkeypatch.delenv("POLYWEB_TINYFISH_API_KEY", raising=False)
     monkeypatch.setenv("TINYFISH_API_KEY", "legacy-fixture")
     assert environment._harness_env_key(ProviderName.TINYFISH) == "legacy-fixture"
-    monkeypatch.setenv("FREESEARCH_TINYFISH_API_KEY", "canonical-fixture")
+    monkeypatch.setenv("POLYWEB_TINYFISH_API_KEY", "canonical-fixture")
     assert environment._harness_env_key(ProviderName.TINYFISH) == "canonical-fixture"
 
 
@@ -351,7 +351,7 @@ def test_harness_env_key_treats_blank_as_absent(monkeypatch: pytest.MonkeyPatch)
 
 def test_keyless_keenable_ignores_a_configured_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keyless scenarios run on the public tier even when a Keenable key is set."""
-    from freesearch.models.provider_limits import AuthMode
+    from polyweb.models.provider_limits import AuthMode
 
     monkeypatch.setenv(PROVIDER_ENV_VARS[ProviderName.KEENABLE], "keenable-fixture")
     keyless = environment._adapter_for(_FakeClient(), _FakeScenario(["live", "keenable"]))
@@ -364,6 +364,6 @@ def test_keyless_keenable_ignores_a_configured_key(monkeypatch: pytest.MonkeyPat
 
 def test_live_tinyfish_scenario_builds_tinyfish_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     """The live Tinyfish feature gets a Tinyfish adapter built from the harness key."""
-    monkeypatch.setenv("FREESEARCH_TINYFISH_API_KEY", "tinyfish-fixture")
+    monkeypatch.setenv("POLYWEB_TINYFISH_API_KEY", "tinyfish-fixture")
     adapter = environment._adapter_for(_FakeClient(), _FakeScenario(["live", "tinyfish-live"]))
     assert adapter.name == "tinyfish"

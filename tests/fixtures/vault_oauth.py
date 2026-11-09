@@ -11,11 +11,11 @@ from tests.fixtures.auth import TEMP_PASSWORD, create_temp_user, temp_email, tem
 from tests.fixtures.scoped_oauth import ScopedOAuthCase
 from tests.integration.services.oauth.oauth_stubs import StubOAuthServer
 
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.models.vault import VaultKeyCreate, VaultKeyDetails
-from freesearch.routers.api import create_app
-from freesearch.services.vault_keys import VaultKeyService, VaultOAuthService
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.models.vault import VaultKeyCreate, VaultKeyDetails
+from polyweb.routers.api import create_app
+from polyweb.services.vault_keys import VaultKeyService, VaultOAuthService
 
 
 @dataclass

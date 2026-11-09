@@ -35,15 +35,15 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.models.credentials import (
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.models.credentials import (
     CredentialAuthMode,
     CredentialCreate,
     CredentialGrantUpsert,
     CredentialOperation,
 )
-from freesearch.models.projects import (
+from polyweb.models.projects import (
     CredentialInstanceRead,
     HumanPrincipal,
     MembershipStatus,
@@ -55,19 +55,19 @@ from freesearch.models.projects import (
     ProjectMemberUpdate,
     ProjectRead,
 )
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.models.users import UserPrincipal
-from freesearch.models.vault import KeyPoolCreate, VaultKeyCreate, VaultKeyDetails
-from freesearch.persistence.oauth_grants import CredentialOAuthGrantRow
-from freesearch.persistence.projects import ProjectRepository
-from freesearch.persistence.storage import RuntimeSettingRow
-from freesearch.services.authorization import AuthorizationDenied
-from freesearch.services.control_errors import ResourceNotFound
-from freesearch.services.credential_oauth import CredentialOAuthService, OAuthTarget
-from freesearch.services.credentials import CredentialService
-from freesearch.services.key_pools import KeyPoolService
-from freesearch.services.projects import ProjectService
-from freesearch.services.vault_keys import VaultKeyService, VaultOAuthService
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.models.users import UserPrincipal
+from polyweb.models.vault import KeyPoolCreate, VaultKeyCreate, VaultKeyDetails
+from polyweb.persistence.oauth_grants import CredentialOAuthGrantRow
+from polyweb.persistence.projects import ProjectRepository
+from polyweb.persistence.storage import RuntimeSettingRow
+from polyweb.services.authorization import AuthorizationDenied
+from polyweb.services.control_errors import ResourceNotFound
+from polyweb.services.credential_oauth import CredentialOAuthService, OAuthTarget
+from polyweb.services.credentials import CredentialService
+from polyweb.services.key_pools import KeyPoolService
+from polyweb.services.projects import ProjectService
+from polyweb.services.vault_keys import VaultKeyService, VaultOAuthService
 from tests.fixtures.alpha_fixtures import AlphaBootstrapResult, bootstrap_fresh_alpha
 from tests.fixtures.api_keys import audit_rows, database_dump
 from tests.fixtures.auth import auth_service_for, create_temp_user, temp_email, temp_principal

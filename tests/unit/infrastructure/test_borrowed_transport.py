@@ -14,7 +14,7 @@ import inspect
 import httpx
 import pytest
 
-from freesearch.infrastructure.borrowed_transport import BorrowedTransport
+from polyweb.infrastructure.borrowed_transport import BorrowedTransport
 
 _PHASES = httpx.Timeout(connect=5.0, read=20.0, write=20.0, pool=20.0)
 _SCALAR_STAMP = 60.0  # what an SDK per-call timeout stamps onto the request

@@ -1,12 +1,12 @@
 # Release note — Local users, backend slice
 
 > **Superseded (TASK-000040):** the alpha baseline revision `0001_alpha_baseline`
-> replaced the migrations described here. FreeSearch now refuses databases from
+> replaced the migrations described here. Polyweb MCP now refuses databases from
 > these older revisions without changing them and prints reset steps; the
 > upgrade, backup, and adoption instructions below no longer apply.
 
 This release adds local accounts, account roles, session families, and
-account-only trace reads to FreeSearch. It covers the backend only. The browser
+account-only trace reads to Polyweb MCP. It covers the backend only. The browser
 login interface comes in a later release.
 
 ---
@@ -61,7 +61,7 @@ span_id)` where `parent_span_id IS NULL`. The current trace indexes remain.
 
 Stop both services before the release migration.
 Resolve the absolute database target before each file operation.
-Run `uv run freesearch-db upgrade` on that target.
+Run `uv run polyweb-db upgrade` on that target.
 Keep the backup and the master key outside the active database directory.
 Restrict the backup to the operator.
 
@@ -78,7 +78,7 @@ Stop both services before a production rollback.
 Verify the absolute active path and the backup path.
 Restore the integrity-checked pre-upgrade copy.
 Restore the previous application release and its compatible master key.
-Run the previous release's `freesearch-db status` check before startup.
+Run the previous release's `polyweb-db status` check before startup.
 
 Production rollback uses the backup, not a direct downgrade command. The
 database CLI has no downgrade command. The integration suite exercises
@@ -103,7 +103,7 @@ grants Admin.
 | Login limits | 5 pair attempts and 20 peer-address attempts per 900 seconds |
 | Registration limits | 5 attempts per peer address and 100 attempts per deployment per 900 seconds |
 | Public auth body | 4096 bytes, measured on streamed bytes |
-| Access token | JWT, HS256, audience `freesearch:auth`, 900 seconds |
+| Access token | JWT, HS256, audience `polyweb:auth`, 900 seconds |
 | Refresh family | 604800 seconds absolute, from the password login |
 | Refresh credential | opaque, 43 characters, single use, digest only in SQLite |
 
@@ -153,10 +153,10 @@ scheme with the login route as its token URL, so a discovery client can find
 Run the commands from the worktree root.
 
 ```powershell
-uv run freesearch-db status
-uv run freesearch-db upgrade
-uv run freesearch-users create-admin --email admin@example.com
-uv run freesearch-users set-role --user-id <account-uuid> --role developer
+uv run polyweb-db status
+uv run polyweb-db upgrade
+uv run polyweb-users create-admin --email admin@example.com
+uv run polyweb-users set-role --user-id <account-uuid> --role developer
 ```
 
 The CLI reads the password from a masked terminal prompt. It refuses a password
@@ -175,7 +175,7 @@ state. It never claims a successful Admin creation.
 ## 7. Stdio MCP policy
 
 The stdio transport accepts anonymous Search and Fetch calls. To attribute a
-call to an account, set `FREESEARCH_MCP_BEARER_TOKEN` in the child process
+call to an account, set `POLYWEB_MCP_BEARER_TOKEN` in the child process
 environment. That optional value comes from the process environment only, so
 the local environment file cannot supply an account credential.
 
@@ -195,16 +195,16 @@ required.
 Launch both transports without a fixed port.
 
 ```powershell
-uv run freesearch-api
-uv run freesearch-mcp
+uv run polyweb-api
+uv run polyweb-mcp
 ```
 
-`FREESEARCH_API_PORT` and `FREESEARCH_MCP_PORT` in the gitignored `.env` file
+`POLYWEB_API_PORT` and `POLYWEB_MCP_PORT` in the gitignored `.env` file
 supply the binds. A missing port stops that transport at startup.
 
 ### Setup of the account secret
 
-The account routes need one signing key. Set `FREESEARCH_AUTH_JWT_SECRET` in the
+The account routes need one signing key. Set `POLYWEB_AUTH_JWT_SECRET` in the
 gitignored `.env` file, or export it in the shell before the launch. Generate a
 value with at least 32 random bytes:
 
@@ -257,14 +257,14 @@ refresh credential in the `Authorization` header. The MCP transport and every
 API client keep that contract.
 
 A request with browser evidence keeps the refresh credential in one strict
-cookie. The cookie name is `__Secure-freesearch_refresh`, and the cookie path is
+cookie. The cookie name is `__Secure-polyweb_refresh`, and the cookie path is
 `/auth/jwt/refresh`. The cookie uses `HttpOnly`, `Secure`, and `SameSite=Strict`,
 and it carries no `Domain` attribute, so it stays host-only. The browser response
 omits the `refresh_token` key. The guard accepts this cookie on the refresh route
 only, so no cookie authenticates an ordinary API or MCP call.
 
-Browser evidence needs one exact allowed origin and the `X-FreeSearch-Client:
-browser` marker. Set `FREESEARCH_AUTH_BROWSER_ORIGINS` to the exact origin list.
+Browser evidence needs one exact allowed origin and the `X-Polyweb MCP-Client:
+browser` marker. Set `POLYWEB_AUTH_BROWSER_ORIGINS` to the exact origin list.
 An empty list disables browser cookie transport. A failed evidence check returns
 HTTP 403 before any credential issue, rotation, or family revocation. The cookie
 is host-only, so it ignores the port: use a separate browser context or a
@@ -314,7 +314,7 @@ System permissions control access to global pages and the account key vault.
 Provider routing order is on the project Providers page.
 
 The playground snapshot now uses one key per account:
-`freesearch:playground:v1:<account-uuid>`. The client discards the legacy
+`polyweb:playground:v1:<account-uuid>`. The client discards the legacy
 unowned snapshot without assigning it to an account, and it remounts the store
 when the account changes. This isolation prevents accidental cross-account
 rehydration through this UI. It does not protect stored results against local

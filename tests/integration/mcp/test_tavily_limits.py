@@ -10,13 +10,13 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from freesearch.adapters.tavily import TavilyAdapter
-from freesearch.configuration.provider_config import ProviderConfig
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import ProviderError, SearchRequest
-from freesearch.models.provider_limits import AuthMode, LimitOperation
-from freesearch.services.execution import _fanout_outcomes
-from freesearch.services.monitoring import _terminal_quota_402
+from polyweb.adapters.tavily import TavilyAdapter
+from polyweb.configuration.provider_config import ProviderConfig
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import ProviderError, SearchRequest
+from polyweb.models.provider_limits import AuthMode, LimitOperation
+from polyweb.services.execution import _fanout_outcomes
+from polyweb.services.monitoring import _terminal_quota_402
 
 
 class _FakeSDK:
@@ -33,7 +33,7 @@ def _keyless_adapter() -> tuple[TavilyAdapter, httpx.AsyncClient]:
 
 
 def test_construction_keyless_without_key() -> None:
-    from freesearch.services.provider_runtime import (
+    from polyweb.services.provider_runtime import (
         build_adapter_with_secret as _build_with_resolved_secret,
     )
 
@@ -47,7 +47,7 @@ def test_construction_keyless_without_key() -> None:
 
 
 async def test_config_apply_uses_adapter_rail() -> None:
-    from freesearch.services.provider_limits import ProviderLimitsService
+    from polyweb.services.provider_limits import ProviderLimitsService
 
     adapter, client = _keyless_adapter()
     try:

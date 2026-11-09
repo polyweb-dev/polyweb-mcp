@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from freesearch.models.contracts import (
+from polyweb.models.contracts import (
     FetchRequest,
     ManualQuota,
     ManualQuotaUpdate,
@@ -21,7 +21,7 @@ from freesearch.models.contracts import (
 
 
 def test_search_request_defaults_are_stable() -> None:
-    request = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="free search")
+    request = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="Polyweb MCP")
 
     assert request.limit == 10
     assert request.routing.mode is RoutingMode.AUTO

@@ -13,10 +13,10 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.models.schema_enums import AuditActorType, AuditCategory, AuditOutcome
-from freesearch.persistence.audit import AuditRepository, StoredAuditEvent
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.models.schema_enums import AuditActorType, AuditCategory, AuditOutcome
+from polyweb.persistence.audit import AuditRepository, StoredAuditEvent
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
 _NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
@@ -156,7 +156,7 @@ async def test_secret_like_detail_keys_raise_and_write_nothing(
 def test_audit_detail_shares_the_telemetry_sanitizer() -> None:
     """One forbidden-key rule for telemetry metadata and audit detail."""
 
-    from freesearch.persistence import storage
+    from polyweb.persistence import storage
 
     with pytest.raises(ValueError):
         storage.sanitized_metadata_json({"x_api_key": "redacted-in-test"})
@@ -166,7 +166,7 @@ def test_audit_detail_shares_the_telemetry_sanitizer() -> None:
 def test_strict_mode_is_opt_in_for_telemetry() -> None:
     """Telemetry keeps the exact-key rule; ``strict=True`` adds the substring rule."""
 
-    from freesearch.persistence import storage
+    from polyweb.persistence import storage
 
     relaxed = storage.sanitized_metadata_json({"tokens_used": 3, "provider_api_key_set": True})
     assert json.loads(relaxed) == {"tokens_used": 3, "provider_api_key_set": True}

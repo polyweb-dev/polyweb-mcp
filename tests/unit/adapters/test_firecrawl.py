@@ -4,7 +4,7 @@ Maps the Firecrawl provider contract to deterministic tests using a fake
 SDK and a recording shared runner - no network, no real key, no installed
 ``firecrawl`` package required. The whole file is expected to fail at
 collection while the production adapter is unimplemented
-(``ModuleNotFoundError: freesearch.adapters.firecrawl``); once the adapter
+(``ModuleNotFoundError: polyweb.adapters.firecrawl``); once the adapter
 exists it must satisfy every assertion below.
 
 Contract under test:
@@ -27,7 +27,7 @@ Contract under test:
   AC-5  ``estimate_cost`` returns a valid provider-specific CostEstimate
         without invoking the runner or the SDK; unknown vendor pricing is
         reported as zero units rather than fabricated credits.
-  AC-6  ``FirecrawlAdapter`` is importable from ``freesearch.adapters`` and
+  AC-6  ``FirecrawlAdapter`` is importable from ``polyweb.adapters`` and
         its capabilities advertise search/fetch/cost estimate but not quota.
 
 Payload contract assumed (Firecrawl v1 API shapes, supplied via the fake
@@ -54,12 +54,12 @@ from firecrawl.v2.utils.error_handler import (
 )
 from pydantic import BaseModel, SecretStr, ValidationError
 
-import freesearch.adapters.firecrawl as firecrawl_module  # import seam
-from freesearch.adapters import FirecrawlAdapter
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError
-from freesearch.models.contracts import FetchRequest, SearchRequest, UnitKind, UsageOperation
-from freesearch.models.provider_limits import AuthMode, Confidence, UsageSyncRequest
+import polyweb.adapters.firecrawl as firecrawl_module  # import seam
+from polyweb.adapters import FirecrawlAdapter
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError
+from polyweb.models.contracts import FetchRequest, SearchRequest, UnitKind, UsageOperation
+from polyweb.models.provider_limits import AuthMode, Confidence, UsageSyncRequest
 
 
 class _FakeClient:
@@ -672,7 +672,7 @@ async def test_fetch_within_max_chars_is_not_truncated() -> None:
 
 
 async def test_construction_missing_resolver_credential_fails_closed(monkeypatch) -> None:
-    monkeypatch.delenv("FREESEARCH_FIRECRAWL_API_KEY", raising=False)
+    monkeypatch.delenv("POLYWEB_FIRECRAWL_API_KEY", raising=False)
 
     client = httpx.AsyncClient()
     try:
@@ -692,7 +692,7 @@ async def test_construction_missing_resolver_credential_fails_closed(monkeypatch
 
 
 async def test_construction_never_falls_back_to_ambient_key(monkeypatch) -> None:
-    monkeypatch.setenv("FREESEARCH_FIRECRAWL_API_KEY", "ambient-sk-leak")
+    monkeypatch.setenv("POLYWEB_FIRECRAWL_API_KEY", "ambient-sk-leak")
 
     client = httpx.AsyncClient()
     try:
@@ -845,7 +845,7 @@ async def test_estimate_cost_never_touches_runner_or_network_for_either_request(
 
 
 def test_firecrawl_adapter_is_exported_from_adapters_package() -> None:
-    from freesearch.adapters import FirecrawlAdapter as Exported
+    from polyweb.adapters import FirecrawlAdapter as Exported
 
     assert Exported is FirecrawlAdapter
 

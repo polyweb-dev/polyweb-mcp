@@ -5,14 +5,14 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
-from freesearch.configuration.config import get_settings
-from freesearch.models.credentials import CredentialOperation, CredentialOwnerScope
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.credentials import CredentialService
+from polyweb.configuration.config import get_settings
+from polyweb.models.credentials import CredentialOperation, CredentialOwnerScope
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.credentials import CredentialService
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -24,8 +24,8 @@ from tests.fixtures.execution import seed_execution_project
 
 @pytest.mark.asyncio
 async def test_retired_routes_and_foreign_vault_key(tmp_path, monkeypatch, auth_secret):
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "vault-route-test-key")
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / "key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "vault-route-test-key")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / "key"))
     get_settings.cache_clear()
     repository = await SQLiteRepository.open(tmp_path / "retired-routes.db")
     try:

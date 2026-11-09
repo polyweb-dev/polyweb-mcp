@@ -44,7 +44,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--owner', default='freesearch')
+    parser.add_argument('--owner', default='polyweb')
     sub = parser.add_subparsers(dest='action', required=True)
     listing = sub.add_parser('list', help='List or search generic packages')
     listing.add_argument('--query', default='')

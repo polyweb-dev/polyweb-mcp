@@ -11,16 +11,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from freesearch.configuration.provider_config import (
+from polyweb.configuration.provider_config import (
     ProviderConfig,
     ProviderConfigSettings,
     ProviderConfigUpdate,
 )
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
-from freesearch.persistence.database_migrations import DatabaseResetRequired
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.models.contracts import UsageEvent, UsageOperation, UsageStatus
+from polyweb.persistence.database_migrations import DatabaseResetRequired
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.conftest import FakeAdapter
 from tests.fixtures.auth import (
     account_id_from_pair,
@@ -84,7 +84,7 @@ async def test_provider_config_env_json_is_base_and_persisted_update_wins(
 ) -> None:
     """AC-10: effective config order is defaults <- env JSON <- persisted."""
     monkeypatch.setenv(
-        "FREESEARCH_PROVIDER_CONFIG_OVERRIDES",
+        "POLYWEB_PROVIDER_CONFIG_OVERRIDES",
         json.dumps({"exa": {"enabled": False, "priority": 7}}),
     )
     env_update = ProviderConfigSettings().provider_config_overrides[ProviderName.EXA]
@@ -327,7 +327,7 @@ async def test_invalid_non_access_field_preserves_valid_stored_access(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """An invalid priority falls back for that field but keeps stored access."""
-    from freesearch.services.provider_runtime import effective_provider_config
+    from polyweb.services.provider_runtime import effective_provider_config
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(PROVIDER_ENV_VARS[ProviderName.EXA], raising=False)

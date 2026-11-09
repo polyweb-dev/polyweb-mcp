@@ -10,8 +10,8 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     configure_bdd_secret,
@@ -22,7 +22,7 @@ from tests.fixtures.auth import (
 
 def _open_manual_repository(context: Any) -> None:
     with tempfile.NamedTemporaryFile(
-        prefix="freesearch-manual-quota-",
+        prefix="polyweb-manual-quota-",
         suffix=".db",
         dir=Path.cwd(),
         delete=False,

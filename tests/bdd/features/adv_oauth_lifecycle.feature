@@ -1,6 +1,6 @@
 @control @adv-oauth @oauth-lifecycle
 Feature: Parallel OAuth lifecycle and resilience
-  As a FreeSearch operator
+  As a Polyweb operator
   I want disconnect and failure handling to be ordered and bounded
   So that revocation, idempotency, and dead grants never herd or leak
 

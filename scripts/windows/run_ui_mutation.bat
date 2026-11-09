@@ -3,7 +3,7 @@ setlocal
 
 set "SCRIPT_DIR=%~dp0"
 set "REPO_ROOT=%SCRIPT_DIR%..\.."
-set "UI_DIR=%REPO_ROOT%\freesearch-ui"
+set "UI_DIR=%REPO_ROOT%\polyweb-ui"
 
 pushd "%UI_DIR%"
 

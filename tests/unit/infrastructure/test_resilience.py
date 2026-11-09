@@ -12,12 +12,12 @@ import httpx
 import pytest
 from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
 
-from freesearch.infrastructure.resilience import (
+from polyweb.infrastructure.resilience import (
     CircuitOpenError,
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.models.contracts import ProviderError
+from polyweb.models.contracts import ProviderError
 
 
 class FakeClock:
@@ -1707,7 +1707,7 @@ def test_multi_word_dotted_and_digit_leading_credential_keys_are_redacted() -> N
 
 
 def test_finite_retry_after_details_accepts_int_and_float() -> None:
-    from freesearch.infrastructure.resilience import _finite_retry_after_details
+    from polyweb.infrastructure.resilience import _finite_retry_after_details
 
     assert _finite_retry_after_details({"retry_after_seconds": 7}) == 7.0
     assert _finite_retry_after_details({"retry_after_seconds": 2.5}) == 2.5
@@ -1715,7 +1715,7 @@ def test_finite_retry_after_details_accepts_int_and_float() -> None:
 
 
 def test_finite_retry_after_details_rejects_malformed() -> None:
-    from freesearch.infrastructure.resilience import _finite_retry_after_details
+    from polyweb.infrastructure.resilience import _finite_retry_after_details
 
     assert _finite_retry_after_details({}) is None
     assert _finite_retry_after_details(None) is None
@@ -1727,7 +1727,7 @@ def test_finite_retry_after_details_rejects_malformed() -> None:
 
 
 async def test_runner_uses_normalized_retry_after_for_429() -> None:
-    from freesearch.infrastructure.resilience import _finite_retry_after_details
+    from polyweb.infrastructure.resilience import _finite_retry_after_details
 
     clock = FakeClock()
     sleeper = FakeSleeper()

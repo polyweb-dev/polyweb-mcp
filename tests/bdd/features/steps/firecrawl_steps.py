@@ -9,7 +9,7 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import HttpUrl
 
-from freesearch.models.contracts import FetchRequest, SearchRequest
+from polyweb.models.contracts import FetchRequest, SearchRequest
 
 _FIRECRAWL_PROVIDER = "firecrawl"
 
@@ -23,7 +23,7 @@ def step_given_firecrawl_key(context: Any) -> None:
     environment hooks, never the default Tavily adapter.
     """
     assert getattr(context, "has_firecrawl_key", False), (
-        "FREESEARCH_FIRECRAWL_API_KEY is not configured in .env or environment. "
+        "POLYWEB_FIRECRAWL_API_KEY is not configured in .env or environment. "
         "Please provide a valid Firecrawl API key to run live BDD tests."
     )
     assert context.adapter is not None, "Firecrawl adapter was not initialized."

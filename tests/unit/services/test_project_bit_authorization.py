@@ -4,16 +4,16 @@ from uuid import uuid4
 
 import pytest
 
-from freesearch.models.project_permissions import PROVIDER_OWNER_BIT
-from freesearch.models.projects import (
+from polyweb.models.project_permissions import PROVIDER_OWNER_BIT
+from polyweb.models.projects import (
     MembershipStatus,
     PermissionAction,
     ProjectMemberRead,
     ProjectMemberUpdate,
 )
-from freesearch.persistence.projects import ProjectRoleAssignmentRow
-from freesearch.services.authorization import ScopedAuthorizationService
-from freesearch.services.projects import _member_expands_access
+from polyweb.persistence.projects import ProjectRoleAssignmentRow
+from polyweb.services.authorization import ScopedAuthorizationService
+from polyweb.services.projects import _member_expands_access
 
 
 @pytest.mark.parametrize(

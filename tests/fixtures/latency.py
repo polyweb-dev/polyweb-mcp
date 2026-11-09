@@ -20,9 +20,9 @@ from typing import Any
 from pydantic import AnyHttpUrl
 from sqlalchemy import event as sa_event
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -37,9 +37,9 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
-from freesearch.models.provider_limits import AuthMode
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.provider_runtime import (
+from polyweb.models.provider_limits import AuthMode
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.provider_runtime import (
     _BACKGROUND_TASKS,
     effective_config_for_name,
     routing_policy,

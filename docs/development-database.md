@@ -12,38 +12,38 @@ gitignored `.env`. The import variable names are listed in `.env.example`.
 uv run python scripts/seed_dev.py
 ```
 
-The script creates `freesearch.dev.db` at the current schema. It refuses an
+The script creates `polyweb.dev.db` at the current schema. It refuses an
 existing file, a different database filename, a symbolic link, leftover SQLite
-sidecars, or an environment other than `development`. It ignores `FREESEARCH_DB`
+sidecars, or an environment other than `development`. It ignores `POLYWEB_DB`
 when choosing its output, so an existing setting cannot redirect the seed into
 the normal database. It does not change `.env` itself.
 
 Set this line in `.env`:
 
 ```dotenv
-FREESEARCH_DB=freesearch.dev.db
+POLYWEB_DB=polyweb.dev.db
 ```
 
 Restart the backend and any MCP process with their normal commands:
 
 ```powershell
-uv run freesearch-api
-uv run freesearch-mcp
+uv run polyweb-api
+uv run polyweb-mcp
 ```
 
 The commands use the worktree ports from `.env`. The UI uses the same backend
-proxy as before; start it with `pnpm dev` from `freesearch-ui` if needed. Sign out
+proxy as before; start it with `pnpm dev` from `polyweb-ui` if needed. Sign out
 of the old browser session and sign in with a fixture account. Old session
 cookies and saved project URLs refer to the previous database.
 
-A process-level `FREESEARCH_DB` overrides `.env`. Clear that override or set it
+A process-level `POLYWEB_DB` overrides `.env`. Clear that override or set it
 to the dev database when switching. To return to the normal database, set
-`FREESEARCH_DB=freesearch.db` and restart the backend and MCP.
+`POLYWEB_DB=polyweb.db` and restart the backend and MCP.
 
 ## Accounts and membership matrix
 
 All five accounts use the deliberately public local fixture password
-`FreeSearchDev123!`. To use a different password, set `FREESEARCH_DEV_PASSWORD`
+`PolywebDev123!`. To use a different password, set `POLYWEB_DEV_PASSWORD`
 in the process environment or `.env` before creating the database. The script
 does not print passwords. These accounts are for a disposable local environment.
 
@@ -76,8 +76,8 @@ provider; Brave supports Search only. All three projects use the same upstream
 credentials and balances. The fixture does not invent quota pools or allocations.
 
 Missing or blank keys are reported by provider name and skipped. The Tinyfish
-import accepts `FREESEARCH_TINYFISH_API_KEY` or the legacy `TINYFISH_API_KEY`
-spelling. `FREESEARCH_BRAVE_SEARCH_API_KEY` supplies Brave; the separate legacy
+import accepts `POLYWEB_TINYFISH_API_KEY` or the legacy `TINYFISH_API_KEY`
+spelling. `POLYWEB_BRAVE_SEARCH_API_KEY` supplies Brave; the separate legacy
 Answers key has no adapter in this runtime and is not imported. The normal app
 continues to resolve credentials from its vault, not from these import variables.
 
@@ -94,10 +94,10 @@ Stop the API and MCP first. Delete only the disposable database and its SQLite
 sidecars, then run the seed again:
 
 ```powershell
-Remove-Item -LiteralPath .\freesearch.dev.db -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\freesearch.dev.db-wal -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\freesearch.dev.db-shm -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\freesearch.dev.db-journal -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath .\polyweb.dev.db -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath .\polyweb.dev.db-wal -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath .\polyweb.dev.db-shm -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath .\polyweb.dev.db-journal -ErrorAction SilentlyContinue
 uv run python scripts/seed_dev.py
 ```
 
@@ -107,7 +107,7 @@ Sign in again and select projects from the fresh list. A failed seed can leave a
 partial dev database: remove it with the same stopped-backend procedure.
 
 For a separate directory or env file, use
-`--database <directory>/freesearch.dev.db --env-file <file>`. The directory must
+`--database <directory>/polyweb.dev.db --env-file <file>`. The directory must
 already exist. The database must still have the exact dev filename.
 
 ## Verification

@@ -1,6 +1,6 @@
 """Unit acceptance for the encrypted-DB master key and AES-256-GCM codec.
 
-Covers vault-only AC-3 (passphrase via FREESEARCH_ENCRYPTION_KEY with
+Covers vault-only AC-3 (passphrase via POLYWEB_ENCRYPTION_KEY with
 PBKDF2+salt, file fallback via Settings.encryption_key_file, strict perms).
 Focused: PBKDF2/env-vs-file, wrong-key None, nondeterministic envelopes.
 """
@@ -30,9 +30,9 @@ def _crypto():
 
 def _load(crypto, monkeypatch, tmp_path, *, passphrase=None):  # type: ignore[no-untyped-def]
     if passphrase is not None:
-        monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", passphrase)
+        monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", passphrase)
     else:
-        monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY", raising=False)
+        monkeypatch.delenv("POLYWEB_ENCRYPTION_KEY", raising=False)
     return crypto.load_or_create_master_key(key_file=tmp_path / ".secret_key")
 
 
@@ -41,7 +41,7 @@ def _load(crypto, monkeypatch, tmp_path, *, passphrase=None):  # type: ignore[no
 
 def test_master_key_env_var_name() -> None:
     crypto = _crypto()
-    assert crypto.MASTER_KEY_ENV_VAR == "FREESEARCH_ENCRYPTION_KEY"
+    assert crypto.MASTER_KEY_ENV_VAR == "POLYWEB_ENCRYPTION_KEY"
 
 
 def test_passphrase_derives_32_byte_key_via_kdf_not_raw(  # AC-1
@@ -147,7 +147,7 @@ def test_two_installations_generate_distinct_keys(  # AC-2
     second_dir = tmp_path / "b"
     first_dir.mkdir()
     second_dir.mkdir()
-    monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("POLYWEB_ENCRYPTION_KEY", raising=False)
 
     first = crypto.load_or_create_master_key(key_file=first_dir / ".secret_key")
     second = crypto.load_or_create_master_key(key_file=second_dir / ".secret_key")
@@ -162,7 +162,7 @@ def test_corrupt_key_file_fails_closed_without_regeneration(  # AC-9
     crypto = _crypto()
     key_file = tmp_path / ".secret_key"
     key_file.write_bytes(b"too-short")
-    monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("POLYWEB_ENCRYPTION_KEY", raising=False)
 
     with pytest.raises(Exception) as exc_info:
         crypto.load_or_create_master_key(key_file=key_file)
@@ -223,7 +223,7 @@ def test_wrong_passphrase_cannot_decrypt_and_error_is_redacted(  # AC-4
     right = _load(crypto, monkeypatch, right_dir, passphrase=SENTINEL_PASSPHRASE)
     envelope = crypto.SecretCodec(right).encrypt("wrong-key-plaintext-sentinel", context="tavily")
 
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", SENTINEL_WRONG_PASSPHRASE)
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", SENTINEL_WRONG_PASSPHRASE)
     wrong = crypto.load_or_create_master_key(key_file=wrong_dir / ".secret_key")
 
     with pytest.raises(crypto.SecretDecryptError) as exc_info:
@@ -262,10 +262,10 @@ def test_explicit_passphrase_env_param_wins_over_process_env(
     monkeypatch,
     tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
-    """AC-3: explicit passphrase_env beats FREESEARCH_ENCRYPTION_KEY."""
+    """AC-3: explicit passphrase_env beats POLYWEB_ENCRYPTION_KEY."""
 
     crypto = _crypto()
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", SENTINEL_WRONG_PASSPHRASE)
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", SENTINEL_WRONG_PASSPHRASE)
     key_file = tmp_path / ".secret_key"
 
     explicit = crypto.load_or_create_master_key(
@@ -273,7 +273,7 @@ def test_explicit_passphrase_env_param_wins_over_process_env(
     )
     envelope = crypto.SecretCodec(explicit).encrypt("explicit-param-wins", context="tavily")
 
-    monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("POLYWEB_ENCRYPTION_KEY", raising=False)
     reloaded = crypto.load_or_create_master_key(
         key_file=key_file, passphrase_env=SENTINEL_PASSPHRASE
     )
@@ -288,15 +288,15 @@ def test_settings_encryption_key_file_overrides_default(
 ) -> None:
     """AC-3: Settings.encryption_key_file overrides DEFAULT_KEY_FILE (/data mount)."""
 
-    from freesearch.configuration.config import get_settings
+    from polyweb.configuration.config import get_settings
 
     monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
     try:
-        monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", "/data/.secret_key")
+        monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", "/data/.secret_key")
         assert get_settings().encryption_key_file == Path("/data/.secret_key")
     finally:
-        monkeypatch.delenv("FREESEARCH_ENCRYPTION_KEY_FILE", raising=False)
+        monkeypatch.delenv("POLYWEB_ENCRYPTION_KEY_FILE", raising=False)
         get_settings.cache_clear()
     assert get_settings().encryption_key_file != Path("/data/.secret_key")
     get_settings.cache_clear()

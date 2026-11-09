@@ -6,9 +6,9 @@ from typing import Any
 
 from behave import given, then, when
 
-from freesearch.models.credentials import CredentialOAuthDeviceRead
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.services.parallel_oauth import OAuthUnpaired
+from polyweb.models.credentials import CredentialOAuthDeviceRead
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.services.parallel_oauth import OAuthUnpaired
 from tests.bdd.features.steps.vault_oauth_support import bdd_vault_oauth_setup
 from tests.integration.services.oauth.oauth_stubs import DEVICE_CODE_VALUE, TOKEN_SENTINELS
 

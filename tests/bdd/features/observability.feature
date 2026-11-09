@@ -1,6 +1,6 @@
 @monitoring @observability
 Feature: OpenTelemetry trace observability for search and fetch
-  As a local FreeSearch operator
+  As a local Polyweb operator
   I want search and fetch requests recorded as queryable traces
   So that I can inspect inputs, results, stage latencies, and errors from Activity
 

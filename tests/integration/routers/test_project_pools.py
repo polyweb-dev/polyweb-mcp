@@ -5,13 +5,13 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from freesearch.configuration.config import get_settings
-from freesearch.models.projects import ProjectMemberAdd
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserRow
-from freesearch.routers.api import create_app
-from freesearch.services.pool_budget import reserve
-from freesearch.services.projects import ProjectService
+from polyweb.configuration.config import get_settings
+from polyweb.models.projects import ProjectMemberAdd
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserRow
+from polyweb.routers.api import create_app
+from polyweb.services.pool_budget import reserve
+from polyweb.services.projects import ProjectService
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -28,8 +28,8 @@ from tests.fixtures.execution import seed_execution_project, suspend_execution_m
 async def test_project_pools_member_access_and_secret_isolation(
     tmp_path, monkeypatch, auth_secret, budgeted
 ):
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "project-pool-test-key")
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / "vault-key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "project-pool-test-key")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / "vault-key"))
     get_settings.cache_clear()
     repository = await SQLiteRepository.open(tmp_path / "project-pools.db")
     try:

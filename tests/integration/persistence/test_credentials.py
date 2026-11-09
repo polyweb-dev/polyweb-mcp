@@ -11,23 +11,23 @@ from alembic.config import Config
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 
-import freesearch.persistence.database_migrations as migration_module
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.projects import (
+import polyweb.persistence.database_migrations as migration_module
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     CredentialOwnerScope,
 )
-from freesearch.persistence.credentials import (
+from polyweb.persistence.credentials import (
     CredentialProjectGrantRow,
     CredentialRepository,
     ProviderCredentialRow,
 )
-from freesearch.persistence.database_migrations import (
+from polyweb.persistence.database_migrations import (
     upgrade_database,
     validate_database_schema,
 )
-from freesearch.persistence.projects import ProjectRow
-from freesearch.persistence.users import UserDatabase, UserRow
+from polyweb.persistence.projects import ProjectRow
+from polyweb.persistence.users import UserDatabase, UserRow
 from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
 
 

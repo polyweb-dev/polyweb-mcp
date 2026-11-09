@@ -18,34 +18,34 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import select
 
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.contracts import (
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.models.contracts import (
     RoutingMode,
     RoutingPreference,
     UsageOperation,
 )
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.observability import AttemptBinding
-from freesearch.models.projects import ProjectContext
-from freesearch.models.provider_limits import (
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.observability import AttemptBinding
+from polyweb.models.projects import ProjectContext
+from polyweb.models.provider_limits import (
     AuthMode,
     LimitCallContext,
     LimitDeniedError,
     LimitOperation,
 )
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.limit_repository import StrictAttemptSpec, StrictWindowSpec
-from freesearch.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
-from freesearch.persistence.storage import SQLiteRepository, UsageEventRow
-from freesearch.services.execution import (
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.limit_repository import StrictAttemptSpec, StrictWindowSpec
+from polyweb.persistence.limit_rows import LimitAdmissionRow, RateAttemptRow
+from polyweb.persistence.storage import SQLiteRepository, UsageEventRow
+from polyweb.services.execution import (
     ExecutionBindingMissing,
     ExecutionError,
     _fanout_outcomes,
 )
-from freesearch.services.monitoring import tracked_call
-from freesearch.services.provider_runtime import (
+from polyweb.services.monitoring import tracked_call
+from polyweb.services.provider_runtime import (
     clear_config_cache,
     effective_config_for_name,
     persist_provider_config,

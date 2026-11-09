@@ -14,10 +14,10 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.models.contracts import SearchRequest, UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.adapters.keenable import KeenableAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from polyweb.models.contracts import SearchRequest, UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     Confidence,
     LimitOperation,
@@ -67,8 +67,8 @@ def _ok_handler(
 
 
 def test_keenable_catalog_shared_profiles() -> None:
-    from freesearch.configuration.provider_limits import provider_limit_defaults
-    from freesearch.services import credit_units as cu
+    from polyweb.configuration.provider_limits import provider_limit_defaults
+    from polyweb.services import credit_units as cu
 
     records = [r for r in provider_limit_defaults() if r.provider == "keenable"]
     assert len(records) == 4
@@ -367,7 +367,7 @@ class _StubRepo:
 
 
 async def test_hydrate_quota_restores_paid_and_exhaustion() -> None:
-    from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
+    from polyweb.models.contracts import UsageEvent, UsageOperation, UsageStatus
 
     now = datetime.now(UTC)
     events = [

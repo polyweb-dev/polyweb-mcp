@@ -17,8 +17,8 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 
-from freesearch.models.project_permissions import ProjectPermission
-from freesearch.models.projects import (
+from polyweb.models.project_permissions import ProjectPermission
+from polyweb.models.projects import (
     DEFAULT_API_KEY_LIFETIME_DAYS,
     BuiltinRole,
     ProjectApiKeyCreate,
@@ -26,10 +26,10 @@ from freesearch.models.projects import (
     ProjectMemberAdd,
     ProjectMemberUpdate,
 )
-from freesearch.models.users import UserPrincipal
-from freesearch.persistence.api_keys import ProjectApiKeyRepository, StoredApiKey
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.api_keys import (
+from polyweb.models.users import UserPrincipal
+from polyweb.persistence.api_keys import ProjectApiKeyRepository, StoredApiKey
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.api_keys import (
     API_KEY_INACTIVE,
     ApiKeyService,
     ApiKeyUseRecorder,
@@ -37,8 +37,8 @@ from freesearch.services.api_keys import (
     ApiKeyVerifier,
     record_api_key_denial,
 )
-from freesearch.services.authorization import AuthorizationDenied
-from freesearch.services.projects import (
+from polyweb.services.authorization import AuthorizationDenied
+from polyweb.services.projects import (
     PROJECT_ARCHIVED,
     ProjectConflict,
     ProjectNotFound,
@@ -193,11 +193,11 @@ async def test_issue_response_repr_and_logs_hide_the_key(
         assert item not in str(issued)
         assert item not in repr(rotated)
         assert item not in caplog.text
-    # FreeSearch's own loggers never carry the verifier digest. (Third-party
+    # Polyweb's own loggers never carry the verifier digest. (Third-party
     # aiosqlite DEBUG logging echoes SQL parameters, so the digest check is
-    # scoped to freesearch.* records; the raw key never reaches SQL at all.)
+    # scoped to polyweb.* records; the raw key never reaches SQL at all.)
     own = "\n".join(
-        record.getMessage() for record in caplog.records if record.name.startswith("freesearch")
+        record.getMessage() for record in caplog.records if record.name.startswith("polyweb")
     )
     for stored in await _stored(repository, project_id):
         assert stored.verifier_digest not in own
@@ -610,7 +610,7 @@ async def test_last_used_at_is_stamped_off_path_and_never_moves_backwards(
 async def test_default_recorder_throttles_stamps_within_the_interval(
     repository: SQLiteRepository,
 ) -> None:
-    from freesearch.services.api_keys import DEFAULT_USE_RECORDER
+    from polyweb.services.api_keys import DEFAULT_USE_RECORDER
 
     key = await issue_project_key(repository)
     first = _now()
@@ -786,10 +786,10 @@ async def test_denial_paths_do_not_wait_on_a_stalled_writer(
 ) -> None:
     import time
 
-    import freesearch.services.api_keys as api_keys_module
-    from freesearch.models.projects import PermissionAction
-    from freesearch.services.api_keys import DEFAULT_USE_RECORDER
-    from freesearch.services.execution_scope import ExecutionForbidden, resolve_execution_scope
+    import polyweb.services.api_keys as api_keys_module
+    from polyweb.models.projects import PermissionAction
+    from polyweb.services.api_keys import DEFAULT_USE_RECORDER
+    from polyweb.services.execution_scope import ExecutionForbidden, resolve_execution_scope
 
     key = await issue_project_key(repository, prefix="r3-stall", scopes={"search.execute"})
     release = asyncio.Event()

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from freesearch.persistence.settings import ProjectSettingsRepository
-from freesearch.services.project_routing import NAMESPACE, seed_legacy_orders
-from freesearch.services.provider_runtime import initialize_provider_configs
+from polyweb.persistence.settings import ProjectSettingsRepository
+from polyweb.services.project_routing import NAMESPACE, seed_legacy_orders
+from polyweb.services.provider_runtime import initialize_provider_configs
 from tests.fixtures.alpha_fixtures import bootstrap_fresh_alpha
 from tests.fixtures.execution import seed_execution_project
 

@@ -1,14 +1,14 @@
 ---
 id: TASK-000054
 title: Preserve CI reports on VPS with authenticated downloads and deletion
-status: In Progress
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-11-03T02:47:00Z'
-updated_date: '2026-11-03T16:02:00Z'
+updated_date: '2026-11-09T12:32:00Z'
 labels: []
 dependencies: []
-ordinal: 38000
+ordinal: 41000
 ---
 
 ## Description

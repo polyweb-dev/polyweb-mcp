@@ -1,17 +1,17 @@
 @latency
-Feature: FreeSearch routing latency with instant provider adapters
-  As an agent calling FreeSearch instead of a provider directly
-  I want the server-side time FreeSearch adds on top of each provider to stay under 150 ms at p95
-  So that searching and fetching through FreeSearch is not noticeably slower
+Feature: Polyweb routing latency with instant provider adapters
+  As an agent calling Polyweb instead of a provider directly
+  I want the server-side time Polyweb adds on top of each provider to stay under 150 ms at p95
+  So that searching and fetching through Polyweb is not noticeably slower
 
   # Runs in the default suite. Real REST and MCP servers are served by uvicorn
   # on 127.0.0.1 with OS-assigned ports and called over TCP; every provider is
   # backed by an instant fake adapter that mirrors the real capability flags.
   # Gated value: server-side added = server_ms - provider_ms, where server_ms
-  # runs from the request reaching the FreeSearch app until its response is
+  # runs from the request reaching the Polyweb app until its response is
   # sent. Client wall time, client overhead (wall - server), and database reads
   # per request are reported only. Reports: test_reports/routing_latency_offline.
-  # {csv,md}; FREESEARCH_LATENCY_PROFILE=1 adds per-transport pyinstrument profiles.
+  # {csv,md}; POLYWEB_LATENCY_PROFILE=1 adds per-transport pyinstrument profiles.
 
   Background:
     Given the routing latency servers are running with instant fake adapters for every provider
@@ -19,7 +19,7 @@ Feature: FreeSearch routing latency with instant provider adapters
   Scenario Outline: Warm <operation> pinned to <provider> over <transport> adds under 150 ms server-side at p95
     When I send warm <operation> requests pinned to "<provider>" over <transport>
     Then every measured <operation> request is served by "<provider>"
-    And the p95 server-side FreeSearch-added latency is under 150 ms
+    And the p95 server-side Polyweb-added latency is under 150 ms
     And database reads per request are reported
 
     Examples: REST

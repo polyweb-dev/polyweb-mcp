@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from freesearch.models.observability import (
+from polyweb.models.observability import (
     TraceDetail,
     TraceError,
     TraceEventDetail,
@@ -79,7 +79,7 @@ def test_search_output_union_shape() -> None:
         results=[
             {
                 "title": "Consensus explained",
-                "url": "https://docs.freesearch.dev/consensus",
+                "url": "https://docs.polyweb.dev/consensus",
                 "snippet": "Raft and Paxos.",
                 "source": "keenable",
                 "score": 0.94,
@@ -89,13 +89,13 @@ def test_search_output_union_shape() -> None:
 
     assert output.kind == "search_results"
     assert output.query == "distributed consensus"
-    assert output.results[0].url == "https://docs.freesearch.dev/consensus"
+    assert output.results[0].url == "https://docs.polyweb.dev/consensus"
     assert output.results[0].score == 0.94
 
 
 def test_fetch_output_union_shape() -> None:
     output = TraceFetchOutput(
-        url="https://docs.freesearch.dev/page",
+        url="https://docs.polyweb.dev/page",
         title="Page",
         content="hello",
         content_length=5,
@@ -109,7 +109,7 @@ def test_fetch_output_union_shape() -> None:
 
 def test_fetch_output_rejects_negative_content_length() -> None:
     with pytest.raises(ValidationError):
-        TraceFetchOutput(url="https://docs.freesearch.dev/page", content_length=-1)
+        TraceFetchOutput(url="https://docs.polyweb.dev/page", content_length=-1)
 
 
 def test_parse_trace_output_decodes_tagged_union() -> None:
@@ -210,7 +210,7 @@ def test_span_detail_provider_accepts_explicit_identity() -> None:
     span = TraceSpanDetail(
         span_id="cc00000000000003",
         parent_span_id="bb00000000000002",
-        name="freesearch.provider",
+        name="polyweb.provider",
         stage="Provider request",
         kind=TraceSpanKind.CLIENT,
         started_at=_aware(),
@@ -245,11 +245,11 @@ def test_event_detail_requires_aware_timestamp() -> None:
 def test_display_stage_labels_are_user_safe() -> None:
     assert display_stage("POST /search") == "Search request"
     assert display_stage("POST /fetch") == "Fetch request"
-    assert display_stage("freesearch.backend") == "Backend handling"
-    assert display_stage("freesearch.provider.http") == "Provider HTTP call"
-    assert display_stage("freesearch.provider.parse") == "Provider response parse"
-    assert display_stage("freesearch.results") == "Results assembly"
-    assert display_stage("freesearch.response") == "Response to caller"
+    assert display_stage("polyweb.backend") == "Backend handling"
+    assert display_stage("polyweb.provider.http") == "Provider HTTP call"
+    assert display_stage("polyweb.provider.parse") == "Provider response parse"
+    assert display_stage("polyweb.results") == "Results assembly"
+    assert display_stage("polyweb.response") == "Response to caller"
     assert display_stage("something.unknown") == "Stage"
 
 
@@ -284,7 +284,7 @@ def test_span_record_defaults_to_success_unset() -> None:
     record = TraceSpanRecord(
         span_id="aa00000000000001",
         trace_id="e" * 32,
-        name="freesearch.backend",
+        name="polyweb.backend",
         kind=TraceSpanKind.INTERNAL,
         started_at=_aware(),
         ended_at=_aware(),

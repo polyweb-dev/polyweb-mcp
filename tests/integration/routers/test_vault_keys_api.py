@@ -11,15 +11,15 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from freesearch.configuration.config import get_settings
-from freesearch.persistence.audit import SystemAuditEventRow
-from freesearch.persistence.credentials import ProviderCredentialRow
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.oauth_grants import CredentialOAuthGrantRow, oauth_secret_slot
-from freesearch.persistence.storage import RuntimeSettingRow, SQLiteRepository
-from freesearch.routers import vault_keys
-from freesearch.routers.api import create_app
-from freesearch.services.credentials import credential_secret_slot
+from polyweb.configuration.config import get_settings
+from polyweb.persistence.audit import SystemAuditEventRow
+from polyweb.persistence.credentials import ProviderCredentialRow
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.oauth_grants import CredentialOAuthGrantRow, oauth_secret_slot
+from polyweb.persistence.storage import RuntimeSettingRow, SQLiteRepository
+from polyweb.routers import vault_keys
+from polyweb.routers.api import create_app
+from polyweb.services.credentials import credential_secret_slot
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -44,8 +44,8 @@ async def repository(tmp_path):
 
 @pytest.fixture
 def vault_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "vault-integration-test-key")
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / "vault-key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "vault-integration-test-key")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / "vault-key"))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -154,8 +154,8 @@ async def test_vault_key_lifecycle_and_ownership(repository, vault_env, auth_sec
             == "second-secret"
         )
         async with repository.session() as session:
-            from freesearch.persistence.bindings import ProjectBindingRepository
-            from freesearch.persistence.pools import PoolAllocationRepository
+            from polyweb.persistence.bindings import ProjectBindingRepository
+            from polyweb.persistence.pools import PoolAllocationRepository
 
             bindings = await ProjectBindingRepository(session).list_for_project(
                 project_id=project.project_id

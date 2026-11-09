@@ -15,4 +15,4 @@ python scripts/gitea_packages.py files PACKAGE VERSION
 python scripts/gitea_packages.py download PACKAGE VERSION FILENAME
 ```
 
-The owner defaults to `freesearch`; use `--owner OWNER` before the subcommand to change it. Search filters package names, not file contents. Check subsequent pages when results fill a page. Downloads are streamed to the gitignored `.gitea-packages/` directory at the repository root, using the artifact filename. The script creates the directory when needed and does not overwrite existing files.
+The owner defaults to `polyweb`; use `--owner OWNER` before the subcommand to change it. Search filters package names, not file contents. Check subsequent pages when results fill a page. Downloads are streamed to the gitignored `.gitea-packages/` directory at the repository root, using the artifact filename. The script creates the directory when needed and does not overwrite existing files.

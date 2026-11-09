@@ -9,7 +9,7 @@ A modular, feature-and-domain driven React architecture designed to prevent mono
 
 ---
 
-## 1. Target Architectural Layers & Responsibilities (`freesearch-ui/src/`)
+## 1. Target Architectural Layers & Responsibilities (`polyweb-ui/src/`)
 
 ```text
 src/
@@ -120,7 +120,7 @@ Avoid multi-hundred-line monolithic files. Within a feature or domain:
 
 ## 6. Pre-Commit Verification Checklist
 
-Before you open a PR or complete a frontend refactoring slice, run these commands from `freesearch-ui/`:
+Before you open a PR or complete a frontend refactoring slice, run these commands from `polyweb-ui/`:
 
 - [ ] New components placed in the appropriate `features/`, `domains/`, or `shared/` layer.
 - [ ] No direct feature-to-feature or illegal upward imports.

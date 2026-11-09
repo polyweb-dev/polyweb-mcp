@@ -15,13 +15,13 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
-import freesearch.services.provider_runtime as provider_runtime
-from freesearch.configuration.provider_config import ProviderConfigUpdate
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.models.contracts import FallbackPolicy, RoutingConfigResponse
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.monitoring import clear_quota_poll_cache
-from freesearch.services.provider_runtime import (
+import polyweb.services.provider_runtime as provider_runtime
+from polyweb.configuration.provider_config import ProviderConfigUpdate
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.models.contracts import FallbackPolicy, RoutingConfigResponse
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.monitoring import clear_quota_poll_cache
+from polyweb.services.provider_runtime import (
     clear_config_cache,
     effective_config_for_name,
     patch_provider_config,

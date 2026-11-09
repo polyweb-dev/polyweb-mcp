@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from freesearch.models.contracts import UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     BudgetBlock,
     BudgetModel,
@@ -29,7 +29,7 @@ from freesearch.models.provider_limits import (
     SyncClaim,
     SyncResult,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.database_lifecycle import unlink_with_retries
 from tests.fixtures.execution import FIXTURE_ACTOR
 
@@ -217,7 +217,7 @@ async def test_failed_sync_preserves_balance_as_stale(limits_repo) -> None:
 
 
 async def test_record_version_precondition(limits_repo) -> None:
-    from freesearch.models.provider_limits import LimitRecordUpdate, LimitVersionConflict
+    from polyweb.models.provider_limits import LimitRecordUpdate, LimitVersionConflict
 
     await limits_repo.seed_records([_record()])
     stored = (await limits_repo.list_records("synth"))[0]
@@ -383,8 +383,8 @@ async def test_finalize_real_overspend_stays_visible(limits_repo) -> None:
 
 async def test_tavily_reserve_rechecks_rate_and_funds_atomically(limits_repo) -> None:
     """Tavily reserve() rechecks minute capacity and native funds in-txn."""
-    from freesearch.configuration.provider_limits import provider_limit_defaults
-    from freesearch.models.provider_limits import RateReservation, RateWindowName
+    from polyweb.configuration.provider_limits import provider_limit_defaults
+    from polyweb.models.provider_limits import RateReservation, RateWindowName
 
     record = next(
         r
@@ -460,7 +460,7 @@ async def test_tavily_reserve_rechecks_rate_and_funds_atomically(limits_repo) ->
         await limits_repo.reserve(_admission("t-atomic-2"), record=record)
         raise AssertionError("reserve must deny")
     except Exception as exc:
-        from freesearch.models.provider_limits import LimitDeniedError
+        from polyweb.models.provider_limits import LimitDeniedError
 
         assert isinstance(exc, LimitDeniedError)
         assert exc.status_code == 402

@@ -22,16 +22,16 @@ from tests.integration.services.oauth.oauth_stubs import (
     StubOAuthServer,
 )
 
-from freesearch.infrastructure.cryptography import MasterKey, SecretCodec
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore
-from freesearch.models.credentials import CredentialCreate
-from freesearch.models.projects import CredentialInstanceRead
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.persistence.oauth_grants import CredentialOAuthGrantRow, oauth_secret_slot
-from freesearch.routers.api import create_app
-from freesearch.services.credential_oauth import CredentialOAuthService, OAuthTarget
-from freesearch.services.credentials import CredentialService
-from freesearch.services.parallel_oauth import ParallelOAuthClient, balance_to_snapshot
+from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
+from polyweb.models.credentials import CredentialCreate
+from polyweb.models.projects import CredentialInstanceRead
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.persistence.oauth_grants import CredentialOAuthGrantRow, oauth_secret_slot
+from polyweb.routers.api import create_app
+from polyweb.services.credential_oauth import CredentialOAuthService, OAuthTarget
+from polyweb.services.credentials import CredentialService
+from polyweb.services.parallel_oauth import ParallelOAuthClient, balance_to_snapshot
 
 SYSTEM = OAuthTarget()
 
@@ -163,7 +163,7 @@ def bdd_oauth_setup(context):
 
     from tests.fixtures.auth import configure_bdd_secret
 
-    from freesearch.persistence.storage import SQLiteRepository
+    from polyweb.persistence.storage import SQLiteRepository
 
     configure_bdd_secret(context)
     if getattr(context, "repository", None) is None:

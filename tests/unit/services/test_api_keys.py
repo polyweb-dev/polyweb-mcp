@@ -19,15 +19,15 @@ from uuid import uuid4
 import pytest
 from pydantic import SecretStr
 
-from freesearch.models.projects import (
+from polyweb.models.projects import (
     API_KEY_SCOPES,
     DEFAULT_API_KEY_LIFETIME_DAYS,
     PROJECT_API_KEY_PREFIX,
     ApiKeyStatus,
     ProjectApiKeyRotate,
 )
-from freesearch.persistence.api_keys import StoredApiKey
-from freesearch.services.api_keys import (
+from polyweb.persistence.api_keys import StoredApiKey
+from polyweb.services.api_keys import (
     API_KEY_PREFIX_LENGTH,
     API_KEY_SECRET_BYTES,
     ApiKeyService,
@@ -290,7 +290,7 @@ async def test_use_recorder_swallows_storage_failures(caplog: pytest.LogCaptureF
 
 
 async def test_denials_are_throttled_per_key_and_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    import freesearch.services.api_keys as api_keys_module
+    import polyweb.services.api_keys as api_keys_module
 
     written: list[tuple[object, str]] = []
 
@@ -327,7 +327,7 @@ async def test_denials_are_throttled_per_key_and_reason(monkeypatch: pytest.Monk
 async def test_full_queue_drops_without_raising_and_logs_prefix_only(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    import freesearch.services.api_keys as api_keys_module
+    import polyweb.services.api_keys as api_keys_module
 
     written: list[str] = []
 
@@ -364,7 +364,7 @@ async def test_scheduling_never_waits_on_a_stalled_writer(monkeypatch: pytest.Mo
     import asyncio
     import time as time_module
 
-    import freesearch.services.api_keys as api_keys_module
+    import polyweb.services.api_keys as api_keys_module
 
     release = asyncio.Event()
 

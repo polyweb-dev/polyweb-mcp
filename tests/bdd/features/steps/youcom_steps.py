@@ -6,14 +6,14 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import HttpUrl
 
-from freesearch.models.contracts import FetchRequest, QuotaSource, SearchRequest
+from polyweb.models.contracts import FetchRequest, QuotaSource, SearchRequest
 
 
 @given("a configured and authenticated You.com adapter")
 def step_given_youcom_adapter(context: Any) -> None:
     """Verify that the You.com adapter was initialized for this scenario."""
     assert context.youcom_adapter is not None, (
-        "You.com adapter was not initialized; FREESEARCH_YOU_API_KEY must be configured."
+        "You.com adapter was not initialized; POLYWEB_YOU_API_KEY must be configured."
     )
 
 

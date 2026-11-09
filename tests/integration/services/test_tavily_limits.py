@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest_asyncio
 
-from freesearch.configuration.provider_config import ProviderConfig
-from freesearch.configuration.provider_limits import provider_limit_defaults
-from freesearch.models.contracts import SearchRequest, SearchResponse, UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.configuration.provider_config import ProviderConfig
+from polyweb.configuration.provider_limits import provider_limit_defaults
+from polyweb.models.contracts import SearchRequest, SearchResponse, UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     LimitCallContext,
     LimitDeniedError,
@@ -22,8 +22,8 @@ from freesearch.models.provider_limits import (
     NativeUsageSnapshot,
     ProviderLimitRecord,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.database_lifecycle import unlink_with_retries
 from tests.fixtures.execution import FIXTURE_ACTOR, seed_execution_project
 
@@ -179,8 +179,8 @@ async def test_funds_gate_terminal_vendor_402_denies(
 async def test_paygo_flag_admits_after_free_zero(
     repository: SQLiteRepository,
 ) -> None:
-    from freesearch.models.contracts import UnitKind as UK
-    from freesearch.models.provider_limits import Confidence, FundingMode, TierBalance
+    from polyweb.models.contracts import UnitKind as UK
+    from polyweb.models.provider_limits import Confidence, FundingMode, TierBalance
 
     service = _service(repository)
     await service.initialize()
@@ -238,8 +238,8 @@ async def test_refill_day1_dec_to_jan_restores_free_pool(
 async def test_observed_tiers_and_live_detail_windows(
     repository: SQLiteRepository,
 ) -> None:
-    from freesearch.models.contracts import UnitKind as UK
-    from freesearch.models.provider_limits import Confidence, TierBalance
+    from polyweb.models.contracts import UnitKind as UK
+    from polyweb.models.provider_limits import Confidence, TierBalance
 
     service = _service(repository)
     await service.initialize()
@@ -285,9 +285,9 @@ async def test_held_usage_poll_adds_no_search_extract_delay(
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.models.contracts import FetchRequest
-    from freesearch.models.provider_limits import UsageSyncRequest
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.models.contracts import FetchRequest
+    from polyweb.models.provider_limits import UsageSyncRequest
 
     gate = asyncio.Event()
     real_refresh = TavilyAdapter._refresh_usage
@@ -357,8 +357,8 @@ async def test_zero_usage_gets_from_cost_quota_and_view(
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.models.contracts import FetchRequest
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.models.contracts import FetchRequest
 
     class _ImmediateSDK:
         async def search(self, **kwargs: object) -> object:
@@ -402,9 +402,9 @@ async def test_pinned_second_call_after_402_denies_locally(
     import pytest
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.infrastructure.resilience import ProviderOperationError
-    from freesearch.models.contracts import UsageOperation
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.infrastructure.resilience import ProviderOperationError
+    from polyweb.models.contracts import UsageOperation
     from tests.fixtures.execution import attributed_tracked_call as tracked_call
 
     class _FailingSDK:
@@ -477,7 +477,7 @@ async def test_env_switch_dev_to_prod_preserves_pool_caps_terminal_and_bucket(
 ) -> None:
     """Dev-to-prod keeps the native pool, local grant cap, terminal state, bucket."""
 
-    from freesearch.models.provider_limits import CRDGrantPayload as GrantPayload
+    from polyweb.models.provider_limits import CRDGrantPayload as GrantPayload
 
     service = _service(repository)
     await service.initialize()
@@ -530,7 +530,7 @@ async def test_env_switch_prod_to_dev_preserves_pool_caps_terminal_and_bucket(
 ) -> None:
     """Prod-to-dev keeps the native pool, local grant cap, terminal state, bucket."""
 
-    from freesearch.models.provider_limits import CRDGrantPayload as GrantPayload
+    from polyweb.models.provider_limits import CRDGrantPayload as GrantPayload
 
     service = _service(repository)
     await service.initialize()
@@ -578,8 +578,8 @@ async def test_spent_key_with_funded_plan_denies_key_cap(
     """A spent key ceiling with a funded plan denies key_cap_exhausted despite PAYGO (F7)."""
     import pytest
 
-    from freesearch.models.contracts import UnitKind as UK
-    from freesearch.models.provider_limits import Confidence, TierBalance
+    from polyweb.models.contracts import UnitKind as UK
+    from polyweb.models.provider_limits import Confidence, TierBalance
 
     service = _service(repository)
     await service.initialize()

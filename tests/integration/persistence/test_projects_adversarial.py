@@ -22,16 +22,16 @@ import sqlalchemy as sa
 from pydantic import ValidationError
 from sqlalchemy import select, text
 
-from freesearch.models.projects import (
+from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
     ProjectCreate,
 )
-from freesearch.models.users import AuthProvider
-from freesearch.persistence.database_migrations import (
+from polyweb.models.users import AuthProvider
+from polyweb.persistence.database_migrations import (
     upgrade_database,
 )
-from freesearch.persistence.projects import (
+from polyweb.persistence.projects import (
     AccountRow,
     ProjectMembershipRow,
     ProjectRepository,
@@ -39,7 +39,7 @@ from freesearch.persistence.projects import (
     ProjectRow,
     bootstrap_fresh_installation,
 )
-from freesearch.persistence.users import UserDatabase, UserRow
+from polyweb.persistence.users import UserDatabase, UserRow
 from tests.fixtures.alpha_fixtures import create_alpha_test_db, seed_alpha_system_admin
 from tests.fixtures.auth import auth_service_for
 
@@ -224,8 +224,8 @@ async def test_gap_in_memory_role_authority_lost_on_fresh_session(
 
     from sqlalchemy import select
 
-    from freesearch.persistence.projects import SystemRoleAssignmentRow
-    from freesearch.services.users import AuthLastSystemAdmin
+    from polyweb.persistence.projects import SystemRoleAssignmentRow
+    from polyweb.services.users import AuthLastSystemAdmin
 
     async def _roles(user_id: object) -> set[str]:
         async with repo.session() as session:
@@ -246,7 +246,7 @@ async def test_gap_in_memory_role_authority_lost_on_fresh_session(
             user_db = UserDatabase(session, UserRow)
             user = await user_db.create(
                 {
-                    "email": "promoted@freesearch.local",
+                    "email": "promoted@polyweb.local",
                     "hashed_password": "some_hash_val",
                     "is_active": True,
                     "is_verified": False,
@@ -277,7 +277,7 @@ async def test_gap_in_memory_role_authority_lost_on_fresh_session(
         # ... but with a second administrator the revocation is durable.
         async with repo.session() as session:
             other = await UserDatabase(session, UserRow).create(
-                {"email": "second-admin@freesearch.local", "hashed_password": "h"}
+                {"email": "second-admin@polyweb.local", "hashed_password": "h"}
             )
         assert await auth_service.grant_system_admin(other.id) is True
         assert await auth_service.revoke_system_admin(user_id) is True
@@ -307,7 +307,7 @@ async def test_gap_user_database_create_honors_untrusted_attribute_overrides(
             # Pass dictionary overrides that attempt to bypass normal defaults
             injected_user = await user_db.create(
                 {
-                    "email": "injected@freesearch.local",
+                    "email": "injected@polyweb.local",
                     "hashed_password": "some_valid_hash",
                     "is_active": False,
                     "is_verified": True,
@@ -331,7 +331,7 @@ async def test_gap_user_database_create_honors_untrusted_attribute_overrides(
         async with repo.session() as session:
             user_db = UserDatabase(session, UserRow)
             trusted_user = await user_db.create_trusted(
-                email="trusted@freesearch.local",
+                email="trusted@polyweb.local",
                 hashed_password=None,
                 auth_provider=AuthProvider.WORKOS.value,
                 auth_provider_id="ext-workos-100",

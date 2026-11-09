@@ -15,8 +15,8 @@ from typing import Any
 
 from behave import given, then, when  # type: ignore[import-untyped]
 
-from freesearch.models.contracts import UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     BudgetBlock,
     BudgetModel,
@@ -38,12 +38,12 @@ from freesearch.models.provider_limits import (
     RateWindowName,
     SyncClaim,
 )
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     CRDGrantPayload as GrantPayload,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services import credit_units as cu
-from freesearch.services.provider_limits import ProviderLimitsService
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services import credit_units as cu
+from polyweb.services.provider_limits import ProviderLimitsService
 from tests.fixtures.database_lifecycle import unlink_with_retries
 from tests.fixtures.execution import FIXTURE_ACTOR, bdd_project_id, scenario_attribution
 
@@ -281,7 +281,7 @@ def step_known_pool(context: Any) -> None:
 
 @when("a bad synthetic usage payload arrives")
 def step_bad_payload(context: Any) -> None:
-    from freesearch.models.provider_limits import SyncResult
+    from polyweb.models.provider_limits import SyncResult
 
     repo = _limits_repo(context)
     pool = _run(context, repo.get_pool(context.record.native_pool_id or ""))
@@ -444,7 +444,7 @@ def step_race(context: Any) -> None:
 
 @then("one synthetic admission succeeds and balances never go negative")
 def step_race_result(context: Any) -> None:
-    from freesearch.models.provider_limits import LimitAdmission as Adm
+    from polyweb.models.provider_limits import LimitAdmission as Adm
 
     admissions = [r for r in (context.race_a, context.race_b) if isinstance(r, Adm)]
     denials = [r for r in (context.race_a, context.race_b) if isinstance(r, LimitDeniedError)]
@@ -484,7 +484,7 @@ def step_admitted(context: Any) -> None:
 
 @when("the synthetic vendor fails definitely")
 def step_fail(context: Any) -> None:
-    from freesearch.models.contracts import ProviderError
+    from polyweb.models.contracts import ProviderError
 
     _run(
         context,
@@ -573,8 +573,8 @@ def step_grant_audit(context: Any) -> None:
 
 @given("synthetic route fixtures with different CRD values")
 def step_route_fixtures(context: Any) -> None:
-    from freesearch.adapters.base import ProviderAdapter
-    from freesearch.models.contracts import (
+    from polyweb.adapters.base import ProviderAdapter
+    from polyweb.models.contracts import (
         CostEstimate,
         FetchRequest,
         FetchResponse,
@@ -604,7 +604,7 @@ def step_route_fixtures(context: Any) -> None:
         async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
             raise NotImplementedError
 
-    from freesearch.services.routing import select_route
+    from polyweb.services.routing import select_route
 
     context.select_route = select_route
     context.route_adapters = [_RouteStub("b"), _RouteStub("a")]
@@ -612,7 +612,7 @@ def step_route_fixtures(context: Any) -> None:
 
 @when("I select routes twice")
 def step_routes_twice(context: Any) -> None:
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     req = SearchRequest(
         project_id="00000000-0000-4000-8000-0000000000aa", query="synthetic routing probe"
@@ -735,7 +735,7 @@ def step_stale_rejected(context: Any) -> None:
 
 @when("I start and stop the synthetic sync task")
 def step_lifecycle(context: Any) -> None:
-    from freesearch.services.limits_sync import LimitSyncService
+    from polyweb.services.limits_sync import LimitSyncService
 
     context.sync = LimitSyncService(
         _limits_repo(context),
@@ -764,7 +764,7 @@ def step_task_clean(context: Any) -> None:
 def step_batch(context: Any) -> None:
     from fastapi.testclient import TestClient
 
-    from freesearch.routers.api import create_app
+    from polyweb.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
@@ -1132,7 +1132,7 @@ def step_shared_once(context: Any) -> None:
 @when("the synthetic price version changes after a debit")
 def step_version_change(context: Any) -> None:
     admission = _run(context, context.service.admit(_ctx(attempt="v-1")))
-    from freesearch.models.contracts import SearchResponse
+    from polyweb.models.contracts import SearchResponse
 
     _run(
         context,
@@ -1237,7 +1237,7 @@ def _brave_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any, A
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.brave import BraveAdapter
+    from polyweb.adapters.brave import BraveAdapter
 
     def counting(request: httpx.Request) -> httpx.Response:
         if calls is not None:
@@ -1251,13 +1251,13 @@ def _brave_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any, A
 
 
 def _brave_records() -> list[ProviderLimitRecord]:
-    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from polyweb.configuration.provider_limits import provider_limit_defaults
 
     return [record for record in provider_limit_defaults() if record.provider == "brave"]
 
 
 def _brave_pool_id() -> str:
-    from freesearch.models.provider_limits import native_pool_id
+    from polyweb.models.provider_limits import native_pool_id
 
     return native_pool_id("brave", AuthMode.KEYED, UnitKind.USD)
 
@@ -1325,7 +1325,7 @@ def step_brave_headers(context: Any) -> None:
     adapter, client = _brave_adapter(handler, context.vendor_calls)
     context.brave_adapter = adapter
     context.brave_client = client
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     context.brave_response = _run(
         context,
@@ -1337,7 +1337,7 @@ def step_brave_headers(context: Any) -> None:
 
 @when("I read the Brave usage snapshot")
 def step_brave_snapshot(context: Any) -> None:
-    from freesearch.models.provider_limits import UsageSyncRequest
+    from polyweb.models.provider_limits import UsageSyncRequest
 
     context.snapshot = _run(
         context,
@@ -1407,9 +1407,9 @@ def step_brave_manual(context: Any) -> None:
 def step_brave_app(context: Any) -> None:
     from fastapi.testclient import TestClient
 
-    from freesearch.models.contracts import SearchRequest
-    from freesearch.models.provider_limits import UsageSyncRequest
-    from freesearch.routers.api import create_app
+    from polyweb.models.contracts import SearchRequest
+    from polyweb.models.provider_limits import UsageSyncRequest
+    from polyweb.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
@@ -1589,7 +1589,7 @@ def step_brave_quota_limited(context: Any) -> None:
 
     adapter, client = _brave_adapter(handler, calls)
     context.brave_client = client
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     try:
         _run(
@@ -1624,7 +1624,7 @@ def step_brave_rate_limited(context: Any) -> None:
 
     adapter, client = _brave_adapter(handler, calls)
     context.brave_client = client
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     try:
         _run(
@@ -1708,7 +1708,7 @@ def step_brave_grant_audit(context: Any) -> None:
 
 @given("Brave route fixtures with different CRD values")
 def step_brave_route_fixtures(context: Any) -> None:
-    from freesearch.services.routing import select_route
+    from polyweb.services.routing import select_route
     from tests.integration.services.test_monitoring import _StubAdapter
 
     context.select_route = select_route
@@ -1717,7 +1717,7 @@ def step_brave_route_fixtures(context: Any) -> None:
 
 @when("I select Brave routes twice")
 def step_brave_routes_twice(context: Any) -> None:
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     req = SearchRequest(
         project_id="00000000-0000-4000-8000-0000000000aa", query="brave routing probe"
@@ -1749,7 +1749,7 @@ def step_brave_fetch_unavailable(context: Any) -> None:
 
 @when("two Brave searches succeed")
 def step_brave_two_successes(context: Any) -> None:
-    from freesearch.models.contracts import SearchResponse
+    from polyweb.models.contracts import SearchResponse
 
     for attempt in ("brave-t1", "brave-t2"):
         admission = _run(context, context.service.admit(_ctx(provider="brave", attempt=attempt)))
@@ -1826,13 +1826,13 @@ def step_brave_both_reasons(context: Any) -> None:
 
 
 def _tavily_records() -> list[ProviderLimitRecord]:
-    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from polyweb.configuration.provider_limits import provider_limit_defaults
 
     return [record for record in provider_limit_defaults() if record.provider == "tavily"]
 
 
 def _tavily_pool_id() -> str:
-    from freesearch.models.provider_limits import native_pool_id
+    from polyweb.models.provider_limits import native_pool_id
 
     return native_pool_id("tavily", AuthMode.KEYED, UnitKind.CREDIT)
 
@@ -2005,7 +2005,7 @@ def step_tavily_two_keyless(context: Any) -> None:
 
 @then("Tavily shares one default minute bucket across search and extract")
 def step_tavily_shared_bucket(context: Any) -> None:
-    from freesearch.configuration.provider_limits import TAVILY_DEFAULT_BUCKET_ID
+    from polyweb.configuration.provider_limits import TAVILY_DEFAULT_BUCKET_ID
 
     keyed = [r for r in context.tavily_records if r.auth_mode is AuthMode.KEYED]
     assert len(keyed) == 2
@@ -2076,7 +2076,7 @@ def step_tavily_concurrent_race(context: Any) -> None:
 
 @then("one Tavily admission succeeds and balances never go negative")
 def step_tavily_race_result(context: Any) -> None:
-    from freesearch.models.provider_limits import LimitAdmission as Adm
+    from polyweb.models.provider_limits import LimitAdmission as Adm
 
     admissions = [r for r in (context.tavily_race_a, context.tavily_race_b) if isinstance(r, Adm)]
     denials = [
@@ -2091,7 +2091,7 @@ def step_tavily_race_result(context: Any) -> None:
 
 @given("a Tavily prod pool with 10000 Credits remaining")
 def step_tavily_prod_pool(context: Any) -> None:
-    from freesearch.configuration.provider_config import ProviderConfig
+    from polyweb.configuration.provider_config import ProviderConfig
 
     _open_repo(context)
     context.service = _service(context, _tavily_records())
@@ -2128,7 +2128,7 @@ def step_tavily_deny_1001(context: Any) -> None:
 
 @when("I apply Tavily key environment prod")
 def step_tavily_apply_prod(context: Any) -> None:
-    from freesearch.configuration.provider_config import ProviderConfig
+    from polyweb.configuration.provider_config import ProviderConfig
 
     _run(context, context.service.initialize())
     _run(
@@ -2141,7 +2141,7 @@ def step_tavily_apply_prod(context: Any) -> None:
 
 @then("both Tavily keyed records carry limit 1000 on the shared bucket")
 def step_tavily_prod_limit(context: Any) -> None:
-    from freesearch.configuration.provider_limits import TAVILY_DEFAULT_BUCKET_ID
+    from polyweb.configuration.provider_limits import TAVILY_DEFAULT_BUCKET_ID
 
     windows = _run(
         context, context.service.rate_limits.window_details("tavily", AuthMode.KEYED, FIXED_AT)
@@ -2154,7 +2154,7 @@ def step_tavily_prod_limit(context: Any) -> None:
 
 @when("I apply Tavily key environment dev")
 def step_tavily_apply_dev(context: Any) -> None:
-    from freesearch.configuration.provider_config import ProviderConfig
+    from polyweb.configuration.provider_config import ProviderConfig
 
     _run(context, context.service.initialize())
     _run(
@@ -2167,7 +2167,7 @@ def step_tavily_apply_dev(context: Any) -> None:
 
 @then("both Tavily keyed records carry limit 100 on the shared bucket")
 def step_tavily_dev_limit(context: Any) -> None:
-    from freesearch.configuration.provider_limits import TAVILY_DEFAULT_BUCKET_ID
+    from polyweb.configuration.provider_limits import TAVILY_DEFAULT_BUCKET_ID
 
     windows = _run(
         context, context.service.rate_limits.window_details("tavily", AuthMode.KEYED, FIXED_AT)
@@ -2185,7 +2185,7 @@ def step_tavily_mock_ambient(context: Any) -> None:
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
+    from polyweb.adapters.tavily import TavilyAdapter
 
     _open_repo(context)
     context.service = _service(context, _tavily_records())
@@ -2233,7 +2233,7 @@ def step_tavily_mock_ambient(context: Any) -> None:
 
 @when("I run Tavily search and extract on both rails through the real SDK")
 def step_tavily_both_rails_sdk(context: Any) -> None:
-    from freesearch.models.contracts import FetchRequest, SearchRequest
+    from polyweb.models.contracts import FetchRequest, SearchRequest
 
     keyless = context.tavily_keyless_adapter
     keyed = context.tavily_keyed_adapter
@@ -2306,7 +2306,7 @@ def step_tavily_recording_sdks(context: Any) -> None:
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
+    from polyweb.adapters.tavily import TavilyAdapter
 
     _open_repo(context)
     context.tavily_keyed_sdk = _TavilyFakeSDK()
@@ -2332,8 +2332,8 @@ def step_tavily_recording_sdks(context: Any) -> None:
 
 @when("I send Tavily full search and extract params on both rails")
 def step_tavily_full_params(context: Any) -> None:
-    from freesearch.models.contracts import FetchRequest, SearchRequest
-    from freesearch.models.tavily import TavilyExtractParams, TavilySearchParams
+    from polyweb.models.contracts import FetchRequest, SearchRequest
+    from polyweb.models.tavily import TavilyExtractParams, TavilySearchParams
 
     search_params = TavilySearchParams(
         search_depth="advanced",
@@ -2427,8 +2427,8 @@ def step_tavily_params_identical(context: Any) -> None:
 
 @then("a Tavily nested depth overrides common mode on both rails with two-Credit cost")
 def step_tavily_depth_precedence(context: Any) -> None:
-    from freesearch.models.contracts import SearchRequest
-    from freesearch.models.tavily import TavilySearchParams
+    from polyweb.models.contracts import SearchRequest
+    from polyweb.models.tavily import TavilySearchParams
 
     request = SearchRequest(
         project_id="00000000-0000-4000-8000-0000000000aa",
@@ -2454,9 +2454,9 @@ def step_tavily_depth_precedence(context: Any) -> None:
 def step_tavily_estimate_search(context: Any) -> None:
     import httpx
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.models.contracts import FetchRequest, SearchRequest
-    from freesearch.models.tavily import TavilyExtractParams
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.models.contracts import FetchRequest, SearchRequest
+    from polyweb.models.tavily import TavilyExtractParams
 
     cost_caller = httpx.AsyncClient()
     context.tavily_cost_adapter = TavilyAdapter(cost_caller, sdk_client=_TavilyFakeSDK())  # type: ignore[arg-type]
@@ -2506,7 +2506,7 @@ def step_tavily_search_costs(context: Any) -> None:
     assert context.tavily_basic_extract_estimate.currency == "Credits"
     assert context.tavily_advanced_extract_estimate.units == Decimal("0.4")
     assert context.tavily_advanced_extract_estimate.currency == "Credits"
-    from freesearch.models.tavily import tavily_extract_credits
+    from polyweb.models.tavily import tavily_extract_credits
 
     assert tavily_extract_credits(1, "basic") == Decimal("0.2")
     assert tavily_extract_credits(1, "advanced") == Decimal("0.4")
@@ -2514,7 +2514,7 @@ def step_tavily_search_costs(context: Any) -> None:
 
 @when("one Tavily basic search and one Tavily advanced search succeed")
 def step_tavily_two_searches(context: Any) -> None:
-    from freesearch.models.contracts import SearchResponse, UsageEvent, UsageOperation
+    from polyweb.models.contracts import SearchResponse, UsageEvent, UsageOperation
 
     basic_adm = _run(context, context.service.admit(_tavily_ctx(LimitOperation.SEARCH, "tav-s1")))
     advanced_adm = _run(
@@ -2563,7 +2563,7 @@ def step_tavily_two_searches(context: Any) -> None:
 def step_tavily_pool_minus_3(context: Any) -> None:
     import httpx
 
-    from freesearch.adapters.tavily import TavilyAdapter
+    from polyweb.adapters.tavily import TavilyAdapter
 
     pool = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
     assert pool is not None
@@ -2587,7 +2587,7 @@ def step_tavily_pool_minus_3(context: Any) -> None:
 
 @when("one Tavily {depth:w} extract succeeds with {good_urls:d} good URLs")
 def step_tavily_extract_debit(context: Any, depth: str, good_urls: int) -> None:
-    from freesearch.models.contracts import (
+    from polyweb.models.contracts import (
         FetchedDocument,
         FetchResponse,
         UsageEvent,
@@ -2642,7 +2642,7 @@ def step_tavily_extract_debit(context: Any, depth: str, good_urls: int) -> None:
 
 @then("the Tavily extract debit is {expected_credits} Credits")
 def step_tavily_extract_assert(context: Any, expected_credits: str) -> None:
-    from freesearch.models.contracts import UnitKind as UK
+    from polyweb.models.contracts import UnitKind as UK
 
     assert Decimal(expected_credits) == context.tavily_expected_debit
     pool = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
@@ -2653,7 +2653,7 @@ def step_tavily_extract_assert(context: Any, expected_credits: str) -> None:
 
 @when("one Tavily basic extract succeeds with 3 good and 2 bad URLs")
 def step_tavily_mixed_urls(context: Any) -> None:
-    from freesearch.models.contracts import (
+    from polyweb.models.contracts import (
         FetchedDocument,
         FetchResponse,
         UsageEvent,
@@ -2688,7 +2688,7 @@ def step_tavily_mixed_urls(context: Any) -> None:
 
 @when("one Tavily call fails definitely")
 def step_tavily_fail(context: Any) -> None:
-    from freesearch.models.contracts import ProviderError
+    from polyweb.models.contracts import ProviderError
 
     context.tavily_failed_admission = _run(
         context, context.service.admit(_tavily_ctx(LimitOperation.SEARCH, "tav-fail-1"))
@@ -2718,7 +2718,7 @@ def step_tavily_release_zero(context: Any) -> None:
 
 @when("one Tavily extract succeeds with empty valid documents")
 def step_tavily_empty_docs(context: Any) -> None:
-    from freesearch.models.contracts import (
+    from polyweb.models.contracts import (
         FetchedDocument,
         FetchResponse,
         UsageEvent,
@@ -2754,7 +2754,7 @@ def step_tavily_stub_usage(context: Any) -> None:
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
+    from polyweb.adapters.tavily import TavilyAdapter
 
     _open_repo(context)
     context.service = _service(context, _tavily_records())
@@ -2771,7 +2771,7 @@ def step_tavily_stub_usage(context: Any) -> None:
 
 @when("Tavily usage omits all figures")
 def step_tavily_usage_absent(context: Any) -> None:
-    from freesearch.models.provider_limits import UsageSyncRequest
+    from polyweb.models.provider_limits import UsageSyncRequest
 
     payload: dict[str, Any] = {}
     facts = context.tavily_stub_adapter._plan_facts(payload)
@@ -2893,8 +2893,8 @@ def step_tavily_january(context: Any) -> None:
 
 @when('the Tavily funds state is "{state}"')
 def step_tavily_funds_state(context: Any, state: str) -> None:
-    from freesearch.configuration.provider_config import ProviderConfig
-    from freesearch.models.provider_limits import FundingMode, ResetRule, TierBalance
+    from polyweb.configuration.provider_config import ProviderConfig
+    from polyweb.models.provider_limits import FundingMode, ResetRule, TierBalance
 
     _open_repo(context)
     context.service = _service(context, _tavily_records())
@@ -2956,7 +2956,7 @@ def step_tavily_funds_state(context: Any, state: str) -> None:
     elif state == "local_spend_cap":
         # A zero grant is absent, not a cap: grant exactly one search (8 CRD),
         # consume it with a success, and the exhausted local ceiling denies.
-        from freesearch.models.contracts import SearchResponse, UsageEvent, UsageOperation
+        from polyweb.models.contracts import SearchResponse, UsageEvent, UsageOperation
 
         _tavily_seed(context, remaining="1000", allowance="1000")
         # Grant adjustments follow the wall clock while reads follow the
@@ -3025,7 +3025,7 @@ def step_tavily_gate_decision(context: Any, decision: str, status: int) -> None:
 def step_tavily_app(context: Any) -> None:
     from fastapi.testclient import TestClient
 
-    from freesearch.routers.api import create_app
+    from polyweb.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
@@ -3074,7 +3074,7 @@ def step_tavily_views(context: Any) -> None:
 
 @then("both Tavily operation views share one pool without double funds")
 def step_tavily_shared_views(context: Any) -> None:
-    from freesearch.services import credit_units as tav_cu
+    from polyweb.services import credit_units as tav_cu
 
     pool = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
     assert pool is not None
@@ -3125,8 +3125,8 @@ def step_tavily_grant_audit(context: Any) -> None:
 
 @when("I select Tavily routes twice")
 def step_tavily_routes_twice(context: Any) -> None:
-    from freesearch.models.contracts import SearchRequest
-    from freesearch.services.routing import select_route
+    from polyweb.models.contracts import SearchRequest
+    from polyweb.services.routing import select_route
     from tests.integration.services.test_monitoring import _StubAdapter
 
     context.tavily_select_route = select_route
@@ -3150,7 +3150,7 @@ def step_tavily_routes_same(context: Any) -> None:
 
 @when("two Tavily searches succeed")
 def step_tavily_two_successes(context: Any) -> None:
-    from freesearch.models.contracts import SearchResponse, UsageEvent, UsageOperation
+    from polyweb.models.contracts import SearchResponse, UsageEvent, UsageOperation
 
     for attempt in ("tav-t1", "tav-t2"):
         admission = _run(
@@ -3189,7 +3189,7 @@ def step_tavily_held_usage(context: Any) -> None:
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
+    from polyweb.adapters.tavily import TavilyAdapter
 
     _open_repo(context)
     context.service = _service(context, _tavily_records())
@@ -3226,8 +3226,8 @@ def step_tavily_held_usage(context: Any) -> None:
 
 @when("Tavily search and extract run while the usage poll is held")
 def step_tavily_run_while_held(context: Any) -> None:
-    from freesearch.models.contracts import FetchRequest, SearchRequest
-    from freesearch.models.provider_limits import UsageSyncRequest
+    from polyweb.models.contracts import FetchRequest, SearchRequest
+    from polyweb.models.provider_limits import UsageSyncRequest
 
     async def _held_poll() -> Any:
         return await context.tavily_held_adapter.usage_snapshot(
@@ -3276,7 +3276,7 @@ def step_tavily_no_delay(context: Any) -> None:
 
 @then("Tavily route cost and budget reads issue zero usage GETs")
 def step_tavily_zero_gets(context: Any) -> None:
-    from freesearch.models.contracts import FetchRequest, SearchRequest
+    from polyweb.models.contracts import FetchRequest, SearchRequest
 
     assert context.tavily_usage_gets == ["https://api.tavily.com/usage"]
     before = list(context.tavily_usage_gets)
@@ -3296,7 +3296,7 @@ def step_tavily_zero_gets(context: Any) -> None:
     )
     _run(context, context.tavily_held_adapter.quota())
     _run(context, context.service.provider_view("tavily"))
-    from freesearch.services.routing import select_route
+    from polyweb.services.routing import select_route
     from tests.integration.services.test_monitoring import _StubAdapter
 
     req = SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="zero-get probe")
@@ -3371,8 +3371,8 @@ def step_tavily_two_schedulers(context: Any) -> None:
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.services.limits_sync import LimitSyncService
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.services.limits_sync import LimitSyncService
 
     async def _race() -> tuple[bool, bool]:
         first = await _limits_repo(context).claim_sync(
@@ -3433,7 +3433,7 @@ def step_tavily_due_sync(context: Any) -> None:
 @when("the Tavily poll fails with transport error")
 def step_tavily_poll_fail(context: Any) -> None:
 
-    from freesearch.models.provider_limits import SyncResult
+    from polyweb.models.provider_limits import SyncResult
 
     _run(
         context,
@@ -3455,7 +3455,7 @@ def step_tavily_poll_fail(context: Any) -> None:
         ),
     )
     context.tavily_after_fail = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
-    from freesearch.services.limits_sync import _cadence_delay
+    from polyweb.services.limits_sync import _cadence_delay
 
     context.tavily_retry_delay = _cadence_delay("tavily", 60, 60)
     assert context.tavily_retry_delay >= 60
@@ -3577,8 +3577,8 @@ def step_tavily_rest_402(context: Any) -> None:
     from fastapi.testclient import TestClient
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.routers.api import create_app
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
@@ -3641,7 +3641,7 @@ def step_tavily_mcp_402(context: Any) -> None:
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
+    from polyweb.adapters.tavily import TavilyAdapter
 
     _open_repo(context)
     context.service = _service(context, _tavily_records())
@@ -3683,7 +3683,7 @@ def step_tavily_mcp_search(context: Any) -> None:
         context.tavily_mcp_error = exc
 
     async def _drain_refresh() -> None:
-        from freesearch.services.provider_runtime import _BACKGROUND_TASKS
+        from polyweb.services.provider_runtime import _BACKGROUND_TASKS
 
         pending = [task for task in list(_BACKGROUND_TASKS) if not task.done()]
         if pending:
@@ -3707,8 +3707,8 @@ def step_tavily_fanout_app(context: Any) -> None:
     from fastapi.testclient import TestClient
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.routers.api import create_app
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.routers.api import create_app
     from tests.fixtures.auth import (
         configure_bdd_secret,
         raw_auth_headers,
@@ -3733,8 +3733,8 @@ def step_tavily_fanout_app(context: Any) -> None:
     context.tavily_other_released = asyncio.Event()
     context.tavily_other_cancelled = False
 
-    from freesearch.adapters.base import ProviderAdapter
-    from freesearch.models.contracts import (
+    from polyweb.adapters.base import ProviderAdapter
+    from polyweb.models.contracts import (
         CostEstimate,
         FetchRequest,
         FetchResponse,
@@ -3827,7 +3827,7 @@ def step_tavily_fanout_run(context: Any) -> None:
         )
 
     async def _drain_refresh() -> None:
-        from freesearch.services.provider_runtime import _BACKGROUND_TASKS
+        from polyweb.services.provider_runtime import _BACKGROUND_TASKS
 
         pending = [task for task in list(_BACKGROUND_TASKS) if not task.done()]
         if pending:
@@ -3883,8 +3883,8 @@ def step_tavily_429_success(context: Any) -> None:
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.infrastructure.resilience import ResilientRunner
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.infrastructure.resilience import ResilientRunner
 
     _open_repo(context)
     context.tavily_sleeps = []
@@ -3925,7 +3925,7 @@ def step_tavily_429_success(context: Any) -> None:
 def step_tavily_search_retry_7(context: Any) -> None:
     from tavily.errors import UsageLimitExceededError  # type: ignore[import-untyped]
 
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     context.tavily_retry_sdk.search_response = _tavily_search_payload()
     original = context.tavily_retry_adapter._normalize_error
@@ -3968,7 +3968,7 @@ def step_tavily_search_sleep_7(context: Any) -> None:
 def step_tavily_extract_retry_3(context: Any) -> None:
     from tavily.errors import UsageLimitExceededError  # type: ignore[import-untyped]
 
-    from freesearch.models.contracts import FetchRequest
+    from polyweb.models.contracts import FetchRequest
 
     # Move the deterministic clock past the search cooldown so the shared
     # breaker records no carryover wait in this operation's sleep list.
@@ -4017,8 +4017,8 @@ def step_tavily_sleeper(context: Any) -> None:
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.infrastructure.resilience import ResilientRunner
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.infrastructure.resilience import ResilientRunner
 
     _open_repo(context)
     context.tavily_sleeps = []
@@ -4063,8 +4063,8 @@ def step_tavily_retry_variant(context: Any, header: str) -> None:
     from pydantic import SecretStr
     from tavily.errors import UsageLimitExceededError  # type: ignore[import-untyped]
 
-    from freesearch.adapters.tavily import TavilyAdapter
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.models.contracts import SearchRequest
 
     context.tavily_sleeps.clear()
     calls = {"count": 0}
@@ -4207,7 +4207,7 @@ def _keenable_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.keenable import KeenableAdapter
+    from polyweb.adapters.keenable import KeenableAdapter
 
     def counting(request: httpx.Request) -> httpx.Response:
         if calls is not None:
@@ -4221,7 +4221,7 @@ def _keenable_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any
 def _keenable_keyless_adapter(handler: Any, calls: list[Any] | None = None) -> tuple[Any, Any]:
     import httpx
 
-    from freesearch.adapters.keenable import KeenableAdapter
+    from polyweb.adapters.keenable import KeenableAdapter
 
     def counting(request: httpx.Request) -> httpx.Response:
         if calls is not None:
@@ -4233,13 +4233,13 @@ def _keenable_keyless_adapter(handler: Any, calls: list[Any] | None = None) -> t
 
 
 def _keenable_records() -> list[ProviderLimitRecord]:
-    from freesearch.configuration.provider_limits import provider_limit_defaults
+    from polyweb.configuration.provider_limits import provider_limit_defaults
 
     return [record for record in provider_limit_defaults() if record.provider == "keenable"]
 
 
 def _keenable_pool_id() -> str:
-    from freesearch.models.provider_limits import native_pool_id
+    from polyweb.models.provider_limits import native_pool_id
 
     return native_pool_id("keenable", AuthMode.KEYED, UnitKind.REQUEST)
 
@@ -4270,7 +4270,7 @@ def step_keenable_four_records(context: Any) -> None:
 
 @then("Keenable keyless records hold no budget")
 def step_keenable_keyless_no_budget(context: Any) -> None:
-    from freesearch.services import credit_units as local_cu
+    from polyweb.services import credit_units as local_cu
 
     keyless = [r for r in context.keenable_records if r.auth_mode is AuthMode.KEYLESS]
     assert len(keyless) == 2
@@ -4284,7 +4284,7 @@ def step_keenable_keyless_no_budget(context: Any) -> None:
 
 @when("I read the Keenable keyed pool contract")
 def step_keenable_keyed_contract(context: Any) -> None:
-    from freesearch.services import credit_units as local_cu
+    from polyweb.services import credit_units as local_cu
 
     context.keenable_search = next(
         r
@@ -4388,7 +4388,7 @@ def step_keenable_full_pool(context: Any) -> None:
 
 @when("one Keenable search reports three credits and one fetch reports two credits")
 def step_keenable_shared_usage(context: Any) -> None:
-    from freesearch.models.contracts import (
+    from polyweb.models.contracts import (
         FetchedDocument,
         FetchResponse,
         SearchResponse,
@@ -4503,7 +4503,7 @@ def step_keenable_totals_12_8(context: Any) -> None:
 
 @given("a Keenable adapter with paid usage of two credits")
 def step_keenable_paid_adapter(context: Any) -> None:
-    from freesearch.models.contracts import UsageEvent, UsageOperation, UsageStatus
+    from polyweb.models.contracts import UsageEvent, UsageOperation, UsageStatus
 
     _open_repo(context)
     context.vendor_calls = []
@@ -4516,7 +4516,7 @@ def step_keenable_paid_adapter(context: Any) -> None:
     adapter, client = _keenable_adapter(handler, context.vendor_calls)
     context.keenable_adapter = adapter
     context.keenable_client = client
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     context.keenable_paid_response = _run(
         context,
@@ -4547,7 +4547,7 @@ def step_keenable_paid_adapter(context: Any) -> None:
 
 @when("Keenable answers 402 after paid usage")
 def step_keenable_snapshot(context: Any) -> None:
-    from freesearch.models.provider_limits import UsageSyncRequest
+    from polyweb.models.provider_limits import UsageSyncRequest
 
     _run(context, context.keenable_adapter.quota_after_error(402))
     now = datetime.now(UTC)
@@ -4565,7 +4565,7 @@ def step_keenable_snapshot(context: Any) -> None:
     assert snapshot is not None
     context.keenable_snapshot = snapshot
     _run(context, _limits_repo(context).apply_snapshot(snapshot))
-    from freesearch.models.contracts import QuotaSnapshot, QuotaSource
+    from polyweb.models.contracts import QuotaSnapshot, QuotaSource
 
     _run(
         context,
@@ -4586,7 +4586,7 @@ def step_keenable_snapshot(context: Any) -> None:
 
 @then("the Keenable snapshot holds remaining zero with separate free and paid spend")
 def step_keenable_paid_402_zero(context: Any) -> None:
-    from freesearch.adapters.keenable import KeenableAdapter
+    from polyweb.adapters.keenable import KeenableAdapter
 
     adapter = context.keenable_adapter
     assert isinstance(adapter, KeenableAdapter)
@@ -4611,8 +4611,8 @@ def step_keenable_rebuild(context: Any) -> None:
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.adapters.keenable import KeenableAdapter
-    from freesearch.models.provider_limits import UsageSyncRequest
+    from polyweb.adapters.keenable import KeenableAdapter
+    from polyweb.models.provider_limits import UsageSyncRequest
 
     client = httpx.AsyncClient(timeout=30.0)
     context.keenable_rebuilt_client = client
@@ -4667,7 +4667,7 @@ def step_keenable_429(context: Any) -> None:
 
     adapter, client = _keenable_adapter(handler, calls)
     context.keenable_client = client
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     try:
         _run(
@@ -4708,7 +4708,7 @@ def step_keenable_402(context: Any) -> None:
 
     adapter, client = _keenable_adapter(handler, calls)
     context.keenable_client = client
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     try:
         _run(
@@ -4739,7 +4739,7 @@ def step_keenable_402_assert(context: Any) -> None:
 
 @when("two Keenable keyed calls succeed with standard cost")
 def step_keenable_two_standard(context: Any) -> None:
-    from freesearch.models.contracts import (
+    from polyweb.models.contracts import (
         FetchedDocument,
         FetchResponse,
         SearchResponse,
@@ -4796,7 +4796,7 @@ def step_keenable_two_standard(context: Any) -> None:
 
 @then("the Keenable shared views hold one pool with 399992 CRDs each")
 def step_keenable_shared_views(context: Any) -> None:
-    from freesearch.services import credit_units as local_cu
+    from polyweb.services import credit_units as local_cu
 
     pool = _run(context, _limits_repo(context).get_pool(_keenable_pool_id()))
     assert pool is not None

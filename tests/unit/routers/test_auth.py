@@ -7,9 +7,9 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from freesearch.models.projects import ProjectApiKeyPrincipal
-from freesearch.models.users import UserPrincipal
-from freesearch.routers.auth import (
+from polyweb.models.projects import ProjectApiKeyPrincipal
+from polyweb.models.users import UserPrincipal
+from polyweb.routers.auth import (
     BrowserTokenResponse,
     TokenPairResponse,
     UserCreate,
@@ -217,7 +217,7 @@ def test_programmatic_pair_keeps_json_refresh_credential() -> None:
 def test_refresh_cookie_helpers_set_strict_scoped_attributes() -> None:
     from starlette.responses import Response
 
-    from freesearch.infrastructure.browser_auth import (
+    from polyweb.infrastructure.browser_auth import (
         REFRESH_COOKIE_NAME,
         clear_refresh_cookie,
         set_refresh_cookie,

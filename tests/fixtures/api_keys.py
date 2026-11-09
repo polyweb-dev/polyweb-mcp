@@ -1,7 +1,7 @@
 """Project API key fixtures (TASK-000041).
 
 Machine clients (REST and MCP) authenticate with a project API key issued
-through the real :class:`~freesearch.services.api_keys.ApiKeyService`, so every
+through the real :class:`~polyweb.services.api_keys.ApiKeyService`, so every
 fixture key has a real prefix, a stored verifier digest and an owning project.
 The owner is an ordinary human who administers the project through membership;
 no fixture grants system authority to issue a key.
@@ -22,12 +22,12 @@ from pydantic import SecretStr
 from tests.fixtures.auth import auth_service_for, temp_principal
 from tests.fixtures.execution import seed_execution_project, seed_execution_user
 
-from freesearch.models.observability import ActorType, ExecutionAttribution
-from freesearch.models.projects import API_KEY_SCOPES, ProjectApiKeyCreate
-from freesearch.models.users import UserPrincipal
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.api_keys import ApiKeyService
-from freesearch.services.users import AuthService
+from polyweb.models.observability import ActorType, ExecutionAttribution
+from polyweb.models.projects import API_KEY_SCOPES, ProjectApiKeyCreate
+from polyweb.models.users import UserPrincipal
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.api_keys import ApiKeyService
+from polyweb.services.users import AuthService
 
 
 class _Omitted:
@@ -160,7 +160,7 @@ async def expire_key(
 
     from sqlalchemy import update
 
-    from freesearch.persistence.api_keys import ProjectApiKeyRow, stored_timestamp
+    from polyweb.persistence.api_keys import ProjectApiKeyRow, stored_timestamp
 
     now = datetime.now(UTC)
     async with repository.session() as session:
@@ -181,8 +181,8 @@ async def expire_key(
 async def archive_project(repository: SQLiteRepository, project_id: UUID) -> None:
     """Archive one project directly in storage (no service-side guard involved)."""
 
-    from freesearch.models.projects import ProjectStatus
-    from freesearch.persistence.projects import ProjectRepository
+    from polyweb.models.projects import ProjectStatus
+    from polyweb.persistence.projects import ProjectRepository
 
     async with repository.session() as session:
         await ProjectRepository(session).set_project_status(
@@ -202,13 +202,13 @@ async def audit_rows(
 
     import json
 
-    from freesearch.services.api_keys import DEFAULT_USE_RECORDER
+    from polyweb.services.api_keys import DEFAULT_USE_RECORDER
 
     await DEFAULT_USE_RECORDER.drain()
 
     from sqlalchemy import select
 
-    from freesearch.persistence.audit import ProjectAuditEventRow, SystemAuditEventRow
+    from polyweb.persistence.audit import ProjectAuditEventRow, SystemAuditEventRow
 
     table = SystemAuditEventRow if scope == "system" else ProjectAuditEventRow
     statement = select(table)

@@ -22,8 +22,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from freesearch.infrastructure import http as freesearch_http
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.infrastructure import http as polyweb_http
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
 
 # ``features`` is an uninstalled namespace package at the repo root; make it
 # importable regardless of pytest's sys.path manipulation.
@@ -92,7 +92,7 @@ def _set_harness_key(monkeypatch: pytest.MonkeyPatch, provider: ProviderName, va
 
 def _forbid_direct_httpx(*args: object, **kwargs: object) -> None:
     raise AssertionError(
-        "before_scenario must build the client via freesearch.http.create_async_client(), "
+        "before_scenario must build the client via polyweb.http.create_async_client(), "
         "not httpx.AsyncClient directly"
     )
 
@@ -132,7 +132,7 @@ def test_before_scenario_builds_brave_adapter_for_tagged_scenario(
 
     _clear_harness_provider_keys(monkeypatch)
     _set_harness_key(monkeypatch, ProviderName.BRAVE, brave_key)
-    monkeypatch.setattr(freesearch_http, "create_async_client", fake_factory)
+    monkeypatch.setattr(polyweb_http, "create_async_client", fake_factory)
     monkeypatch.setattr(environment, "create_async_client", fake_factory, raising=False)
     monkeypatch.setattr(environment.httpx, "AsyncClient", _forbid_direct_httpx)
     monkeypatch.setattr(environment, "TavilyAdapter", _FakeTavilyAdapter, raising=False)
@@ -170,7 +170,7 @@ def test_before_scenario_keeps_tavily_adapter_for_untagged_scenario(
 
     _clear_harness_provider_keys(monkeypatch)
     _set_harness_key(monkeypatch, ProviderName.TAVILY, tavily_key)
-    monkeypatch.setattr(freesearch_http, "create_async_client", fake_factory)
+    monkeypatch.setattr(polyweb_http, "create_async_client", fake_factory)
     monkeypatch.setattr(environment, "create_async_client", fake_factory, raising=False)
     monkeypatch.setattr(environment.httpx, "AsyncClient", _forbid_direct_httpx)
     monkeypatch.setattr(environment, "TavilyAdapter", _FakeTavilyAdapter, raising=False)

@@ -6,17 +6,17 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import update
 
-from freesearch.models.contracts import SearchRequest, UsageOperation
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from freesearch.models.provider_limits import AuthMode, LimitDeniedError, LimitOperation
-from freesearch.persistence.pools import (
+from polyweb.models.contracts import SearchRequest, UsageOperation
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+from polyweb.models.provider_limits import AuthMode, LimitDeniedError, LimitOperation
+from polyweb.persistence.pools import (
     PoolAllocationRepository,
     ProjectPoolAllocationRow,
     UpstreamPoolRepository,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.services.execution import ExecutionService
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.services.execution import ExecutionService
 from tests.integration.persistence.test_strict_capacity import seed_capacity_world
 
 

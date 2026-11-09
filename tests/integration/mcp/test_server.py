@@ -16,16 +16,16 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.registry import adapter_factory
-from freesearch.infrastructure.secrets import ProviderName
-from freesearch.mcp.server import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.registry import adapter_factory
+from polyweb.infrastructure.secrets import ProviderName
+from polyweb.mcp.server import (
     _ADAPTERS,
     _encrypted_store,
     close_adapters,
     create_server,
 )
-from freesearch.models.contracts import (
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -36,8 +36,8 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
-from freesearch.persistence.settings import ProjectSettingsRepository
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.settings import ProjectSettingsRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.api_keys import mcp_project_key
 from tests.fixtures.execution import install_adapter_map, seed_provider_bindings
 
@@ -220,7 +220,7 @@ async def test_build_adapters_includes_keyless_keenable() -> None:
 async def test_build_adapters_skips_failing_factory_keeps_others(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from freesearch.adapters import registry as _reg
+    from polyweb.adapters import registry as _reg
 
     monkeypatch.setitem(
         _reg._ADAPTERS, ProviderName.EXA, lambda _c: (_ for _ in ()).throw(RuntimeError("boom"))
@@ -264,11 +264,11 @@ def test_create_server_stateless_http_flag() -> None:
 def test_main_cli_dispatch(
     monkeypatch: pytest.MonkeyPatch, auth_secret: str, tmp_path: Path
 ) -> None:
-    import freesearch.mcp.server as server_module
-    from freesearch.mcp.server import main
+    import polyweb.mcp.server as server_module
+    from polyweb.mcp.server import main
 
     # main() runs the pre-start database check: never against the checkout DB.
-    monkeypatch.setenv("FREESEARCH_DB", str(tmp_path / "main-dispatch.db"))
+    monkeypatch.setenv("POLYWEB_DB", str(tmp_path / "main-dispatch.db"))
 
     calls: list[tuple[str, bool, int | None]] = []
 
@@ -433,8 +433,8 @@ async def test_mcp_fanout_excludes_masked_provider(
 
 
 async def _reset_mcp_caches() -> None:
-    from freesearch.services.monitoring import clear_quota_poll_cache
-    from freesearch.services.provider_runtime import clear_config_cache
+    from polyweb.services.monitoring import clear_quota_poll_cache
+    from polyweb.services.provider_runtime import clear_config_cache
 
     clear_config_cache()
     clear_quota_poll_cache()
@@ -468,7 +468,7 @@ class _QuotaStub(_StubAdapter):
 
     @property
     def capabilities(self):  # type: ignore[no-untyped-def]
-        from freesearch.models.contracts import ProviderCapabilities as _Caps
+        from polyweb.models.contracts import ProviderCapabilities as _Caps
 
         return _Caps(search=True, fetch=True, cost_estimate=True, quota=True)
 
@@ -490,7 +490,7 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
     tmp_path: Path,
 ) -> None:
     """M4 MCP: unknown REQUIRE raises ToolError without touching other providers."""
-    from freesearch.persistence.storage import SQLiteRepository as _Repo
+    from polyweb.persistence.storage import SQLiteRepository as _Repo
 
     await _reset_mcp_caches()
     repository = await _Repo.open(tmp_path / "mcp-require-unknown.db")
@@ -557,7 +557,7 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
         await repository.set_runtime_setting(
             "provider.exa", {"config": {"enable_mask": 0, "support_mask": 7, "priority": 100}}
         )
-        from freesearch.services.provider_runtime import clear_config_cache as _clear
+        from polyweb.services.provider_runtime import clear_config_cache as _clear
 
         _clear(repository)
         masked, pid = await _authed_server(
@@ -566,10 +566,10 @@ async def test_mcp_require_unknown_fails_fast_without_unrelated_reads(
         with pytest.raises(ToolError, match="no eligible provider"):
             await masked.call_tool("search", {"request": {"project_id": pid, "query": "masked"}})
     finally:
-        from freesearch.services.provider_runtime import clear_config_cache as _clear2
+        from polyweb.services.provider_runtime import clear_config_cache as _clear2
 
         _clear2()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq
 
         _cq()
         await repository.close()
@@ -579,7 +579,7 @@ async def test_mcp_auto_and_prefer_inspect_all_eligible(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """M4 MCP: AUTO and PREFER batch reads cover every eligible provider."""
-    from freesearch.persistence.storage import SQLiteRepository as _Repo
+    from polyweb.persistence.storage import SQLiteRepository as _Repo
 
     await _reset_mcp_caches()
     repository = await _Repo.open(tmp_path / "mcp-auto-inspect.db")
@@ -618,10 +618,10 @@ async def test_mcp_auto_and_prefer_inspect_all_eligible(
         for batch in seen:
             assert set(batch) == {"exa", "brave", "tavily"}
     finally:
-        from freesearch.services.provider_runtime import clear_config_cache as _clear
+        from polyweb.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq
 
         _cq()
         await repository.close()
@@ -631,7 +631,7 @@ async def test_mcp_pinned_fanout_reads_only_subset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """M4 MCP: fanout with providers=[A,B] queries only that subset."""
-    from freesearch.persistence.storage import SQLiteRepository as _Repo
+    from polyweb.persistence.storage import SQLiteRepository as _Repo
 
     await _reset_mcp_caches()
     repository = await _Repo.open(tmp_path / "mcp-pinned.db")
@@ -669,10 +669,10 @@ async def test_mcp_pinned_fanout_reads_only_subset(
         for batch in health_names:
             assert set(batch) <= {"p1", "p2"}
     finally:
-        from freesearch.services.provider_runtime import clear_config_cache as _clear
+        from polyweb.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq
 
         _cq()
         await repository.close()
@@ -688,9 +688,9 @@ async def test_mcp_stale_first_then_new_snapshot(
     from datetime import datetime as _dt
     from decimal import Decimal as _Dec
 
-    from freesearch.models.contracts import QuotaSnapshot as _QS
-    from freesearch.models.contracts import QuotaSource as _QSrc
-    from freesearch.services.provider_runtime import _BACKGROUND_TASKS as _TASKS
+    from polyweb.models.contracts import QuotaSnapshot as _QS
+    from polyweb.models.contracts import QuotaSource as _QSrc
+    from polyweb.services.provider_runtime import _BACKGROUND_TASKS as _TASKS
 
     await _reset_mcp_caches()
     repository = await SQLiteRepository.open(tmp_path / "mcp-stale.db")
@@ -707,7 +707,7 @@ async def test_mcp_stale_first_then_new_snapshot(
                 observed_at=fixed,
             )
         )
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq0
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq0
 
         _cq0()
         zero = _QS(
@@ -723,7 +723,7 @@ async def test_mcp_stale_first_then_new_snapshot(
         )
         from uuid import UUID
 
-        from freesearch.persistence.bindings import ProjectBindingRepository
+        from polyweb.persistence.bindings import ProjectBindingRepository
 
         async with repository.session() as session:
             bindings = await ProjectBindingRepository(session).list_for_project(
@@ -759,7 +759,7 @@ async def test_mcp_stale_first_then_new_snapshot(
         assert stored.remaining == _Dec("0")
         unscoped = await repository.latest_quota("exa")
         assert unscoped is not None and unscoped.remaining == _Dec("10")
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq1
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq1
 
         _cq1()
         with pytest.raises(ToolError, match="no required provider is eligible"):
@@ -776,15 +776,15 @@ async def test_mcp_stale_first_then_new_snapshot(
         assert adapter.search_calls == 1
     finally:
         release.set()
-        from freesearch.services.provider_runtime import _BACKGROUND_TASKS as _T2
+        from polyweb.services.provider_runtime import _BACKGROUND_TASKS as _T2
 
         for task in list(_T2):
             with _suppress(Exception):
                 await _asyncio.wait_for(_asyncio.shield(task), timeout=5)
-        from freesearch.services.provider_runtime import clear_config_cache as _clear
+        from polyweb.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq
 
         _cq()
         await repository.close()
@@ -797,8 +797,8 @@ async def test_mcp_single_attempt_preserves_tool_error(
     await _reset_mcp_caches()
     repository = await SQLiteRepository.open(tmp_path / "mcp-single.db")
     try:
-        from freesearch.models.contracts import RoutingConfigResponse
-        from freesearch.routers.control import persist_routing_config
+        from polyweb.models.contracts import RoutingConfigResponse
+        from polyweb.routers.control import persist_routing_config
 
         async def order_exa_first(pid: str) -> None:
             async with repository.session() as session:
@@ -878,10 +878,10 @@ async def test_mcp_single_attempt_preserves_tool_error(
                 assert primary_f.fetch_calls == 1
                 assert fallback_f.fetch_calls == 0
     finally:
-        from freesearch.services.provider_runtime import clear_config_cache as _clear
+        from polyweb.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq
 
         _cq()
         await repository.close()
@@ -922,10 +922,10 @@ async def test_mcp_fanout_partial_and_all_fail(
         assert first.search_calls == 1
         assert second.search_calls == 1
     finally:
-        from freesearch.services.provider_runtime import clear_config_cache as _clear
+        from polyweb.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq
 
         _cq()
         await repository.close()
@@ -933,7 +933,7 @@ async def test_mcp_fanout_partial_and_all_fail(
 
 async def test_mcp_lifespan_clears_config_cache(tmp_path: Path) -> None:
     """M3 MCP: lifespan exit clears cached config and policy entries."""
-    from freesearch.services.provider_runtime import (
+    from polyweb.services.provider_runtime import (
         _CONFIG_CACHE,
         _POLICY_CACHE,
         clear_config_cache,
@@ -968,7 +968,7 @@ async def test_mcp_lifespan_clears_config_cache(tmp_path: Path) -> None:
         assert id(repository) not in _POLICY_CACHE
     finally:
         clear_config_cache()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq
 
         _cq()
         await repository.close()
@@ -978,9 +978,9 @@ async def test_mcp_generation_replacement_builds_fresh_state(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """MCP generations detach cleanly so a later session never reuses closed state."""
-    from freesearch.infrastructure.observability import NO_OP_OBSERVABILITY
-    from freesearch.mcp.server import _detach_generation
-    from freesearch.services.execution import ExecutionService
+    from polyweb.infrastructure.observability import NO_OP_OBSERVABILITY
+    from polyweb.mcp.server import _detach_generation
+    from polyweb.services.execution import ExecutionService
 
     await _reset_mcp_caches()
     repository = await SQLiteRepository.open(tmp_path / "mcp-gen.db")
@@ -1015,10 +1015,10 @@ async def test_mcp_generation_replacement_builds_fresh_state(
         assert second.search_calls == 1
         assert first.search_calls == 0
     finally:
-        from freesearch.services.provider_runtime import clear_config_cache as _clear
+        from polyweb.services.provider_runtime import clear_config_cache as _clear
 
         _clear()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq
 
         _cq()
         await repository.close()
@@ -1030,7 +1030,7 @@ async def test_mcp_object_identity_after_lifespan(
     """E3 MCP: a new repository never inherits a closed repository cache entry."""
     import builtins
 
-    from freesearch.services.provider_runtime import (
+    from polyweb.services.provider_runtime import (
         clear_config_cache,
         effective_config_for_name,
     )
@@ -1069,6 +1069,6 @@ async def test_mcp_object_identity_after_lifespan(
             await repo_b.close()
     finally:
         clear_config_cache()
-        from freesearch.services.monitoring import clear_quota_poll_cache as _cq
+        from polyweb.services.monitoring import clear_quota_poll_cache as _cq
 
         _cq()

@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from freesearch.models.credentials import (
+from polyweb.models.credentials import (
     ALL_CREDENTIAL_OPERATIONS,
     CredentialAuthMode,
     CredentialCreate,
@@ -16,7 +16,7 @@ from freesearch.models.credentials import (
     CredentialRotate,
     ProjectCredentialRead,
 )
-from freesearch.models.projects import CredentialOwnerScope
+from polyweb.models.projects import CredentialOwnerScope
 
 
 def _create(**overrides: object) -> CredentialCreate:

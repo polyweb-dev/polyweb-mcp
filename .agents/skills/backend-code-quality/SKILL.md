@@ -1,6 +1,6 @@
 ---
 name: backend-code-quality
-description: Use when you format code, verify type safety, audit before PR submission, or fix lint and type errors across src/freesearch and tests/. Review code quality, audit changes, enforce import hygiene, check cyclomatic complexity, scan for dead code, and run static type checking with Ruff and MyPy.
+description: Use when you format code, verify type safety, audit before PR submission, or fix lint and type errors across src/polyweb and tests/. Review code quality, audit changes, enforce import hygiene, check cyclomatic complexity, scan for dead code, and run static type checking with Ruff and MyPy.
 ---
 
 # Code Quality & Static Analysis with Ruff & MyPy
@@ -13,7 +13,7 @@ Automated code quality auditing, import boundary verification, dead-code detecti
 
 * **Inner Loop (Active Development / Single File)**:
   ```bash
-  uv run ruff format src/freesearch/services/routing.py && uv run ruff check src/freesearch/services/routing.py
+  uv run ruff format src/polyweb/services/routing.py && uv run ruff check src/polyweb/services/routing.py
   ```
 * **Fast Typecheck**:
   ```bash
@@ -38,7 +38,7 @@ Automated code quality auditing, import boundary verification, dead-code detecti
 | Rule Set | Code | Threshold / Rule | Scope |
 | :--- | :--- | :--- | :--- |
 | **Cyclomatic Complexity** | `C901` | McCabe Complexity $\le 15$ | `src/` (exempt in `tests/**`) |
-| **Strict Type Safety** | MyPy | `strict = true`, no untyped defs, explicit `T \| None` | Workspace-wide (`freesearch`) |
+| **Strict Type Safety** | MyPy | `strict = true`, no untyped defs, explicit `T \| None` | Workspace-wide (`polyweb`) |
 | **Dead Code / Unused Items** | `F401`, `F841` | 0 unused imports or variables | Workspace-wide |
 | **Code Simplification** | `SIM`, `B` | Simplify nested conditionals, avoid bug patterns | Workspace-wide |
 | **Modern Python 3.12+** | `UP` | Enforce `X \| Y` unions, built-in generic collections (`list[str]`) | Workspace-wide |

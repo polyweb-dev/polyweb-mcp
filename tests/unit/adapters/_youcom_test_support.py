@@ -18,8 +18,8 @@ from contextlib import asynccontextmanager
 import httpx
 from pydantic import SecretStr
 
-from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from polyweb.adapters.youcom import YoucomAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
 
 _UNSET = object()
 
@@ -38,7 +38,7 @@ class _FakeClient:
     timeout: httpx.Timeout = httpx.Timeout(20.0)
     follow_redirects = True
     max_redirects = 20
-    headers = httpx.Headers({"user-agent": "freesearch-test/1.0"})
+    headers = httpx.Headers({"user-agent": "polyweb-test/1.0"})
 
 
 class _FakeClock:

@@ -23,10 +23,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from freesearch.adapters.registry import _ADAPTERS  # noqa: E402
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName  # noqa: E402
-from freesearch.models.contracts import SearchRequest, SearchResponse  # noqa: E402
-from freesearch.models.provider_limits import AuthMode  # noqa: E402
+from polyweb.adapters.registry import _ADAPTERS  # noqa: E402
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName  # noqa: E402
+from polyweb.models.contracts import SearchRequest, SearchResponse  # noqa: E402
+from polyweb.models.provider_limits import AuthMode  # noqa: E402
 from tests.bdd.features.steps import routing_latency_steps as steps  # noqa: E402
 from tests.fixtures.execution import EXECUTION_PROJECT_ID  # noqa: E402
 from tests.fixtures.latency import (  # noqa: E402
@@ -56,7 +56,7 @@ _SENTINEL_KEY = "unit-sentinel-key-material-0001"
 def _clear_live_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for env_var in PROVIDER_ENV_VARS.values():
         monkeypatch.delenv(env_var, raising=False)
-    for env_var in ("FREESEARCH_RUN_LIVE", steps.LIVE_WARMUP_ENV, steps.LIVE_SAMPLES_ENV):
+    for env_var in ("POLYWEB_RUN_LIVE", steps.LIVE_WARMUP_ENV, steps.LIVE_SAMPLES_ENV):
         monkeypatch.delenv(env_var, raising=False)
 
 
@@ -93,9 +93,9 @@ def test_live_gate_opens_with_a_key_and_never_echoes_key_material(
 def test_keyless_keenable_is_gated_on_run_live(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_live_env(monkeypatch)
     reason = steps.live_skip_reason("keenable")
-    assert reason is not None and "FREESEARCH_RUN_LIVE=1" in reason
+    assert reason is not None and "POLYWEB_RUN_LIVE=1" in reason
 
-    monkeypatch.setenv("FREESEARCH_RUN_LIVE", "1")
+    monkeypatch.setenv("POLYWEB_RUN_LIVE", "1")
     assert steps.live_skip_reason("keenable") is None
 
 

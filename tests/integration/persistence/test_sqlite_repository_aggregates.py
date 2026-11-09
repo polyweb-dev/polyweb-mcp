@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest_asyncio
 
-from freesearch.models.contracts import UsageEvent, UsageOperation
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.models.contracts import UsageEvent, UsageOperation
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
 

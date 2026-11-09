@@ -1,6 +1,6 @@
 # CI artifacts in Gitea
 
-The manual backend workflows publish report ZIP files to the Gitea Generic Package Registry.
+The manual backend and UI workflows publish report ZIP files to the Gitea Generic Package Registry.
 The source repository remains on GitHub. Woodpecker still uses GitHub.
 No artifact service or Git repository in Gitea is necessary.
 
@@ -21,9 +21,9 @@ A forced worker shutdown or Spot preemption can prevent the upload step from com
 
 ## Access
 
-Open <https://gitea.thiocyanate.dev/freesearch/-/packages> through the private network.
-Use a Gitea account with package read permission in the `freesearch` organization.
-Each workflow uses a package such as `freesearch-api-mutation` or `freesearch-api-latency`.
+Open <https://gitea.thiocyanate.dev/polyweb/-/packages> through the private network.
+Use a Gitea account with package read permission in the `polyweb` organization.
+Each workflow uses a package such as `polyweb-api-mutation`, `polyweb-ui-quality`, or `polyweb-ui-bdd`.
 Each version contains the pipeline number, rerun count, and a unique upload timestamp.
 Download `reports.zip`. Extract the ZIP to open its reports.
 
@@ -35,6 +35,9 @@ The repository secret is `gitea_artifact_upload_token`.
 It contains the token for the `ci-upload` account, with `write:package` scope.
 Woodpecker exposes it only on manual events. Test steps do not receive this secret.
 The secret has no image filter because the upload step executes commands rather than a plugin.
+Set `GITEA_PACKAGE_OWNER` as a Woodpecker repository variable when the package
+owner differs from `polyweb`. This keeps external package ownership separate
+from the application brand and lets an existing package namespace move later.
 
 The package write permission also permits deletion. Do not give this token to untrusted jobs.
 Future production image uploads need separate credentials.
@@ -48,8 +51,8 @@ The upload image uses a digest pin.
 
 ## Manual verification
 
-1. Start a new manual pipeline on `feature/project` after the configuration commit.
-2. Select a test workflow. `api-unit` gives a smaller first check than mutation tests.
+1. Start a new manual pipeline after the configuration commit.
+2. Select a test workflow. `ui-quality` gives a compact UI gate. `ui-bdd` runs the stubbed and visual browser suite.
 3. Confirm that its `upload-artifacts` step succeeds.
 4. Open the package URL from that step.
 5. Download the ZIP and inspect `ci-metadata.json` and the test log.
@@ -68,6 +71,10 @@ uv run --no-sync --with pyyaml python -m unittest discover -s scripts/ci -p 'tes
 uv run --no-sync ruff check scripts/ci
 uv run --no-sync mypy --follow-imports=silent scripts/ci/upload_gitea.py
 ```
+
+The UI jobs use Node 24 for static checks and unit tests, and the official
+Playwright image for browser tests. The BDD job runs critical desktop
+`@smoke` scenarios. It does not run `@live` or `@mobile` scenarios.
 
 References: [Gitea Generic Package Registry](https://docs.gitea.com/usage/packages/generic/),
 [Woodpecker workflow conditions](https://woodpecker-ci.org/docs/usage/workflow-syntax),

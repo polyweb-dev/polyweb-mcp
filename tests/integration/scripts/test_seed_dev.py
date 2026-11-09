@@ -17,17 +17,17 @@ from scripts.seed_dev import (
 )
 from sqlalchemy import select, text
 
-from freesearch.configuration.config import Settings
-from freesearch.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.models.projects import BuiltinRole
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserRow
-from freesearch.services.credentials import credential_secret_slot
-from freesearch.services.projects import ProjectNotFound, ProjectService
-from freesearch.services.provider_bindings import ProviderBindingService, provider_capability
-from freesearch.services.users import AuthService
-from freesearch.services.vault_keys import VaultKeyService
+from polyweb.configuration.config import Settings
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.models.projects import BuiltinRole
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserRow
+from polyweb.services.credentials import credential_secret_slot
+from polyweb.services.projects import ProjectNotFound, ProjectService
+from polyweb.services.provider_bindings import ProviderBindingService, provider_capability
+from polyweb.services.users import AuthService
+from polyweb.services.vault_keys import VaultKeyService
 
 
 async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: Path) -> None:
@@ -40,7 +40,7 @@ async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: 
         auth_jwt_secret=SecretStr("fake-test-jwt-secret-at-least-32-characters"),
     )
     database = tmp_path / DEV_DATABASE
-    normal_database = tmp_path / "freesearch.db"
+    normal_database = tmp_path / "polyweb.db"
     normal_database.write_bytes(b"leave the normal database untouched")
     keys = {
         ProviderName.EXA: SecretStr("fake-dev-exa-key"),
@@ -164,14 +164,14 @@ def test_env_key_import_is_explicit_and_never_prints_values(
         monkeypatch.delenv(variable, raising=False)
     env_file = tmp_path / ".env"
     env_file.write_text(
-        'FREESEARCH_EXA_API_KEY="fake-exa-from-file" # comment\n'
-        "FREESEARCH_BRAVE_SEARCH_API_KEY='fake-brave'\n"
-        "FREESEARCH_BRAVE_ANSWERS_API_KEY=unused-answers\n"
-        "FREESEARCH_TINYFISH_API_KEY=fake-tinyfish\n"
-        "FREESEARCH_TAVILY_API_KEY=\n",
+        'POLYWEB_EXA_API_KEY="fake-exa-from-file" # comment\n'
+        "POLYWEB_BRAVE_SEARCH_API_KEY='fake-brave'\n"
+        "POLYWEB_BRAVE_ANSWERS_API_KEY=unused-answers\n"
+        "POLYWEB_TINYFISH_API_KEY=fake-tinyfish\n"
+        "POLYWEB_TAVILY_API_KEY=\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("FREESEARCH_EXA_API_KEY", "fake-process-exa")
+    monkeypatch.setenv("POLYWEB_EXA_API_KEY", "fake-process-exa")
     keys = read_provider_keys(env_file)
     assert set(keys) == {ProviderName.EXA, ProviderName.BRAVE, ProviderName.TINYFISH}
     assert keys[ProviderName.EXA].get_secret_value() == "fake-process-exa"
@@ -180,7 +180,7 @@ def test_env_key_import_is_explicit_and_never_prints_values(
     assert capsys.readouterr().out == ""
 
 
-@pytest.mark.parametrize("name", ["freesearch.db", "production.db", "other.dev.db"])
+@pytest.mark.parametrize("name", ["polyweb.db", "production.db", "other.dev.db"])
 def test_seed_rejects_normal_database_paths(tmp_path: Path, name: str) -> None:
     database = tmp_path / name
     database.write_bytes(b"do not touch")
@@ -191,7 +191,7 @@ def test_seed_rejects_normal_database_paths(tmp_path: Path, name: str) -> None:
 
 async def test_production_and_leftover_sidecars_are_rejected(tmp_path: Path) -> None:
     database = tmp_path / DEV_DATABASE
-    with pytest.raises(ValueError, match="requires FREESEARCH_ENVIRONMENT=development"):
+    with pytest.raises(ValueError, match="requires POLYWEB_ENVIRONMENT=development"):
         await seed_database(
             database,
             Settings(_env_file=None, environment="production"),
@@ -210,9 +210,9 @@ async def test_production_and_leftover_sidecars_are_rejected(tmp_path: Path) -> 
 def test_cli_failure_does_not_leak_a_configured_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("FREESEARCH_HTTP_TIMEOUT_SECONDS", "fake-sensitive-bad-value")
+    monkeypatch.setenv("POLYWEB_HTTP_TIMEOUT_SECONDS", "fake-sensitive-bad-value")
     env_file = tmp_path / ".env"
-    env_file.write_text("FREESEARCH_ENVIRONMENT=development\n", encoding="utf-8")
+    env_file.write_text("POLYWEB_ENVIRONMENT=development\n", encoding="utf-8")
     assert main(["--database", str(tmp_path / DEV_DATABASE), "--env-file", str(env_file)]) == 1
     output = capsys.readouterr()
     assert "failed validation" in output.err

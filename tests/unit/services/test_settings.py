@@ -4,23 +4,23 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from freesearch.models.contracts import FallbackPolicy
-from freesearch.models.projects import (
+from polyweb.models.contracts import FallbackPolicy
+from polyweb.models.projects import (
     ExecutionSettings,
     ProjectSettingsDocument,
     RoutingSettings,
     SettingsProvenance,
     SettingsScope,
 )
-from freesearch.models.settings import (
+from polyweb.models.settings import (
     SystemExecutionDefaults,
     SystemRoutingDefaults,
     SystemSafetyLimits,
     SystemSettingsDocument,
     resolve_trace_policy,
 )
-from freesearch.persistence.settings import StoredSettings
-from freesearch.services.settings import _project_document, _system_document, resolve_settings
+from polyweb.persistence.settings import StoredSettings
+from polyweb.services.settings import _project_document, _system_document, resolve_settings
 
 
 def test_legacy_routing_fields_are_stripped_for_versions_one_and_two() -> None:

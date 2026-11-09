@@ -1,11 +1,11 @@
 ---
 id: TASK-000046
 title: Projects U1 - Project shell, members and API keys UI
-status: In Progress
+status: Done
 assignee:
   - '@devin'
 created_date: '2026-10-26T09:47:00Z'
-updated_date: '2026-10-31T18:49:00Z'
+updated_date: '2026-11-09T12:32:00Z'
 labels:
   - projects-first
   - step-3-ui
@@ -19,7 +19,7 @@ documentation:
   - doc-000008
 priority: high
 type: feature
-ordinal: 30000
+ordinal: 45000
 ---
 
 ## Description

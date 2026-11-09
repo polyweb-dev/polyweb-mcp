@@ -19,16 +19,16 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from freesearch.models.project_permissions import PROVIDER_OWNER_BIT
-from freesearch.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
-from freesearch.persistence.credentials import CredentialRepository
-from freesearch.persistence.database_migrations import _config, migration_head
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.persistence.migrations.vault_rbac_schema import (
+from polyweb.models.project_permissions import PROVIDER_OWNER_BIT
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.database_migrations import _config, migration_head
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.persistence.migrations.vault_rbac_schema import (
     add_vault_schema,
     finalize_vault_schema,
 )
-from freesearch.persistence.projects import ProjectRepository
+from polyweb.persistence.projects import ProjectRepository
 
 
 @asynccontextmanager

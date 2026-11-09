@@ -14,13 +14,13 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.infrastructure.resilience import (
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.infrastructure.resilience import (
     CircuitOpenError,
     ProviderOperationError,
     ResilientRunner,
 )
-from freesearch.models.contracts import SearchRequest
+from polyweb.models.contracts import SearchRequest
 
 
 class _RaisingRunner:

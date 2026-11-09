@@ -11,8 +11,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
-from freesearch.persistence.database_migrations import _config
-from freesearch.persistence.migrations.vault_rbac_schema import (
+from polyweb.persistence.database_migrations import _config
+from polyweb.persistence.migrations.vault_rbac_schema import (
     add_vault_schema,
     finalize_vault_schema,
 )

@@ -7,7 +7,7 @@ operation rejection, and capability-to-mask conversion.
 
 import pytest
 
-from freesearch.models.provider_access import (
+from polyweb.models.provider_access import (
     ALL_BITS,
     FETCH_BIT,
     GLOBAL_BIT,

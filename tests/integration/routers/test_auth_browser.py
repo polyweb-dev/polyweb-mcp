@@ -14,18 +14,18 @@ import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.browser_auth import (
+from polyweb.configuration.config import get_settings
+from polyweb.infrastructure.browser_auth import (
     REFRESH_COOKIE_NAME,
     REFRESH_COOKIE_PATH,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import TEMP_PASSWORD, raw_auth_headers, temp_email
 from tests.integration.routers.test_users_transport import _StubAdapter
 
 _BROWSER_ORIGIN = "http://localhost:5177"
-_BROWSER_HEADERS = {"Origin": _BROWSER_ORIGIN, "X-FreeSearch-Client": "browser"}
+_BROWSER_HEADERS = {"Origin": _BROWSER_ORIGIN, "X-Polyweb-Client": "browser"}
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def auth_secret(monkeypatch: pytest.MonkeyPatch) -> str:
     import secrets as secrets_module
 
     secret = secrets_module.token_urlsafe(32)
-    monkeypatch.setenv("FREESEARCH_AUTH_JWT_SECRET", secret)
+    monkeypatch.setenv("POLYWEB_AUTH_JWT_SECRET", secret)
     get_settings.cache_clear()
     yield secret
     get_settings.cache_clear()
@@ -45,7 +45,7 @@ def auth_secret(monkeypatch: pytest.MonkeyPatch) -> str:
 def browser_origins(monkeypatch: pytest.MonkeyPatch) -> str:
     """Enable cookie transport for one explicit loopback origin."""
 
-    monkeypatch.setenv("FREESEARCH_AUTH_BROWSER_ORIGINS", f'["{_BROWSER_ORIGIN}"]')
+    monkeypatch.setenv("POLYWEB_AUTH_BROWSER_ORIGINS", f'["{_BROWSER_ORIGIN}"]')
     get_settings.cache_clear()
     yield _BROWSER_ORIGIN
     get_settings.cache_clear()
@@ -67,7 +67,7 @@ async def programmatic_client(
     # Empty allowlist keeps the programmatic contract. The worktree .env file
     # may carry origins, and pydantic-settings reads the file when the process
     # env lacks the var, so set an explicit empty value (env wins over .env).
-    monkeypatch.setenv("FREESEARCH_AUTH_BROWSER_ORIGINS", "")
+    monkeypatch.setenv("POLYWEB_AUTH_BROWSER_ORIGINS", "")
     get_settings.cache_clear()
     try:
         repository = await SQLiteRepository.open(tmp_path / "auth-programmatic.db")
@@ -256,7 +256,7 @@ def test_invalid_origin_fails_without_family_revocation(
         "/auth/jwt/refresh",
         headers={
             "Origin": "https://evil.example.com",
-            "X-FreeSearch-Client": "browser",
+            "X-Polyweb-Client": "browser",
             "Cookie": f"{REFRESH_COOKIE_NAME}={first_value}",
         },
     )
@@ -287,7 +287,7 @@ def test_browser_requests_require_origin_and_marker(
         browser_client.post(
             "/auth/jwt/login",
             data={"username": email, "password": TEMP_PASSWORD},
-            headers={"X-FreeSearch-Client": "browser"},
+            headers={"X-Polyweb-Client": "browser"},
         ).status_code
         == 403
     )
@@ -295,7 +295,7 @@ def test_browser_requests_require_origin_and_marker(
         browser_client.post(
             "/auth/jwt/login",
             data={"username": email, "password": TEMP_PASSWORD},
-            headers={"Origin": "null", "X-FreeSearch-Client": "browser"},
+            headers={"Origin": "null", "X-Polyweb-Client": "browser"},
         ).status_code
         == 403
     )

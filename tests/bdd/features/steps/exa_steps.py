@@ -5,14 +5,14 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import HttpUrl
 
-from freesearch.adapters.exa import ExaAdapter
-from freesearch.models.contracts import FetchRequest, SearchRequest
+from polyweb.adapters.exa import ExaAdapter
+from polyweb.models.contracts import FetchRequest, SearchRequest
 
 
 @given("a configured and authenticated Exa adapter")
 def step_given_exa_adapter(context: Any) -> None:
     """Verify that an Exa API key is resolved and the adapter is ready."""
-    assert context.has_exa_key, "FREESEARCH_EXA_API_KEY is not configured."
+    assert context.has_exa_key, "POLYWEB_EXA_API_KEY is not configured."
     assert isinstance(context.adapter, ExaAdapter), "Exa adapter was not initialized."
 
 

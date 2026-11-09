@@ -1,9 +1,10 @@
 ---
 id: TASK-000049
 title: Projects R1 - Project-first release
-status: To Do
+status: Testing
 assignee: []
 created_date: '2026-10-26T09:47:00Z'
+updated_date: '2026-11-09T12:39:00Z'
 labels:
   - projects-first
   - release
@@ -19,7 +20,7 @@ documentation:
   - doc-000004
 priority: high
 type: feature
-ordinal: 33000
+ordinal: 1000
 ---
 
 ## Description

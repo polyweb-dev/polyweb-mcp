@@ -10,18 +10,18 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 
-from freesearch.configuration.config import get_settings
-from freesearch.models.credentials import CredentialOperation
-from freesearch.models.projects import BuiltinRole, MembershipStatus, ProjectMemberAdd
-from freesearch.persistence.audit import SystemAuditEventRow
-from freesearch.persistence.bindings import ProjectBindingRepository
-from freesearch.persistence.key_pools import KeyPoolRepository
-from freesearch.persistence.projects import ProjectRepository
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserRow
-from freesearch.routers.api import create_app
-from freesearch.services.pool_materializer import keyless_credential_id
-from freesearch.services.projects import ProjectService
+from polyweb.configuration.config import get_settings
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.projects import BuiltinRole, MembershipStatus, ProjectMemberAdd
+from polyweb.persistence.audit import SystemAuditEventRow
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.key_pools import KeyPoolRepository
+from polyweb.persistence.projects import ProjectRepository
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserRow
+from polyweb.routers.api import create_app
+from polyweb.services.pool_materializer import keyless_credential_id
+from polyweb.services.projects import ProjectService
 from tests.fixtures.a2_execution import build_execution_world
 from tests.fixtures.alpha_fixtures import ALPHA_ADMIN_PASSWORD
 from tests.fixtures.auth import (
@@ -105,8 +105,8 @@ async def repository(tmp_path):
 
 @pytest.fixture
 def vault_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", "pool-integration-test-key")
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / "vault-key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", "pool-integration-test-key")
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / "vault-key"))
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -227,10 +227,10 @@ async def test_pool_lifecycle_authorization_and_materialization(repository, vaul
 
 @pytest.mark.asyncio
 async def test_copy_and_budget_usage(repository, vault_env, auth_secret, monkeypatch):
-    module = ModuleType("freesearch.services.pool_budget")
+    module = ModuleType("polyweb.services.pool_budget")
     counter = AsyncMock(side_effect=[0, 0, 1234567, 0])
     module.pool_budget_used_micros = counter
-    monkeypatch.setitem(sys.modules, "freesearch.services.pool_budget", module)
+    monkeypatch.setitem(sys.modules, "polyweb.services.pool_budget", module)
     with TestClient(create_app([], repository=repository)) as client:
         owner = await register_system_admin_login(client, repository, temp_email("copy-owner"))
         headers = raw_auth_headers(owner["access_token"])

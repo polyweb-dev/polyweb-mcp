@@ -6,8 +6,8 @@ from uuid import uuid4
 import pytest
 from pydantic import SecretStr, ValidationError
 
-import freesearch.models.users as users_module
-from freesearch.models.users import (
+import polyweb.models.users as users_module
+from polyweb.models.users import (
     REFRESH_TOKEN_BYTES,
     REFRESH_TOKEN_LENGTH,
     AuthFamily,

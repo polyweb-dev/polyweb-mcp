@@ -1,0 +1,44 @@
+labels:
+  size: standard
+  provider: gcp
+
+when:
+  - event: manual
+
+steps:
+  ui-bdd-tests:
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
+    environment:
+      CI: "true"
+    commands:
+      - |
+        echo "=========================================================="
+        echo "               GCP SPOT CI WORKER INFO                    "
+        echo "=========================================================="
+        echo "Worker Host:   ${CI_MACHINE}"
+        echo "Worker Labels: ${CI_AGENT_LABELS}"
+        echo "OS / Platform: ${CI_SYSTEM_PLATFORM}"
+        echo "CPU Cores:     $(nproc) physical/virtual cores detected"
+        echo "Total Memory:  $(free -h | awk "/Mem:/ {print \$2}")"
+        echo "Free Disk:     $(df -h / | awk "NR==2 {print \$4}")"
+        echo "=========================================================="
+      - |
+        bash scripts/ci/run-and-log.sh ui-bdd-tests.log bash -euo pipefail -c '
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          npm install --global pnpm@12.15.0
+          uv sync --frozen
+          export PLAYWRIGHT_GREP_INVERT="@live|@mobile"
+          bash scripts/ci/run-ui-bdd.sh
+        '
+
+  upload-artifacts:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
+    environment:
+      GITEA_UPLOAD_TOKEN:
+        from_secret: gitea_artifact_upload_token
+    commands:
+      - python scripts/ci/upload_gitea.py ui-bdd
+    when:
+      - event: manual
+        status: [success, failure]

@@ -34,11 +34,11 @@ import pytest
 from exa_py.api import ContentStatus, CostDollars, Result, SearchResponse
 from pydantic import SecretStr, ValidationError
 
-import freesearch.adapters.exa as exa_module
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.adapters.exa import ExaAdapter
-from freesearch.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from freesearch.models.contracts import (
+import polyweb.adapters.exa as exa_module
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.exa import ExaAdapter
+from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
+from polyweb.models.contracts import (
     FetchRequest,
     QuotaSource,
     SearchRequest,
@@ -223,7 +223,7 @@ async def test_init_missing_credential_fails_closed() -> None:
 
 
 async def test_init_missing_credential_never_falls_back_to_ambient_key(monkeypatch) -> None:
-    monkeypatch.setenv("FREESEARCH_EXA_API_KEY", "ambient-freesearch-leak")
+    monkeypatch.setenv("POLYWEB_EXA_API_KEY", "ambient-polyweb-leak")
     monkeypatch.setenv("EXA_API_KEY", "ambient-sdk-leak")
 
     client = httpx.AsyncClient()
@@ -1464,7 +1464,7 @@ async def test_normalize_error_generic_402() -> None:
 async def test_exa_usage_snapshot() -> None:
     from datetime import UTC, datetime
 
-    from freesearch.models.provider_limits import AuthMode, Confidence, UsageSyncRequest
+    from polyweb.models.provider_limits import AuthMode, Confidence, UsageSyncRequest
 
     adapter = make_adapter()
     now = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
@@ -1518,9 +1518,9 @@ async def test_estimate_cost_dynamic_pricing() -> None:
 
 
 def test_request_native_cost_dynamic_pricing() -> None:
-    from freesearch.configuration.provider_limits import provider_limit_defaults
-    from freesearch.models.provider_limits import LimitOperation
-    from freesearch.services.credit_units import request_native_cost
+    from polyweb.configuration.provider_limits import provider_limit_defaults
+    from polyweb.models.provider_limits import LimitOperation
+    from polyweb.services.credit_units import request_native_cost
 
     records = [r for r in provider_limit_defaults() if r.provider == "exa"]
     search_rec = next(r for r in records if r.operation is LimitOperation.SEARCH)
@@ -1545,11 +1545,11 @@ def test_request_native_cost_dynamic_pricing() -> None:
 
 
 def test_exa_catalog_limits_and_tiers() -> None:
-    from freesearch.configuration.provider_limits import (
+    from polyweb.configuration.provider_limits import (
         provider_limit_defaults,
         provider_tier_defaults,
     )
-    from freesearch.models.provider_limits import (
+    from polyweb.models.provider_limits import (
         FundingMode,
         LimitOperation,
         RateScope,

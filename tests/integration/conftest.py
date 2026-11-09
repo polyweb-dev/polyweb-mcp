@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 
 import pytest_asyncio
 
-from freesearch.services.api_keys import DEFAULT_USE_RECORDER
+from polyweb.services.api_keys import DEFAULT_USE_RECORDER
 
 
 @pytest_asyncio.fixture(autouse=True)

@@ -17,12 +17,12 @@ from uuid import uuid4
 import pytest
 from _pytest.capture import CaptureResult
 
-from freesearch.configuration.config import get_settings
-from freesearch.persistence.database_migrations import absolute_database_path, migration_head
+from polyweb.configuration.config import get_settings
+from polyweb.persistence.database_migrations import absolute_database_path, migration_head
 
 
 def _older_database(directory: Path) -> Path:
-    database = directory / "old checkout" / "freesearch.db"
+    database = directory / "old checkout" / "polyweb.db"
     database.parent.mkdir(parents=True)
     connection = sqlite3.connect(database)
     try:
@@ -48,15 +48,15 @@ def _assert_reset_on_stderr(captured: CaptureResult[str], database: Path) -> Non
     assert str(absolute_database_path(database)) in captured.err, captured.err
     assert "unversioned" in captured.err, captured.err
     assert migration_head() in captured.err, captured.err
-    assert "FREESEARCH_DB" in captured.err, captured.err
+    assert "POLYWEB_DB" in captured.err, captured.err
     assert "-wal" in captured.err and "-shm" in captured.err, captured.err
 
 
 @pytest.fixture
 def older_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     database = _older_database(tmp_path)
-    monkeypatch.setenv("FREESEARCH_DB", str(database))
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
+    monkeypatch.setenv("POLYWEB_DB", str(database))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
     get_settings.cache_clear()
     yield database
     get_settings.cache_clear()
@@ -67,7 +67,7 @@ async def test_users_cli_prints_the_reset_message(
     auth_secret: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from freesearch.cli.users import _run
+    from polyweb.cli.users import _run
 
     digest_before = _sha256(older_database)
 
@@ -90,7 +90,7 @@ def test_secrets_cli_status_prints_the_reset_message(
     older_database: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from freesearch.cli.secrets import _run
+    from polyweb.cli.secrets import _run
 
     digest_before = _sha256(older_database)
 
@@ -113,7 +113,7 @@ def test_api_main_refuses_to_start_on_a_database_that_needs_a_reset(
 ) -> None:
     import uvicorn
 
-    import freesearch.routers.api as api
+    import polyweb.routers.api as api
 
     monkeypatch.setattr(uvicorn, "run", _refuse)
     monkeypatch.setattr(api, "create_app", _refuse)
@@ -131,7 +131,7 @@ def test_mcp_main_refuses_to_start_on_a_database_that_needs_a_reset(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import freesearch.mcp.server as server
+    import polyweb.mcp.server as server
 
     monkeypatch.setattr(server, "create_server", _refuse)
     monkeypatch.setattr(server, "run_stdio_server", _refuse)
@@ -152,7 +152,7 @@ _LOCKED = "database is locked by another connection, try again"
 
 @pytest.fixture
 def locked_inspection(older_database: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    import freesearch.persistence.database_migrations as migrations
+    import polyweb.persistence.database_migrations as migrations
 
     def locked(database: Path) -> object:
         raise migrations.DatabaseMigrationError(f"{_LOCKED}: {database}")
@@ -169,7 +169,7 @@ def _assert_locked_on_stderr(captured: CaptureResult[str]) -> None:
 def test_pre_start_check_reports_a_locked_database(
     locked_inspection: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from freesearch.persistence.database_migrations import exit_if_database_reset_required
+    from polyweb.persistence.database_migrations import exit_if_database_reset_required
 
     with pytest.raises(SystemExit) as raised:
         exit_if_database_reset_required(locked_inspection)
@@ -186,7 +186,7 @@ def test_api_main_reports_a_locked_database_without_traceback(
 ) -> None:
     import uvicorn
 
-    import freesearch.routers.api as api
+    import polyweb.routers.api as api
 
     monkeypatch.setattr(uvicorn, "run", _refuse)
     monkeypatch.setattr(api, "create_app", _refuse)
@@ -204,7 +204,7 @@ def test_mcp_main_reports_a_locked_database_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import freesearch.mcp.server as server
+    import polyweb.mcp.server as server
 
     monkeypatch.setattr(server, "create_server", _refuse)
     monkeypatch.setattr(server, "run_stdio_server", _refuse)
@@ -222,7 +222,7 @@ def test_pre_start_check_reports_a_really_locked_database(
 ) -> None:
     """The same path end to end with a real exclusive lock instead of a stand-in."""
 
-    import freesearch.persistence.database_migrations as migrations
+    import polyweb.persistence.database_migrations as migrations
 
     database = _older_database(tmp_path)
     monkeypatch.setattr(migrations, "_SQLITE_TIMEOUT_SECONDS", 0.2, raising=False)

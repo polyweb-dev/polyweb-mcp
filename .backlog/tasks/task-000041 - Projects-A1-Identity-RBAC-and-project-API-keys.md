@@ -1,11 +1,11 @@
 ---
 id: TASK-000041
 title: Projects A1 - Identity, RBAC and project API keys
-status: In Progress
+status: Done
 assignee:
   - '@devin'
 created_date: '2026-10-26T09:47:00Z'
-updated_date: '2026-10-26T22:11:00Z'
+updated_date: '2026-11-09T12:32:00Z'
 labels:
   - projects-first
   - step-2-api
@@ -19,7 +19,7 @@ documentation:
   - doc-000002
 priority: high
 type: feature
-ordinal: 25000
+ordinal: 43000
 ---
 
 ## Description

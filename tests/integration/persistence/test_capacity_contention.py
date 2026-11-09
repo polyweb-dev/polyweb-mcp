@@ -8,8 +8,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-from freesearch.models.provider_limits import AuthMode, LimitOperation, LimitStoreUnavailable
-from freesearch.persistence.limit_repository import LimitRepository, StrictWindowSpec
+from polyweb.models.provider_limits import AuthMode, LimitOperation, LimitStoreUnavailable
+from polyweb.persistence.limit_repository import LimitRepository, StrictWindowSpec
 from tests.integration.persistence.test_strict_capacity import (
     CapacityWorld,
     _attempt_rows,
@@ -49,7 +49,7 @@ def _busy_factory(real_factory: Any, seen: list[int], blocked: asyncio.Event) ->
 async def test_real_busy_at_begin_retries_boundedly_without_duplicate_debits(
     tmp_path: Any, release_writer: bool
 ) -> None:
-    from freesearch.persistence.storage import SQLiteRepository
+    from polyweb.persistence.storage import SQLiteRepository
 
     repository = await SQLiteRepository.open(tmp_path / "contention.db")
     try:

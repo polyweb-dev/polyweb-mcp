@@ -1,6 +1,6 @@
 @monitoring
 Feature: Read-only monitoring API (JSON for the future React dashboard)
-  As a local FreeSearch operator
+  As a local Polyweb operator
   I want to inspect observed usage, quota, and health telemetry
   So that I can diagnose providers without exposing request payloads
 

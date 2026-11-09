@@ -27,7 +27,7 @@ from uuid import UUID, uuid4
 
 from fastapi_users.password import PasswordHelper
 
-from freesearch.models.projects import (
+from polyweb.models.projects import (
     BUILTIN_ROLE_DEFINITIONS,
     DEFAULT_INSTALLATION_ACCOUNT_ID,
     BuiltinRole,
@@ -38,13 +38,13 @@ from freesearch.models.projects import (
     ProjectStatus,
     RoleAssignmentRead,
 )
-from freesearch.persistence.database_migrations import upgrade_database, validate_database_schema
-from freesearch.persistence.projects import (
+from polyweb.persistence.database_migrations import upgrade_database, validate_database_schema
+from polyweb.persistence.projects import (
     ProjectRepository,
     bootstrap_fresh_installation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.persistence.users import UserDatabase, UserRow
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserDatabase, UserRow
 
 #: Default password for bootstrap administrative user in isolated test fixtures.
 ALPHA_ADMIN_PASSWORD: Final[str] = "AlphaAdmin123!SecureKey"
@@ -103,7 +103,7 @@ async def alpha_test_db_context() -> AsyncIterator[tuple[Path, SQLiteRepository]
 async def seed_alpha_system_admin(
     repository: SQLiteRepository,
     *,
-    email: str = "admin@freesearch.local",
+    email: str = "admin@polyweb.local",
     password: str = ALPHA_ADMIN_PASSWORD,
 ) -> tuple[UserRow, HumanPrincipal]:
     """Seed the initial system administrator in a fresh alpha database.
@@ -164,7 +164,7 @@ def build_alpha_project(
 async def bootstrap_fresh_alpha(
     db_path: Path,
     *,
-    admin_email: str = "admin@freesearch.local",
+    admin_email: str = "admin@polyweb.local",
     admin_password: str = ALPHA_ADMIN_PASSWORD,
     project_name: str = "Default Alpha Project",
 ) -> AlphaBootstrapResult:

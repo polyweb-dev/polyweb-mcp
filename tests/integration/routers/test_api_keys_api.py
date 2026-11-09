@@ -22,8 +22,8 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -35,9 +35,9 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.project_permissions import ProjectPermission
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.models.project_permissions import ProjectPermission
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.api_keys import (
     archive_project,
     audit_rows,
@@ -389,7 +389,7 @@ def test_a_valid_key_is_rejected_by_every_non_execution_route(world: _World) -> 
 def test_rest_key_execution_matrix_reaches_no_provider_when_rejected(
     world: _World, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.DEBUG, logger="freesearch")
+    caplog.set_level(logging.DEBUG, logger="polyweb")
     headers, user_id, pid = _admin_project(world)
     other_headers, _other, other_pid = _admin_project(world, "keys-other")
     full = world.loop_run(key_for_account(world.repository, user_id, pid))
@@ -580,7 +580,7 @@ def test_rest_denial_does_not_wait_on_a_slow_security_writer(
     import asyncio
     import time
 
-    import freesearch.services.api_keys as api_keys_module
+    import polyweb.services.api_keys as api_keys_module
 
     async def _slow(*_args: object, **_kwargs: object) -> None:
         await asyncio.sleep(1.5)

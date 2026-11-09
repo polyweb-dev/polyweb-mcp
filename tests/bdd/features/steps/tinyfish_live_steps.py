@@ -9,7 +9,7 @@ from typing import Any
 from behave import given, then, when  # type: ignore[import-untyped]
 from pydantic import HttpUrl
 
-from freesearch.models.contracts import FetchRequest, SearchRequest
+from polyweb.models.contracts import FetchRequest, SearchRequest
 
 _TINYFISH_PROVIDER = "tinyfish"
 
@@ -18,7 +18,7 @@ _TINYFISH_PROVIDER = "tinyfish"
 def step_given_live_tinyfish(context: Any) -> None:
     """Verify the hooks built the Tinyfish adapter from the harness env key."""
     assert getattr(context, "has_tinyfish_key", False), (
-        "FREESEARCH_TINYFISH_API_KEY is not configured in the harness env."
+        "POLYWEB_TINYFISH_API_KEY is not configured in the harness env."
     )
     assert context.adapter is not None, "Tinyfish adapter was not initialized."
     assert getattr(context.adapter, "name", None) == _TINYFISH_PROVIDER, (

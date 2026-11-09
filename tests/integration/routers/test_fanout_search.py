@@ -15,8 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import AnyHttpUrl
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchRequest,
     FetchResponse,
@@ -30,8 +30,8 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
     raw_auth_headers,
@@ -565,9 +565,9 @@ async def test_fanout_trace_has_sibling_providers_and_partial_outcome(
     roots = [span for span in spans if span["parent_span_id"] is None]
     assert len(roots) == 1
     assert roots[0]["name"] == "POST /search"
-    providers = [span for span in spans if span["name"] == "freesearch.provider"]
+    providers = [span for span in spans if span["name"] == "polyweb.provider"]
     assert len(providers) == 2
-    results = [span for span in spans if span["name"] == "freesearch.results"]
+    results = [span for span in spans if span["name"] == "polyweb.results"]
     assert len(results) == 1
     failed = next(span for span in providers if span["error"] is not None)
     assert failed["outcome"] == "error"
@@ -618,7 +618,7 @@ async def test_fanout_success_trace_has_one_root_and_two_provider_children(
 
     assert detail["outcome"] == "success"
     assert detail["result_count"] == 2
-    providers = [span for span in detail["spans"] if span["name"] == "freesearch.provider"]
+    providers = [span for span in detail["spans"] if span["name"] == "polyweb.provider"]
     assert len(providers) == 2
     assert all(span["outcome"] == "success" for span in providers)
 
@@ -659,7 +659,7 @@ async def test_fanout_all_fail_writes_error_trace_without_results(
     assert detail["outcome"] == "error"
     assert detail["output"] is None
     assert detail["result_count"] is None
-    providers = [span for span in detail["spans"] if span["name"] == "freesearch.provider"]
+    providers = [span for span in detail["spans"] if span["name"] == "polyweb.provider"]
     assert len(providers) == 2
     assert all(span["outcome"] == "error" for span in providers)
 
@@ -755,8 +755,8 @@ async def test_fanout_with_no_eligible_candidate_returns_503(
 
 
 async def _reset_fanout_caches() -> None:
-    from freesearch.services.monitoring import clear_quota_poll_cache
-    from freesearch.services.provider_runtime import clear_config_cache
+    from polyweb.services.monitoring import clear_quota_poll_cache
+    from polyweb.services.provider_runtime import clear_config_cache
 
     clear_config_cache()
     clear_quota_poll_cache()
@@ -766,8 +766,8 @@ async def test_pinned_fanout_reads_only_subset(
     monkeypatch: pytest.MonkeyPatch, repository: SQLiteRepository, auth_secret: str
 ) -> None:
     """M4: fanout with providers=[A,B] queries only the subset (batch name lists)."""
-    from freesearch.services.monitoring import clear_quota_poll_cache
-    from freesearch.services.provider_runtime import clear_config_cache
+    from polyweb.services.monitoring import clear_quota_poll_cache
+    from polyweb.services.provider_runtime import clear_config_cache
 
     await _reset_fanout_caches()
     try:
@@ -857,8 +857,8 @@ async def test_fanout_partial_failure_detailed_contract(
     auth_secret: str,
 ) -> None:
     """E7: one failure preserves results, waterfall, RRF output, and partial trace."""
-    from freesearch.services.monitoring import clear_quota_poll_cache
-    from freesearch.services.provider_runtime import clear_config_cache
+    from polyweb.services.monitoring import clear_quota_poll_cache
+    from polyweb.services.provider_runtime import clear_config_cache
 
     await _reset_fanout_caches()
     try:
@@ -917,7 +917,7 @@ async def test_fanout_partial_failure_detailed_contract(
         assert detail["output"]["kind"] == "search_results"
         assert len(detail["output"]["results"]) == 1
         spans = detail["spans"]
-        providers = [s for s in spans if s["name"] == "freesearch.provider"]
+        providers = [s for s in spans if s["name"] == "polyweb.provider"]
         assert len(providers) == 2
         failed = next(s for s in providers if s["error"] is not None)
         assert failed["outcome"] == "error"
@@ -937,8 +937,8 @@ async def test_fanout_all_fail_first_error_deterministic(
     auth_secret: str,
 ) -> None:
     """E7: all-fail gives REST 500 with the first candidate error in order."""
-    from freesearch.services.monitoring import clear_quota_poll_cache
-    from freesearch.services.provider_runtime import clear_config_cache
+    from polyweb.services.monitoring import clear_quota_poll_cache
+    from polyweb.services.provider_runtime import clear_config_cache
 
     await _reset_fanout_caches()
     try:
@@ -974,7 +974,7 @@ async def test_fanout_all_fail_first_error_deterministic(
                     f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers
                 ).json()
                 assert detail["outcome"] == "error"
-                providers = [s for s in detail["spans"] if s["name"] == "freesearch.provider"]
+                providers = [s for s in detail["spans"] if s["name"] == "polyweb.provider"]
                 assert len(providers) == 2
                 assert all(s["outcome"] == "error" for s in providers)
         assert first.search_calls == 1

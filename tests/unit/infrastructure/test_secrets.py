@@ -2,7 +2,7 @@
 
 Runtime resolution is encrypted-DB -> None. The process environment, ``.env``
 files, and any legacy credential manager NEVER resolve at runtime; the
-canonical ``FREESEARCH_*`` names survive only as documentation, never as
+canonical ``POLYWEB_*`` names survive only as documentation, never as
 reads. Fails Red while any legacy source still resolves or any keyring/dotenv
 shim remains in ``secrets.py``.
 """
@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from freesearch.infrastructure import secrets as secrets_module
-from freesearch.infrastructure.secrets import (
+from polyweb.infrastructure import secrets as secrets_module
+from polyweb.infrastructure.secrets import (
     PROVIDER_ENV_VARS,
     ProviderName,
     ProviderSecretResolver,
@@ -50,13 +50,13 @@ async def _resolve(resolver: ProviderSecretResolver, provider: ProviderName):  #
 
 def test_all_providers_have_explicit_environment_names() -> None:
     assert set(PROVIDER_ENV_VARS) == set(ProviderName)
-    assert PROVIDER_ENV_VARS[ProviderName.YOU] == "FREESEARCH_YOU_API_KEY"
-    assert PROVIDER_ENV_VARS[ProviderName.TINYFISH] == "FREESEARCH_TINYFISH_API_KEY"
+    assert PROVIDER_ENV_VARS[ProviderName.YOU] == "POLYWEB_YOU_API_KEY"
+    assert PROVIDER_ENV_VARS[ProviderName.TINYFISH] == "POLYWEB_TINYFISH_API_KEY"
     assert provider_env_var_names(ProviderName.TINYFISH) == (
-        "FREESEARCH_TINYFISH_API_KEY",
+        "POLYWEB_TINYFISH_API_KEY",
         "TINYFISH_API_KEY",
     )
-    assert provider_env_var_names(ProviderName.EXA) == ("FREESEARCH_EXA_API_KEY",)
+    assert provider_env_var_names(ProviderName.EXA) == ("POLYWEB_EXA_API_KEY",)
 
 
 def test_resolver_exposes_vault_only_aget_set_delete() -> None:

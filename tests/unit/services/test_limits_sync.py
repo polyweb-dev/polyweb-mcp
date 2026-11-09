@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from freesearch.models.provider_limits import SyncResult
-from freesearch.services.limits_sync import LimitSyncService
+from polyweb.models.provider_limits import SyncResult
+from polyweb.services.limits_sync import LimitSyncService
 
 
 @pytest.mark.asyncio

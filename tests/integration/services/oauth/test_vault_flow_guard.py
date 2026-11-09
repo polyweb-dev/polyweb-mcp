@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from freesearch.models.projects import ProjectMemberAdd
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.models.vault import VaultKeyCreate
-from freesearch.persistence.projects import ProjectRepository
-from freesearch.services import oauth_flow_guard
-from freesearch.services.authorization import AuthorizationDenied
-from freesearch.services.control_errors import ResourceNotFound
-from freesearch.services.credential_oauth import OAuthTarget
-from freesearch.services.projects import ProjectService
-from freesearch.services.vault_keys import VaultKeyService, VaultOAuthService
+from polyweb.models.projects import ProjectMemberAdd
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.models.vault import VaultKeyCreate
+from polyweb.persistence.projects import ProjectRepository
+from polyweb.services import oauth_flow_guard
+from polyweb.services.authorization import AuthorizationDenied
+from polyweb.services.control_errors import ResourceNotFound
+from polyweb.services.credential_oauth import OAuthTarget
+from polyweb.services.projects import ProjectService
+from polyweb.services.vault_keys import VaultKeyService, VaultOAuthService
 from tests.fixtures.auth import auth_service_for
 from tests.integration.services.test_credential_oauth import (
     _connect,

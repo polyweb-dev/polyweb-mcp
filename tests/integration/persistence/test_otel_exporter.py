@@ -18,7 +18,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
-from freesearch.models.observability import (
+from polyweb.models.observability import (
     ActorType,
     TraceAttribute,
     TraceOperation,
@@ -28,12 +28,12 @@ from freesearch.models.observability import (
     TraceSpanRecord,
     TraceStatusCode,
 )
-from freesearch.persistence.otel_exporter import (
+from polyweb.persistence.otel_exporter import (
     SQLiteSpanExporter,
     span_record,
     write_trace_spans,
 )
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
 _SEARCH_OUTPUT = TraceSearchOutput(
@@ -41,14 +41,14 @@ _SEARCH_OUTPUT = TraceSearchOutput(
     results=[
         {
             "title": "Consensus explained",
-            "url": "https://docs.freesearch.dev/consensus",
+            "url": "https://docs.polyweb.dev/consensus",
             "snippet": "Raft and Paxos.",
             "source": "keenable",
             "score": 0.94,
         },
         {
             "title": "Raft vs Paxos",
-            "url": "https://docs.freesearch.dev/raft-vs-paxos",
+            "url": "https://docs.polyweb.dev/raft-vs-paxos",
             "snippet": "A practical comparison.",
             "source": "keenable",
             "score": 0.81,
@@ -115,27 +115,27 @@ async def test_exported_root_and_children_round_trip(
         "POST /search",
         kind=SpanKind.SERVER,
         attributes={
-            "freesearch.operation.name": "search",
-            "freesearch.provider.name": "keenable",
-            "freesearch.request.query": "distributed consensus",
-            "freesearch.response.result_count": 2,
-            "freesearch.response.output_json": _SEARCH_OUTPUT.model_dump_json(),
+            "polyweb.operation.name": "search",
+            "polyweb.provider.name": "keenable",
+            "polyweb.request.query": "distributed consensus",
+            "polyweb.response.result_count": 2,
+            "polyweb.response.output_json": _SEARCH_OUTPUT.model_dump_json(),
             TraceAttribute.USER_ID: str(owner),
             **ownership,
         },
     ):
         with tracer.start_as_current_span(
-            "freesearch.backend", kind=SpanKind.INTERNAL, attributes=dict(ownership)
+            "polyweb.backend", kind=SpanKind.INTERNAL, attributes=dict(ownership)
         ):
             pass
         with tracer.start_as_current_span(
-            "freesearch.provider",
+            "polyweb.provider",
             kind=SpanKind.CLIENT,
             attributes={
                 "error.type": "http_error",
                 # RED (PLAN §6.1 item 2): the child provider span carries its
                 # own identity, distinct from the root summary provider.
-                "freesearch.provider.name": "brave",
+                "polyweb.provider.name": "brave",
                 **ownership,
             },
         ) as failed:
@@ -144,14 +144,14 @@ async def test_exported_root_and_children_round_trip(
 
     # RED: span_record must project the child span's own provider attribute
     # instead of dropping it (exporter only projects provider for the root).
-    child_finished = next(span for span in capture.spans if span.name == "freesearch.provider")
+    child_finished = next(span for span in capture.spans if span.name == "polyweb.provider")
     assert span_record(child_finished).provider == "brave"
 
     # RED: the persisted child row must preserve the child provider
     # independently of the root summary provider.
     with sqlite3.connect(database) as connection:
         child_row = connection.execute(
-            "SELECT provider FROM trace_spans WHERE name = 'freesearch.provider'"
+            "SELECT provider FROM trace_spans WHERE name = 'polyweb.provider'"
         ).fetchone()
         root_row = connection.execute(
             "SELECT provider FROM trace_spans WHERE parent_span_id IS NULL"
@@ -179,15 +179,15 @@ async def test_exported_root_and_children_round_trip(
     ]
     assert {span.name for span in detail.spans} == {
         "POST /search",
-        "freesearch.backend",
-        "freesearch.provider",
+        "polyweb.backend",
+        "polyweb.provider",
     }
     # The detail timeline is stable under (started_at, span_id) ordering even
     # when spans share a microsecond.
     assert [(span.started_at, span.span_id) for span in detail.spans] == sorted(
         [(span.started_at, span.span_id) for span in detail.spans]
     )
-    failed_span = next(span for span in detail.spans if span.name == "freesearch.provider")
+    failed_span = next(span for span in detail.spans if span.name == "polyweb.provider")
     assert failed_span.outcome is TraceOutcome.ERROR
     assert failed_span.error is not None
     assert failed_span.error.type == "http_error"
@@ -209,11 +209,11 @@ async def test_root_content_columns_stored_once_not_in_attributes_json(
         "POST /search",
         kind=SpanKind.SERVER,
         attributes={
-            "freesearch.operation.name": "search",
-            "freesearch.provider.name": "keenable",
-            "freesearch.request.query": "stored-query",
-            "freesearch.response.result_count": 1,
-            "freesearch.response.output_json": _SEARCH_OUTPUT.model_dump_json(),
+            "polyweb.operation.name": "search",
+            "polyweb.provider.name": "keenable",
+            "polyweb.request.query": "stored-query",
+            "polyweb.response.result_count": 1,
+            "polyweb.response.output_json": _SEARCH_OUTPUT.model_dump_json(),
             TraceAttribute.SAMPLED: True,
             TraceAttribute.CAPTURE_PAYLOAD: True,
             TraceAttribute.PROJECT_ID: str(attribution.project_id),
@@ -232,9 +232,9 @@ async def test_root_content_columns_stored_once_not_in_attributes_json(
     assert row[0] == "stored-query"
     assert json.loads(row[1])["kind"] == "search_results"
     attributes = json.loads(row[2])
-    assert "freesearch.request.query" not in attributes
-    assert "freesearch.response.output_json" not in attributes
-    assert "freesearch.provider.name" in attributes
+    assert "polyweb.request.query" not in attributes
+    assert "polyweb.response.output_json" not in attributes
+    assert "polyweb.provider.name" in attributes
     assert isinstance(json.loads(row[3]), list)
     assert json.loads(row[4])["service.name"] == "otel-test"
 
@@ -270,7 +270,7 @@ async def test_span_upsert_is_idempotent(repository: SQLiteRepository) -> None:
             span_id="bb00000000000002",
             trace_id="e" * 32,
             parent_span_id="aa00000000000001",
-            name="freesearch.backend",
+            name="polyweb.backend",
             kind=TraceSpanKind.INTERNAL,
             started_at=started,
             ended_at=ended,
@@ -343,13 +343,13 @@ async def test_span_record_maps_status_kind_and_duration() -> None:
     capture_provider = TracerProvider()
     capture_provider.add_span_processor(SimpleSpanProcessor(capture))
     tracer = capture_provider.get_tracer("map-test")
-    with tracer.start_as_current_span("freesearch.backend", kind=SpanKind.INTERNAL):
+    with tracer.start_as_current_span("polyweb.backend", kind=SpanKind.INTERNAL):
         pass
 
     (finished,) = capture.spans
     record = span_record(finished)
 
-    assert record.name == "freesearch.backend"
+    assert record.name == "polyweb.backend"
     assert record.kind is TraceSpanKind.INTERNAL
     assert record.status_code is TraceStatusCode.UNSET
     assert record.outcome is TraceOutcome.SUCCESS
@@ -370,9 +370,9 @@ def test_export_failure_returns_failure_without_raising(tmp_path: Path) -> None:
         attributes={
             TraceAttribute.SAMPLED: True,
             TraceAttribute.CAPTURE_PAYLOAD: False,
-            "freesearch.project.id": "00000000-0000-4000-8000-0000000000aa",
-            "freesearch.actor.type": "human",
-            "freesearch.actor.id": "00000000-0000-4000-8000-0000000000bb",
+            "polyweb.project.id": "00000000-0000-4000-8000-0000000000aa",
+            "polyweb.actor.type": "human",
+            "polyweb.actor.id": "00000000-0000-4000-8000-0000000000bb",
         },
     ):
         pass
@@ -390,7 +390,7 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
     repository: SQLiteRepository,
 ) -> None:
     """Finished children must never be re-evaluated against flush-time settings."""
-    from freesearch.infrastructure.observability import (
+    from polyweb.infrastructure.observability import (
         OtelObservability,
         SpanKindName,
         _AttributionSpanProcessor,
@@ -398,7 +398,7 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
         bind_trace_capture,
         use_observability,
     )
-    from freesearch.models.projects import ProjectTracePolicy, TraceDetailPolicy
+    from polyweb.models.projects import ProjectTracePolicy, TraceDetailPolicy
     from tests.fixtures.execution import allow_full_trace_capture
 
     attribution = await seed_execution_project(repository)
@@ -414,15 +414,15 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
             bind_execution_attribution(attribution)
             bind_trace_capture(ProjectTracePolicy(detail=TraceDetailPolicy.METADATA))
             with runtime.span("POST /search", kind=SpanKindName.SERVER):
-                with runtime.span("freesearch.provider") as child:
+                with runtime.span("polyweb.provider") as child:
                     child.add_event(
-                        "freesearch.provider.request",
+                        "polyweb.provider.request",
                         {"query": marker, "url": marker, "results": marker, "result_count": 1},
                     )
                     child.record_exception(RuntimeError(marker))
                 assert exporter.export(capture.spans[:1]) is SpanExportResult.SUCCESS
                 await allow_full_trace_capture(repository)
-                with runtime.span("freesearch.backend") as child:
+                with runtime.span("polyweb.backend") as child:
                     child.set_attributes({TraceAttribute.REQUEST_QUERY: marker})
             assert exporter.export(capture.spans[1:]) is SpanExportResult.SUCCESS
         assert len(capture.spans) == 3
@@ -441,9 +441,9 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
         # Only a new trace can use the newly allowed FULL policy.
         from uuid import uuid4
 
-        from freesearch.models.projects import HumanPrincipal
-        from freesearch.services.authorization import ScopedAuthorizationService
-        from freesearch.services.settings import project_trace_policy
+        from polyweb.models.projects import HumanPrincipal
+        from polyweb.services.authorization import ScopedAuthorizationService
+        from polyweb.services.settings import project_trace_policy
 
         context = await ScopedAuthorizationService(repository).resolve_project_context(
             HumanPrincipal(user_id=attribution.actor_id, session_id=uuid4()),
@@ -459,7 +459,7 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
             with runtime.span("POST /search", kind=SpanKindName.SERVER) as root:
                 root.set_attributes({TraceAttribute.REQUEST_QUERY: "allowed next query"})
                 root.add_event(
-                    "freesearch.provider.response",
+                    "polyweb.provider.response",
                     {
                         "results": [{"title": "allowed", "api_key": credential_marker}],
                     },
@@ -481,7 +481,7 @@ async def test_capture_time_policy_survives_settings_edit_and_separate_child_bat
 async def test_full_fetch_json_is_scrubbed_before_export_and_trace_read(
     repository: SQLiteRepository,
 ) -> None:
-    from freesearch.infrastructure.observability import (
+    from polyweb.infrastructure.observability import (
         OtelObservability,
         SpanKindName,
         _AttributionSpanProcessor,
@@ -489,9 +489,9 @@ async def test_full_fetch_json_is_scrubbed_before_export_and_trace_read(
         bind_trace_capture,
         use_observability,
     )
-    from freesearch.infrastructure.trace_payloads import _annotate_fetch_root
-    from freesearch.models.contracts import FetchedDocument, FetchRequest, FetchResponse
-    from freesearch.models.projects import ProjectTracePolicy
+    from polyweb.infrastructure.trace_payloads import _annotate_fetch_root
+    from polyweb.models.contracts import FetchedDocument, FetchRequest, FetchResponse
+    from polyweb.models.projects import ProjectTracePolicy
 
     attribution = await seed_execution_project(repository)
     provider = TracerProvider()
@@ -516,8 +516,8 @@ async def test_full_fetch_json_is_scrubbed_before_export_and_trace_read(
             with runtime.span("POST /fetch", kind=SpanKindName.SERVER) as root:
                 root.set_attributes({TraceAttribute.USER_ID: str(attribution.actor_id)})
                 _annotate_fetch_root(runtime, FetchRequest(url="https://example.com"), response)
-                with runtime.span("freesearch.provider") as child:
-                    child.add_event("freesearch.provider.response", {"payload": document})
+                with runtime.span("polyweb.provider") as child:
+                    child.add_event("polyweb.provider.response", {"payload": document})
                 trace_id = root.trace_id
         assert trace_id is not None
         assert "sentinel-" not in "".join(span.to_json() for span in capture.spans)
@@ -537,14 +537,14 @@ async def test_full_fetch_json_is_scrubbed_before_export_and_trace_read(
 async def test_unstamped_spans_are_persisted_as_metadata(
     repository: SQLiteRepository,
 ) -> None:
-    from freesearch.infrastructure.observability import (
+    from polyweb.infrastructure.observability import (
         OtelObservability,
         _AttributionSpanProcessor,
         bind_execution_attribution,
         bind_trace_capture,
         use_observability,
     )
-    from freesearch.models.projects import ProjectTracePolicy
+    from polyweb.models.projects import ProjectTracePolicy
 
     attribution = await seed_execution_project(repository)
     provider = TracerProvider()
@@ -558,7 +558,7 @@ async def test_unstamped_spans_are_persisted_as_metadata(
                 bind_execution_attribution(attribution)
                 if policy is not None:
                     bind_trace_capture(policy)
-                with runtime.span("freesearch.provider"):
+                with runtime.span("polyweb.provider"):
                     pass
         assert len(capture.spans) == 2
         assert TraceAttribute.SAMPLED not in capture.spans[0].attributes
@@ -589,8 +589,8 @@ def test_concurrent_export_failure_cleanup_discards_failed_connection_without_lo
     from typing import Any
     from uuid import uuid4
 
-    from freesearch.persistence.database_migrations import upgrade_database
-    from freesearch.persistence.otel_exporter import _INSERT, _write_rows
+    from polyweb.persistence.database_migrations import upgrade_database
+    from polyweb.persistence.otel_exporter import _INSERT, _write_rows
 
     class DeterministicLockHandoff:
         """Controlled lock scheduling wrapper guaranteeing handoff order.
@@ -700,7 +700,7 @@ def test_concurrent_export_failure_cleanup_discards_failed_connection_without_lo
             raise RuntimeError("simulated Batch A failure on second row")
         original_write_rows(connection, rows)
 
-    monkeypatch.setattr("freesearch.persistence.otel_exporter._write_rows", intercepted_write_rows)
+    monkeypatch.setattr("polyweb.persistence.otel_exporter._write_rows", intercepted_write_rows)
 
     res_a: list[SpanExportResult] = []
     res_b: list[SpanExportResult] = []

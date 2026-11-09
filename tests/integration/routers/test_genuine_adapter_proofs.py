@@ -26,19 +26,19 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from freesearch.adapters.brave import BraveAdapter
-from freesearch.adapters.exa import ExaAdapter
-from freesearch.adapters.firecrawl import FirecrawlAdapter
-from freesearch.adapters.keenable import KeenableAdapter
-from freesearch.adapters.parallel import ParallelAdapter
-from freesearch.adapters.tavily import TavilyAdapter
-from freesearch.adapters.tinyfish import TinyfishAdapter
-from freesearch.adapters.youcom import YoucomAdapter
-from freesearch.configuration.config import get_settings
-from freesearch.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
-from freesearch.models.contracts import SearchRequest
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.adapters.brave import BraveAdapter
+from polyweb.adapters.exa import ExaAdapter
+from polyweb.adapters.firecrawl import FirecrawlAdapter
+from polyweb.adapters.keenable import KeenableAdapter
+from polyweb.adapters.parallel import ParallelAdapter
+from polyweb.adapters.tavily import TavilyAdapter
+from polyweb.adapters.tinyfish import TinyfishAdapter
+from polyweb.adapters.youcom import YoucomAdapter
+from polyweb.configuration.config import get_settings
+from polyweb.infrastructure.secrets import PROVIDER_ENV_VARS, ProviderName
+from polyweb.models.contracts import SearchRequest
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.encrypted_secrets_helpers import SENTINEL_PROVIDER_KEYS, assert_no_sentinels
 from tests.fixtures.auth import (
     account_id_from_pair,
@@ -254,8 +254,8 @@ def _assert_key_on_wire(wire: _VendorWire, provider: ProviderName, sentinel: str
 def hermetic(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
     """Clean env, isolated cwd, passphrase wiring pinned to tmp_path (vault-only)."""
 
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY", PASSPHRASE)
-    monkeypatch.setenv("FREESEARCH_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY", PASSPHRASE)
+    monkeypatch.setenv("POLYWEB_ENCRYPTION_KEY_FILE", str(tmp_path / ".secret_key"))
     for var in PROVIDER_ENV_VARS.values():
         monkeypatch.delenv(var, raising=False)
     monkeypatch.chdir(tmp_path)
@@ -453,7 +453,7 @@ async def test_restart_routes_search_through_encrypted_key(
     assert_no_sentinels(search.text, (sentinel,), f"{provider.value} search response")
 
 
-# --- Proof 1c: a FREESEARCH_* env key never reaches the wire (AC-V3) --------
+# --- Proof 1c: a POLYWEB_* env key never reaches the wire (AC-V3) --------
 
 
 @pytest.mark.parametrize("provider", list(ProviderName))
@@ -522,8 +522,8 @@ async def test_env_key_is_ignored_vault_key_reaches_wire(
 
 
 def _tavily_402_error():  # type: ignore[no-untyped-def]
-    from freesearch.infrastructure.resilience import ProviderOperationError
-    from freesearch.models.contracts import ProviderError
+    from polyweb.infrastructure.resilience import ProviderOperationError
+    from polyweb.models.contracts import ProviderError
 
     return ProviderOperationError(
         ProviderError(
@@ -538,7 +538,7 @@ def _tavily_402_error():  # type: ignore[no-untyped-def]
 
 def test_tavily_402_rest_transport_shape() -> None:
     """The REST transport renders {"detail": msg, "provider": "tavily"} at 402."""
-    from freesearch.routers.api import _provider_operation_error_response
+    from polyweb.routers.api import _provider_operation_error_response
 
     response = _provider_operation_error_response(_tavily_402_error())
     assert response.status_code == 402
@@ -555,9 +555,9 @@ def test_tavily_402_non_terminal_reraises() -> None:
     """Every non-terminal error re-raises instead of becoming a 402."""
     import pytest
 
-    from freesearch.infrastructure.resilience import ProviderOperationError
-    from freesearch.models.contracts import ProviderError
-    from freesearch.routers.api import _provider_operation_error_response
+    from polyweb.infrastructure.resilience import ProviderOperationError
+    from polyweb.models.contracts import ProviderError
+    from polyweb.routers.api import _provider_operation_error_response
 
     other = ProviderOperationError(
         ProviderError(
@@ -579,8 +579,8 @@ async def test_tavily_402_fanout_cancels_and_raises() -> None:
 
     import pytest
 
-    from freesearch.infrastructure.resilience import ProviderOperationError
-    from freesearch.services.execution import _fanout_outcomes
+    from polyweb.infrastructure.resilience import ProviderOperationError
+    from polyweb.services.execution import _fanout_outcomes
 
     async def _held() -> tuple:
         await asyncio.sleep(30)
@@ -607,17 +607,17 @@ async def test_tavily_402_single_attempt_zero_debit(
     import httpx
     from pydantic import SecretStr
 
-    from freesearch.configuration.provider_limits import provider_limit_defaults
-    from freesearch.infrastructure.resilience import ProviderOperationError
-    from freesearch.models.contracts import SearchRequest, UnitKind, UsageOperation
-    from freesearch.models.provider_limits import (
+    from polyweb.configuration.provider_limits import provider_limit_defaults
+    from polyweb.infrastructure.resilience import ProviderOperationError
+    from polyweb.models.contracts import SearchRequest, UnitKind, UsageOperation
+    from polyweb.models.provider_limits import (
         AuthMode,
         LimitCallContext,
         LimitDeniedError,
         LimitOperation,
         NativeUsageSnapshot,
     )
-    from freesearch.services.provider_limits import ProviderLimitsService
+    from polyweb.services.provider_limits import ProviderLimitsService
     from tests.fixtures.execution import attributed_tracked_call as tracked_call
 
     class _FailingSDK:

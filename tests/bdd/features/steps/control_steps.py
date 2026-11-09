@@ -16,8 +16,8 @@ from uuid import UUID, uuid4
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -31,10 +31,10 @@ from freesearch.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
-from freesearch.models.provider_access import is_operation_enabled
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services.credentials import credential_secret_slot
+from polyweb.models.provider_access import is_operation_enabled
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services.credentials import credential_secret_slot
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     auth_service_for,
@@ -53,7 +53,7 @@ class _ScenarioDirectory:
     """Plain-mode scenario directory accepted by the constrained Windows runner."""
 
     def __init__(self) -> None:
-        self._path = Path.cwd() / f"freesearch-control-cwd-{uuid4().hex}"
+        self._path = Path.cwd() / f"polyweb-control-cwd-{uuid4().hex}"
         self._path.mkdir()
         self.name = str(self._path)
 
@@ -149,7 +149,7 @@ class _ControlAdapter(ProviderAdapter):
 
 def _open_repository(context: Any) -> None:
     with tempfile.NamedTemporaryFile(
-        prefix="freesearch-control-",
+        prefix="polyweb-control-",
         suffix=".db",
         dir=Path.cwd(),
         delete=False,
@@ -258,7 +258,7 @@ def _control_headers(context: Any) -> dict[str, str]:
 def _build_mcp_server(context: Any) -> Any:
     """Use the same project and vault pools as the REST requests."""
 
-    from freesearch.mcp.server import create_server
+    from polyweb.mcp.server import create_server
     from tests.fixtures.api_keys import key_for_account
 
     key = context.loop.run_until_complete(
@@ -496,7 +496,7 @@ def step_when_write_secret(context: Any, provider: str) -> None:
 
 @then("the vault response should be configured without exposing the secret")
 def step_then_secret_configured(context: Any) -> None:
-    from freesearch.models.vault import VaultKeyDetails
+    from polyweb.models.vault import VaultKeyDetails
 
     assert context.secret_write_response.status_code == 201, context.secret_write_response.text
     body = context.secret_write_response.json()

@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from freesearch.models.budget_period import window_bounds
+from polyweb.models.budget_period import window_bounds
 
 
 @pytest.mark.parametrize(

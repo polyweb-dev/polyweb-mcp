@@ -11,11 +11,11 @@ from datetime import timedelta
 
 import pytest
 
-from freesearch.models.schema_enums import OAuthGrantStatus
-from freesearch.persistence.oauth_grants import oauth_secret_slot
-from freesearch.services.control_errors import UpstreamUnavailable
-from freesearch.services.monitoring import refresh_quotas
-from freesearch.services.parallel_oauth import (
+from polyweb.models.schema_enums import OAuthGrantStatus
+from polyweb.persistence.oauth_grants import oauth_secret_slot
+from polyweb.services.control_errors import UpstreamUnavailable
+from polyweb.services.monitoring import refresh_quotas
+from polyweb.services.parallel_oauth import (
     OAuthUnpaired,
     ParallelOAuthClient,
     ParallelOAuthError,

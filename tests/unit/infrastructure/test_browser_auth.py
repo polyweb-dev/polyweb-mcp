@@ -11,7 +11,7 @@ from typing import Any
 
 from starlette.responses import Response
 
-from freesearch.infrastructure.browser_auth import (
+from polyweb.infrastructure.browser_auth import (
     BROWSER_CLIENT_HEADER,
     BROWSER_CLIENT_VALUE,
     MAX_REFRESH_COOKIE_AGE_SECONDS,
@@ -39,7 +39,7 @@ def _scope(headers: list[tuple[bytes, bytes]]) -> dict[str, Any]:
 def _origin_headers(origin: str = _ORIGIN) -> list[tuple[bytes, bytes]]:
     return [
         (b"origin", origin.encode("ascii")),
-        (b"x-freesearch-client", b"browser"),
+        (b"x-polyweb-client", b"browser"),
     ]
 
 
@@ -48,9 +48,9 @@ def _allowed(*origins: str) -> frozenset[str]:
 
 
 def test_cookie_constants_use_strict_host_only_scope() -> None:
-    assert REFRESH_COOKIE_NAME == "__Secure-freesearch_refresh"
+    assert REFRESH_COOKIE_NAME == "__Secure-polyweb_refresh"
     assert REFRESH_COOKIE_PATH == "/auth/jwt/refresh"
-    assert BROWSER_CLIENT_HEADER == "x-freesearch-client"
+    assert BROWSER_CLIENT_HEADER == "x-polyweb-client"
     assert BROWSER_CLIENT_VALUE == "browser"
     assert MAX_REFRESH_COOKIE_AGE_SECONDS == 604800
 
@@ -94,7 +94,7 @@ def test_normalize_origin_rejects_untrusted_forms() -> None:
 def test_browser_transport_detects_each_evidence_signal() -> None:
     assert browser_transport(_scope([(b"origin", b"https://app.example.com")])) is True
     assert browser_transport(_scope([(b"sec-fetch-site", b"same-origin")])) is True
-    assert browser_transport(_scope([(b"x-freesearch-client", b"browser")])) is True
+    assert browser_transport(_scope([(b"x-polyweb-client", b"browser")])) is True
     assert (
         browser_transport(_scope([(b"cookie", f"{REFRESH_COOKIE_NAME}=abc".encode("ascii"))]))
         is True
@@ -126,8 +126,8 @@ def test_validate_browser_request_rejects_evidence_failures() -> None:
             _scope(
                 [
                     (b"origin", _ORIGIN.encode("ascii")),
-                    (b"x-freesearch-client", b"browser"),
-                    (b"x-freesearch-client", b"browser"),
+                    (b"x-polyweb-client", b"browser"),
+                    (b"x-polyweb-client", b"browser"),
                 ]
             ),
             allowed,

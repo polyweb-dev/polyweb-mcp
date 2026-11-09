@@ -57,7 +57,7 @@ def encode_otlp(payload):
     return ParseDict(document, ExportTraceServiceRequest()).SerializeToString()
 
 
-def build_payload(project="freesearch-ui-audit-demo", count=40, now_ns=None, seed=None):
+def build_payload(project="polyweb-ui-audit-demo", count=40, now_ns=None, seed=None):
     """Build a standard OTLP ExportTraceServiceRequest with deterministic layouts."""
     if not 1 <= count <= 500:
         raise ValueError("count must be between 1 and 500")
@@ -140,7 +140,7 @@ def build_payload(project="freesearch-ui-audit-demo", count=40, now_ns=None, see
             spans.append(s)
 
         make(
-            f"freesearch.{case}",
+            f"polyweb.{case}",
             root_id,
             None,
             base,
@@ -158,7 +158,7 @@ def build_payload(project="freesearch-ui-audit-demo", count=40, now_ns=None, see
         ]:
             sid = secrets.token_hex(8)
             make(
-                f"freesearch.{label}",
+                f"polyweb.{label}",
                 sid,
                 root_id,
                 base + int(duration * 0.1),
@@ -178,7 +178,7 @@ def build_payload(project="freesearch-ui-audit-demo", count=40, now_ns=None, see
             )
         if case == "fallback":
             make(
-                "freesearch.fallback",
+                "polyweb.fallback",
                 secrets.token_hex(8),
                 root_id,
                 base + int(duration * 0.55),
@@ -191,7 +191,7 @@ def build_payload(project="freesearch-ui-audit-demo", count=40, now_ns=None, see
         if case == "parallel":
             for n in range(2):
                 make(
-                    f"freesearch.fanout.{n + 1}",
+                    f"polyweb.fanout.{n + 1}",
                     secrets.token_hex(8),
                     root_id,
                     base + int(duration * 0.2),
@@ -207,13 +207,13 @@ def build_payload(project="freesearch-ui-audit-demo", count=40, now_ns=None, see
                 "resource": {
                     "attributes": attrs(
                         {
-                            "service.name": "FreeSearch synthetic demo",
+                            "service.name": "Polyweb synthetic demo",
                             "openinference.project.name": project,
                             "demo.synthetic": True,
                         }
                     )
                 },
-                "scopeSpans": [{"scope": {"name": "freesearch.synthetic-demo"}, "spans": spans}],
+                "scopeSpans": [{"scope": {"name": "polyweb.synthetic-demo"}, "spans": spans}],
             }
         ]
     }
@@ -221,7 +221,7 @@ def build_payload(project="freesearch-ui-audit-demo", count=40, now_ns=None, see
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--project", default="freesearch-ui-audit-demo")
+    p.add_argument("--project", default="polyweb-ui-audit-demo")
     p.add_argument("--count", type=int, default=40)
     p.add_argument("--output", help="write JSON file; default stdout")
     p.add_argument(

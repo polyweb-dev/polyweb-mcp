@@ -8,8 +8,8 @@ from uuid import UUID
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.models.contracts import (
     CostEstimate,
     FetchRequest,
     FetchResponse,
@@ -19,8 +19,8 @@ from freesearch.models.contracts import (
     SearchResult,
     UsageOperation,
 )
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
 from tests.fixtures.auth import TEMP_PASSWORD, configure_bdd_secret, temp_email
 from tests.fixtures.execution import _install_bdd_adapters, account_id_from_headers, bdd_project_id
 from tests.fixtures.project_order import seed_order_pools
@@ -74,7 +74,7 @@ class _FanoutStubAdapter(ProviderAdapter):
 def _open_fanout_repository(context: Any) -> None:
     # Open one temp database for account access in this scenario.
     with tempfile.NamedTemporaryFile(
-        prefix="freesearch-fanout-",
+        prefix="polyweb-fanout-",
         suffix=".db",
         dir=Path.cwd(),
         delete=False,

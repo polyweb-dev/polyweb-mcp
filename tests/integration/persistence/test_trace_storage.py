@@ -14,7 +14,7 @@ from uuid import UUID
 
 import pytest_asyncio
 
-from freesearch.models.observability import (
+from polyweb.models.observability import (
     ActorType,
     TraceEventDetail,
     TraceFetchOutput,
@@ -25,8 +25,8 @@ from freesearch.models.observability import (
     TraceSpanRecord,
     TraceStatusCode,
 )
-from freesearch.persistence.otel_exporter import write_trace_spans
-from freesearch.persistence.storage import SQLiteRepository
+from polyweb.persistence.otel_exporter import write_trace_spans
+from polyweb.persistence.storage import SQLiteRepository
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "observability"
 
@@ -155,17 +155,17 @@ async def test_success_fixture_round_trips_summary_and_detail(
     assert detail.input == "distributed consensus algorithms"
     assert isinstance(detail.output, TraceSearchOutput)
     assert [item.url for item in detail.output.results] == [
-        "https://docs.freesearch.dev/consensus",
-        "https://docs.freesearch.dev/raft-vs-paxos",
+        "https://docs.polyweb.dev/consensus",
+        "https://docs.polyweb.dev/raft-vs-paxos",
     ]
     assert len(detail.spans) == 7
     assert [(span.started_at, span.span_id) for span in detail.spans] == sorted(
         [(span.started_at, span.span_id) for span in detail.spans]
     )
-    provider_span = next(span for span in detail.spans if span.name == "freesearch.provider")
+    provider_span = next(span for span in detail.spans if span.name == "polyweb.provider")
     assert [event.name for event in provider_span.events] == [
-        "freesearch.provider.request",
-        "freesearch.provider.response",
+        "polyweb.provider.request",
+        "polyweb.provider.response",
     ]
     assert all(span.duration_ms >= 0 for span in detail.spans)
 
@@ -187,7 +187,7 @@ async def test_error_fixture_projects_error_without_output(
 
     detail = await repository.get_trace(summary.trace_id, user_id=OWNER_A)
     assert detail is not None
-    assert detail.input == "https://docs.freesearch.dev/getting-started"
+    assert detail.input == "https://docs.polyweb.dev/getting-started"
     assert detail.output is None
     exception_events = [
         event for span in detail.spans for event in span.events if event.name == "exception"
@@ -292,7 +292,7 @@ async def test_detail_orders_concurrent_fanout_children_stably(
             span_id=span_id,
             trace_id=trace_id,
             parent_span_id="aa00000000000000",
-            name="freesearch.provider",
+            name="polyweb.provider",
             kind=TraceSpanKind.CLIENT,
             started_at=moment,
             ended_at=moment,
@@ -350,7 +350,7 @@ async def test_fetch_detail_output_shape(repository: SQLiteRepository) -> None:
     moment = datetime(2026, 9, 29, 12, 0, tzinfo=UTC)
     trace_id = "9" * 32
     output = TraceFetchOutput(
-        url="https://docs.freesearch.dev/page",
+        url="https://docs.polyweb.dev/page",
         title="Page",
         content="hello world",
         content_length=11,
@@ -372,7 +372,7 @@ async def test_fetch_detail_output_shape(repository: SQLiteRepository) -> None:
                 duration_ms=40,
                 operation=TraceOperation.FETCH,
                 provider="keenable",
-                input_text="https://docs.freesearch.dev/page",
+                input_text="https://docs.polyweb.dev/page",
                 output_json=output.model_dump_json(),
                 result_count=1,
                 user_id=str(OWNER_A),

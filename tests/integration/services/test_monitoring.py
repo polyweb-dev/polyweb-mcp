@@ -21,9 +21,9 @@ from fastapi.testclient import TestClient
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import SecretStr, ValidationError
 
-from freesearch.adapters.base import ProviderAdapter
-from freesearch.mcp.server import close_adapters, create_server
-from freesearch.models.contracts import (
+from polyweb.adapters.base import ProviderAdapter
+from polyweb.mcp.server import close_adapters, create_server
+from polyweb.models.contracts import (
     CostEstimate,
     FetchedDocument,
     FetchRequest,
@@ -42,7 +42,7 @@ from freesearch.models.contracts import (
     UsageOperation,
     UsageStatus,
 )
-from freesearch.models.provider_limits import (
+from polyweb.models.provider_limits import (
     AuthMode,
     BudgetBlock,
     BudgetModel,
@@ -53,18 +53,18 @@ from freesearch.models.provider_limits import (
     ProviderLimitRecord,
     RateBlock,
 )
-from freesearch.models.quota_api import USDUsageTotal
-from freesearch.persistence.storage import SQLiteRepository
-from freesearch.routers.api import create_app
-from freesearch.services import monitoring
-from freesearch.services import parallel_oauth as oauth_module
-from freesearch.services.monitoring import (
+from polyweb.models.quota_api import USDUsageTotal
+from polyweb.persistence.storage import SQLiteRepository
+from polyweb.routers.api import create_app
+from polyweb.services import monitoring
+from polyweb.services import parallel_oauth as oauth_module
+from polyweb.services.monitoring import (
     clear_quota_poll_cache,
     effective_quotas_batch,
     refresh_quotas,
 )
-from freesearch.services.provider_limits import ProviderLimitsService
-from freesearch.services.provider_runtime import _quota_state_changed
+from polyweb.services.provider_limits import ProviderLimitsService
+from polyweb.services.provider_runtime import _quota_state_changed
 from tests.fixtures.api_keys import key_for_account, mcp_project_key
 from tests.fixtures.auth import (
     account_id_from_pair,
@@ -669,8 +669,8 @@ async def test_adapter_failure_records_degraded_and_preserves_rest_and_mcp_error
     # The MCP leg gets its own binding only now, so the REST call above could
     # never have routed to it; the REST binding is disabled so the MCP call
     # reaches exactly the MCP adapter, as the original two-composition test did.
-    from freesearch.mcp.server import _encrypted_store
-    from freesearch.persistence.bindings import ProjectBindingRepository
+    from polyweb.mcp.server import _encrypted_store
+    from polyweb.persistence.bindings import ProjectBindingRepository
 
     async with repository.session() as session:
         bindings = ProjectBindingRepository(session)
@@ -1608,7 +1608,7 @@ async def _bound_key_credentials(
     factory: Any = None,
 ) -> tuple[Any, SecretStr, str]:
     """Real project/key/binding; every lazy generation validates its exact secret."""
-    from freesearch.mcp.server import _encrypted_store
+    from polyweb.mcp.server import _encrypted_store
 
     service, key = await mcp_project_key(repository, prefix)
     secrets: dict[str, str] = {}
@@ -1636,7 +1636,7 @@ async def _bound_key_credentials(
 
         return build
 
-    monkeypatch.setattr("freesearch.services.execution.adapter_factory", adapter_factory)
+    monkeypatch.setattr("polyweb.services.execution.adapter_factory", adapter_factory)
     return service, key.key, str(key.project_id)
 
 
@@ -1872,7 +1872,7 @@ async def test_server_owned_lifespan_delayed_teardown_does_not_close_new_session
         await teardown_gate.wait()
         await real_close_adapters(adapters, client)
 
-    monkeypatch.setattr("freesearch.mcp.server.close_adapters", close_adapters_spy)
+    monkeypatch.setattr("polyweb.mcp.server.close_adapters", close_adapters_spy)
     database = tmp_path / "race.db"
     service_repository = await real_open(database)
     service, token, pid = await _bound_key_credentials(
@@ -2020,10 +2020,10 @@ def test_resolve_database_path_prefers_environment_then_argument_then_default(
     monkeypatch.chdir(tmp_path)
     env_path = Path.cwd() / "from-env.db"
     argument_path = Path.cwd() / "from-argument.db"
-    monkeypatch.setenv("FREESEARCH_DB", str(env_path))
+    monkeypatch.setenv("POLYWEB_DB", str(env_path))
     assert monitoring.resolve_database_path(argument_path) == env_path
 
-    monkeypatch.delenv("FREESEARCH_DB")
+    monkeypatch.delenv("POLYWEB_DB")
     assert monitoring.resolve_database_path(argument_path) == argument_path
     assert monitoring.resolve_database_path() == Path(monitoring.DEFAULT_DB_FILENAME)
 
@@ -2075,11 +2075,11 @@ async def test_cancelled_tracked_call_after_dispatch_keeps_admission_consumed(
     the upstream did not consume capacity, so the attempt stays debited as
     uncertain and is never released back to the pool.
     """
-    from freesearch.configuration.provider_limits import provider_limit_defaults
-    from freesearch.models.contracts import CostEstimate
-    from freesearch.models.provider_limits import NativeUsageSnapshot
-    from freesearch.services.monitoring import tracked_call
-    from freesearch.services.provider_limits import ProviderLimitsService
+    from polyweb.configuration.provider_limits import provider_limit_defaults
+    from polyweb.models.contracts import CostEstimate
+    from polyweb.models.provider_limits import NativeUsageSnapshot
+    from polyweb.services.monitoring import tracked_call
+    from polyweb.services.provider_limits import ProviderLimitsService
 
     fixed_at = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 

@@ -8,8 +8,8 @@ from decimal import Decimal
 
 import pytest
 
-from freesearch.models.contracts import UnitKind
-from freesearch.models.provider_limits import (
+from polyweb.models.contracts import UnitKind
+from polyweb.models.provider_limits import (
     AuthMode,
     BudgetBlock,
     BudgetModel,
@@ -21,7 +21,7 @@ from freesearch.models.provider_limits import (
     ProviderLimitRecord,
     RateBlock,
 )
-from freesearch.services.credit_units import (
+from polyweb.services.credit_units import (
     crd_state,
     crd_view,
     effective_crd,
@@ -441,7 +441,7 @@ def test_unsupported_view_has_no_request_cost() -> None:
 
 
 def test_tavily_search_depth_rule_basic_and_advanced() -> None:
-    from freesearch.models.contracts import SearchRequest
+    from polyweb.models.contracts import SearchRequest
 
     record = _record(
         provider="tavily",
@@ -463,8 +463,8 @@ def test_tavily_search_depth_rule_basic_and_advanced() -> None:
 
 
 def test_tavily_extract_depth_rule_basic_and_advanced() -> None:
-    from freesearch.models.contracts import FetchRequest
-    from freesearch.models.tavily import TavilyExtractParams
+    from polyweb.models.contracts import FetchRequest
+    from polyweb.models.tavily import TavilyExtractParams
 
     record = _record(
         provider="tavily",

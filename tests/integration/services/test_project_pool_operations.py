@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from freesearch.models.credentials import CredentialOperation
-from freesearch.persistence.key_pools import KeyPoolRepository, KeyPoolValues
-from freesearch.services.project_routing import ProjectPoolOperations
+from polyweb.models.credentials import CredentialOperation
+from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
+from polyweb.services.project_routing import ProjectPoolOperations
 from tests.integration.persistence.test_vault_repositories import _credential, world
 
 
