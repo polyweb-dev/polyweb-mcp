@@ -336,7 +336,7 @@ When("I bulk create pools for {string} for project Alpha without provider calls"
   for (const provider of providers) {
     await dialog.getByRole("checkbox", { name: provider, exact: false }).check();
   }
-  await dialog.getByRole("button", { name: /Create pools/i }).click();
+  await dialog.getByRole("button", { name: /^Create(?: \d+)? pools?$/i }).click();
   await expect(dialog).toBeHidden({ timeout: 15_000 });
   expectNoExecution(page);
 });
