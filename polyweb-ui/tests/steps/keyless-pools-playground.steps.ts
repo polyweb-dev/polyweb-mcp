@@ -464,7 +464,7 @@ When("I open the pool actions menu for the created pool", async ({ page }) => {
   // The pool popover lives inside the expanded key row's pools table: open
   // the key row first, then the created pool's own Actions trigger.
   await page.getByRole("button", { name: `Pools of ${lastCreatedPoolKeyLabel()}` }).click();
-  const trigger = page.getByRole("button", { name: `Actions for ${lastCreatedPoolLabel()}` });
+  const trigger = page.getByRole("button", { name: `Actions for ${lastCreatedPoolLabel()}`, exact: true });
   await expect(trigger).toBeVisible({ timeout: 15_000 });
   await trigger.click();
   await expect(page.locator("[data-slot=popover-content]").first()).toBeVisible({ timeout: 10_000 });
