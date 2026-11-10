@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { KeyPool, VaultKey } from "@/domains/vault"
+import { KEYLESS_AUTH_LABEL } from "@/domains/providers"
 import { ApiError } from "@/shared/api/http"
 import { AddCapacityDialog } from "./AddCapacityDialog"
 
@@ -147,21 +148,17 @@ describe("AddCapacityDialog", () => {
       const onSaved = vi.fn()
       render(<AddCapacityDialog provider="keenable" projects={[{ id: "p1", name: "Alpha", available_providers: ["keenable"] }]}
         onClose={vi.fn()} onSaved={onSaved} />)
-      const auth = screen.queryByRole("combobox", { name: "Authentication" })
-      if (auth !== null) {
-        await user.click(auth)
-        await user.click(await screen.findByRole("option", { name: /keyless|no (api )?key|free tier/i }))
-      }
-      // This step only creates/advances the key (the pool dialog follows once
-      // the key exists): the pass criterion is a secret-free key save.
+      // The catalog always offers an Authentication combobox for Keenable;
+      // choose its keyless mode. This step only creates the key (the pool
+      // step follows), so the check is a secret-free keyless key save.
+      await user.click(screen.getByRole("combobox", { name: "Authentication" }))
+      await user.click(await screen.findByRole("option", { name: KEYLESS_AUTH_LABEL }))
       expect(screen.queryByLabelText("API key")).not.toBeInTheDocument()
       await user.click(screen.getByRole("button", { name: "Add key" }))
       await waitFor(() => expect(api.createVaultKey).toHaveBeenCalledWith(
-        expect.objectContaining({ provider_type: "keenable" })
+        expect.objectContaining({ provider_type: "keenable", auth_mode: "keyless" })
       ))
-      expect(api.createVaultKey).not.toHaveBeenCalledWith(
-        expect.objectContaining({ secret: expect.anything() })
-      )
+      expect(api.createVaultKey.mock.calls[0]?.[0]).not.toHaveProperty("secret")
     })
   })
 })

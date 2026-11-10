@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { KEYLESS_AUTH_LABEL } from "@/domains/providers"
 import { KeyDialog } from "./KeyDialog"
 
 const api = vi.hoisted(() => ({ createVaultKey: vi.fn() }))
@@ -66,15 +67,10 @@ describe("KeyDialog", () => {
       render(<KeyDialog mode="add" onClose={vi.fn()} onSaved={onSaved} />)
       await user.click(screen.getByRole("combobox", { name: "Provider" }))
       await user.click(await screen.findByRole("option", { name: "Keenable" }))
-      // No-secret contract: a keyless provider saves without an API key. An
-      // Authentication combobox with an explicit keyless mode satisfies this
-      // too (automatic keyless needs no choice at all), so the combobox is
-      // optional — the pass criterion is a secret-free successful save.
-      const auth = screen.queryByRole("combobox", { name: "Authentication" })
-      if (auth !== null) {
-        await user.click(auth)
-        await user.click(await screen.findByRole("option", { name: /keyless|no (api )?key|free tier/i }))
-      }
+      // The catalog always offers an Authentication combobox for Keenable;
+      // choose its keyless mode and expect a secret-free save.
+      await user.click(screen.getByRole("combobox", { name: "Authentication" }))
+      await user.click(await screen.findByRole("option", { name: KEYLESS_AUTH_LABEL }))
       expect(screen.queryByLabelText("API key")).not.toBeInTheDocument()
       await user.clear(screen.getByLabelText("Label"))
       await user.type(screen.getByLabelText("Label"), "Keenable keyless")
@@ -83,9 +79,8 @@ describe("KeyDialog", () => {
         provider_type: "keenable", label: "Keenable keyless", auth_mode: "keyless",
       })))
       await waitFor(() => expect(onSaved).toHaveBeenCalled())
-      expect(api.createVaultKey).not.toHaveBeenCalledWith(
-        expect.objectContaining({ secret: expect.anything() })
-      )
+      expect(api.createVaultKey).toHaveBeenCalledTimes(1)
+      expect(api.createVaultKey.mock.calls[0]?.[0]).not.toHaveProperty("secret")
     })
   })
 })

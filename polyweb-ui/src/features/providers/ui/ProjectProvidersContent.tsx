@@ -1,4 +1,4 @@
-import { MinusCircle, Pencil, Plus } from "lucide-react"
+import { MinusCircle, Pencil } from "lucide-react"
 import type { ProjectPool, ProviderOwner } from "@/domains/projects"
 import type { ProviderTypeView } from "@/domains/providers"
 import type { PoolOperation } from "@/domains/vault"
@@ -52,9 +52,6 @@ function renderReadyContent(props: Omit<Props, "pools"> & { pools: ProjectPool[]
         if (pool !== undefined) {
           return <RowActionsMenu label={`Actions for ${item.name}`} actions={[
             { key: "edit", label: "Edit pool", icon: Pencil, onSelect: () => props.edit(pool) },
-            ...(item.keyless
-              ? [{ key: "add", label: "Add a key for higher limits", icon: Plus, onSelect: () => props.add(item.provider) }]
-              : []),
             { key: "unassign", label: "Unassign", icon: MinusCircle, danger: true, onSelect: () => props.unassign(pool) },
           ]} />
         }

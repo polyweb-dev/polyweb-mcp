@@ -24,29 +24,15 @@ export function SearchOptions({ controller }: { controller: PlaygroundController
   const { setQuery, selectedProviderId, setSelectedProviderId, eligibleProviders, resultCount, setResultCount } = controller
   /**
    * Whether the input is mid-edit on a blank: clearing stays visibly blank
-   * while the store always keeps a valid committed value — so submit (by
-   * click or by Enter, with or without a blur) always sends a sensible
-   * clamped limit. Every non-blank write normalizes through the controller
-   * at once, so no draft string needs tracking beyond the blank flag.
-   * Upstream moves while blank (rehydration, another setter) simply rebase
-   * to the new value because the flag only forces blank rendering.
+   * while the store always keeps a valid clamped value (a blank commits the
+   * floor, like an explicit 0), so any submit sends a sensible limit. Blur
+   * ends the edit and reveals the committed value.
    */
   const [clearing, setClearing] = useState(false)
   const shown = clearing ? "" : String(resultCount)
   const commit = (raw: string) => {
-    if (raw.trim() === "") {
-      // Blank is an in-progress edit; the store keeps the clamp floor so any
-      // submit is sensible, matching an explicit 0 → 1.
-      setClearing(true)
-      setResultCount(clampLimit(Number(raw)))
-      return
-    }
-    setClearing(false)
+    setClearing(raw.trim() === "")
     setResultCount(clampLimit(Number(raw)))
-  }
-  const blur = () => {
-    // A blank loses focus: exit edit mode and reveal the committed value.
-    setClearing(false)
   }
   const providerOptions = [
     { value: "auto", label: "Auto" },
@@ -106,7 +92,7 @@ export function SearchOptions({ controller }: { controller: PlaygroundController
             step={1}
             value={shown}
             onChange={commit}
-            onBlur={blur}
+            onBlur={() => setClearing(false)}
           />
         </div>
       </div>

@@ -243,9 +243,6 @@ function capacityStub(ownerId = "acc", permissions = [...PROJECT_MEMBER_PERMISSI
 }
 
 describe("ProjectProvidersPage pool capacity", () => {
-  const KEENABLE_POOL = {
-    ...CAPACITY_POOL, pool_id: "pool-k", label: "Keenable pool", provider_type: "keenable", key_label: "Keenable keyless",
-  }
   function keylessStub(ownerId = "acc", keys: unknown[] = [], failKey = false, pools: unknown[] = [CAPACITY_POOL]) {
     const keyless = {
       provider_type: "keenable", capability: ["search", "fetch"], kill_switch: false,
@@ -295,7 +292,7 @@ describe("ProjectProvidersPage pool capacity", () => {
     expect(within(dialog).getByLabelText("Label")).toHaveValue("Keenable key")
   })
 
-  it("offers pool CRUD for a keyless provider's assigned pool, keeping the key upgrade option", async () => {
+  it("offers pool CRUD for a keyless provider's assigned pool without an add-key action", async () => {
     const keenablePool = {
       ...CAPACITY_POOL, pool_id: "pool-k", label: "Keenable pool", provider_type: "keenable", key_label: "Keenable keyless",
     }
@@ -308,18 +305,16 @@ describe("ProjectProvidersPage pool capacity", () => {
     expect(within(screen.getByRole("table", { name: "Without capacity" })).queryByText("Keenable")).toBeNull()
     await userEvent.click(within(row).getByRole("button", { name: "Actions for Keenable" }))
     expect(screen.getByRole("button", { name: "Edit pool" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Add a key for higher limits" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Unassign" })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole("button", { name: "Add a key for higher limits" }))
-    const dialog = await screen.findByRole("dialog", { name: "Add Keenable key" })
-    expect(within(dialog).getByLabelText("Label")).toHaveValue("Keenable key")
+    // A second pool for the same project and provider would conflict and could
+    // orphan a key: the upgrade path is Unassign, then Add capacity.
+    expect(screen.queryByRole("button", { name: "Add a key for higher limits" })).toBeNull()
   })
 
   it("does not expose an echoed secret after a vault key failure", async () => {
-    keylessStub("acc", [], true, [CAPACITY_POOL, KEENABLE_POOL])
+    keylessStub("acc", [], true, [CAPACITY_POOL])
     renderInProject(<ProjectProvidersPage accountId="acc" />)
-    await userEvent.click(await screen.findByRole("button", { name: "Actions for Keenable" }))
-    await userEvent.click(screen.getByRole("button", { name: "Add a key for higher limits" }))
+    await userEvent.click(await screen.findByRole("button", { name: "Add capacity for Keenable" }))
     const dialog = await screen.findByRole("dialog", { name: "Add Keenable key" })
     // Keenable now defaults to keyless: explicitly choose the API key mode so
     // the secret field exists, exactly as a keyed upgrade does.
@@ -335,10 +330,9 @@ describe("ProjectProvidersPage pool capacity", () => {
     keylessStub("acc", [
       { ...VAULT_KEY, id: "k1", provider_type: "keenable", label: "First" },
       { ...VAULT_KEY, id: "k2", provider_type: "keenable", label: "Second" },
-    ], false, [CAPACITY_POOL, KEENABLE_POOL])
+    ], false, [CAPACITY_POOL])
     renderInProject(<ProjectProvidersPage accountId="acc" />)
-    await userEvent.click(await screen.findByRole("button", { name: "Actions for Keenable" }))
-    await userEvent.click(screen.getByRole("button", { name: "Add a key for higher limits" }))
+    await userEvent.click(await screen.findByRole("button", { name: "Add capacity for Keenable" }))
     const dialog = await screen.findByRole("dialog", { name: "Add Keenable capacity" })
     expect(within(dialog).getByRole("combobox", { name: "Provider" })).toHaveTextContent("Keenable")
     await userEvent.click(within(dialog).getByRole("combobox", { name: "Provider" }))
