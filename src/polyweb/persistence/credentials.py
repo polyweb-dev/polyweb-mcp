@@ -192,9 +192,14 @@ class ProviderCredentialRow(Base):
             name="provider_credentials_auth_mode_allowed",
         ),
         CheckConstraint(
+            # Ownerless system rows are the public keyless singletons (no owner
+            # user, no creator). SYSTEM + owner_user_id + created_by rows are
+            # user-owned vault credentials (the vault service always sets all
+            # three). Owned keyless credentials always carry an owner user and
+            # creator. Every other row requires a creator.
             "(auth_mode = 'keyless' AND owner_scope = 'system' AND owner_user_id IS NULL "
-            "AND created_by IS NULL) OR (auth_mode = 'keyless' AND owner_scope != 'system' "
-            "AND owner_user_id IS NOT NULL AND created_by IS NOT NULL) "
+            "AND created_by IS NULL) OR (owner_scope = 'system' AND owner_user_id IS NOT NULL "
+            "AND created_by IS NOT NULL) "
             "OR (auth_mode != 'keyless' AND created_by IS NOT NULL)",
             name="provider_credentials_keyless_system",
         ),
@@ -350,7 +355,13 @@ class CredentialRepository:
         owner_user_id: UUID | None = None,
         now: str | None = None,
     ) -> CredentialInstanceRead:
-        """Insert one generation-1 active credential and return its read model."""
+        """Insert one generation-1 active credential and return its read model.
+
+        ``owner_user_id`` is written on the initial INSERT so ownership is
+        established atomically before the flush: the CHECK constraint that
+        requires a system scope for ownerless keyless rows and an owner for
+        owned keyless rows must hold on every visible row version.
+        """
 
         if owner_user_id is not None and owner_scope != CredentialOwnerScope.SYSTEM:
             raise ValueError("vault credentials must be system scoped")
@@ -369,14 +380,10 @@ class CredentialRepository:
             created_at=timestamp,
             updated_at=timestamp,
             version=1,
+            owner_user_id=(str(owner_user_id) if owner_user_id is not None else None),
         )
         self._session.add(row)
         await self._session.flush()
-        if owner_user_id is not None:
-            await self._session.execute(
-                text("UPDATE provider_credentials SET owner_user_id=:owner WHERE id=:id"),
-                {"owner": str(owner_user_id), "id": row.id},
-            )
         return _credential_read(row)
 
     async def list_for_owner(self, user_id: UUID) -> list[StoredVaultCredential]:

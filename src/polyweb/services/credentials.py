@@ -43,7 +43,7 @@ from polyweb.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
     SecretSlotConflict,
 )
-from polyweb.infrastructure.secrets import ProviderName
+from polyweb.infrastructure.secrets import KEYLESS_PROVIDER_TYPES, ProviderName
 from polyweb.models.credentials import (
     ALL_CREDENTIAL_OPERATIONS,
     CredentialAuthMode,
@@ -100,14 +100,6 @@ CREDENTIAL_GRANT_DELETED: Final[str] = "credential_grant.deleted"
 
 #: Providers whose credentials may use the per-credential OAuth device flow.
 OAUTH_PROVIDER_TYPES: Final[frozenset[str]] = frozenset({ProviderName.PARALLEL.value})
-
-#: Providers whose free-tier endpoints need no vendor secret. ``keyless``
-#: credentials are only accepted for these providers; keyed providers still
-#: require an API key. The membership matches the materializer's public
-#: keyless set so owned keyless pools resolve through the same providers.
-#: This is the user-facing allowlist; the system materializer owns its copy
-#: to stay import-safe at pool-sync time.
-KEYLESS_PROVIDER_TYPES: Final[frozenset[str]] = frozenset({"keenable", "tavily"})
 
 #: Conflict code for a rotation that named a stale generation.
 CREDENTIAL_GENERATION_CONFLICT: Final[str] = "CREDENTIAL_GENERATION_CONFLICT"

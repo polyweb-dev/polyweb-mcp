@@ -10,7 +10,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from sqlalchemy import delete, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from polyweb.infrastructure.secrets import ProviderName
+from polyweb.infrastructure.secrets import KEYLESS_PROVIDER_TYPES, ProviderName
 from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
 from polyweb.persistence.bindings import ProjectBindingRow
 from polyweb.persistence.credentials import CredentialProjectGrantRow
@@ -20,7 +20,7 @@ from polyweb.persistence.projects import ProjectRow
 from polyweb.persistence.storage import RuntimeSettingRow
 
 _POOL_PREFIX = "vault-key:"
-KEYLESS_PROVIDERS = frozenset({"keenable", "tavily"})
+KEYLESS_PROVIDERS = KEYLESS_PROVIDER_TYPES
 
 
 @dataclass(frozen=True)

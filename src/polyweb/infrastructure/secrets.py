@@ -1,7 +1,7 @@
 """Vault-only provider credential resolution."""
 
 from enum import StrEnum
-from typing import Protocol
+from typing import Final, Protocol
 
 from pydantic import SecretStr
 
@@ -17,6 +17,14 @@ class ProviderName(StrEnum):
     BRAVE = "brave"
     KEENABLE = "keenable"
     TINYFISH = "tinyfish"
+
+
+#: Free-tier providers whose endpoints need no vendor secret. ``keyless``
+#: credentials are accepted only for these providers. Single source of truth
+#: for the credential allowlist and the pool materializer's public set.
+KEYLESS_PROVIDER_TYPES: Final[frozenset[str]] = frozenset(
+    {ProviderName.KEENABLE.value, ProviderName.TAVILY.value}
+)
 
 
 PROVIDER_ENV_VARS: dict[ProviderName, str] = {

@@ -189,13 +189,11 @@ def test_project_projection_allows_manage_and_generation() -> None:
     assert read.generation == 2
 
 
-# --- Intended owned keyless contract (TASK-000065 red regressions) --------------
+# --- Owned keyless contract (TASK-000065) ------------------------------------
 #
-# A fresh signup must be able to create an owned keyless/free-tier credential
-# without an API key and then assign a pool for it. Current production only
-# accepts ``api_key``/``oauth`` at the model layer (``CredentialCreate``), so
-# these tests fail until the intended ``keyless`` contract lands. Keyed/OAuth
-# guards below must stay green through that change.
+# A fresh signup can create an owned keyless/free-tier credential without an
+# API key and then assign a pool for it. Keyed/OAuth guards below stay green
+# through that change.
 
 
 def test_keyless_auth_mode_is_supported() -> None:
@@ -264,9 +262,7 @@ def test_oauth_credential_without_secret_still_valid() -> None:
 
 
 def test_keyless_credential_forbids_secret() -> None:
-    import pytest as _pytest
-
-    with _pytest.raises(ValidationError):
+    with pytest.raises(ValidationError):
         CredentialCreate.model_validate(
             {
                 "provider_type": "keenable",
