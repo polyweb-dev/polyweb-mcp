@@ -13,7 +13,7 @@ import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 from fastapi.testclient import TestClient
@@ -202,7 +202,7 @@ async def test_cloud_keyless_unsupported_provider_and_rotation_guards(
         from polyweb.models.credentials import CredentialRotate
 
         admin = temp_principal(boot.admin_user)
-        credentials, vault, _ = _vault_services(boot)
+        _, vault, store = _vault_services(boot)
         with pytest.raises(CredentialValidationError, match="does not support keyless"):
             await vault.create(
                 admin,
@@ -217,11 +217,15 @@ async def test_cloud_keyless_unsupported_provider_and_rotation_guards(
             ),
         )
         with pytest.raises(CredentialValidationError, match="no secret to rotate"):
-            await credentials.rotate_system_credential(
+            await vault.rotate(
                 admin,
                 created.id,
                 CredentialRotate(expected_generation=1, secret=SecretStr("rotation-secret")),
             )
+        unchanged = next(key for key in await vault.list_keys(admin) if key.id == created.id)
+        assert unchanged.generation == 1
+        assert await store.get(credential_secret_slot(created.id, 1)) is None
+        assert await store.get(credential_secret_slot(created.id, 2)) is None
         with pytest.raises(ValidationError, match="keyless credential needs no secret"):
             VaultKeyCreate(
                 provider_type="keenable",
@@ -234,7 +238,7 @@ async def test_cloud_keyless_unsupported_provider_and_rotation_guards(
 
 
 @pytest.mark.asyncio
-async def test_cloud_keyless_rest_create_without_secret(tmp_path: Path) -> None:
+async def test_cloud_keyless_rest_create_without_secret(tmp_path: Path, auth_secret: str) -> None:
     """POST /api/v1/account/vault/keys accepts a keyless body with no secret."""
 
     repository = await SQLiteRepository.open(tmp_path / "keyless-cloud-rest.db")
@@ -291,7 +295,9 @@ async def test_cloud_0007_populated_upgrade_preserves_and_coexists(
         create_async_engine(URL.create("sqlite+aiosqlite", database=str(database)))
     )
     codec = SecretCodec(MasterKey(os.urandom(32)))
-    singleton_id = uuid4()
+    # Freeze the pre-0008 public singleton identity rather than minting an arbitrary row.
+    # Historical materialization inserts by this UUID5 and ignores conflicts on id only.
+    singleton_id = uuid5(NAMESPACE_URL, "polyweb:keyless-credential:keenable")
     try:
         store = EncryptedDbSecretStore(repository, codec)
         vault = VaultKeyService(repository, store)
@@ -411,6 +417,23 @@ async def test_cloud_0007_populated_upgrade_preserves_and_coexists(
             await session.commit()
     finally:
         await repository.close()
+    before_refused_downgrade = _vault_snapshot(database)
+    with sqlite3.connect(database) as connection:
+        schema_before = set(connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master"))
+        revision_before = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+    assert revision_before == ("0008_owned_keyless_credentials",)
+    with pytest.raises(NotImplementedError, match="owned keyless credentials cannot be downgraded"):
+        alembic_command.downgrade(config, "0007_provider_budget_period")
+    # A rejected rollback must not rebuild tables, change the index/CHECK, or lose vault data.
+    assert _vault_snapshot(database) == before_refused_downgrade
+    with sqlite3.connect(database) as connection:
+        assert set(connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master")) == (
+            schema_before
+        )
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            revision_before
+        )
+    validate_database_schema(database)
     with (
         sqlite3.connect(database) as connection,
         pytest.raises(sqlite3.IntegrityError, match=r"provider_credentials\.account_id"),

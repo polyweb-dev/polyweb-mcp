@@ -793,7 +793,7 @@ def test_vault_partial_indexes_match_migrated_definitions(baseline: Path) -> Non
         "provider_credentials_keyless_provider_key": (
             "provider_credentials",
             ("account_id", "provider_type"),
-            "auth_mode = 'keyless'",
+            "auth_mode = 'keyless' AND owner_user_id IS NULL",
         ),
         "project_memberships_one_provider_owner": (
             "project_memberships",

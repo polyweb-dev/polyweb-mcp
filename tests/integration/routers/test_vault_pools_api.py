@@ -1,5 +1,6 @@
 """Vault pool API against real SQLite and materialized runtime bindings."""
 
+import json
 import sys
 from types import ModuleType
 from unittest.mock import AsyncMock
@@ -15,12 +16,12 @@ from polyweb.models.credentials import CredentialOperation
 from polyweb.models.projects import BuiltinRole, MembershipStatus, ProjectMemberAdd
 from polyweb.persistence.audit import SystemAuditEventRow
 from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialProjectGrantRow
 from polyweb.persistence.key_pools import KeyPoolRepository
 from polyweb.persistence.projects import ProjectRepository
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.persistence.users import UserRow
 from polyweb.routers.api import create_app
-from polyweb.services.pool_materializer import keyless_credential_id
 from polyweb.services.projects import ProjectService
 from tests.fixtures.a2_execution import build_execution_world
 from tests.fixtures.alpha_fixtures import ALPHA_ADMIN_PASSWORD
@@ -119,13 +120,29 @@ async def _bindings(repository, project_id):
 
 async def _assert_bindings(repository, project_id, *exa_credential_ids):
     bindings = await _bindings(repository, project_id)
-    expected = {
-        (UUID(keyless_credential_id("keenable")), "keenable"),
-        (UUID(keyless_credential_id("tavily")), "tavily"),
-        *((credential_id, "exa") for credential_id in exa_credential_ids),
-    }
+    # Only explicitly assigned pools confer runtime access, including keyless providers.
+    expected = {(credential_id, "exa") for credential_id in exa_credential_ids}
     assert len(bindings) == len(expected)
     assert {(binding.credential_id, binding.route_label) for binding in bindings} == expected
+    async with repository.session() as session:
+        pools = await KeyPoolRepository(session).list_for_project(project_id)
+        assert {(pool.credential_id, pool.provider_type) for pool in pools} == expected
+        grants = (
+            await session.scalars(
+                select(CredentialProjectGrantRow).where(
+                    CredentialProjectGrantRow.project_id == str(project_id)
+                )
+            )
+        ).all()
+        assert len(grants) == len(exa_credential_ids)
+        assert {UUID(grant.credential_id) for grant in grants} == set(exa_credential_ids)
+        for grant in grants:
+            pool = next(pool for pool in pools if str(pool.credential_id) == grant.credential_id)
+            assert grant.owner_scope == "system"
+            assert set(json.loads(grant.permitted_operations)) == set(pool.operations)
+    for binding in bindings:
+        pool = next(pool for pool in pools if pool.credential_id == binding.credential_id)
+        assert {operation.value for operation in binding.enabled_operations} == set(pool.operations)
     return bindings
 
 
