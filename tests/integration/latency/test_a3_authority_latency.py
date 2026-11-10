@@ -45,6 +45,7 @@ from tests.fixtures.execution import (
 from tests.fixtures.latency import (
     REPO_ROOT,
     OfflineAdapter,
+    attach_select_counter,
     drain_background_tasks,
     fetch_payload,
     git_commit,
@@ -168,6 +169,9 @@ async def _record_request(
     )
 
 
+_READS_UNAVAILABLE_REASONS: list[str] = []
+
+
 async def _run_mix(
     rows: list[dict[str, Any]],
     *,
@@ -178,9 +182,13 @@ async def _run_mix(
     providers: str,
     repository: SQLiteRepository,
     call: Callable[[], Awaitable[Any]],
+    db_reads: list[dict[str, Any]] | None = None,
 ) -> None:
     clear_config_cache()
     clear_quota_poll_cache()
+    selects: list[int] = [0]
+    detach = attach_select_counter(repository, selects)
+    reads_start = selects[0]
     await _record_request(
         rows,
         commit=commit,
@@ -217,6 +225,67 @@ async def _run_mix(
             request_index=index,
             call=call,
         )
+    if detach is not None:
+        detach()
+    if db_reads is not None:
+        per_request = (selects[0] - reads_start) / float(1 + _WARMUP_PER_MIX + _MEASURED_PER_MIX)
+        db_reads.append(
+            {
+                "transport": transport,
+                "operation": operation,
+                "routing_mode": routing_mode,
+                "providers": providers,
+                "samples": 1 + _WARMUP_PER_MIX + _MEASURED_PER_MIX,
+                "foreground_selects": selects[0] - reads_start,
+                "selects_per_request": round(per_request, 2),
+                "counter_available": detach is not None,
+            }
+        )
+
+
+def _write_db_reads_report(db_reads: Sequence[dict[str, Any]]) -> None:
+    """Write the per-mix foreground SELECT diagnostic (no timings, no gate)."""
+
+    csv_path = _REPORT_DIR / "db_reads.csv"
+    md_path = _REPORT_DIR / "db_reads.md"
+    with open(csv_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "transport",
+                "operation",
+                "routing_mode",
+                "providers",
+                "samples",
+                "foreground_selects",
+                "selects_per_request",
+                "counter_available",
+            ],
+        )
+        writer.writeheader()
+        for row in db_reads:
+            writer.writerow(row)
+    lines = [
+        "# A3 authority foreground SELECT diagnostic",
+        "",
+        "Foreground SELECT statements per mix on the shared repository engine,",
+        "counted with the existing `attach_select_counter` seam during each mix",
+        "(cold + warmup + measured samples). Counts include authorization,",
+        "binding, credential, pool, allocation, order, settings, health, usage,",
+        "and quota reads plus any background SELECT inside the mix window. They",
+        "are a diagnostic, not a pass/fail limit: no threshold applies.",
+        "",
+        "| transport | operation | routing | providers | samples | selects | each | counter |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for row in db_reads:
+        lines.append(
+            f"| {row['transport']} | {row['operation']} | {row['routing_mode']} | "
+            f"{row['providers']} | {row['samples']} | {row['foreground_selects']} | "
+            f"{row['selects_per_request']} | "
+            f"{'available' if row['counter_available'] else 'unavailable'} |"
+        )
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _assert_mixes_routed(
@@ -401,6 +470,7 @@ async def test_a3_rest_and_mcp_authority_latency(
                 ("search", "auto"): rest_search_auto,
                 ("fetch", "require"): rest_fetch_require,
             }
+            db_reads: list[dict[str, Any]] = []
 
             # REST mixes run against the live app.
             for transport_name, operation, mode, providers in _MIXES:
@@ -415,6 +485,7 @@ async def test_a3_rest_and_mcp_authority_latency(
                     providers=providers,
                     repository=repository,
                     call=rest_calls[(operation, mode)],
+                    db_reads=db_reads,
                 )
 
         # MCP mixes run against a separate stdio composition of the same DB.
@@ -470,13 +541,17 @@ async def test_a3_rest_and_mcp_authority_latency(
                 providers=providers,
                 repository=repository,
                 call=call_mcp,
+                db_reads=db_reads,
             )
 
         _assert_mixes_routed(rows)
         table = _added_stats(rows)
         _write_report(rows, table)
+        _write_db_reads_report(db_reads)
         assert (_REPORT_DIR / "routing_latency.csv").exists()
         assert (_REPORT_DIR / "routing_latency.md").exists()
+        assert (_REPORT_DIR / "db_reads.csv").exists()
+        assert (_REPORT_DIR / "db_reads.md").exists()
         _assert_added_p95_under_limit(table)
     finally:
         await drain_background_tasks()

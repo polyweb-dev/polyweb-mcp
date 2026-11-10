@@ -612,6 +612,7 @@ class CredentialService:
         project_id: UUID,
         credential_id: UUID,
         operation: CredentialOperation,
+        project_verified_in_session: bool = False,
     ) -> CredentialInstanceRead | None:
         """Return the credential usable by this project for this operation.
 
@@ -619,14 +620,22 @@ class CredentialService:
         active system credential holding a grant that lists ``operation``.
         ``None`` covers unknown, foreign, ungranted, deleted, and any project
         that is missing or archived inside this account.
+
+        ``project_verified_in_session`` skips only the ``get_project`` active
+        check. Set it only when the caller just proved this project active on
+        the SAME session inside the SAME read snapshot (execution
+        re-authorizes through ``_live_context_in_session`` first); it carries
+        no cache, and every owner, grant, operation, and rollout check still
+        runs. Direct callers leave the default so the project is validated.
         """
 
         self._rollout.require_management()
-        project = await ProjectRepository(session).get_project(
-            project_id=project_id, account_id=self._account_id
-        )
-        if project is None or project.status is not ProjectStatus.ACTIVE:
-            return None
+        if not project_verified_in_session:
+            project = await ProjectRepository(session).get_project(
+                project_id=project_id, account_id=self._account_id
+            )
+            if project is None or project.status is not ProjectStatus.ACTIVE:
+                return None
         credentials = CredentialRepository(session)
         private = await credentials.get_private_credential(
             account_id=self._account_id,

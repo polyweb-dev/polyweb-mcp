@@ -1449,6 +1449,7 @@ class ExecutionService:
                 project_id=context.project_id,
                 credential_id=binding.credential_id,
                 operation=operation,
+                project_verified_in_session=expected_generation is not None,
             )
             if usable is None:
                 if expected_generation is not None:
@@ -2199,6 +2200,7 @@ class ExecutionService:
                         project_id=context.project_id,
                         credential_id=binding.credential_id,
                         operation=code,
+                        project_verified_in_session=True,
                     )
                     if credential is None:
                         continue
@@ -2802,6 +2804,7 @@ class _AttemptSeam:
                     project_id=context.project_id,
                     credential_id=leg.credential.credential_id,
                     operation=operation,
+                    project_verified_in_session=True,
                 )
                 if usable is None or usable.generation != leg.credential.generation:
                     raise ExecutionBindingMissing(

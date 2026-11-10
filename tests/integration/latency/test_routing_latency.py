@@ -293,14 +293,15 @@ def _group_label(transport: str, operation: str, mode: str, providers: str) -> s
     return f"{short}\n{operation} {mode}\n{providers}"
 
 
-def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
-    """Write routing_latency.csv, both PNG charts, and routing_latency.md."""
-    pytest.importorskip("matplotlib")
-    import matplotlib
+def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> bool:
+    """Write routing_latency.csv, routing_latency.md, and PNG charts when possible.
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+    The numeric report (CSV + Markdown + gate inputs) always runs. The PNG
+    charts need matplotlib, which the CI image may not install: when the
+    import is unavailable the report is written without chart embeds and this
+    returns False instead of skipping the benchmark. Returns True when both
+    charts were written.
+    """
     resolved = Path(output_dir)
     if not resolved.is_absolute():
         resolved = REPO_ROOT / resolved
@@ -354,32 +355,43 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> N
             }
         )
 
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        plotted = False
+    else:
+        plotted = True
+
     labels = [
         _group_label(e["transport"], e["operation"], e["mode"], e["providers"]) for e in table
     ]
 
-    wall_fig, wall_ax = plt.subplots(figsize=(12, 5))
-    wall_ax.bar(range(len(labels)), [e["median_ms"] for e in table])
-    wall_ax.set_xticks(range(len(labels)), labels, rotation=30, ha="right")
-    wall_ax.set_ylabel("median wall time (ms)")
-    wall_ax.set_title("Routing latency: median wall ms per measured mix (in-process)")
-    wall_fig.tight_layout()
-    wall_fig.savefig(wall_path)
-    plt.close(wall_fig)
+    if plotted:
+        wall_fig, wall_ax = plt.subplots(figsize=(12, 5))
+        wall_ax.bar(range(len(labels)), [e["median_ms"] for e in table])
+        wall_ax.set_xticks(range(len(labels)), labels, rotation=30, ha="right")
+        wall_ax.set_ylabel("median wall time (ms)")
+        wall_ax.set_title("Routing latency: median wall ms per measured mix (in-process)")
+        wall_fig.tight_layout()
+        wall_fig.savefig(wall_path)
+        plt.close(wall_fig)
 
-    reads_fig, reads_ax = plt.subplots(figsize=(12, 5))
-    reads_values = [e["median_reads"] if e["median_reads"] is not None else 0.0 for e in table]
-    reads_ax.bar(range(len(labels)), reads_values)
-    top = max(reads_values) if reads_values and max(reads_values) > 0 else 1.0
-    for index, entry in enumerate(table):
-        if entry["median_reads"] is None:
-            reads_ax.text(index, top * 0.05, "unavailable", ha="center", rotation=90)
-    reads_ax.set_xticks(range(len(labels)), labels, rotation=30, ha="right")
-    reads_ax.set_ylabel("median route-plan reads")
-    reads_ax.set_title("Route-plan reads: median SELECTs per measured mix")
-    reads_fig.tight_layout()
-    reads_fig.savefig(reads_path)
-    plt.close(reads_fig)
+        reads_fig, reads_ax = plt.subplots(figsize=(12, 5))
+        reads_values = [e["median_reads"] if e["median_reads"] is not None else 0.0 for e in table]
+        reads_ax.bar(range(len(labels)), reads_values)
+        top = max(reads_values) if reads_values and max(reads_values) > 0 else 1.0
+        for index, entry in enumerate(table):
+            if entry["median_reads"] is None:
+                reads_ax.text(index, top * 0.05, "unavailable", ha="center", rotation=90)
+        reads_ax.set_xticks(range(len(labels)), labels, rotation=30, ha="right")
+        reads_ax.set_ylabel("median route-plan reads")
+        reads_ax.set_title("Route-plan reads: median SELECTs per measured mix")
+        reads_fig.tight_layout()
+        reads_fig.savefig(reads_path)
+        plt.close(reads_fig)
 
     if _READS_UNAVAILABLE_REASONS:
         reads_note = "Unavailable: " + "; ".join(_READS_UNAVAILABLE_REASONS)
@@ -520,15 +532,30 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> N
         f"- {reads_note}",
         "",
         "## Charts",
-        "![API wall time](routing_latency_wall_time.png)",
-        "![Route-plan reads](routing_latency_route_reads.png)",
-        "",
     ]
-    md_path.write_text("\n".join(lines), encoding="utf-8")
+    if plotted:
+        lines += [
+            "![API wall time](routing_latency_wall_time.png)",
+            "![Route-plan reads](routing_latency_route_reads.png)",
+            "",
+        ]
+    else:
+        lines += [
+            "Charts were not rendered: matplotlib is not installed in this environment.",
+            "The CSV and the tables above carry the full numeric report; the gate",
+            "inputs do not depend on the charts.",
+            "",
+        ]
+    md_path.write_text(chr(10).join(lines), encoding="utf-8")
+    return plotted
 
 
-def _assert_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
-    """Shared report assertions: structure per mix, positive walls, artifacts."""
+def _assert_report(rows: Sequence[dict[str, Any]], output_dir: Path, *, plotted: bool) -> None:
+    """Shared report assertions: structure per mix, positive walls, artifacts.
+
+    PNG chart artifacts are asserted only when the report writer produced
+    them; a missing matplotlib must never fail the numeric benchmark.
+    """
     csv_path = output_dir / "routing_latency.csv"
     md_path = output_dir / "routing_latency.md"
     wall_png = output_dir / "routing_latency_wall_time.png"
@@ -556,10 +583,14 @@ def _assert_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
             float(row["wall_time_ms"]) - float(row["provider_time_ms"]), abs=0.000002
         )
     md_text = md_path.read_text(encoding="utf-8")
-    assert "![API wall time](routing_latency_wall_time.png)" in md_text
-    assert "![Route-plan reads](routing_latency_route_reads.png)" in md_text
-    assert wall_png.exists() and wall_png.stat().st_size > 0
-    assert reads_png.exists() and reads_png.stat().st_size > 0
+    if plotted:
+        assert "![API wall time](routing_latency_wall_time.png)" in md_text
+        assert "![Route-plan reads](routing_latency_route_reads.png)" in md_text
+        assert wall_png.exists() and wall_png.stat().st_size > 0
+        assert reads_png.exists() and reads_png.stat().st_size > 0
+    else:
+        assert "Charts were not rendered" in md_text
+        assert "![API wall time](routing_latency_wall_time.png)" not in md_text
 
 
 @pytest.fixture(scope="session")
@@ -684,8 +715,8 @@ async def test_rest_search_latency(
             latency_rows, transport="rest-inprocess", operation="search"
         )
         report_dir = REPO_ROOT / "test_reports" / "a2-takeover" / "latency"
-        _write_latency_report(latency_rows, report_dir)
-        _assert_report(latency_rows, report_dir)
+        plotted = _write_latency_report(latency_rows, report_dir)
+        _assert_report(latency_rows, report_dir, plotted=plotted)
     finally:
         if detach is not None:
             detach()
@@ -783,8 +814,8 @@ async def test_rest_fetch_latency(
             latency_rows, transport="rest-inprocess", operation="fetch"
         )
         report_dir = REPO_ROOT / "test_reports" / "a2-takeover" / "latency"
-        _write_latency_report(latency_rows, report_dir)
-        _assert_report(latency_rows, report_dir)
+        plotted = _write_latency_report(latency_rows, report_dir)
+        _assert_report(latency_rows, report_dir, plotted=plotted)
     finally:
         if detach is not None:
             detach()
@@ -884,8 +915,8 @@ async def test_mcp_search_latency(
             latency_rows, transport="mcp-inprocess", operation="search"
         )
         report_dir = REPO_ROOT / "test_reports" / "a2-takeover" / "latency"
-        _write_latency_report(latency_rows, report_dir)
-        _assert_report(latency_rows, report_dir)
+        plotted = _write_latency_report(latency_rows, report_dir)
+        _assert_report(latency_rows, report_dir, plotted=plotted)
     finally:
         if detach is not None:
             detach()
@@ -964,8 +995,8 @@ async def test_mcp_fetch_latency(
             latency_rows, transport="mcp-inprocess", operation="fetch"
         )
         report_dir = REPO_ROOT / "test_reports" / "a2-takeover" / "latency"
-        _write_latency_report(latency_rows, report_dir)
-        _assert_report(latency_rows, report_dir)
+        plotted = _write_latency_report(latency_rows, report_dir)
+        _assert_report(latency_rows, report_dir, plotted=plotted)
     finally:
         if detach is not None:
             detach()
