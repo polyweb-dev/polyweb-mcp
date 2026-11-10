@@ -344,7 +344,7 @@ Then("no vendor request should have been made", async ({ page }) => {
   expectNoExecution(page);
 });
 
-When("I bulk create pools for {string} for project Alpha without provider calls", async ({ page }, list: string) => {
+When("I bulk create pools for {string} for project Alpha without provider calls", async ({ page, $testInfo }, list: string) => {
   const providers = list.split(",").map((entry) => entry.trim()).filter((entry) => entry !== "");
   expect(providers.length).toBeGreaterThan(1);
   await page.goto("/account/keys");
@@ -358,6 +358,9 @@ When("I bulk create pools for {string} for project Alpha without provider calls"
   for (const provider of providers) {
     await dialog.getByRole("checkbox", { name: provider, exact: false }).check();
   }
+  // Visual evidence (non-live, cloud only): bulk dialog after the project and
+  // provider choices, before submission. Single PNG per scenario.
+  await attachPng(page, $testInfo, "task-000065-bulk-dialog.png");
   await dialog.getByRole("button", { name: /^Create(?: \d+)? pools?$/i }).click();
   await expect(dialog).toBeHidden({ timeout: 15_000 });
   expectNoExecution(page);
@@ -387,14 +390,11 @@ async function expectCreatedPools(page: Page, providers: string[]): Promise<void
   expectNoExecution(page);
 }
 
-Then("project Alpha has new pools for {string} assigned to Alpha", async ({ page, $testInfo }, list: string) => {
+Then("project Alpha has new pools for {string} assigned to Alpha", async ({ page }, list: string) => {
   await expectCreatedPools(page, list.split(",").map((entry) => PROVIDERS[entry.trim()]));
-  // Visual evidence (non-live, cloud only): created pool table with the rate
-  // column after bulk creation. Single PNG per scenario.
-  await attachPng(page, $testInfo, "task-000065-bulk-created-pools-rate-column.png");
 });
 
-When("I create the keyless free-tier default pools for project Alpha without an API key", async ({ page }) => {
+When("I create the keyless free-tier default pools for project Alpha without an API key", async ({ page, $testInfo }) => {
   await page.goto("/account/keys");
   await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible({ timeout: 15_000 });
   // Anticipated defaults contract: one control provisions the supported
@@ -404,20 +404,20 @@ When("I create the keyless free-tier default pools for project Alpha without an 
   await expect(dialog).toBeVisible({ timeout: 10_000 });
   await chooseOption(dialog, "Project", "Alpha");
   await expect(dialog.getByLabel("API key", { exact: true })).toHaveCount(0);
+  // Visual evidence (non-live, cloud only): defaults modal after the project
+  // selection, showing no secret, before submission. Single PNG per scenario.
+  await attachPng(page, $testInfo, "task-000065-keyless-defaults-dialog.png");
   await dialog.getByRole("button", { name: /Create|Save/i }).click();
   await expect(dialog).toBeHidden({ timeout: 15_000 });
   expectNoExecution(page);
 });
 
-Then("project Alpha has new keyless pools for {string} assigned to Alpha", async ({ page, $testInfo }, list: string) => {
+Then("project Alpha has new keyless pools for {string} assigned to Alpha", async ({ page }, list: string) => {
   const providers = list.split(",").map((entry) => PROVIDERS[entry.trim()]);
   const keys = await Promise.all(evidence(page).keys);
   expect(keys).toHaveLength(providers.length);
   expect(keys.every((key) => key.auth_mode === "keyless")).toBe(true);
   await expectCreatedPools(page, providers);
-  // Visual evidence (non-live, cloud only): keyless defaults table showing the
-  // new keyless pools with no secret rendered. Single PNG per scenario.
-  await attachPng(page, $testInfo, "task-000065-keyless-defaults-pools.png");
 });
 
 // ---------------------------------------------------------------------------
