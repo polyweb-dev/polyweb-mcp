@@ -1,6 +1,6 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
-import { credentialProviderTypes, providerIdentity, providerTypeName, supportsOAuth } from "@/domains/providers"
+import { authModeNeedsSecret, credentialAuthModes, credentialProviderTypes, providerIdentity, providerTypeName, supportsKeyless, supportsOAuth } from "@/domains/providers"
 import { createVaultKey, rotateVaultKey, updateVaultKey } from "@/domains/vault"
 import type { VaultKey } from "@/domains/vault"
 import { AdvancedSection } from "@/shared/ui/AdvancedSection"
@@ -23,7 +23,7 @@ function invalidCapacity(capacity: string): boolean {
 }
 
 function needsSecret(mode: Mode, auth: string): boolean {
-  return mode === "rotate" || (mode === "add" && auth === "api_key")
+  return mode === "rotate" || (mode === "add" && authModeNeedsSecret(auth))
 }
 
 function capacityToSave(form: HTMLFormElement, capacity: string, initial: string): string {
@@ -66,7 +66,7 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
   const initialCapacity = initialKeyCapacity(item)
   const [provider, setProvider] = useState(initial.provider)
   const [label, setLabel] = useState(initial.label)
-  const [auth, setAuth] = useState("api_key")
+  const [auth, setAuth] = useState(() => credentialAuthModes(initial.provider)[0]?.value ?? "api_key")
   const [secret, setSecret] = useState("")
   const [capacity, setCapacity] = useState(initialCapacity.capacity)
   const [windowSeconds, setWindowSeconds] = useState(initialCapacity.windowSeconds)
@@ -85,7 +85,10 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
     setPending(true)
     setError(null)
     try {
-      if (mode === "add") await createVaultKey({ ...policy, provider_type: provider, auth_mode: auth, ...(auth === "api_key" ? { secret } : {}) })
+      if (mode === "add") {
+        const keyless = !authModeNeedsSecret(auth)
+        await createVaultKey({ ...policy, provider_type: provider, auth_mode: auth, ...(keyless ? {} : { secret }) })
+      }
       else if (item && mode === "settings") await updateVaultKey(item.id, policy)
       else if (item) await rotateVaultKey(item.id, item.generation, secret)
       onSaved()
@@ -112,16 +115,19 @@ export function KeyDialog({ mode, item, onClose, onSaved }: {
                 const next = credentialProviderTypes().find((type) => providerIdentity(type).id === value) ?? value
                 setLabel((current) => current === `${providerTypeName(provider)} key` ? `${providerTypeName(next)} key` : current)
                 setProvider(next)
-                setAuth("api_key")
+                // Rebase the selection onto a supported mode; when unsupported
+                // modes overlap nothing, keep the previous choice untouched.
+                const modes = credentialAuthModes(next)
+                if (!modes.some((entry) => entry.value === auth)) setAuth(modes[0]?.value ?? auth)
               }} />
           </Field>
         )}
         <KeyFormFields idPrefix="vault" label={label} setLabel={setLabel} secret={secret} setSecret={setSecret}
           submitted={submitted} showLabel={mode !== "rotate"} showSecret={needsSecret(mode, auth)}>
-          {mode === "add" && supportsOAuth(provider) && (
+          {mode === "add" && (supportsOAuth(provider) || supportsKeyless(provider)) && (
             <Field id="vault-auth" label="Authentication">
               <Select id="vault-auth" value={auth} onValueChange={setAuth}
-                options={[{ value: "api_key", label: "API key" }, { value: "oauth", label: "OAuth" }]} />
+                options={credentialAuthModes(provider)} />
             </Field>
           )}
         </KeyFormFields>
