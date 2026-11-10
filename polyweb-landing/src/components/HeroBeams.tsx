@@ -26,7 +26,7 @@ const FAN = Array.from({ length: FAN_COUNT }, (_, i) => {
   const endY = ENTRY_Y + (FAN_END_X - SPLIT_X) * Math.tan(angle)
   return {
     d: `M ${SPLIT_X} ${ENTRY_Y} L ${FAN_END_X} ${endY.toFixed(1)}`,
-    stroke: lerpHex("#0047ff", "#19d3f5", t),
+    stroke: lerpHex("#b8035e", "#fe8a0b", t),
   }
 })
 

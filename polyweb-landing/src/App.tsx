@@ -26,26 +26,7 @@ import { GITHUB } from "./links"
 import { useMobile } from "./useMobile"
 
 import projectsWide from "./assets/projects-wide.webp"
-
-import brave from "./assets/brave.webp"
-import exa from "./assets/exa.webp"
-import firecrawl from "./assets/firecrawl.webp"
-import keenable from "./assets/keenable.webp"
-import parallel from "./assets/parallel.webp"
-import tavily from "./assets/tavily.webp"
-import tinyfish from "./assets/tinyfish.webp"
-import youcom from "./assets/youcom.webp"
-
-const PROVIDERS: Array<[string, string]> = [
-  ["Brave Search", brave],
-  ["Exa", exa],
-  ["Firecrawl", firecrawl],
-  ["Tavily", tavily],
-  ["Parallel", parallel],
-  ["You.com", youcom],
-  ["Keenable", keenable],
-  ["Tinyfish", tinyfish],
-]
+import { PROVIDERS, pickRandom } from "./providers"
 
 function Hero() {
   return (
@@ -89,8 +70,8 @@ function Hero() {
         aria-label="Supported providers"
         data-theme="night"
       >
-        {PROVIDERS.map(([name, src]) => (
-          <img key={name} src={src} alt={name} />
+        {PROVIDERS.map((p) => (
+          <img key={p.name} src={p.src} alt={p.name} />
         ))}
       </div>
     </div>
@@ -99,20 +80,13 @@ function Hero() {
 
 /* ---------- credits gauges ---------- */
 
-const GAUGES: Array<{
-  name: string
-  src: string
-  value: number
-  of: number
-  fill: number
-  drain: number
-  label: string
-}> = [
-  { name: "Brave Search", src: brave, value: 642, of: 1000, fill: 0.64, drain: 0.06, label: "credits left this month" },
-  { name: "Tavily", src: tavily, value: 818, of: 1000, fill: 0.82, drain: 0.09, label: "credits left this month" },
-  { name: "Exa", src: exa, value: 231, of: 500, fill: 0.46, drain: 0.07, label: "credits left this month" },
-  { name: "Keenable", src: keenable, value: 412, of: 1000, fill: 0.41, drain: 0.10, label: "requests left this hour · keyless" },
-]
+const GAUGE_PICKS = pickRandom(PROVIDERS, 4)
+const GAUGES = [
+  { value: 642, fill: 0.64, drain: 0.06 },
+  { value: 818, fill: 0.82, drain: 0.09 },
+  { value: 231, fill: 0.46, drain: 0.07 },
+  { value: 412, fill: 0.41, drain: 0.10 },
+].map((g, i) => ({ ...g, provider: GAUGE_PICKS[i] }))
 
 const GAUGE_R = 118
 const GAUGE_C = 2 * Math.PI * GAUGE_R
@@ -140,9 +114,8 @@ function Gauge({ g, progress }: { g: (typeof GAUGES)[number]; progress: MotionVa
           style={{ strokeDasharray: dasharray }}
         />
       </svg>
-      <img className="gauge-logo" src={g.src} alt={g.name} />
+      <img className="gauge-logo" src={g.provider.src} alt={g.provider.name} />
       <motion.span className="gauge-num">{num}</motion.span>
-      <span className="gauge-label">{g.label}</span>
     </div>
   )
 }
@@ -172,7 +145,7 @@ function Credits() {
         </Reveal>
         <div className="gauge-row">
           {GAUGES.map((g) => (
-            <Gauge key={g.name} g={g} progress={progress} />
+            <Gauge key={g.provider.name} g={g} progress={progress} />
           ))}
         </div>
       </div>
@@ -260,10 +233,15 @@ function KeyField({ progress }: { progress: MotionValue<number> }) {
   )
 }
 
+const EVENT_FETCH = pickRandom(PROVIDERS.filter((p) => p.fetch), 1)[0]
+const EVENT_SEARCH = pickRandom(
+  PROVIDERS.filter((p) => p.search && p !== EVENT_FETCH),
+  2
+)
 const EVENTS = [
-  ["search", brave, "Brave Search · answered"],
-  ["fetch", firecrawl, "Firecrawl · answered"],
-  ["search", exa, "Exa · answered"],
+  { tag: "search", provider: EVENT_SEARCH[0] },
+  { tag: "fetch", provider: EVENT_FETCH },
+  { tag: "search", provider: EVENT_SEARCH[1] },
 ]
 
 function PinRow({
@@ -318,12 +296,12 @@ function Bento() {
           <div className="bento-tile">
             <h3 className="bento-title">Activity</h3>
             <div className="timeline">
-              {EVENTS.map(([tag, src, meta], i) => (
-                <PinRow key={String(meta)} progress={progress} from={0.45 + i * 0.11} to={0.56 + i * 0.11} className="timeline-row">
+              {EVENTS.map((e, i) => (
+                <PinRow key={e.provider.name + e.tag} progress={progress} from={0.45 + i * 0.11} to={0.56 + i * 0.11} className="timeline-row">
                   <span className="timeline-dot" aria-hidden="true" />
-                  <span className="timeline-tag">{tag}</span>
-                  <img src={src as string} alt="" />
-                  <span className="timeline-meta">{meta}</span>
+                  <span className="timeline-tag">{e.tag}</span>
+                  <img src={e.provider.src} alt="" />
+                  <span className="timeline-meta">{e.provider.name} · answered</span>
                 </PinRow>
               ))}
             </div>
@@ -499,67 +477,6 @@ function SelfHost() {
 
 /* ---------- final CTA ---------- */
 
-function CtaRosette({ progress }: { progress: MotionValue<number> }) {
-  const rotate = useTransform(progress, [0, 1], [0, 30])
-  const cx = 250, cy = 250
-  const pt = (a: number, r: number): [number, number] => [
-    cx + r * Math.cos((a * Math.PI) / 180),
-    cy + r * Math.sin((a * Math.PI) / 180),
-  ]
-  const hex = [0, 60, 120, 180, 240, 300].map((a) => pt(a, 72).join(",")).join(" ")
-  return (
-    <motion.svg
-      className="cta-rosette"
-      viewBox="0 0 500 500"
-      fill="none"
-      style={{ rotate }}
-      aria-hidden="true"
-    >
-      <defs>
-        <linearGradient id="cta-grad" x1="0" y1="1" x2="1" y2="0">
-          <stop offset="0" stopColor="#0047ff" />
-          <stop offset="1" stopColor="#19d3f5" />
-        </linearGradient>
-      </defs>
-      <polygon points={hex} stroke="url(#cta-grad)" strokeWidth="7" strokeLinejoin="round" />
-      {[0, 60, 120, 180, 240, 300].map((a) => {
-        const [x, y] = pt(a, 158)
-        return <circle key={a} cx={x} cy={y} r={54} stroke="url(#cta-grad)" strokeWidth="7" />
-      })}
-    </motion.svg>
-  )
-}
-
-function FinalCta() {
-  const ref = useRef<HTMLDivElement>(null)
-  const reduced = useReducedMotion()
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start end", "end start"] })
-  const done = useMotionValue(0.5)
-  const progress = reduced ? done : scrollYProgress
-  return (
-    <div className="section-night" data-theme="night" ref={ref}>
-      <section className="section" aria-label="Get started">
-        <div className="container cta-inner">
-          <CtaRosette progress={progress} />
-          <Reveal>
-            <h2 className="cta-head">One API. Every provider.</h2>
-          </Reveal>
-          <Reveal delay={0.12}>
-            <div className="cta-buttons">
-              <a className="button button-primary" href={GITHUB} target="_blank" rel="noreferrer">
-                View on GitHub
-              </a>
-              <a className="button button-secondary-dark" href="#self-host">
-                Get started
-              </a>
-            </div>
-          </Reveal>
-        </div>
-      </section>
-    </div>
-  )
-}
-
 /* ---------- router ---------- */
 
 const PAGES: Record<string, ComponentType> = {
@@ -591,7 +508,6 @@ function Home() {
       <Capacity />
       <Agents />
       <SelfHost />
-      <FinalCta />
     </>
   )
 }

@@ -8,38 +8,19 @@ import {
   type MotionValue,
 } from "motion/react"
 
-import brave from "../assets/brave.webp"
-import exa from "../assets/exa.webp"
-import firecrawl from "../assets/firecrawl.webp"
-import keenable from "../assets/keenable.webp"
-import parallel from "../assets/parallel.webp"
-import tavily from "../assets/tavily.webp"
-import tinyfish from "../assets/tinyfish.webp"
-import youcom from "../assets/youcom.webp"
+import { PROVIDERS, pickRandom } from "../providers"
 
 const W = 1400
 const H = 1000
 const CX = 700
 const CY = 500
-const HEX_R = 72
-const RING_DIST = 158
-const RING_R = 54
+const OCT_R = 72
+const RING_DIST = 170
+const RING_R = 50
 const ORBIT = 380
 const LOGO_ANGLES = [-90, -45, 0, 45, 90, 135, 180, 225]
-const LOGOS = [brave, exa, firecrawl, tavily, parallel, youcom, keenable, tinyfish]
-const LOGO_NAMES = [
-  "Brave Search",
-  "Exa",
-  "Firecrawl",
-  "Tavily",
-  "Parallel",
-  "You.com",
-  "Keenable",
-  "Tinyfish",
-]
-const RING_ANGLES = [0, 60, 120, 180, 240, 300]
-const ACTIVE_LOGO = 0 // Brave — the chosen provider
-const NEXT_LOGO = 1 // Exa — the fallback
+const OCT_ANGLES = [22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5]
+const [ACTIVE_LOGO, NEXT_LOGO] = pickRandom([0, 1, 2, 3, 4, 5, 6, 7], 2) // the chosen provider, then its fallback
 const NIGHT = "#070a12"
 const FAINT = "#a3a9b8"
 
@@ -49,8 +30,8 @@ const pt = (angle: number, r: number): [number, number] => [
   CY + r * Math.sin(rad(angle)),
 ]
 
-// Flat-top hexagon: vertices at 0, 60, …, 300 degrees.
-const HEX_POINTS = RING_ANGLES.map((a) => pt(a, HEX_R).join(",")).join(" ")
+// Flat-top octagon: vertices offset 22.5° from the provider angles.
+const OCT_POINTS = OCT_ANGLES.map((a) => pt(a, OCT_R).join(",")).join(" ")
 
 function FaintBeam({
   progress,
@@ -63,7 +44,7 @@ function FaintBeam({
   const length = useTransform(progress, [from, from + 0.1], [0, 1], {
     clamp: true,
   })
-  const [x1, y1] = pt(LOGO_ANGLES[index], HEX_R - 4)
+  const [x1, y1] = pt(LOGO_ANGLES[index], OCT_R - 4)
   const [x2, y2] = pt(LOGO_ANGLES[index], ORBIT - 46)
   return (
     <motion.line
@@ -104,7 +85,7 @@ function ActiveBeam({
     [appear, dim] as MotionValue<number>[],
     (v) => (v[0] as number) * (v[1] as number)
   )
-  const [x1, y1] = pt(LOGO_ANGLES[index], HEX_R - 4)
+  const [x1, y1] = pt(LOGO_ANGLES[index], OCT_R - 4)
   const [x2, y2] = pt(LOGO_ANGLES[index], ORBIT - 46)
   return (
     <motion.line
@@ -134,7 +115,7 @@ function DashedBeam({
   const opacity = useTransform(progress, [from, to], [0, 0.35], {
     clamp: true,
   })
-  const [x1, y1] = pt(LOGO_ANGLES[index], HEX_R - 4)
+  const [x1, y1] = pt(LOGO_ANGLES[index], OCT_R - 4)
   const [x2, y2] = pt(LOGO_ANGLES[index], ORBIT - 46)
   return (
     <motion.line
@@ -184,7 +165,7 @@ function OrbitLogo({
         opacity,
       }}
     >
-      <img src={LOGOS[index]} alt={LOGO_NAMES[index]} width={30} height={30} />
+      <img src={PROVIDERS[index].src} alt={PROVIDERS[index].name} width={30} height={30} />
     </motion.div>
   )
 }
@@ -224,7 +205,7 @@ function DrawnRing({
   const length = useTransform(progress, [from, from + 0.09], [0, 1], {
     clamp: true,
   })
-  const [x, y] = pt(RING_ANGLES[index], RING_DIST)
+  const [x, y] = pt(LOGO_ANGLES[index], RING_DIST)
   return (
     <motion.circle
       cx={x}
@@ -251,7 +232,7 @@ export function RosetteScene() {
   const queryLine = useTransform(progress, [0.01, 0.12], [0, 1], {
     clamp: true,
   })
-  const hexDraw = useTransform(progress, [0.02, 0.12], [0, 1], {
+  const octDraw = useTransform(progress, [0.02, 0.12], [0, 1], {
     clamp: true,
   })
 
@@ -273,16 +254,16 @@ export function RosetteScene() {
           >
             <defs>
               <linearGradient id="rosette-grad" x1="0" y1="1" x2="1" y2="0">
-                <stop offset="0" stopColor="#0047ff" />
-                <stop offset="1" stopColor="#19d3f5" />
+                <stop offset="0" stopColor="#b8035e" />
+                <stop offset="1" stopColor="#fe8a0b" />
               </linearGradient>
             </defs>
 
-            {/* the query enters the hexagon */}
+            {/* the query enters the octagon */}
             <motion.line
               x1={64}
               y1={CY}
-              x2={CX - HEX_R}
+              x2={CX - OCT_R}
               y2={CY}
               stroke="url(#rosette-grad)"
               strokeWidth={2.5}
@@ -312,16 +293,17 @@ export function RosetteScene() {
             />
             <DashedBeam progress={progress} index={ACTIVE_LOGO} from={0.74} to={0.86} />
 
-            {/* the rosette mark: hexagon + six rings, drawn on first */}
+            {/* the rosette mark: octagon + eight rings, one per provider,
+                drawn on first */}
             <motion.polygon
-              points={HEX_POINTS}
+              points={OCT_POINTS}
               fill={NIGHT}
               stroke="url(#rosette-grad)"
               strokeWidth={5}
               strokeLinejoin="round"
-              style={{ pathLength: hexDraw }}
+              style={{ pathLength: octDraw }}
             />
-            {RING_ANGLES.map((_, i) => (
+            {LOGO_ANGLES.map((_, i) => (
               <DrawnRing key={`ring-${i}`} progress={progress} index={i} />
             ))}
           </svg>
