@@ -44,4 +44,40 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise NotImplementedError("owned keyless credentials cannot be safely downgraded")
+    # Conditional rollback to 0006: refuse loudly BEFORE any destructive
+    # mutation when owned (user-held) keyless rows exist, because the 0006
+    # CHECK admits keyless rows only as ownerless public singletons and the
+    # batch copy below would reject them mid-migration. Compatible databases
+    # (no owned keyless rows) roll back cleanly to the prior CHECK and the
+    # prior all-keyless partial unique index.
+    connection = op.get_bind()
+    owned_keyless = connection.execute(
+        sa.text(
+            "SELECT COUNT(*) FROM provider_credentials "
+            "WHERE auth_mode = 'keyless' AND owner_user_id IS NOT NULL"
+        )
+    ).scalar_one()
+    if owned_keyless:
+        raise NotImplementedError(
+            "owned keyless credentials cannot be downgraded: "
+            f"{owned_keyless} owned keyless row(s) would be invalid under 0006"
+        )
+    with op.batch_alter_table(
+        "provider_credentials",
+        recreate="always",
+        naming_convention={"fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s"},
+    ) as batch:
+        batch.drop_constraint("provider_credentials_keyless_system", type_="check")
+        batch.create_check_constraint(
+            "provider_credentials_keyless_system",
+            "(auth_mode = 'keyless' AND owner_scope = 'system' AND owner_user_id IS NULL "
+            "AND created_by IS NULL) OR (auth_mode != 'keyless' AND created_by IS NOT NULL)",
+        )
+    op.drop_index("provider_credentials_keyless_provider_key", table_name="provider_credentials")
+    op.create_index(
+        "provider_credentials_keyless_provider_key",
+        "provider_credentials",
+        ["account_id", "provider_type"],
+        unique=True,
+        sqlite_where=sa.text("auth_mode = 'keyless'"),
+    )
