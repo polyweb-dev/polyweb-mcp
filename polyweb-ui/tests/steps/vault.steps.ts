@@ -4,30 +4,76 @@ import { chooseOption, consoleCarrying, requestsCarrying, secretLeaks } from "./
 import { approveVaultOAuth, seedVaultBalance } from "./vaultStub"
 
 When("I open Keys and pools", async ({ page }) => {
-  await page.goto("/account")
-  await page.getByRole("tab", { name: "Keys and pools", exact: true }).click()
+  await page.goto("/account/keys")
   await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible()
 })
 
 When("I add a Brave Search vault key labelled {string} with a fake secret", async ({ page }, label: string) => {
+  await page.goto("/account/keys")
+  await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible()
   await page.getByRole("button", { name: "Add key", exact: true }).first().click()
   const dialog = page.getByRole("dialog", { name: "Add key" })
   await chooseOption(dialog, "Provider", "Brave Search")
   await dialog.getByLabel("Label", { exact: true }).fill(label)
   await dialog.getByLabel("API key", { exact: true }).fill("fake-brave-api-key")
-  await dialog.getByRole("button", { name: "Save key", exact: true }).click()
+  await dialog.getByRole("button", { name: "Add key", exact: true }).click()
   await expect(dialog).toBeHidden()
   await expect(page.getByRole("row").filter({ hasText: label })).toBeVisible()
 })
 
+/** Label of the most recently created pool (create-mode has no Pool name field; the label defaults to the project name). */
+let createdPoolLabel = ""
+/** Key label owning the most recently created pool (for expanding its pools table). */
+let createdPoolKeyLabel = ""
+
+/** Actual label of the last pool created through the shared pool helper. */
+export function lastCreatedPoolLabel(): string {
+  return createdPoolLabel
+}
+
+/** Key label of the last pool created through the shared pool helper. */
+export function lastCreatedPoolKeyLabel(): string {
+  return createdPoolKeyLabel
+}
+
 When("I create a Search pool {string} for project Alpha on key {string}", async ({ page }, pool: string, key: string) => {
+  await page.goto("/account/keys")
+  await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible()
   await page.getByRole("row").filter({ hasText: key }).getByRole("button", { name: "Create pool" }).click()
   const dialog = page.getByRole("dialog", { name: "Create pool" })
   await chooseOption(dialog, "Project", "Alpha")
-  await dialog.getByLabel("Pool name").fill(pool)
+  // Create-mode renders no Pool name field (label defaults to the project
+  // name); fill it only when present and record the actual created label.
+  createdPoolLabel = "Alpha"
+  createdPoolKeyLabel = key
+  const nameField = dialog.getByLabel("Pool name")
+  if ((await nameField.count()) > 0) {
+    await nameField.fill(pool)
+    createdPoolLabel = pool
+  }
   await expect(dialog.getByRole("checkbox", { name: "Search", exact: true })).toBeChecked()
   await dialog.getByRole("button", { name: "Create pool", exact: true }).click()
   await expect(dialog).toBeHidden()
+  await expect(page.getByRole("row").filter({ hasText: key })).toBeVisible()
+})
+
+When("I create a Search pool for project Alpha on key {string}", async ({ page }, key: string) => {
+  await page.goto("/account/keys")
+  await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible()
+  await page.getByRole("row").filter({ hasText: key }).getByRole("button", { name: "Create pool" }).click()
+  const dialog = page.getByRole("dialog", { name: "Create pool" })
+  await chooseOption(dialog, "Project", "Alpha")
+  createdPoolLabel = "Alpha"
+  createdPoolKeyLabel = key
+  const nameField = dialog.getByLabel("Pool name")
+  if ((await nameField.count()) > 0) {
+    await nameField.fill("Alpha Search")
+    createdPoolLabel = "Alpha Search"
+  }
+  await expect(dialog.getByRole("checkbox", { name: "Search", exact: true })).toBeChecked()
+  await dialog.getByRole("button", { name: "Create pool", exact: true }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByRole("row").filter({ hasText: key })).toBeVisible()
 })
 
 Then("the Search provider order shows {string} for {string}", async ({ page }, pool: string, provider: string) => {

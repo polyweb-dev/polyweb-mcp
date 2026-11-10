@@ -4,6 +4,7 @@ import { Given, When, Then } from "./fixtures";
 import { executionTraffic } from "./backendStub";
 import { projectStubId } from "./projectStub";
 import { chooseOption, watchBrowserTraffic } from "./providerConfigUi";
+import { lastCreatedPoolKeyLabel, lastCreatedPoolLabel } from "./vault.steps";
 
 /**
  * TASK-000065 regression steps (test-only, no production changes).
@@ -309,26 +310,20 @@ Then("project Alpha has a new keyless pool for Keenable assigned to Alpha", asyn
 // [data-slot=popover-content] — no menu/menuitem roles.
 // ---------------------------------------------------------------------------
 
-When("I open the pool actions menu for {string}", async ({ page }, pool: string) => {
+When("I open the pool actions menu for the created pool", async ({ page }) => {
   watchBrowserTraffic(page);
   await page.goto("/account/keys");
-  const trigger = page.getByRole("button", { name: `Actions for ${pool}` });
+  await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible({ timeout: 15_000 });
+  // The pool popover lives inside the expanded key row's pools table: open
+  // the key row first, then the created pool's own Actions trigger.
+  await page.getByRole("button", { name: `Pools of ${lastCreatedPoolKeyLabel()}` }).click();
+  const trigger = page.getByRole("button", { name: `Actions for ${lastCreatedPoolLabel()}` });
   await expect(trigger).toBeVisible({ timeout: 15_000 });
   await trigger.click();
   await expect(page.locator("[data-slot=popover-content]").first()).toBeVisible({ timeout: 10_000 });
 });
 
 Then("the pool actions menu should show Edit pool, Copy to another project, Remove from project and Delete pool each with an icon", async ({ page }) => {
-  const popup = page.locator("[data-slot=popover-content]").first();
-  await expect(popup).toBeVisible({ timeout: 10_000 });
-  for (const label of ["Edit pool", "Copy to another project", "Remove from project", "Delete pool"]) {
-    const item = popup.getByRole("button", { name: label });
-    await expect(item).toBeVisible({ timeout: 10_000 });
-    await expect(item.locator("svg").first()).toBeVisible({ timeout: 5_000 });
-  }
-});
-
-Then("the pool actions menu shows Edit pool, Copy to another project, Remove from project and Delete pool each with an icon", async ({ page }) => {
   const popup = page.locator("[data-slot=popover-content]").first();
   await expect(popup).toBeVisible({ timeout: 10_000 });
   for (const label of ["Edit pool", "Copy to another project", "Remove from project", "Delete pool"]) {

@@ -58,6 +58,6 @@ Feature: New-project keyless pools, playground errors, trace storage and results
     Given the projects backend is stubbed for a system administrator
     And I am a member of project Alpha with role project_admin
     And I add a Brave Search vault key labelled "Alpha Brave" with a fake secret
-    And I create a Search pool "Alpha Search" for project Alpha on key "Alpha Brave"
-    When I open the pool actions menu for "Alpha Search"
+    And I create a Search pool for project Alpha on key "Alpha Brave"
+    When I open the pool actions menu for the created pool
     Then the pool actions menu should show Edit pool, Copy to another project, Remove from project and Delete pool each with an icon
