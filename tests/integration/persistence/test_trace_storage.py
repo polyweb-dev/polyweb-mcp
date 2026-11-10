@@ -249,9 +249,21 @@ async def test_list_rows_are_summary_only(repository: SQLiteRepository) -> None:
     assert len(summaries) == 2
     for summary in summaries:
         assert summary.user_id == str(OWNER_A)
+        assert summary.actor_type is ActorType.HUMAN
+        assert str(summary.actor_id) == "00000000-0000-4000-8000-0000000000bb"
+        assert summary.username is None
+        assert summary.first_name is None
+        assert summary.last_name is None
+        assert summary.email is None
         assert set(summary.model_dump(mode="json")) == {
             "trace_id",
             "user_id",
+            "actor_type",
+            "actor_id",
+            "username",
+            "first_name",
+            "last_name",
+            "email",
             "operation",
             "started_at",
             "duration_ms",

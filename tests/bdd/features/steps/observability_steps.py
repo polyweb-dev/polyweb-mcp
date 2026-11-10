@@ -63,6 +63,12 @@ _FETCH_TITLE = "Example Article"
 _LIST_ITEM_KEYS = {
     "trace_id",
     "user_id",
+    "actor_type",
+    "actor_id",
+    "username",
+    "first_name",
+    "last_name",
+    "email",
     "operation",
     "started_at",
     "duration_ms",
@@ -499,6 +505,14 @@ def step_then_trace_detail_query(context: Any, query: str, count: int) -> None:
     assert len(listing["items"]) == 1
     item = listing["items"][0]
     assert set(item) == _LIST_ITEM_KEYS, f"list row is not summary-only: {sorted(item)}"
+    owner = _account_uuid(context.otel_auth_headers)
+    assert item["actor_type"] == "human"
+    assert item["actor_id"] == owner
+    assert item["user_id"] == owner
+    assert item["first_name"] == "Test"
+    assert item["last_name"] == "User"
+    assert item["email"] is not None and item["email"].endswith("@example.com")
+    assert item["username"] == item["email"].split("@")[0][:64]
     list_text = json.dumps(listing)
     assert query not in list_text, "full query leaked into the trace list"
     for expected in _SEARCH_RESULTS:

@@ -117,17 +117,33 @@ async def test_list_returns_newest_first_summary_only(
         anonymous = client.get(f"/api/v1/projects/{UUID(int=1)}/traces")
         assert anonymous.status_code == 401
 
-        pair = register_and_login(client, temp_email("obs-list"))
+        email = temp_email("obs-list")
+        pair = register_and_login(client, email)
         headers = raw_auth_headers(pair["access_token"])
         owner = account_id_from_pair(pair)
         pid = await _seed(repository, owner, "search_success.json", "provider_error.json")
         response = client.get(f"/api/v1/projects/{pid}/traces", headers=headers)
+
+    from polyweb.persistence.users import UserRow
+
+    async with repository.session() as session:
+        account = await session.get(UserRow, owner)
+    assert account is not None
+    assert account.email == email
+    assert account.first_name == "Test"
+    assert account.last_name == "User"
 
     assert response.status_code == 200
     payload = response.json()
     assert [item["trace_id"] for item in payload["items"]] == [_ERROR_ID, _SUCCESS_ID]
     for item in payload["items"]:
         assert item["user_id"] == str(owner)
+        assert item["actor_type"] == "human"
+        assert item["actor_id"] == str(owner)
+        assert item["username"] == account.username
+        assert item["first_name"] == account.first_name
+        assert item["last_name"] == account.last_name
+        assert item["email"] == account.email
     first, second = payload["items"]
     assert (first["operation"], first["outcome"], first["result_count"]) == (
         "fetch",
@@ -145,6 +161,12 @@ async def test_list_returns_newest_first_summary_only(
         assert set(item) == {
             "trace_id",
             "user_id",
+            "actor_type",
+            "actor_id",
+            "username",
+            "first_name",
+            "last_name",
+            "email",
             "operation",
             "started_at",
             "duration_ms",

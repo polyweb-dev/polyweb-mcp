@@ -165,6 +165,9 @@ async def test_owner_transfer_and_guards(tmp_path: Path, auth_secret: str) -> No
             assert result.json() == {
                 "user_id": str(peer.id),
                 "email": peer.email,
+                "username": None,
+                "first_name": None,
+                "last_name": None,
                 "unassigned_pools": [],
             }
             assert (
