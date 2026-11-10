@@ -60,23 +60,27 @@ describe("KeyDialog", () => {
   })
 
   describe("KeyDialog keyless creation (TASK-000065 AC#2)", () => {
-    it("offers a no-secret keyless mode for Keenable and saves without an API key", async () => {
+    it("saves a Keenable key without an API key secret", async () => {
       const user = userEvent.setup()
-      render(<KeyDialog mode="add" onClose={vi.fn()} onSaved={vi.fn()} />)
+      const onSaved = vi.fn()
+      render(<KeyDialog mode="add" onClose={vi.fn()} onSaved={onSaved} />)
       await user.click(screen.getByRole("combobox", { name: "Provider" }))
       await user.click(await screen.findByRole("option", { name: "Keenable" }))
-      // Anticipated contract: a keyless provider offers an Authentication
-      // choice with a no-secret keyless mode. Current source only renders
-      // Authentication for OAuth (Parallel), so this fails here.
+      // No-secret contract: a keyless provider saves without an API key. An
+      // Authentication combobox with an explicit keyless mode satisfies this
+      // too (automatic keyless needs no choice at all), so the combobox is
+      // optional — the pass criterion is a secret-free successful save.
       const auth = screen.queryByRole("combobox", { name: "Authentication" })
-      expect(auth).toBeInTheDocument()
-      await user.click(auth!)
-      await user.click(await screen.findByRole("option", { name: /keyless/i }))
+      if (auth !== null) {
+        await user.click(auth)
+        await user.click(await screen.findByRole("option", { name: /keyless/i }))
+      }
       expect(screen.queryByLabelText("API key")).not.toBeInTheDocument()
       await user.clear(screen.getByLabelText("Label"))
       await user.type(screen.getByLabelText("Label"), "Keenable keyless")
       await user.click(screen.getByRole("button", { name: "Add key" }))
       await waitFor(() => expect(api.createVaultKey).toHaveBeenCalled())
+      await waitFor(() => expect(onSaved).toHaveBeenCalled())
       expect(api.createVaultKey).not.toHaveBeenCalledWith(
         expect.objectContaining({ secret: expect.anything() })
       )

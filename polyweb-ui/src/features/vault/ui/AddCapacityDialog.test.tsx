@@ -141,12 +141,14 @@ describe("AddCapacityDialog", () => {
     })))
   })
 
-  describe("AddCapacityDialog keyless pool (TASK-000065 AC#2)", () => {
-    it("creates a Keenable keyless pool without an API key secret", async () => {
+  describe("AddCapacityDialog keyless key step (TASK-000065 AC#2)", () => {
+    it("saves the keyless key step for Keenable without an API key secret", async () => {
       const user = userEvent.setup()
+      const onSaved = vi.fn()
       render(<AddCapacityDialog provider="keenable" projects={[{ id: "p1", name: "Alpha", available_providers: ["keenable"] }]}
-        onClose={vi.fn()} onSaved={vi.fn()} />)
-      // Anticipated contract: a keyless provider's key step needs no secret.
+        onClose={vi.fn()} onSaved={onSaved} />)
+      // This step only creates/advances the key (the pool dialog follows once
+      // the key exists): the pass criterion is a secret-free key save.
       // Current source always shows the API key field for non-OAuth
       // providers and refuses to save without it, so this fails here.
       expect(screen.queryByLabelText("API key")).not.toBeInTheDocument()
