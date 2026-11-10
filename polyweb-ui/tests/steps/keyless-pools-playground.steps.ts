@@ -3,7 +3,7 @@ import type { Page, Response } from "@playwright/test";
 import { Before, Given, When, Then } from "./fixtures";
 import { projectStubId } from "./projectStub";
 import { chooseOption } from "./providerConfigUi";
-import { lastCreatedPoolKeyLabel, lastCreatedPoolLabel } from "./vault.steps";
+import { lastCreatedPoolKeyLabel, lastCreatedPoolLabel, openVaultPoolDialog } from "./vault.steps";
 import { seedVaultKey } from "./vaultStub";
 
 interface PoolRecord {
@@ -171,10 +171,7 @@ async function createKeylessKey(page: Page): Promise<void> {
 }
 
 async function createPoolOnKeyInProject(page: Page, keyLabel: string, projectName: string): Promise<void> {
-  await page.goto("/account/keys");
-  await page.getByRole("row").filter({ hasText: keyLabel }).first().getByRole("button", { name: "Create pool" }).click();
-  const dialog = page.getByRole("dialog", { name: "Create pool" });
-  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  const dialog = await openVaultPoolDialog(page, keyLabel);
   // Explicit fresh-project selection inside the create-pool dialog.
   await chooseOption(dialog, "Project", projectName);
   const key = (await Promise.all(evidence(page).keys)).find((entry) => entry.label === keyLabel);

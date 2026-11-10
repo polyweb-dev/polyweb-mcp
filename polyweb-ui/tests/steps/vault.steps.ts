@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test"
+import type { Locator, Page } from "@playwright/test"
 import { Given, Then, When } from "./fixtures"
 import { chooseOption, consoleCarrying, requestsCarrying, secretLeaks } from "./providerConfigUi"
 import { approveVaultOAuth, seedVaultBalance } from "./vaultStub"
@@ -36,11 +37,19 @@ export function lastCreatedPoolKeyLabel(): string {
   return createdPoolKeyLabel
 }
 
-When("I create a Search pool {string} for project Alpha on key {string}", async ({ page }, pool: string, key: string) => {
+/** Create pool is an action in the key's portaled popup, not an inline row button. */
+export async function openVaultPoolDialog(page: Page, keyLabel: string): Promise<Locator> {
   await page.goto("/account/keys")
   await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible()
-  await page.getByRole("row").filter({ hasText: key }).getByRole("button", { name: "Create pool" }).click()
+  await page.getByRole("button", { name: `Actions for ${keyLabel}`, exact: true }).click()
+  await page.locator('[data-slot="popover-content"]').getByRole("button", { name: "Create pool", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: "Create pool" })
+  await expect(dialog).toBeVisible()
+  return dialog
+}
+
+When("I create a Search pool {string} for project Alpha on key {string}", async ({ page }, pool: string, key: string) => {
+  const dialog = await openVaultPoolDialog(page, key)
   await chooseOption(dialog, "Project", "Alpha")
   // Create-mode renders no Pool name field (label defaults to the project
   // name); fill it only when present and record the actual created label.
@@ -63,10 +72,7 @@ When("I create a Search pool {string} for project Alpha on key {string}", async 
 })
 
 When("I create a Search pool for project Alpha on key {string}", async ({ page }, key: string) => {
-  await page.goto("/account/keys")
-  await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible()
-  await page.getByRole("row").filter({ hasText: key }).getByRole("button", { name: "Create pool" }).click()
-  const dialog = page.getByRole("dialog", { name: "Create pool" })
+  const dialog = await openVaultPoolDialog(page, key)
   await chooseOption(dialog, "Project", "Alpha")
   createdPoolLabel = "Alpha"
   createdPoolKeyLabel = key
