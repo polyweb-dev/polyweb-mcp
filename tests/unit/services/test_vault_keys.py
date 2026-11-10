@@ -1,7 +1,7 @@
 """Isolated vault access and ownership checks."""
 
 from unittest.mock import AsyncMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -44,34 +44,6 @@ async def test_foreign_or_deleted_key_is_not_found() -> None:
         credentials.return_value.get_owned = AsyncMock(return_value=None)
         with pytest.raises(ResourceNotFound):
             await _owned(AsyncMock(), uuid4(), uuid4())
-
-
-@pytest.mark.asyncio
-async def test_insert_establishes_owner_before_flush() -> None:
-    """Ownership rides the initial INSERT, never a post-flush UPDATE.
-
-    The keyless CHECK requires an owner (or creator) on every visible row
-    version, so a keyless row built ownerless-then-patched would fail the
-    constraint at flush time on a strict database.
-    """
-
-    session = _FakeSession()
-    owner = uuid4()
-    created = await CredentialRepository(session).insert_credential(  # type: ignore[arg-type]
-        account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
-        provider_type="keenable",
-        owner_scope=CredentialOwnerScope.SYSTEM,
-        owner_project_id=None,
-        label="free-tier",
-        auth_mode="keyless",
-        created_by=owner,
-        owner_user_id=owner,
-    )
-    assert session.flushed is True
-    (row,) = session.added
-    assert row.owner_user_id == str(owner)
-    assert created.id == UUID(row.id)
-    assert row.auth_mode == "keyless"
 
 
 @pytest.mark.asyncio

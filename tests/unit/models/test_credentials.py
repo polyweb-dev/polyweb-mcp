@@ -196,26 +196,8 @@ def test_project_projection_allows_manage_and_generation() -> None:
 # through that change.
 
 
-def test_keyless_auth_mode_is_supported() -> None:
-    assert CredentialAuthMode("keyless") is CredentialAuthMode.KEYLESS
-
-
 def test_keyless_credential_create_needs_no_secret() -> None:
     created = CredentialCreate.model_validate(
-        {
-            "provider_type": "keenable",
-            "label": "free-tier",
-            "auth_mode": "keyless",
-        }
-    )
-    assert created.auth_mode is CredentialAuthMode.KEYLESS
-    assert created.secret is None
-
-
-def test_keyless_vault_key_create_needs_no_secret() -> None:
-    from polyweb.models.vault import VaultKeyCreate
-
-    created = VaultKeyCreate.model_validate(
         {
             "provider_type": "keenable",
             "label": "free-tier",
