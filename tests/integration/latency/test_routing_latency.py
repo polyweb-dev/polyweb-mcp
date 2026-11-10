@@ -21,6 +21,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -596,7 +597,14 @@ async def test_rest_search_latency(
         ):
             email = temp_email("latency-rest")
             registered = await client.post(
-                "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+                "/auth/register",
+                json={
+                    "email": email,
+                    "password": TEMP_PASSWORD,
+                    "username": f"tester-{uuid4().hex[:8]}",
+                    "first_name": "Test",
+                    "last_name": "User",
+                },
             )
             assert registered.status_code == 201
             logged_in = await client.post(
@@ -716,7 +724,14 @@ async def test_rest_fetch_latency(
         ):
             email = temp_email("latency-rest-fetch")
             registered = await client.post(
-                "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+                "/auth/register",
+                json={
+                    "email": email,
+                    "password": TEMP_PASSWORD,
+                    "username": f"tester-{uuid4().hex[:8]}",
+                    "first_name": "Test",
+                    "last_name": "User",
+                },
             )
             assert registered.status_code == 201
             logged_in = await client.post(

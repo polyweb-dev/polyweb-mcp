@@ -541,9 +541,11 @@ class ProjectStatus(StrEnum):
 class ProjectCreate(ContractModel):
     """Request to create a new project with an initial administrator.
 
-    The initial administrator is identified by exactly one of
+    The initial administrator is identified by at most one of
     ``initial_admin_user_id`` or ``initial_admin_email``; the service resolves
-    an email to a durable user id inside the creation transaction.
+    an email to a durable user id inside the creation transaction. Omitting
+    both identifiers selects self-service creation and defaults the initial
+    administrator to the authenticated creator.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -560,9 +562,9 @@ class ProjectCreate(ContractModel):
 
     @model_validator(mode="after")
     def _validate_one_admin_identifier(self) -> "ProjectCreate":
-        if (self.initial_admin_user_id is None) == (self.initial_admin_email is None):
+        if self.initial_admin_user_id is not None and self.initial_admin_email is not None:
             raise ValueError(
-                "exactly one of initial_admin_user_id or initial_admin_email must be set"
+                "at most one of initial_admin_user_id or initial_admin_email must be set"
             )
         return self
 
@@ -719,6 +721,9 @@ class ProjectMemberRead(ContractModel):
     project_id: UUID
     user_id: UUID
     email: str
+    username: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
     status: MembershipStatus
     roles: list[str]
     version: int
@@ -744,6 +749,9 @@ class ProviderOwnerRead(ContractModel):
 
     user_id: UUID
     email: str
+    username: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
 
 
 class UnassignedPoolRead(ContractModel):

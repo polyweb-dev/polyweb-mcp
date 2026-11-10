@@ -347,17 +347,16 @@ def test_token_issue_response_wire_boundary_and_leak_prevention() -> None:
 
 
 def test_project_create_requires_atomic_initial_admin() -> None:
-    admin_id = uuid4()
-    proj = ProjectCreate(
+    default_self = ProjectCreate(name="Workspace Alpha", slug="workspace-alpha")
+    assert default_self.initial_admin_user_id is None
+    assert default_self.initial_admin_email is None
+
+    explicit = ProjectCreate(
         name="Workspace Alpha",
         slug="workspace-alpha",
-        initial_admin_user_id=admin_id,
+        initial_admin_user_id=uuid4(),
     )
-    assert proj.initial_admin_user_id == admin_id
-
-    # Missing an initial administrator identifier is rejected
-    with pytest.raises(ValidationError):
-        ProjectCreate(name="Workspace Beta")
+    assert explicit.initial_admin_user_id is not None
 
 
 def test_project_create_requires_exactly_one_admin_identifier() -> None:
@@ -373,10 +372,13 @@ def test_project_create_requires_exactly_one_admin_identifier() -> None:
     assert by_email.initial_admin_user_id is None
     assert by_email.initial_admin_email == "admin@example.com"
 
-    # Both and neither are rejected
-    with pytest.raises(ValidationError, match="exactly one"):
-        ProjectCreate(name="Workspace Gamma")
-    with pytest.raises(ValidationError, match="exactly one"):
+    # Omitted identifiers default to self-service creation.
+    default_self = ProjectCreate(name="Workspace Gamma")
+    assert default_self.initial_admin_user_id is None
+    assert default_self.initial_admin_email is None
+
+    # Both identifiers at once are rejected (at-most-one).
+    with pytest.raises(ValidationError, match="at most one"):
         ProjectCreate(
             name="Workspace Delta",
             initial_admin_user_id=admin_id,

@@ -36,6 +36,7 @@ from polyweb.persistence.oauth_grants import CredentialOAuthGrantRepository
 from polyweb.persistence.otel_exporter import write_trace_spans
 from polyweb.persistence.pools import UpstreamPoolRepository
 from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.users import UserRow
 from polyweb.services.control_errors import ResourceNotFound
 from polyweb.services.credential_oauth import OAuthTarget
 from polyweb.services.vault_keys import VaultOAuthService
@@ -548,3 +549,183 @@ async def test_get_project_trace_of_a_foreign_project_is_none(world: _World) -> 
     assert foreign is None
     assert foreign_reverse is None
     assert missing is None
+
+
+async def test_project_trace_summaries_and_detail_carry_saved_human_profile(
+    world: _World,
+) -> None:
+    """Human roots project the saved user profile on list and detail reads."""
+
+    # Projects A and B share one admin user by fixture design; one saved
+    # profile covers both projects' human traces.
+    async with world.repo.session() as session:
+        user = await session.get(UserRow, world.a.actor_id)
+        assert user is not None
+        assert world.b.actor_id == world.a.actor_id
+        user.username = "trace-alice"
+        user.first_name = "Alice"
+        user.last_name = "Anderson"
+        expected_email = user.email
+        await session.commit()
+
+    _seed_traces(world)
+
+    # Legacy fallback: a root without user_id still resolves via the human actor_id.
+    connection = sqlite3.connect(world.repo.database_path)
+    try:
+        connection.execute(
+            "UPDATE trace_spans SET user_id = NULL WHERE trace_id = ? AND parent_span_id IS NULL",
+            (_TRACE_A2,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    summaries_a = await world.repo.list_project_trace_summaries(project_id=world.a.project_id)
+    by_trace = {summary.trace_id: summary for summary in summaries_a}
+    assert set(by_trace) == {_TRACE_A, _TRACE_A2}
+
+    intact = by_trace[_TRACE_A]
+    assert intact.actor_type is ActorType.HUMAN
+    assert intact.actor_id == str(world.a.actor_id)
+    assert intact.user_id == str(world.a.actor_id)
+    assert intact.username == "trace-alice"
+    assert intact.first_name == "Alice"
+    assert intact.last_name == "Anderson"
+    assert intact.email == expected_email
+
+    legacy = by_trace[_TRACE_A2]
+    assert legacy.actor_type is ActorType.HUMAN
+    assert legacy.actor_id == str(world.a.actor_id)
+    assert legacy.user_id is None
+    assert legacy.username == "trace-alice"
+    assert legacy.first_name == "Alice"
+    assert legacy.last_name == "Anderson"
+    assert legacy.email == expected_email
+
+    summaries_b = await world.repo.list_project_trace_summaries(project_id=world.b.project_id)
+    assert len(summaries_b) == 1
+    shared = summaries_b[0]
+    assert shared.trace_id == _TRACE_B
+    assert shared.actor_type is ActorType.HUMAN
+    assert shared.actor_id == str(world.b.actor_id)
+    assert shared.user_id == str(world.b.actor_id)
+    assert shared.username == "trace-alice"
+    assert shared.first_name == "Alice"
+    assert shared.last_name == "Anderson"
+    assert shared.email == expected_email
+
+    detail_intact = await world.repo.get_project_trace(_TRACE_A, project_id=world.a.project_id)
+    assert detail_intact is not None
+    assert detail_intact.actor_type is ActorType.HUMAN
+    assert detail_intact.actor_id == str(world.a.actor_id)
+    assert detail_intact.user_id == str(world.a.actor_id)
+    assert detail_intact.username == "trace-alice"
+    assert detail_intact.first_name == "Alice"
+    assert detail_intact.last_name == "Anderson"
+    assert detail_intact.email == expected_email
+
+    detail_legacy = await world.repo.get_project_trace(_TRACE_A2, project_id=world.a.project_id)
+    assert detail_legacy is not None
+    assert detail_legacy.actor_type is ActorType.HUMAN
+    assert detail_legacy.actor_id == str(world.a.actor_id)
+    assert detail_legacy.user_id is None
+    assert detail_legacy.username == "trace-alice"
+    assert detail_legacy.email == expected_email
+
+    # Incomplete legacy profile: null names stay null, IDs stay stable.
+    async with world.repo.session() as session:
+        partial_user = await session.get(UserRow, world.a.actor_id)
+        assert partial_user is not None
+        partial_user.first_name = None
+        partial_user.last_name = None
+        await session.commit()
+
+    reread = await world.repo.list_project_trace_summaries(project_id=world.a.project_id)
+    reread_by_trace = {summary.trace_id: summary for summary in reread}
+    assert reread_by_trace[_TRACE_A].username == "trace-alice"
+    assert reread_by_trace[_TRACE_A].first_name is None
+    assert reread_by_trace[_TRACE_A].last_name is None
+    assert reread_by_trace[_TRACE_A].email == expected_email
+    assert reread_by_trace[_TRACE_A].actor_id == str(world.a.actor_id)
+    assert reread_by_trace[_TRACE_A].user_id == str(world.a.actor_id)
+
+
+async def test_project_api_key_and_historical_traces_keep_null_human_profile(
+    world: _World,
+) -> None:
+    """API-key roots never resolve to a human profile; missing users stay null."""
+
+    async with world.repo.session() as session:
+        creator = await session.get(UserRow, world.a.actor_id)
+        assert creator is not None
+        creator.username = "key-creator"
+        creator.first_name = "Key"
+        creator.last_name = "Creator"
+        await session.commit()
+
+    key_id = uuid4()
+    ghost_id = uuid4()
+    api_trace_id = "d" * 32
+    ghost_trace_id = "e" * 32
+    api_owner = ExecutionAttribution(
+        project_id=world.a.project_id,
+        actor_type=ActorType.PROJECT_API_KEY,
+        actor_id=key_id,
+    )
+    ghost_owner = ExecutionAttribution(
+        project_id=world.a.project_id,
+        actor_type=ActorType.HUMAN,
+        actor_id=ghost_id,
+    )
+    api_record = _span(
+        span_id="d000000000000001", trace_id=api_trace_id, owner=api_owner, at=_T0
+    ).model_copy(update={"user_id": None})
+    ghost_record = _span(
+        span_id="e000000000000001",
+        trace_id=ghost_trace_id,
+        owner=ghost_owner,
+        at=_T0 + timedelta(minutes=1),
+    )
+    write_trace_spans(world.repo.database_path, [api_record, ghost_record])
+
+    summaries = await world.repo.list_project_trace_summaries(project_id=world.a.project_id)
+    by_trace = {summary.trace_id: summary for summary in summaries}
+    assert set(by_trace) == {api_trace_id, ghost_trace_id}
+
+    api_summary = by_trace[api_trace_id]
+    assert api_summary.actor_type is ActorType.PROJECT_API_KEY
+    assert api_summary.actor_id == str(key_id)
+    assert api_summary.user_id is None
+    assert api_summary.username is None
+    assert api_summary.first_name is None
+    assert api_summary.last_name is None
+    assert api_summary.email is None
+
+    ghost_summary = by_trace[ghost_trace_id]
+    assert ghost_summary.actor_type is ActorType.HUMAN
+    assert ghost_summary.actor_id == str(ghost_id)
+    assert ghost_summary.user_id == str(ghost_id)
+    assert ghost_summary.username is None
+    assert ghost_summary.first_name is None
+    assert ghost_summary.last_name is None
+    assert ghost_summary.email is None
+
+    api_detail = await world.repo.get_project_trace(api_trace_id, project_id=world.a.project_id)
+    assert api_detail is not None
+    assert api_detail.actor_type is ActorType.PROJECT_API_KEY
+    assert api_detail.actor_id == str(key_id)
+    assert api_detail.username is None
+    assert api_detail.first_name is None
+    assert api_detail.last_name is None
+    assert api_detail.email is None
+
+    ghost_detail = await world.repo.get_project_trace(ghost_trace_id, project_id=world.a.project_id)
+    assert ghost_detail is not None
+    assert ghost_detail.actor_type is ActorType.HUMAN
+    assert ghost_detail.actor_id == str(ghost_id)
+    assert ghost_detail.username is None
+    assert ghost_detail.email is None
+
+    assert await world.repo.list_project_trace_summaries(project_id=world.b.project_id) == []
+    assert await world.repo.get_project_trace(api_trace_id, project_id=world.b.project_id) is None

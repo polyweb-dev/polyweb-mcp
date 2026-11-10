@@ -1,5 +1,6 @@
 import { accountDisplayName, useAuth } from "@/domains/auth"
 import type { UserAccount } from "@/domains/auth"
+import { identityLabel } from "@/shared/lib/identity"
 import type { Fact } from "@/shared/ui/FactList"
 import { PageHeader } from "@/shared/ui/PageHeader"
 
@@ -11,15 +12,19 @@ const SIGN_IN_METHODS: Record<UserAccount["auth_provider"], string> = {
 /**
  * Account view: one card of facts from `GET /users/me`. A signed-in account
  * is active by definition, so no status row. Verification has no supported
- * action and is omitted. Sign out lives in the sidebar account popup.
+ * action and is omitted. The full name leads when one exists, then the
+ * username, with the email kept for contact and sign-in context. Sign out
+ * lives in the sidebar account popup.
  */
 export function AccountPage() {
   const { account } = useAuth()
   if (account === null) return null
   const name = accountDisplayName(account)
+  const username = account.username !== null && account.username.trim() !== "" ? account.username.trim() : null
   const facts: Fact[] = [
     { label: "Email", value: account.email },
-    ...(name === null ? [] : [{ label: "Name", value: name }]),
+    ...(name === null ? [] : [{ label: "Name", value: identityLabel(account) }]),
+    ...(username === null || username === name ? [] : [{ label: "Username", value: username }]),
     { label: "Sign-in method", value: SIGN_IN_METHODS[account.auth_provider] },
   ]
 

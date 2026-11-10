@@ -10,7 +10,7 @@ import {
   useProjects,
 } from "@/domains/projects"
 
-const NOT_A_MEMBER_MESSAGE = "Project created. You are not a member of it."
+const NOT_A_MEMBER_MESSAGE = "Project created. Refresh the list to open it."
 
 interface CreateErrors {
   name: string | null
@@ -28,16 +28,22 @@ function serverErrors(message: string): CreateErrors {
 /**
  * Project creation panel of the projects page.
  *
- * Renders only when the page gates it behind project creation. After a
- * successful create the provider reloads the list once: a member lands on
- * the new overview, a creator without membership (a system administrator)
- * gets a neutral note instead, since there is no implicit membership.
+ * Renders only when the page gates it behind the live `project.create` system
+ * permission. The project name is required; the administrator email is
+ * optional and blank by default. A blank email omits the admin identifier so
+ * the backend defaults the initial administrator to the authenticated
+ * creator. A filled email preserves the explicit-admin flow (for example a
+ * system administrator naming someone else's account); the creator still
+ * retains administration. After a successful create the provider reloads
+ * the list once: when the new project is listed the form navigates to its
+ * overview, otherwise it notes the project was created and asks to refresh
+ * the list to open it, since the refreshed list may not be ready yet.
  */
-export function ProjectCreateForm({ defaultAdminEmail }: { defaultAdminEmail: string }) {
+export function ProjectCreateForm() {
   const { reloadProjects } = useProjects()
   const navigate = useNavigate()
   const [name, setName] = useState("")
-  const [adminEmail, setAdminEmail] = useState(defaultAdminEmail)
+  const [adminEmail, setAdminEmail] = useState("")
   const [pending, setPending] = useState(false)
   const [errors, setErrors] = useState<CreateErrors>(NO_ERRORS)
   const [note, setNote] = useState<string | null>(null)
@@ -48,15 +54,18 @@ export function ProjectCreateForm({ defaultAdminEmail }: { defaultAdminEmail: st
     const trimmedEmail = adminEmail.trim()
     const invalid: CreateErrors = {
       name: trimmedName ? null : "Enter a project name",
-      email: trimmedEmail ? null : "Enter the first administrator's email address",
+      email: null,
       form: null,
     }
     setNote(null)
     setErrors(invalid)
-    if (invalid.name !== null || invalid.email !== null) return
+    if (invalid.name !== null) return
     setPending(true)
     try {
-      const created = await createProject({ name: trimmedName, initial_admin_email: trimmedEmail })
+      const created =
+        trimmedEmail === ""
+          ? await createProject({ name: trimmedName })
+          : await createProject({ name: trimmedName, initial_admin_email: trimmedEmail })
       const fresh = await reloadProjects()
       if (fresh !== null && fresh.some((project) => project.id === created.id)) {
         navigate(`/p/${created.id}`)
@@ -94,12 +103,13 @@ export function ProjectCreateForm({ defaultAdminEmail }: { defaultAdminEmail: st
         />
         <TextField
           id="project-create-admin-email"
-          label="First administrator email"
+          label="First administrator email (optional)"
           type="email"
           value={adminEmail}
           onChange={setAdminEmail}
           disabled={pending}
           autoComplete="email"
+          hint="Leave blank to make yourself the administrator."
           error={errors.email}
         />
         {errors.form !== null && (

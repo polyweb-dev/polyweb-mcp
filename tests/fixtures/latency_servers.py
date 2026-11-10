@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -522,7 +523,13 @@ class RoutingLatencyHarness:
         email = temp_email("latency-rest")
         registered = await client.post(
             f"{target.base_url}/auth/register",
-            json={"email": email, "password": TEMP_PASSWORD},
+            json={
+                "email": email,
+                "password": TEMP_PASSWORD,
+                "username": f"tester-{uuid4().hex[:8]}",
+                "first_name": "Test",
+                "last_name": "User",
+            },
         )
         if registered.status_code != 201:
             raise RuntimeError(f"REST registration failed with HTTP {registered.status_code}")

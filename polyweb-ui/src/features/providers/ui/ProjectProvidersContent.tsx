@@ -6,6 +6,7 @@ import type { ScopedResource } from "@/shared/lib/useScopedResource"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/EmptyState"
 import { RowActionsMenu } from "@/shared/ui/RowActionsMenu"
+import { identityDetailLabel } from "@/shared/lib/identity"
 import type { ProjectProvidersController } from "../model/useProjectProvidersController"
 import { ProjectPoolCell } from "./ProjectPoolCell"
 import { ProviderOrderSection } from "./ProviderOrderSection"
@@ -45,10 +46,11 @@ function renderPoolMenu({ pool, name, isOwner, edit, unassign }: {
 
 function renderReadyContent(props: Omit<Props, "pools"> & { pools: ProjectPool[]; providers: ProviderTypeView[] }) {
   const { projectId, revision, providers, pools, owner, isOwner, canConfigure, missing } = props
-  const ownerEmail = owner.status === "ready" ? owner.data?.email : null
+  const ownerEntry = owner.status === "ready" ? owner.data : null
+  const ownerContact = ownerEntry === null || ownerEntry === undefined ? null : identityDetailLabel(ownerEntry)
   return <>
     <ProviderOrderSection key={projectId} context={{
-      projectId, revision, providers, canConfigure, owner: ownerEmail, isOwner,
+      projectId, revision, providers, canConfigure, ownerContact, isOwner,
       canEditSystem: props.canEditSystem, addCapacity: missing.length > 0 ? () => props.add() : undefined,
       poolOperations: (provider) => pools.find((pool) => pool.provider_type === provider)?.operations,
       changePoolOperation: (provider, operation, enabled) => {
@@ -66,7 +68,7 @@ function renderReadyContent(props: Omit<Props, "pools"> & { pools: ProjectPool[]
     }} />
     <ProvidersWithoutCapacity providers={missing} isOwner={isOwner} onAdd={props.add} />
     {providers.length === 0 && pools.length === 0 && <EmptyState title="No providers yet" description={isOwner
-      ? "Add provider capacity to use providers" : `No provider has capacity yet. Ask ${ownerEmail ?? "the provider owner"} to add it`} />}
+      ? "Add provider capacity to use providers" : `No provider has capacity yet. Ask ${ownerContact ?? "the provider owner"} to add it`} />}
   </>
 }
 

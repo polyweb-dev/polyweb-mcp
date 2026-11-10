@@ -66,13 +66,64 @@ describe("projectsApi", () => {
     expect(stub.requests[0]?.url).toBe("/api/v1/system/projects?include_archived=true")
   })
 
-  it("creates a project by first-admin email", async () => {
+  it("creates a project with one explicit administrator identifier", async () => {
     const stub = installFetchStub(() =>
       ok({ id: "p1", account_id: "a", name: "N", slug: "n", status: "active", created_by: "u", created_at: "t", version: 1 }, 201)
     )
     const created = await createProject({ name: "N", initial_admin_email: " a@x.io " })
     expect(created.id).toBe("p1")
     expect(stub.requests[0]?.body).toEqual({ name: "N", initial_admin_email: " a@x.io " })
+  })
+
+  it("round-trips named, legacy, and nullable member profile payloads", async () => {
+    const stub = installFetchStub((req) => {
+      if (req.url.endsWith("/access")) return ok(PROJECT_ACCESS_BODY)
+      if (req.url.endsWith("/members") && req.method === "GET") {
+        return ok([
+          { ...MEMBER_BODY, username: "ada", first_name: "Ada", last_name: "Lovelace" },
+          { ...MEMBER_BODY, user_id: "u2", email: "ops@example.com", username: "ops-lead" },
+          { ...MEMBER_BODY, user_id: "u3", email: "legacy@example.com" },
+          { ...MEMBER_BODY, user_id: "u4", email: "null@example.com", username: null, first_name: null, last_name: null },
+        ])
+      }
+      return ok(MEMBER_BODY)
+    })
+    const members = await listProjectMembers("p1", new AbortController().signal)
+    expect(members.map((member) => member.email)).toEqual([
+      "m@example.com",
+      "ops@example.com",
+      "legacy@example.com",
+      "null@example.com",
+    ])
+    expect(members[0]).toMatchObject({ username: "ada", first_name: "Ada", last_name: "Lovelace" })
+    expect(members[1]).toMatchObject({ username: "ops-lead", first_name: null, last_name: null })
+    expect(members[2]).not.toHaveProperty("username")
+    expect(members[3]).toMatchObject({ username: null, first_name: null, last_name: null })
+    expect(stub.requests[0]?.url).toBe("/api/v1/projects/p1/members")
+  })
+
+  it("defaults the initial administrator by omitting blank admin identifiers", async () => {
+    const stub = installFetchStub(() =>
+      ok({ id: "p1", account_id: "a", name: "N", slug: "n", status: "active", created_by: "u", created_at: "t", version: 1 }, 201)
+    )
+    await createProject({ name: "N" })
+    expect(stub.requests[0]?.body).toEqual({ name: "N" })
+
+    const stubBlank = installFetchStub(() =>
+      ok({ id: "p1", account_id: "a", name: "N", slug: "n", status: "active", created_by: "u", created_at: "t", version: 1 }, 201)
+    )
+    // The create form trims the email before it calls; the domain contract
+    // omits identifiers that arrive empty so the backend defaults the creator.
+    await createProject({ name: "N", initial_admin_email: "", initial_admin_user_id: "" })
+    expect(stubBlank.requests[0]?.body).toEqual({ name: "N" })
+  })
+
+  it("preserves the other-admin user id flow", async () => {
+    const stub = installFetchStub(() =>
+      ok({ id: "p1", account_id: "a", name: "N", slug: "n", status: "active", created_by: "u", created_at: "t", version: 1 }, 201)
+    )
+    await createProject({ name: "N", initial_admin_user_id: "u-2" })
+    expect(stub.requests[0]?.body).toEqual({ name: "N", initial_admin_user_id: "u-2" })
   })
 
   it("maps project endpoints for access, members, and mutations", async () => {

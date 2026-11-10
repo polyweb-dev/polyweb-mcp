@@ -65,13 +65,14 @@ Feature: Project shell and membership UX
     And the second tab still has member management controls
     And the second tab's draft still contains "teammate@example.com"
 
-  @stub
+  @stub @smoke
   Scenario: A system administrator creates a project and lands on its overview
     Given the projects backend is stubbed for a system administrator
     When I open the workspace page "/projects"
     And I fill "Project name" with "Gamma"
     When I submit the create project form
-    Then I see the heading "Gamma"
+    Then the project selector names "Gamma" within the viewport
+    And I see the heading "Gamma"
     And the page URL path should be "/p/cccccccc-3333-4333-8333-cccccccccccc"
     When I open the workspace page "/p/cccccccc-3333-4333-8333-cccccccccccc/routing"
     Then the page URL path should be "/p/cccccccc-3333-4333-8333-cccccccccccc"
@@ -85,6 +86,21 @@ Feature: Project shell and membership UX
     Then I see the heading "Projects"
     And I see "Alpha"
     And the create project form is absent
+
+  @stub @smoke
+  Scenario: A regular user with project.create creates a project and keeps access to it
+    Given the projects backend is stubbed with system permissions "project.create"
+    And I hold no project memberships
+    When I open the workspace page "/projects"
+    And I fill "Project name" with "Gamma"
+    When I submit the create project form
+    Then the project selector names "Gamma" within the viewport
+    And I see the heading "Gamma"
+    And the page URL path should be "/p/cccccccc-3333-4333-8333-cccccccccccc"
+    When I open the workspace page "/projects"
+    Then I see "Gamma"
+    When I open the workspace page "/p/cccccccc-3333-4333-8333-cccccccccccc/members"
+    Then the members table shows "member@example.com"
 
   @stub
   Scenario: The root path reopens the last explicitly selected project

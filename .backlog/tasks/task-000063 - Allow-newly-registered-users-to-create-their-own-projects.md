@@ -1,10 +1,10 @@
 ---
 id: TASK-000063
 title: Complete self-service signup, profile names and project creation
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-11-09T15:36:00Z'
-updated_date: '2026-11-09T15:39:00Z'
+updated_date: '2026-11-09T17:21:00Z'
 labels:
   - frontend
   - backend
@@ -24,7 +24,7 @@ references:
     C:\Users\shara\.t3\userdata\attachments\mcp-ef53194d-3bc5-4bd8-af1e-7dfc981ed007-025190e3-42a2-4abe-9cbf-8691edebbed3.png
 priority: high
 type: bug
-ordinal: 52000
+ordinal: 1000
 ---
 
 ## Description
@@ -58,6 +58,12 @@ Reproduction: start with a fresh installation, sign up as a regular user, sign i
 - [ ] #13 Username, first name and last name are mandatory signup parameters, just like email. Both the desktop signup form and signup API require, validate and persist all three fields on the user profile.
 - [ ] #14 Signup rejects omitted, null, empty or whitespace-only username, first name or last name with clear field-level validation errors, and does not create an account when any required field is invalid. Regression coverage exercises these cases through the UI and API.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Backend stage (this agent): self-service project creation for any active authenticated regular user without membership or system admin; creator durably granted project admin; preserve isolation, system RBAC, inactive/unauthenticated restrictions; mandatory signup username/first_name/last_name with atomic per-field validation; persist/expose profile on authenticated reads; expose available profile names in member/owner/activity responses within existing visibility; no TASK-000056 lifecycle expansion. 2. Frontend stage (separate agent): empty-state create flow, sidebar/Account/member/owner/activity display with full-name greater than username greater than email fallback and avatar initials. 3. Independent tester stage: regression coverage for fresh signup to first-project creation, creator permissions, isolation, signup validation/persistence, display fallbacks. 4. Adversarial Codex review plus executor CI (unit/integration/BDD/latency as applicable on Woodpecker). 5. Final Devin UI-only review. 6. Finalization and PR.
+<!-- SECTION:PLAN:END -->
 
 ## Comments
 

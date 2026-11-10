@@ -123,7 +123,16 @@ def step_given_live_vault_youcom(context: Any) -> None:
     client.__enter__()
     _push_cleanup(context, lambda: client.__exit__(None, None, None))
     context.live_client = client
-    registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+    registered = client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": TEMP_PASSWORD,
+            "username": email.split("@")[0][:64],
+            "first_name": "Test",
+            "last_name": "User",
+        },
+    )
     assert registered.status_code == 201, registered.text
     context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
     logged_in = client.post("/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD})

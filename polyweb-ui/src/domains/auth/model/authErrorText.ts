@@ -13,7 +13,8 @@ import { ApiError, errorMessage } from "@/shared/api/http"
 const CODE_TEXT: Record<string, string> = {
   REGISTER_INVALID_PASSWORD:
     "Use 12 to 128 characters with an upper-case letter, a lower-case letter, a digit, and a symbol.",
-  REGISTER_USER_ALREADY_EXISTS: "That email address already has an account. Sign in instead.",
+  REGISTER_USER_ALREADY_EXISTS:
+    "That email address or username is already in use. Choose another, or sign in to your existing account.",
   LOGIN_BAD_CREDENTIALS: "The email address or the password is not correct.",
 }
 

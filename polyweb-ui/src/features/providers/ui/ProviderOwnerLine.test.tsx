@@ -39,4 +39,65 @@ describe("ProviderOwnerLine", () => {
     render(<MemoryRouter><ProviderOwnerLine owner={owner({ user_id: "me", email: "me@example.com" })} projectId="p1" accountId="me" isAdmin canConfigure onClaimed={vi.fn()} /></MemoryRouter>)
     expect(screen.getByRole("link", { name: "Transfer ownership" })).toHaveAttribute("href", "/p/p1/members")
   })
+
+  it("shows the owner full name primary with the email kept for contact", () => {
+    render(
+      <MemoryRouter>
+        <ProviderOwnerLine
+          owner={owner({ user_id: "u1", email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" })}
+          projectId="p1"
+          accountId="me"
+          isAdmin
+          canConfigure
+          onClaimed={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    const note = screen.getByRole("note")
+    expect(note).toHaveTextContent("Provider owner: Ada Lovelace")
+    expect(note).toHaveAttribute("title", "Ada Lovelace (ada@example.com)")
+    expect(note).not.toHaveTextContent("(you)")
+    expect(screen.getByText(/Only the provider owner can add or remove capacity/)).toHaveTextContent(
+      "Ask Ada Lovelace (ada@example.com)"
+    )
+  })
+
+  it("marks the caller with the username fallback and keeps the email secondary", () => {
+    render(
+      <MemoryRouter>
+        <ProviderOwnerLine
+          owner={owner({ user_id: "me", email: "ops@example.com", username: "ops-lead" })}
+          projectId="p1"
+          accountId="me"
+          isAdmin
+          canConfigure
+          onClaimed={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    const note = screen.getByRole("note")
+    expect(note).toHaveTextContent("Provider owner: ops-lead (you)")
+    expect(note).toHaveAttribute("title", "ops-lead (ops@example.com)")
+  })
+
+  it("shows the email alone without a title for a legacy owner payload", () => {
+    render(
+      <MemoryRouter>
+        <ProviderOwnerLine
+          owner={owner({ user_id: "u1", email: "lead@example.com" })}
+          projectId="p1"
+          accountId="me"
+          isAdmin={false}
+          canConfigure={false}
+          onClaimed={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    const note = screen.getByRole("note")
+    expect(note).toHaveTextContent("Provider owner: lead@example.com")
+    expect(note).not.toHaveAttribute("title")
+  })
 })

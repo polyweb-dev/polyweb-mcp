@@ -190,7 +190,7 @@ describe("Provider order section", () => {
     const empty = document()
     empty.search.providers = []
     mocks.get.mockResolvedValue(empty)
-    const { rerender } = render(<ProviderOrderSection context={context({ owner: "owner@example.com" })} />)
+    const { rerender } = render(<ProviderOrderSection context={context({ ownerContact: "owner@example.com" })} />)
     expect(await screen.findByText(/Ask owner@example.com/)).toBeInTheDocument()
     rerender(<ProviderOrderSection context={context({ isOwner: true })} />)
     expect(screen.getByRole("link", { name: "Change pools" })).toHaveAttribute("href", "/account/keys")

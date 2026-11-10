@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { apiKeyFixture } from "@/test/accessFixtures"
 import {
   canRotateKey,
+  creatorContactDetail,
   creatorLabel,
   expiresLabel,
   formatKeyDate,
@@ -54,13 +55,49 @@ describe("column labels", () => {
 describe("creatorLabel", () => {
   const creator = "11111111-1111-4111-8111-111111111111"
 
-  it("shows the member email when the member list is readable", () => {
-    expect(creatorLabel(creator, new Map([[creator, "lead@example.com"]]))).toBe("lead@example.com")
+  it("shows the member email when the member list holds an email-only identity", () => {
+    expect(creatorLabel(creator, new Map([[creator, { email: "lead@example.com" }]]))).toBe(
+      "lead@example.com"
+    )
   })
 
-  it("shows a short id without the member list or for a former member", () => {
+  it("shows the member display name when the creator has a saved profile", () => {
+    const identities = new Map([
+      [creator, { email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" }],
+    ])
+    expect(creatorLabel(creator, identities)).toBe("Ada Lovelace")
+  })
+
+  it("falls back to the username when the creator has no full name, else the email", () => {
+    expect(
+      creatorLabel(creator, new Map([[creator, { email: "ops@example.com", username: "ops-lead" }]]))
+    ).toBe("ops-lead")
+    expect(creatorLabel(creator, new Map([[creator, { email: "lead@example.com" }]]))).toBe(
+      "lead@example.com"
+    )
+  })
+
+  it("shows a short id without the member list or for an unreadable member", () => {
     expect(creatorLabel(creator, null)).toBe("11111111")
     expect(creatorLabel(creator, new Map())).toBe("11111111")
+  })
+})
+
+describe("creatorContactDetail", () => {
+  const creator = "11111111-1111-4111-8111-111111111111"
+
+  it("returns Name (email) only when the primary label hides the email", () => {
+    expect(creatorContactDetail(creator, null)).toBeNull()
+    expect(creatorContactDetail(creator, new Map())).toBeNull()
+    expect(creatorContactDetail(creator, new Map([[creator, { email: "lead@example.com" }]]))).toBeNull()
+    expect(
+      creatorContactDetail(
+        creator,
+        new Map([
+          [creator, { email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" }],
+        ])
+      )
+    ).toBe("Ada Lovelace (ada@example.com)")
   })
 })
 

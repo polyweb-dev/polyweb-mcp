@@ -67,16 +67,20 @@ describe("TraceDetailDialog", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
   })
 
-  it("shows the compact summary strip with status, provider, latency, and count", () => {
+  it("shows the compact summary strip with status, provider, attribution, latency, and count", () => {
     renderDialog(aggregatedDetail())
 
     const dialog = screen.getByRole("dialog")
     expect(within(dialog).getAllByText("Provider").length).toBeGreaterThan(0)
     expect(within(dialog).getByText("All providers")).toBeInTheDocument()
+    expect(within(dialog).getAllByText("Initiated by").length).toBeGreaterThan(0)
     expect(within(dialog).getAllByText("Total latency").length).toBeGreaterThan(0)
     expect(within(dialog).getAllByText(/^3,?381 ?ms$/).length).toBeGreaterThan(0)
     expect(within(dialog).getByText("Success")).toBeInTheDocument()
     expect(within(dialog).getAllByText("6").length).toBeGreaterThan(0)
+    expect(
+      within(dialog).getByText("Initiated by").closest("div")
+    ).toHaveTextContent("—")
   })
 
   it("discloses the full query in the compact context band", () => {
@@ -288,13 +292,14 @@ describe("TraceDetailDialog", () => {
     expect(within(trajectory).getByText(/^2,?025 ?ms$/)).toBeInTheDocument()
   })
 
-  it("keeps the approved narrow branches: 2×2 summary rail", () => {
+  it("keeps the approved responsive rail: 2×2 narrow, 3 from sm, 5 on wide", () => {
     renderDialog(aggregatedDetail())
 
     const rail = screen.getByText("All providers").closest("dl")
     expect(rail?.className.split(" ")).toEqual(
-      expect.arrayContaining(["grid-cols-2", "sm:grid-cols-4"])
+      expect.arrayContaining(["grid-cols-2", "sm:grid-cols-3", "lg:grid-cols-5"])
     )
+    expect(rail?.className).not.toContain("sm:grid-cols-4")
   })
 
   it("opens Timeline with the first payload-bearing span selected", async () => {
@@ -430,6 +435,54 @@ describe("TraceDetailDialog", () => {
 })
 
 /**
+ * TASK-000063 initiated-by attribution: the summary rail keeps attribution
+ * visible as its third cell, with human labels, key-distinct rows, and quiet
+ * legacy rows carrying no project rename.
+ */
+describe("TraceDetailDialog actor identity", () => {
+  const ACTOR_DETAIL_ID = "9".repeat(32)
+
+  function detailWithActor(overrides: Record<string, unknown> = {}): TraceDetail {
+    return mapTraceDetail(traceDetailFixture({ trace_id: ACTOR_DETAIL_ID, ...overrides }))
+  }
+
+  function railTerms(): string[] {
+    const rail = document.querySelector("dl")!
+    return Array.from(rail.querySelectorAll(":scope > div dt")).map(
+      (term) => term.textContent ?? ""
+    )
+  }
+
+  function railValues(): string[] {
+    const rail = document.querySelector("dl")!
+    return Array.from(rail.querySelectorAll(":scope > div dd")).map(
+      (value) => value.textContent ?? ""
+    )
+  }
+
+  it("keeps attribution visible as the third rail cell with the approved labels", () => {
+    renderDialog(
+      detailWithActor({
+        actor_type: "human",
+        first_name: "Ada",
+        last_name: "Lovelace",
+        email: "ada@example.com",
+      })
+    )
+
+    expect(railTerms()).toEqual([
+      "Status",
+      "Provider",
+      "Initiated by",
+      "Total latency",
+      "Results",
+    ])
+    expect(railValues()[2]).toContain("Ada Lovelace")
+    expect(railValues()[2]).toContain("ada@example.com")
+  })
+})
+
+/**
  * The rebuilt dialog (PLAN §6.3 item 5): 7xl modal, one aligned `<dl>` summary
  * compact context band, two inspection views, and a default-selected result.
  */
@@ -457,7 +510,12 @@ describe("TraceDetailDialog inspector workspace", () => {
     expect(document.querySelector(".sm\\:max-w-7xl")).not.toBeNull()
     const rail = document.querySelector("dl")
     expect(rail).not.toBeNull()
-    expect(rail?.querySelectorAll(":scope > div")).toHaveLength(4)
+    expect(rail?.querySelectorAll(":scope > div")).toHaveLength(5)
+    expect(
+      Array.from(rail?.querySelectorAll(":scope > div dt") ?? []).map(
+        (term) => term.textContent
+      )
+    ).toEqual(["Status", "Provider", "Initiated by", "Total latency", "Results"])
   })
 
   it("keeps the concise fusion explanation available without a duplicate list", async () => {

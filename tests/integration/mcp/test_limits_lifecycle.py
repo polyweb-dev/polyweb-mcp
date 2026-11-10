@@ -277,7 +277,14 @@ async def test_injected_repository_mcp_runs_admission_like_rest(
 async def _register_and_login(client: httpx.AsyncClient) -> dict[str, str]:
     email = temp_email("rest-admission")
     registered = await client.post(
-        "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+        "/auth/register",
+        json={
+            "email": email,
+            "password": TEMP_PASSWORD,
+            "username": email.split("@")[0][:64],
+            "first_name": "Test",
+            "last_name": "User",
+        },
     )
     assert registered.status_code == 201
     logged_in = await client.post(

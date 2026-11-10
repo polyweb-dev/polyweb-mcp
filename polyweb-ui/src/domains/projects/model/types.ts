@@ -62,6 +62,9 @@ export interface ProjectMember {
   project_id: string
   user_id: string
   email: string
+  username?: string | null
+  first_name?: string | null
+  last_name?: string | null
   status: MembershipStatus
   roles: string[]
   role: "admin" | "developer"

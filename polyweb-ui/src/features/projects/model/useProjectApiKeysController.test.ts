@@ -13,7 +13,7 @@ function installStub(issue: () => Response = () => ok({ ...apiKeyFixture(), key:
   return installFetchStub((req) => {
     if (req.url.endsWith("/api-keys") && req.method === "GET") return ok([apiKeyFixture()])
     if (req.url.endsWith("/members")) {
-      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", status: "active", roles: ["project_admin"], role: "admin", permissions: 15, provider_owner: false, account_active: true, version: 1 }])
+      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace", status: "active", roles: ["project_admin"], role: "admin", permissions: 15, provider_owner: false, account_active: true, version: 1 }])
     }
     if (req.url.endsWith("/api-keys") && req.method === "POST") return issue()
     return err(404, null)
@@ -40,18 +40,25 @@ const ISSUE = { label: "CI", scopes: ["search.execute"] as const, expiry: { kind
 afterEach(() => vi.unstubAllGlobals())
 
 describe("useProjectApiKeysController", () => {
-  it("loads the keys and the creator emails", async () => {
+  it("loads the keys and the creator identity", async () => {
     installStub()
     const { result } = renderController()
     await waitFor(() => expect(result.current.keys.status).toBe("ready"))
-    await waitFor(() => expect(result.current.emailsByUserId?.get(CREATOR)).toBe("lead@example.com"))
+    await waitFor(() =>
+      expect(result.current.identitiesByUserId?.get(CREATOR)).toEqual({
+        email: "lead@example.com",
+        username: "ada",
+        first_name: "Ada",
+        last_name: "Lovelace",
+      })
+    )
   })
 
   it("skips the member read without members.read", async () => {
     const stub = installStub()
     const { result } = renderController({ canReadMembers: false })
     await waitFor(() => expect(result.current.keys.status).toBe("ready"))
-    expect(result.current.emailsByUserId).toBeNull()
+    expect(result.current.identitiesByUserId).toBeNull()
     expect(stub.requests.some((req) => req.url.endsWith("/members"))).toBe(false)
   })
 

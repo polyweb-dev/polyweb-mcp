@@ -44,7 +44,7 @@ function renderActivityPage(search = "") {
 }
 
 /**
- * The Activity list is a scannable, payload-free table: seven headers ending
+ * The Activity list is a scannable, payload-free table: eight headers ending
  * in Actions, one shared "View details" chevron button per row, and
  * never the query or result URLs in the list document. An aggregated fanout
  * row discloses one nested provider attempt per recorded call. Page-level
@@ -81,7 +81,7 @@ describe("ActivityList", () => {
     vi.unstubAllGlobals()
   })
 
-  it("renders seven visible headers ending in Actions", () => {
+  it("renders eight visible headers ending in Actions", () => {
     render(<ActivityList {...listProps()} />)
 
     const headers = screen.getAllByRole("columnheader")
@@ -89,6 +89,7 @@ describe("ActivityList", () => {
       "Time",
       "Operation",
       "Provider",
+      "Initiated by",
       "Status",
       "Latency",
       "Results",
@@ -192,13 +193,52 @@ describe("ActivityList", () => {
       (latency) => within(screen.getByText(ms(latency)).closest("tr")!).getByRole("button", { name: "View details" })
     )
     expect(inspectButtons).toHaveLength(7)
+    // Nested rows align under the eight shared headers: the gutter and
+    // Response lead, Provider names the attempt, Initiated by stays empty
+    // (attempts carry no actor), then Status/Latency/Results/Actions.
+    // The gutter and empty Initiated-by cells are aria-hidden, so include
+    // hidden cells to count the full eight-column row.
+    const headers = screen.getAllByRole("columnheader").map((header) => header.textContent)
+    expect(headers).toEqual([
+      "Time",
+      "Operation",
+      "Provider",
+      "Initiated by",
+      "Status",
+      "Latency",
+      "Results",
+      "Actions",
+    ])
     // Scope by the attempt latency: the parent list has other Keenable rows.
     const keenableRow = screen.getByText(ms(2025)).closest("tr")!
-    expect(within(keenableRow).getByText("Keenable")).toBeInTheDocument()
-    expect(within(keenableRow).getByText("3")).toBeInTheDocument()
-    expect(within(keenableRow).getByText("Success")).toBeInTheDocument()
+    const keenableCells = within(keenableRow).getAllByRole("cell", { hidden: true })
+    expect(keenableCells).toHaveLength(8)
+    expect(keenableCells[1]).toHaveTextContent("Response")
+    expect(keenableCells[2]).toHaveTextContent("Keenable")
+    expect(keenableCells[3]?.textContent).toBe("")
+    expect(keenableCells[3]).toHaveAttribute("aria-hidden", "true")
+    expect(keenableCells[4]).toHaveTextContent("Success")
+    expect(keenableCells[5]).toHaveTextContent(ms(2025))
+    expect(keenableCells[6]).toHaveTextContent("3")
+    expect(
+      within(keenableCells[7]!).getByRole("button", { name: "View details" })
+    ).toBeInTheDocument()
     const tavilyRow = screen.getByText(ms(3223)).closest("tr")!
-    expect(within(tavilyRow).getByText("Tavily")).toBeInTheDocument()
+    const tavilyCells = within(tavilyRow).getAllByRole("cell", { hidden: true })
+    expect(tavilyCells).toHaveLength(8)
+    expect(tavilyCells[2]).toHaveTextContent("Tavily")
+    expect(tavilyCells[3]?.textContent).toBe("")
+    expect(tavilyCells[4]).toHaveTextContent("Success")
+    expect(tavilyCells[5]).toHaveTextContent(ms(3223))
+    // Every nested attempt leaves Initiated by empty instead of repeating an actor.
+    for (const latency of [2025, 3223, 1450, 1780, 2050, 2310, 830]) {
+      const cells = within(screen.getByText(ms(latency)).closest("tr")!).getAllByRole("cell", {
+        hidden: true,
+      })
+      expect(cells).toHaveLength(8)
+      expect(cells[3]?.textContent).toBe("")
+      expect(cells[3]?.textContent).not.toContain("—")
+    }
   })
 
   it("passes the trace id and provider span id when View details is clicked", async () => {
@@ -233,6 +273,9 @@ describe("ActivityList", () => {
       />
     )
     expect(screen.getByRole("status")).toHaveTextContent(/loading provider responses/i)
+    const loadingCell = screen.getByRole("status").closest("td")!
+    expect(loadingCell).toHaveAttribute("colspan", "8")
+    expect(within(loadingCell.closest("tr")!).getAllByRole("cell")).toHaveLength(1)
 
     rerender(
       <ActivityList
@@ -245,7 +288,13 @@ describe("ActivityList", () => {
         })}
       />
     )
-    expect(screen.getByRole("alert")).toHaveTextContent(/provider responses unavailable/i)
+    const alert = screen.getByRole("alert")
+    expect(alert).toHaveTextContent(/provider responses unavailable/i)
+    const errorCell = alert.closest("td")!
+    expect(errorCell).toHaveAttribute("colspan", "8")
+    expect(within(errorCell.closest("tr")!).getAllByRole("cell")).toHaveLength(1)
+    // The retry control lives inside the same spanning panel row.
+    expect(within(errorCell).getByRole("button", { name: "Retry" })).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Retry" }))
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
@@ -325,6 +374,143 @@ describe("ActivityList", () => {
 
     expect(onSelect).toHaveBeenCalledTimes(1)
     expect(onSelect).toHaveBeenCalledWith(ERROR_TRACE_ID)
+  })
+})
+
+/**
+ * TASK-000063 initiated-by attribution: visible human names in the correct
+ * actor context, key-distinct API-key rows, and quiet legacy rows without
+ * renaming any project content.
+ */
+describe("ActivityList actor identity", () => {
+  const HUMAN_TRACE_ID = "1".repeat(32)
+  const KEY_TRACE_ID = "2".repeat(32)
+  const LEGACY_TRACE_ID = "3".repeat(32)
+
+  function actorSummaries(): TraceSummary[] {
+    return mapTraceList({
+      items: [
+        traceSummaryFixture({
+          trace_id: HUMAN_TRACE_ID,
+          first_name: "Ada",
+          last_name: "Lovelace",
+          username: "ada",
+          email: "ada@example.com",
+        }),
+        traceSummaryFixture({
+          trace_id: KEY_TRACE_ID,
+          actor_type: "project_api_key",
+          username: "ada",
+          first_name: "Ada",
+          last_name: "Lovelace",
+          email: "ada@example.com",
+        }),
+        traceSummaryFixture({ trace_id: LEGACY_TRACE_ID }),
+      ],
+      generated_at: "2026-09-29T09:25:00.000000Z",
+    })
+  }
+
+  function actorCells() {
+    const rows = screen.getAllByRole("row").slice(1)
+    return rows.map((row) => within(row).getAllByRole("cell")[3]!)
+  }
+
+  it("shows each actor name in the Initiated by cell of its own row", () => {
+    render(<ActivityList {...listProps({ summaries: actorSummaries() })} />)
+
+    expect(screen.getAllByRole("columnheader")[3]).toHaveTextContent("Initiated by")
+    const [humanCell, keyCell, legacyCell] = actorCells()
+    expect(humanCell).toHaveTextContent("Ada Lovelace")
+    expect(keyCell).toHaveTextContent("API key")
+    // The legacy row has no name to show, so its actor context stays an em dash.
+    expect(legacyCell).toHaveTextContent("—")
+    expect(screen.getByText("Ada Lovelace")).not.toBe(screen.getByText("API key"))
+  })
+
+  it("keeps API-key rows key-identified when stray human profile values arrive", () => {
+    render(<ActivityList {...listProps({ summaries: actorSummaries() })} />)
+
+    const keyRow = screen.getByText("API key").closest("tr")!
+    expect(keyRow?.textContent).not.toContain("Ada Lovelace")
+    expect(keyRow?.textContent).not.toContain("ada@example.com")
+  })
+
+  it("never renders an actor name as the provider name", () => {
+    render(<ActivityList {...listProps({ summaries: actorSummaries() })} />)
+
+    // Keenable is the provider of each fixture row, so every named actor cell
+    // must sit beside - not inside - its row's provider cell.
+    for (const name of ["Ada Lovelace", "API key"]) {
+      const row = screen.getByText(name).closest("tr")!
+      const cells = within(row).getAllByRole("cell")
+      expect(cells[2]).toHaveTextContent("Keenable")
+      expect(cells[2]?.textContent).not.toContain(name)
+      expect(cells[3]).toHaveTextContent(name)
+      expect(cells[3]?.textContent).not.toContain("Keenable")
+    }
+  })
+
+  it("keeps legacy missing payload rows quiet without naming a project", () => {
+    render(<ActivityList {...listProps({ summaries: actorSummaries() })} />)
+
+    const rows = screen.getAllByRole("row").slice(1)
+    const legacyRow = rows[2]!
+    expect(legacyRow.textContent).not.toContain("Ada Lovelace")
+    expect(legacyRow.textContent).not.toContain("API key")
+    expect(legacyRow.textContent).not.toContain("Alpha")
+  })
+
+  it("labels username-only humans with the username in the actor cell", () => {
+    const summaries = mapTraceList({
+      items: [
+        traceSummaryFixture({
+          trace_id: HUMAN_TRACE_ID,
+          actor_type: "human",
+          username: "ada",
+          email: "ada@example.com",
+        }),
+      ],
+      generated_at: "2026-09-29T09:25:00.000000Z",
+    })
+    render(<ActivityList {...listProps({ summaries })} />)
+
+    expect(screen.getByText("ada")).toBeInTheDocument()
+  })
+
+  it("disambiguates two same-name humans by their visible emails", () => {
+    const summaries = mapTraceList({
+      items: [
+        traceSummaryFixture({
+          trace_id: "7".repeat(32),
+          first_name: "Ada",
+          last_name: "Lovelace",
+          email: "ada-one@example.com",
+        }),
+        traceSummaryFixture({
+          trace_id: "8".repeat(32),
+          first_name: "Ada",
+          last_name: "Lovelace",
+          email: "ada-two@example.com",
+        }),
+      ],
+      generated_at: "2026-09-29T09:25:00.000000Z",
+    })
+    render(<ActivityList {...listProps({ summaries })} />)
+
+    expect(screen.getAllByText("Ada Lovelace")).toHaveLength(2)
+    // Two rows, so each scoped row shows its own email only.
+    const rows = screen.getAllByRole("row").slice(1)
+    const firstCell = within(rows[0]!).getAllByRole("cell")[3]!
+    const secondCell = within(rows[1]!).getAllByRole("cell")[3]!
+    expect(within(firstCell).getByText("Ada Lovelace")).toHaveAttribute(
+      "title",
+      "Ada Lovelace (ada-one@example.com)"
+    )
+    expect(firstCell).toHaveTextContent("ada-one@example.com")
+    expect(firstCell.textContent).not.toContain("ada-two@example.com")
+    expect(secondCell).toHaveTextContent("ada-two@example.com")
+    expect(secondCell.textContent).not.toContain("ada-one@example.com")
   })
 })
 

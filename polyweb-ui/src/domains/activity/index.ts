@@ -12,6 +12,8 @@ export {
 } from "./model/tracePresentation"
 export type { TraceLatencySummary } from "./model/tracePresentation"
 export type {
+  TraceActor,
+  TraceActorType,
   TraceDetail,
   TraceError,
   TraceEvent,

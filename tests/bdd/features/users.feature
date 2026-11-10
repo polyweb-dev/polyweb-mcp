@@ -212,3 +212,12 @@ Feature: Local user accounts, migration, and settings
     Given an offline users API with account auth and stub adapters
     When I register account "t2-omitted-bdd@example.com"
     Then the registration should create an ordinary account without tokens
+
+  Scenario: A fresh signup creates its first project and keeps creator administration
+    Given an offline users API with account auth and stub adapters
+    When I sign up with profile names and sign in
+    Then the registration should create an ordinary account without tokens
+    When I read my account with the access token
+    Then the account read should return my record without a hash
+    When I create my first project with only a name
+    Then the new project stays visible with durable creator administration and my profile

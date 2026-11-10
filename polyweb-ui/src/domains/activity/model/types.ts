@@ -13,6 +13,14 @@ export interface TraceError {
 }
 
 /** One Activity list row. Deliberately carries no query and no results. */
+export type TraceActorType = "human" | "project_api_key"
+
+export interface TraceActor {
+  kind: TraceActorType | null
+  displayName: string | null
+  email: string | null
+}
+
 export interface TraceSummary {
   traceId: string
   operation: TraceOperation | null
@@ -23,6 +31,7 @@ export interface TraceSummary {
   outcome: TraceOutcome
   resultCount: number | null
   error: TraceError | null
+  actor: TraceActor
 }
 
 export interface TraceSearchResult {

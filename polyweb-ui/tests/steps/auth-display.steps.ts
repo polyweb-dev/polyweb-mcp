@@ -95,6 +95,9 @@ When("I open the register screen", async ({ page }) => {
 
 When("I submit a registration with a weak password", async ({ page }) => {
   await page.getByLabel("Email").fill("weak-rule@example.com")
+  await page.getByLabel("Username").fill("weak-rule-agent")
+  await page.getByLabel("First name").fill("Ada")
+  await page.getByLabel("Last name").fill("Lovelace")
   await page.getByLabel("Password", { exact: true }).fill("abcdefghijkl")
   await page.getByLabel("Confirm password").fill("abcdefghijkl")
   await page.getByRole("button", { name: "Create account" }).click()
@@ -156,21 +159,34 @@ async function expectNoAccountTypeChoice(scope: import("@playwright/test").Locat
   await expect(scope.getByText(/\b(role|account type)\b/i)).toHaveCount(0)
 }
 
-/** The request body is exactly {email, password}: no role and no extra field. */
-function expectEmailAndPasswordOnly(body: unknown, email: string): void {
+/**
+ * The public registration payload: email, password, username, first name,
+ * and last name only. No role, account type, or confirmation field, and no
+ * privilege or account-type keys.
+ */
+function expectPublicRegistrationPayload(body: unknown, email: string): void {
   expect(body).not.toBeNull()
   expect(typeof body).toBe("object")
   const record = body as Record<string, unknown>
-  expect(Object.keys(record).sort()).toEqual(["email", "password"])
+  expect(Object.keys(record).sort()).toEqual([
+    "email",
+    "first_name",
+    "last_name",
+    "password",
+    "username",
+  ])
   expect(record.email).toBe(email)
   expect(typeof record.password).toBe("string")
+  expect(typeof record.username).toBe("string")
+  expect(typeof record.first_name).toBe("string")
+  expect(typeof record.last_name).toBe("string")
 }
 
 Then("the register screen offers no account-type choice", async ({ page }) => {
   await expectNoAccountTypeChoice(page.locator("form"))
 })
 
-Then("the registration request carried only email and password", async () => {
+Then("the registration request carried the public registration payload", async () => {
   expect(registrationBodies).toHaveLength(1)
-  expectEmailAndPasswordOnly(registrationBodies[0], "weak-rule@example.com")
+  expectPublicRegistrationPayload(registrationBodies[0], "weak-rule@example.com")
 })

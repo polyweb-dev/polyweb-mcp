@@ -162,7 +162,16 @@ def _register_agent(context: Any) -> dict[str, str]:
     # Search and fetch need any role, dashboard and stats need the Reader role.
     email = temp_email("trace-dev")
     with _client_for(context) as client:
-        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        registered = client.post(
+            "/auth/register",
+            json={
+                "email": email,
+                "password": TEMP_PASSWORD,
+                "username": email.split("@")[0][:64],
+                "first_name": "Test",
+                "last_name": "User",
+            },
+        )
         assert registered.status_code == 201
         # Stats/dashboard are system-scoped reads (A1): trusted system_admin.
         context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
@@ -744,7 +753,16 @@ def step_then_list_rows_carry_owner(context: Any) -> None:
 def step_when_second_reader(context: Any) -> None:
     email = temp_email("trace-second")
     with _client_for(context) as client:
-        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        registered = client.post(
+            "/auth/register",
+            json={
+                "email": email,
+                "password": TEMP_PASSWORD,
+                "username": email.split("@")[0][:64],
+                "first_name": "Test",
+                "last_name": "User",
+            },
+        )
         assert registered.status_code == 201
         logged_in = client.post(
             "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}

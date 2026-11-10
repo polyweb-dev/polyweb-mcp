@@ -44,7 +44,11 @@ async def test_project_pools_member_access_and_secret_isolation(
             async with repository.session() as session:
                 user = await session.get(UserRow, owner_id)
                 assert user is not None
+                user.username = "pool-owner"
+                user.first_name = "Pool"
+                user.last_name = "Owner"
                 actor = temp_principal(user)
+                await session.commit()
             await ProjectService(repository).add_member(
                 actor, project.project_id, ProjectMemberAdd(user_id=member_id, permissions=0)
             )
@@ -91,7 +95,13 @@ async def test_project_pools_member_access_and_secret_isolation(
                     "label": "Project pool",
                     "provider_type": "exa",
                     "key_label": "Source key",
-                    "owner": {"user_id": str(owner_id), "email": owner_email},
+                    "owner": {
+                        "user_id": str(owner_id),
+                        "email": owner_email,
+                        "username": "pool-owner",
+                        "first_name": "Pool",
+                        "last_name": "Owner",
+                    },
                     "rate": body["rate"],
                     "budget": body["budget"],
                     "budget_used": 1.234567 if budgeted else 0,
@@ -102,6 +112,36 @@ async def test_project_pools_member_access_and_secret_isolation(
             ]
             assert secret not in response.text
             assert key.json()["id"] not in response.text
+            async with repository.session() as session:
+                legacy = await session.get(UserRow, owner_id)
+                assert legacy is not None
+                legacy.username = None
+                legacy.first_name = None
+                legacy.last_name = None
+                await session.commit()
+            legacy_response = client.get(path, headers=member_headers)
+            assert legacy_response.status_code == 200, legacy_response.text
+            assert legacy_response.json() == [
+                {
+                    "pool_id": created.json()["id"],
+                    "label": "Project pool",
+                    "provider_type": "exa",
+                    "key_label": "Source key",
+                    "owner": {
+                        "user_id": str(owner_id),
+                        "email": owner_email,
+                        "username": None,
+                        "first_name": None,
+                        "last_name": None,
+                    },
+                    "rate": body["rate"],
+                    "budget": body["budget"],
+                    "budget_used": 1.234567 if budgeted else 0,
+                    "operations": ["search"],
+                    "operation_limits": None,
+                    "overcommit": False,
+                }
+            ]
             assert client.get(path, headers=outsider_headers).status_code == 404
             assert (
                 client.get(f"/api/v1/projects/{uuid4()}/pools", headers=member_headers).status_code

@@ -41,8 +41,17 @@ export interface AuthCredentials {
   password: string
 }
 
-/** Submitted credentials of an account creation: the email and the password only. */
-export type RegistrationCredentials = AuthCredentials
+/**
+ * Submitted credentials of an account creation.
+ *
+ * The public signup always sends the username, the first name, and the
+ * last name alongside the email and the password.
+ */
+export interface RegistrationCredentials extends AuthCredentials {
+  username: string
+  first_name: string
+  last_name: string
+}
 
 /**
  * Session status of the browser client.
@@ -62,11 +71,15 @@ export interface AuthState {
  * Return the display name of one account, or `null` when it has none.
  *
  * The full name wins over the username; the email stays the identity line.
+ * Identity resolution is intentionally local: it stays identical for every
+ * named identity view without coupling domains.
  */
-export function accountDisplayName(account: UserAccount): string | null {
-  const fullName = [account.first_name, account.last_name]
-    .filter((part): part is string => part !== null && part.trim() !== "")
-    .join(" ")
-  if (fullName !== "") return fullName
-  return account.username !== null && account.username.trim() !== "" ? account.username : null
+import { displayNameFromProfile } from "@/shared/lib/identity"
+
+export function accountDisplayName(account: {
+  username: string | null
+  first_name: string | null
+  last_name: string | null
+}): string | null {
+  return displayNameFromProfile(account)
 }

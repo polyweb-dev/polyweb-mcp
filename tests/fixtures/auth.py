@@ -160,7 +160,16 @@ def install_auth_secret(monkeypatch: pytest.MonkeyPatch) -> str:
 def register_http(client: TestClient, email: str, password: str = TEMP_PASSWORD) -> Response:
     """POST one public registration; return the raw response without asserts."""
 
-    return client.post("/auth/register", json={"email": email, "password": password})
+    return client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": password,
+            "username": f"tester-{uuid4().hex[:8]}",
+            "first_name": "Test",
+            "last_name": "User",
+        },
+    )
 
 
 def login_http(client: TestClient, email: str, password: str = TEMP_PASSWORD) -> Response:

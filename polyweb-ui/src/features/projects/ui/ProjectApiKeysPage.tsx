@@ -12,7 +12,7 @@ import { IssueApiKeyForm } from "./IssueApiKeyForm"
 import { RotateApiKeyDialog } from "./RotateApiKeyDialog"
 
 const ARCHIVED_NOTE = "This project is archived. Its keys can be revoked but not issued or rotated."
-const TWO_COLUMNS = "grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"
+const TWO_COLUMNS = "grid items-start gap-6 min-[1400px]:grid-cols-[minmax(0,1fr)_360px]"
 
 /**
  * API key management of one project (`tokens.manage`, gated by the shell).

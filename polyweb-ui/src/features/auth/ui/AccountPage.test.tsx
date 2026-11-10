@@ -55,6 +55,32 @@ describe("AccountPage", () => {
     expect(screen.getByText("ada")).toBeInTheDocument()
   })
 
+  it("shows the full name primary with a distinct username kept as its own fact", () => {
+    renderAuthenticated(<AccountPage />, {
+      account: adminAccountFixture({ first_name: "Ada", last_name: "Lovelace", username: "ada42" }),
+    })
+
+    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument()
+    expect(screen.getByText("ada42")).toBeInTheDocument()
+    expect(screen.getByText("admin@example.com")).toBeInTheDocument()
+  })
+
+  it("shows the username as the name with no separate username row when it is the only identity", () => {
+    renderAuthenticated(<AccountPage />, { account: adminAccountFixture({ username: "ops-lead" }) })
+
+    expect(screen.getByText("Name")).toBeInTheDocument()
+    expect(screen.getByText("ops-lead")).toBeInTheDocument()
+    expect(screen.queryByText("Username")).toBeNull()
+  })
+
+  it("shows no name or username row for an email-only account", () => {
+    renderAuthenticated(<AccountPage />, { account: adminAccountFixture() })
+
+    expect(screen.getByText("admin@example.com")).toBeInTheDocument()
+    expect(screen.queryByText("Name")).toBeNull()
+    expect(screen.queryByText("Username")).toBeNull()
+  })
+
   it("shows no Sign out action on the account page", () => {
     renderAuthenticated(<AccountPage />, { account: adminAccountFixture() })
 
@@ -81,7 +107,6 @@ describe("AccountPage", () => {
     expect(screen.getByText("developer@example.com")).toBeInTheDocument()
     expect(screen.queryByRole("link", { name: "Create accounts" })).toBeNull()
   })
-
   it("shows no account creation link without system permissions or a projects surface", () => {
     renderAuthenticated(<AccountPage />, { account: agentAccountFixture(), systemPermissions: [] })
     expect(screen.getByText("agent@example.com")).toBeInTheDocument()

@@ -64,6 +64,19 @@ def _login(client: TestClient, email: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+def _fresh_signup_payload(email: str) -> dict[str, str]:
+    """Return one valid REAL public-signup body (all required profile fields)."""
+
+    local = email.split("@")[0].strip().lower() or "user"
+    return {
+        "email": email,
+        "password": TEMP_PASSWORD,
+        "username": local[:64],
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+    }
+
+
 async def _count_admins(repository: SQLiteRepository, project_id: UUID) -> int:
     async with repository.session() as session:
         return await ProjectRepository(session).count_active_project_admins(project_id=project_id)
@@ -129,7 +142,8 @@ async def test_system_admin_has_no_membership_and_live_revocation_is_effective(
                 == 404
             )
 
-            # The project administrator has project scope, not system scope.
+            # The project administrator has project scope, not system scope:
+            # ordinary project.create succeeds, but system surfaces stay closed.
             assert (
                 client.get("/api/v1/projects", headers=admin_headers).json()[0]["id"] == project_id
             )
@@ -141,23 +155,23 @@ async def test_system_admin_has_no_membership_and_live_revocation_is_effective(
                 == 200
             )
             assert client.get("/api/v1/routing/config", headers=admin_headers).status_code == 403
-            assert (
-                client.post(
-                    "/api/v1/projects",
-                    headers=admin_headers,
-                    json={
-                        "name": "Admin Create",
-                        "slug": "admin-create",
-                        "initial_admin_user_id": str(admin_row.id),
-                    },
-                ).status_code
-                == 403
+            admin_created = client.post(
+                "/api/v1/projects",
+                headers=admin_headers,
+                json={
+                    "name": "Admin Create",
+                    "slug": "admin-create",
+                    "initial_admin_user_id": str(admin_row.id),
+                },
             )
+            assert admin_created.status_code == 201, admin_created.text
+            assert client.get("/api/v1/routing/config", headers=admin_headers).status_code == 403
 
             assert client.get("/api/v1/routing/config", headers=system_headers).status_code == 200
 
             # The same access JWT stays authenticated, but the removed system
-            # assignment immediately closes both system-scoped surfaces.
+            # assignment immediately closes system-only surfaces. Ordinary
+            # project.create remains, so creation still succeeds.
             # (A1: the assignment row itself is removed; no role column exists.)
             async with repository.session() as session:
                 assert await ProjectRepository(session).delete_system_role(
@@ -168,18 +182,16 @@ async def test_system_admin_has_no_membership_and_live_revocation_is_effective(
                 await session.commit()
 
             assert client.get("/users/me", headers=system_headers).status_code == 200
-            assert (
-                client.post(
-                    "/api/v1/projects",
-                    headers=system_headers,
-                    json={
-                        "name": "Revoked Create",
-                        "slug": "revoked-create",
-                        "initial_admin_user_id": str(admin_row.id),
-                    },
-                ).status_code
-                == 403
+            revoked = client.post(
+                "/api/v1/projects",
+                headers=system_headers,
+                json={
+                    "name": "Revoked Create",
+                    "slug": "revoked-create",
+                    "initial_admin_user_id": str(admin_row.id),
+                },
             )
+            assert revoked.status_code == 201, revoked.text
             assert client.get("/api/v1/routing/config", headers=system_headers).status_code == 403
     finally:
         await repository.close()
@@ -279,12 +291,12 @@ async def test_system_access_reflects_live_system_permissions(
                 "permissions": expected,
             }
 
-            # An ordinary authenticated human has no system-scope permissions.
+            # An ordinary authenticated human has only project.create at system scope.
             ordinary_access = client.get("/api/v1/system/access", headers=admin_headers)
             assert ordinary_access.status_code == 200, ordinary_access.text
             assert ordinary_access.json() == {
                 "rollout_state": "preview",
-                "permissions": [],
+                "permissions": ["project.create"],
             }
 
             service = ProjectService(repository)
@@ -294,12 +306,12 @@ async def test_system_access_reflects_live_system_permissions(
             )
             assert client.get("/api/v1/system/access", headers=admin_headers).json() == {
                 "rollout_state": "preview",
-                "permissions": ["vault.manage"],
+                "permissions": ["project.create", "vault.manage"],
             }
             await service.remove_member(temp_principal(system_row), project.id, admin_row.id)
             assert client.get("/api/v1/system/access", headers=admin_headers).json() == {
                 "rollout_state": "preview",
-                "permissions": [],
+                "permissions": ["project.create"],
             }
             async with repository.session() as session:
                 assert await ProjectRepository(session).delete_system_role(
@@ -308,10 +320,11 @@ async def test_system_access_reflects_live_system_permissions(
                     role_key=BuiltinRole.SYSTEM_ADMIN.value,
                 )
                 await session.commit()
-            # The former system admin still has a vault as the project creator.
+            # The former system admin still has a vault as the project creator,
+            # plus the ordinary project.create grant.
             assert client.get("/api/v1/system/access", headers=system_headers).json() == {
                 "rollout_state": "preview",
-                "permissions": ["vault.manage"],
+                "permissions": ["project.create", "vault.manage"],
             }
             assert client.get("/api/v1/system/access").status_code == 401
     finally:
@@ -517,6 +530,16 @@ async def test_member_responses_include_email_and_add_member_by_email(
     try:
         system_row, admin_row, peer_row = await _seed_users(repository)
         inactive_row = await create_temp_user(repository, temp_email("p06-inactive"))
+        # One named participant with saved profile names; legacy fixture rows
+        # keep null profile fields (pre-signup accounts).
+        peer_username = peer_row.email.split("@")[0][:64].lower() or "user"
+        async with repository.session() as session:
+            stored_peer = await session.get(UserRow, peer_row.id)
+            assert stored_peer is not None
+            stored_peer.username = peer_username
+            stored_peer.first_name = "Peer"
+            stored_peer.last_name = "Member"
+            await session.commit()
         service = ProjectService(repository)
         system = temp_principal(system_row)
         project = await service.create_project(
@@ -543,6 +566,9 @@ async def test_member_responses_include_email_and_add_member_by_email(
                     "project_id": str(project.id),
                     "user_id": str(admin_row.id),
                     "email": admin_row.email,
+                    "username": None,
+                    "first_name": None,
+                    "last_name": None,
                     "status": "active",
                     "account_active": True,
                     "roles": [BuiltinRole.PROJECT_ADMIN.value],
@@ -555,6 +581,9 @@ async def test_member_responses_include_email_and_add_member_by_email(
                     "project_id": str(project.id),
                     "user_id": str(system_row.id),
                     "email": system_row.email,
+                    "username": None,
+                    "first_name": None,
+                    "last_name": None,
                     "status": "active",
                     "account_active": True,
                     "roles": [BuiltinRole.PROJECT_ADMIN.value],
@@ -574,6 +603,9 @@ async def test_member_responses_include_email_and_add_member_by_email(
             assert added.status_code == 201, added.text
             assert added.json()["user_id"] == str(peer_row.id)
             assert added.json()["email"] == peer_row.email
+            assert added.json()["username"] == peer_username
+            assert added.json()["first_name"] == "Peer"
+            assert added.json()["last_name"] == "Member"
             assert added.json()["role"] == "developer"
             assert added.json()["permissions"] == STANDARD
             assert added.json()["provider_owner"] is False
@@ -582,6 +614,13 @@ async def test_member_responses_include_email_and_add_member_by_email(
                 f"/api/v1/projects/{project.id}/members",
                 headers=admin_headers,
             )
+            by_id = {item["user_id"]: item for item in members.json()}
+            assert by_id[str(peer_row.id)]["username"] == peer_username
+            assert by_id[str(peer_row.id)]["first_name"] == "Peer"
+            assert by_id[str(peer_row.id)]["last_name"] == "Member"
+            assert by_id[str(admin_row.id)]["username"] is None
+            assert by_id[str(admin_row.id)]["first_name"] is None
+            assert by_id[str(admin_row.id)]["last_name"] is None
             emails = {item["user_id"]: item["email"] for item in members.json()}
             assert emails == {
                 str(admin_row.id): admin_row.email,
@@ -676,13 +715,19 @@ async def test_create_project_with_initial_admin_email(
             assert created.status_code == 201, created.text
             project_id = created.json()["id"]
 
-            # The named user is the active project_admin of the new project.
+            # Both the named user and the creator are durable project_admins.
             access = client.get(
                 f"/api/v1/projects/{project_id}/access",
                 headers=admin_headers,
             )
             assert access.status_code == 200, access.text
             assert access.json()["roles"] == [BuiltinRole.PROJECT_ADMIN.value]
+            creator_access = client.get(
+                f"/api/v1/projects/{project_id}/access",
+                headers=system_headers,
+            )
+            assert creator_access.status_code == 200, creator_access.text
+            assert creator_access.json()["roles"] == [BuiltinRole.PROJECT_ADMIN.value]
             members = client.get(
                 f"/api/v1/projects/{project_id}/members",
                 headers=admin_headers,
@@ -693,6 +738,9 @@ async def test_create_project_with_initial_admin_email(
                     "project_id": project_id,
                     "user_id": str(admin_row.id),
                     "email": admin_row.email,
+                    "username": None,
+                    "first_name": None,
+                    "last_name": None,
                     "status": "active",
                     "account_active": True,
                     "roles": [BuiltinRole.PROJECT_ADMIN.value],
@@ -705,6 +753,9 @@ async def test_create_project_with_initial_admin_email(
                     "project_id": project_id,
                     "user_id": str(system_row.id),
                     "email": system_row.email,
+                    "username": None,
+                    "first_name": None,
+                    "last_name": None,
                     "status": "active",
                     "account_active": True,
                     "roles": [BuiltinRole.PROJECT_ADMIN.value],
@@ -738,7 +789,8 @@ async def test_create_project_with_initial_admin_email(
             assert inactive_email.status_code == 400
             assert inactive_email.content == b""
 
-            # Both and neither identifiers are schema errors.
+            # Both identifiers at once remain a schema error; omitting both now
+            # selects self-service creation defaulting to the creator.
             assert (
                 client.post(
                     "/api/v1/projects",
@@ -751,22 +803,22 @@ async def test_create_project_with_initial_admin_email(
                 ).status_code
                 == 422
             )
-            assert (
-                client.post(
-                    "/api/v1/projects",
-                    headers=system_headers,
-                    json={"name": "Neither"},
-                ).status_code
-                == 422
+            neither = client.post(
+                "/api/v1/projects",
+                headers=system_headers,
+                json={"name": "Neither"},
             )
+            assert neither.status_code == 201, neither.text
 
-            # A caller without system project.create is denied before lookup.
-            denied = client.post(
+            # An ordinary active human now holds project.create, so the ghost
+            # email reaches lookup and fails like an unknown user id.
+            allowed = client.post(
                 "/api/v1/projects",
                 headers=admin_headers,
-                json={"name": "Denied", "initial_admin_email": temp_email("p06-ghost")},
+                json={"name": "Allowed", "initial_admin_email": temp_email("p06-ghost")},
             )
-            assert denied.status_code == 403
+            assert allowed.status_code == 400
+            assert allowed.content == b""
     finally:
         await repository.close()
 
@@ -906,7 +958,167 @@ async def test_project_scoped_routes_hide_existence_from_non_members(
         await repository.close()
 
 
-# --- R2: deactivation never removes the last active system administrator ---------
+# --- TASK-000063: fresh public signup creates and isolates its own projects ---
+
+
+@pytest.mark.asyncio
+async def test_fresh_signup_creates_own_projects_with_isolation(
+    tmp_path: Path, auth_secret: str
+) -> None:
+    repository = await create_alpha_test_db(tmp_path / "t63-fresh-signup.db")
+    try:
+        app = create_app([], repository=repository, secret_store=_MemorySecretStore())
+        with TestClient(app) as client:
+            first_email = temp_email("t63-fresh")
+            registered = client.post("/auth/register", json=_fresh_signup_payload(first_email))
+            assert registered.status_code == 201, registered.text
+            first_user_id = UUID(registered.json()["id"])
+
+            first_headers = _login(client, first_email)
+
+            system_access = client.get("/api/v1/system/access", headers=first_headers)
+            assert system_access.status_code == 200, system_access.text
+            assert system_access.json() == {
+                "rollout_state": "preview",
+                "permissions": ["project.create"],
+            }
+
+            first_created = client.post(
+                "/api/v1/projects", headers=first_headers, json={"name": "Fresh Signup First"}
+            )
+            assert first_created.status_code == 201, first_created.text
+            first_id = first_created.json()["id"]
+
+            second_created = client.post(
+                "/api/v1/projects", headers=first_headers, json={"name": "Fresh Signup Second"}
+            )
+            assert second_created.status_code == 201, second_created.text
+            second_id = second_created.json()["id"]
+
+            # Creating projects grants vault use but no system authority.
+            after_create_access = client.get("/api/v1/system/access", headers=first_headers)
+            assert after_create_access.status_code == 200, after_create_access.text
+            assert after_create_access.json() == {
+                "rollout_state": "preview",
+                "permissions": ["project.create", "vault.manage"],
+            }
+            async with repository.session() as session:
+                assert (
+                    await ProjectRepository(session).get_system_role_assignments(
+                        account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                        user_id=first_user_id,
+                    )
+                    == []
+                )
+            assert client.get("/api/v1/routing/config", headers=first_headers).status_code == 403
+
+            listed = client.get("/api/v1/projects", headers=first_headers)
+            assert listed.status_code == 200, listed.text
+            assert {item["id"] for item in listed.json()} == {first_id, second_id}
+
+            for project_id in (first_id, second_id):
+                access = client.get(f"/api/v1/projects/{project_id}/access", headers=first_headers)
+                assert access.status_code == 200, access.text
+                assert access.json()["project_id"] == project_id
+                assert access.json()["roles"] == [BuiltinRole.PROJECT_ADMIN.value]
+
+            fresh_headers = _login(client, first_email)
+            after_signin_access = client.get("/api/v1/system/access", headers=fresh_headers)
+            assert after_signin_access.status_code == 200, after_signin_access.text
+            assert after_signin_access.json() == {
+                "rollout_state": "preview",
+                "permissions": ["project.create", "vault.manage"],
+            }
+            async with repository.session() as session:
+                assert (
+                    await ProjectRepository(session).get_system_role_assignments(
+                        account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                        user_id=first_user_id,
+                    )
+                    == []
+                )
+            assert client.get("/api/v1/routing/config", headers=fresh_headers).status_code == 403
+            relisted = client.get("/api/v1/projects", headers=fresh_headers)
+            assert relisted.status_code == 200, relisted.text
+            assert {item["id"] for item in relisted.json()} == {first_id, second_id}
+            for project_id in (first_id, second_id):
+                access = client.get(f"/api/v1/projects/{project_id}/access", headers=fresh_headers)
+                assert access.status_code == 200, access.text
+                assert access.json()["roles"] == [BuiltinRole.PROJECT_ADMIN.value]
+
+            peer_email = temp_email("t63-peer")
+            peer_registered = client.post("/auth/register", json=_fresh_signup_payload(peer_email))
+            assert peer_registered.status_code == 201, peer_registered.text
+            peer_user_id = UUID(peer_registered.json()["id"])
+            peer_headers = _login(client, peer_email)
+
+            peer_listed = client.get("/api/v1/projects", headers=peer_headers)
+            assert peer_listed.status_code == 200, peer_listed.text
+            assert peer_listed.json() == []
+            peer_access_before = client.get("/api/v1/system/access", headers=peer_headers)
+            assert peer_access_before.status_code == 200, peer_access_before.text
+            assert peer_access_before.json() == {
+                "rollout_state": "preview",
+                "permissions": ["project.create"],
+            }
+            assert client.get("/api/v1/routing/config", headers=peer_headers).status_code == 403
+
+            peer_created = client.post(
+                "/api/v1/projects", headers=peer_headers, json={"name": "Peer Own Project"}
+            )
+            assert peer_created.status_code == 201, peer_created.text
+            peer_id = peer_created.json()["id"]
+
+            creator_exact = client.get("/api/v1/projects", headers=first_headers)
+            assert creator_exact.status_code == 200, creator_exact.text
+            assert {item["id"] for item in creator_exact.json()} == {first_id, second_id}
+            peer_exact = client.get("/api/v1/projects", headers=peer_headers)
+            assert peer_exact.status_code == 200, peer_exact.text
+            assert {item["id"] for item in peer_exact.json()} == {peer_id}
+            peer_own_access = client.get(
+                f"/api/v1/projects/{peer_id}/access", headers=peer_headers
+            )
+            assert peer_own_access.status_code == 200, peer_own_access.text
+            assert peer_own_access.json()["roles"] == [BuiltinRole.PROJECT_ADMIN.value]
+            async with repository.session() as session:
+                assert (
+                    await ProjectRepository(session).get_system_role_assignments(
+                        account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                        user_id=peer_user_id,
+                    )
+                    == []
+                )
+
+            for project_id in (first_id, second_id):
+                peer_access = client.get(
+                    f"/api/v1/projects/{project_id}/access", headers=peer_headers
+                )
+                assert peer_access.status_code == 404
+                peer_members = client.get(
+                    f"/api/v1/projects/{project_id}/members", headers=peer_headers
+                )
+                assert peer_members.status_code == 404
+                peer_add = client.post(
+                    f"/api/v1/projects/{project_id}/members",
+                    headers=peer_headers,
+                    json={"user_id": str(uuid4())},
+                )
+                assert peer_add.status_code == 404
+            for headers in (first_headers, fresh_headers):
+                assert (
+                    client.get(f"/api/v1/projects/{peer_id}/access", headers=headers).status_code
+                    == 404
+                )
+                assert (
+                    client.get(
+                        f"/api/v1/projects/{peer_id}/members", headers=headers
+                    ).status_code
+                    == 404
+                )
+            unknown_access = client.get(f"/api/v1/projects/{uuid4()}/access", headers=peer_headers)
+            assert unknown_access.status_code == 404
+    finally:
+        await repository.close()
 
 
 async def _active(repository: SQLiteRepository, user_id: UUID) -> bool:

@@ -9,6 +9,7 @@ import {
 } from "@/shared/ui/menuStyles"
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover"
 import type { ProjectMembersController } from "../model/useProjectMembersController"
+import { memberActionLabel, memberDetailLabel } from "../model/memberIdentity"
 import { MemberRoleItems } from "./MemberRoleItems"
 
 /** One destructive member action waiting for its confirmation. */
@@ -93,16 +94,16 @@ export function MemberActionsMenu({
 
   const suspend = () =>
     onConfirm({
-      title: `Suspend ${member.email}`,
-      body: `${member.email} loses access to ${projectName} until reactivated`,
+      title: `Suspend ${memberActionLabel(member)}`,
+      body: `${memberDetailLabel(member)} loses access to ${projectName} until reactivated`,
       confirm: "Suspend",
       run: () => void controller.setStatus(member, "suspended"),
     })
 
   const removeMember = () =>
     onConfirm({
-      title: `Remove ${member.email}`,
-      body: `${member.email} loses all access to ${projectName}`,
+      title: `Remove ${memberActionLabel(member)}`,
+      body: `${memberDetailLabel(member)} loses all access to ${projectName}`,
       confirm: "Remove from project",
       run: () => void controller.remove(member),
     })
@@ -110,7 +111,7 @@ export function MemberActionsMenu({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger
-        aria-label={`Actions for ${member.email}`}
+        aria-label={`Actions for ${memberActionLabel(member)}`}
         disabled={controller.pending}
         className={MENU_TRIGGER_ICON_CLASS}
       >

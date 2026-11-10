@@ -46,7 +46,16 @@ def _login_admin(context: Any) -> dict[str, str]:
     # Register one account, assign the Admin role, and return one access header.
     email = temp_email("quota-admin")
     with _client(context) as client:
-        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        registered = client.post(
+            "/auth/register",
+            json={
+                "email": email,
+                "password": TEMP_PASSWORD,
+                "username": email.split("@")[0][:64],
+                "first_name": "Test",
+                "last_name": "User",
+            },
+        )
         assert registered.status_code == 201
         context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
         logged_in = client.post(

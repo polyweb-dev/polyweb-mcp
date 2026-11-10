@@ -9,6 +9,7 @@ import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { Select } from "@/shared/ui/select"
+import { memberDetailLabel, memberSortLabel } from "../model/memberIdentity"
 
 interface Props {
   projectId: string
@@ -20,7 +21,7 @@ interface Props {
   onSaved: () => void
 }
 
-function affectedPools(pools: ProjectPool[] | null, email: string | undefined) {
+function affectedPools(pools: ProjectPool[] | null, owner: string | undefined) {
   if (pools === null || pools.length === 0) return null
   const providers = [...new Map(pools.map((pool) => {
     const identity = providerIdentity(pool.provider_type)
@@ -28,7 +29,7 @@ function affectedPools(pools: ProjectPool[] | null, email: string | undefined) {
   })).values()].sort((a, b) => a.name.localeCompare(b.name))
   return (
     <>
-      <p>These providers stop until {email} adds capacity:</p>
+      <p>These providers stop until {owner} adds capacity:</p>
       <ul className="space-y-1">{providers.map((provider) => (
         <li key={provider.id}>
           <ProviderBadge providerId={provider.id} name={provider.name} />
@@ -40,7 +41,7 @@ function affectedPools(pools: ProjectPool[] | null, email: string | undefined) {
 
 export function TransferOwnershipDialog({ projectId, projectName, members, ownerId, initialUserId, onClose, onSaved }: Props) {
   const admins = members.filter((member) => member.user_id !== ownerId && member.account_active && member.status === "active" &&
-    member.role === "admin").sort((a, b) => a.email.localeCompare(b.email))
+    member.role === "admin").sort((a, b) => memberSortLabel(a).localeCompare(memberSortLabel(b)))
   const [selected, setSelected] = useState(initialUserId ?? admins[0]?.user_id ?? "")
   const [pools, setPools] = useState<ProjectPool[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -75,10 +76,10 @@ export function TransferOwnershipDialog({ projectId, projectName, members, owner
         <div className="space-y-4">
           <Field id="new-provider-owner" label="New provider owner">
             <Select id="new-provider-owner" value={selected} onValueChange={setSelected}
-              options={admins.map((admin) => ({ value: admin.user_id, label: admin.email }))} />
+              options={admins.map((admin) => ({ value: admin.user_id, label: memberDetailLabel(admin) }))} />
           </Field>
-          <p>{recipient?.email} becomes the provider owner of <strong className="whitespace-nowrap">{projectName}</strong></p>
-          {affectedPools(pools, recipient?.email)}
+          <p>{recipient ? memberDetailLabel(recipient) : null} becomes the provider owner of <strong className="whitespace-nowrap">{projectName}</strong></p>
+          {affectedPools(pools, recipient ? memberDetailLabel(recipient) : undefined)}
         </div>
       )}
       {error && <p role="alert" className="mt-4">{error}</p>}

@@ -11,11 +11,13 @@ import { ProjectsTable } from "./ProjectsTable"
  *
  * The list shows every project the caller can read. The create form appears
  * only when the live system access grants `project.create`, the permission the
- * backend enforces; it is never inferred from an account role. The shell
- * mounts it behind the workspace access gate; rendered on its own, a failed
- * load still shows an error with Retry instead of hiding the page.
+ * backend enforces; it is never inferred from an account role. The blank
+ * empty state keeps a self-service next step: a permitted caller sees the
+ * create panel beside it, everyone else sees why no projects are visible.
+ * The shell mounts it behind the workspace access gate; rendered on its own,
+ * a failed load still shows an error with Retry instead of hiding the page.
  */
-export function ProjectsPage({ defaultAdminEmail }: { defaultAdminEmail: string }) {
+export function ProjectsPage() {
   const { accountId, availability, systemAccess, projects, reloadProjects } = useProjects()
   const lastProjectId = resolveLastProject(accountId, projects)
 
@@ -53,13 +55,17 @@ export function ProjectsPage({ defaultAdminEmail }: { defaultAdminEmail: string 
       <div className={canCreate ? "grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]" : undefined}>
         {projects.length === 0 ? (
           <EmptyState
-            title="You are not a member of any project"
-            description="Ask a system administrator to add you"
+            title={canCreate ? "No projects yet" : "You are not a member of any project"}
+            description={
+              canCreate
+                ? "Create your first project to get started."
+                : "Ask a system administrator to add you"
+            }
           />
         ) : (
           <ProjectsTable projects={projects} lastProjectId={lastProjectId} />
         )}
-        {canCreate && <ProjectCreateForm defaultAdminEmail={defaultAdminEmail} />}
+        {canCreate && <ProjectCreateForm />}
       </div>
     </section>
   )

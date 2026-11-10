@@ -9,6 +9,7 @@ pair contract for non-browser clients.
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -84,7 +85,16 @@ async def programmatic_client(
 
 
 def _register(client: TestClient, email: str) -> None:
-    response = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": TEMP_PASSWORD,
+            "username": f"tester-{uuid4().hex[:8]}",
+            "first_name": "Test",
+            "last_name": "User",
+        },
+    )
     assert response.status_code == 201
 
 

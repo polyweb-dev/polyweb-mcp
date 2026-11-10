@@ -400,7 +400,14 @@ async def test_a3_rest_and_mcp_authority_latency(
         ):
             email = temp_email("a3-latency")
             registered = await client.post(
-                "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+                "/auth/register",
+                json={
+                    "email": email,
+                    "password": TEMP_PASSWORD,
+                    "username": f"tester-{uuid4().hex[:8]}",
+                    "first_name": "Test",
+                    "last_name": "User",
+                },
             )
             assert registered.status_code == 201
             logged_in = await client.post(

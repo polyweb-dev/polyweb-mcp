@@ -328,10 +328,24 @@ class TraceSummary(ContractModel):
 
     ``user_id`` is the canonical account UUID of the trace root. A historical
     row without an owner keeps ``None`` and stays outside every account read.
+
+    ``actor_type``/``actor_id`` name the verified execution principal that
+    owns the trace: ``human`` carries the account UUID (mirroring ``user_id``)
+    and the saved human profile below; ``project_api_key`` carries the API key
+    UUID and never carries a human profile. Profile fields are the saved
+    ``user`` row values at read time (nullable for legacy/incomplete
+    profiles); callers fall back to ``username``, then ``email``, then the
+    stable IDs. They are additive and optional so older payloads still decode.
     """
 
     trace_id: str
     user_id: str | None = None
+    actor_type: ActorType | None = None
+    actor_id: str | None = None
+    username: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
     operation: TraceOperation | None = None
     started_at: AwareDatetime
     duration_ms: int = Field(ge=0)

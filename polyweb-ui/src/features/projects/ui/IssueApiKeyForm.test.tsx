@@ -7,7 +7,7 @@ import { IssueApiKeyForm } from "./IssueApiKeyForm"
 function controllerStub(overrides: Partial<ProjectApiKeysController> = {}): ProjectApiKeysController {
   return {
     keys: { status: "ready", data: [], reload: vi.fn(async () => []) },
-    emailsByUserId: null,
+    identitiesByUserId: null,
     pending: false,
     message: null,
     showMessage: vi.fn(),

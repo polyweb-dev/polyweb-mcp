@@ -31,6 +31,11 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null
 }
 
+function asOptionalText(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null
+  return typeof value === "string" ? value : undefined
+}
+
 function asStringList(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null
   const items: string[] = []
@@ -51,6 +56,26 @@ function isProjectStatus(value: unknown): value is ProjectStatus {
 
 function isMembershipStatus(value: unknown): value is MembershipStatus {
   return value === "active" || value === "suspended"
+}
+
+/**
+ * Decode optional profile fields, keeping absent fields absent for
+ * backward-compatible payloads while rejecting wrong types.
+ */
+function decodeOptionalProfile(
+  record: Record<string, unknown>,
+  invalid: () => Error
+): Pick<ProjectMember, "username" | "first_name" | "last_name"> {
+  const username = "username" in record ? asOptionalText(record.username) : null
+  const firstName = "first_name" in record ? asOptionalText(record.first_name) : null
+  const lastName = "last_name" in record ? asOptionalText(record.last_name) : null
+  if (username === undefined || firstName === undefined || lastName === undefined) {
+    throw invalid()
+  }
+  if (!("username" in record) && !("first_name" in record) && !("last_name" in record)) {
+    return {}
+  }
+  return { username, first_name: firstName, last_name: lastName }
 }
 
 /** Decode the system-scope access payload of `GET /api/v1/system/access`. */
@@ -138,7 +163,7 @@ function validMemberExtension(record: Record<string, unknown>): record is Record
     typeof record.provider_owner === "boolean" && typeof record.account_active === "boolean"
 }
 
-/** Decode one member projection. */
+/** Decode one member projection. Absent profile fields stay absent. */
 export function decodeProjectMember(value: unknown): ProjectMember {
   const record = asRecord(value)
   if (record === null) throw invalidProjectResponse()
@@ -161,6 +186,7 @@ export function decodeProjectMember(value: unknown): ProjectMember {
     project_id: projectId,
     user_id: userId,
     email,
+    ...decodeOptionalProfile(record, invalidProjectResponse),
     status: record.status,
     roles,
     version: record.version,

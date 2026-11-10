@@ -7,6 +7,7 @@ import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
 import { SegmentedControl } from "@/shared/ui/SegmentedControl"
 import { Switch } from "@/shared/ui/Switch"
+import { memberActionLabel } from "../model/memberIdentity"
 
 interface Props {
   projectId: string
@@ -42,7 +43,7 @@ export function MemberPermissionsDialog({ projectId, member, onClose, onSaved }:
     }
   }
   return (
-    <Modal isOpen onClose={onClose} title={`Permissions for ${member.email}`} subtitle="Turn on only what this person needs" maxWidth="4xl">
+    <Modal isOpen onClose={onClose} title={`Permissions for ${memberActionLabel(member)}`} subtitle="Turn on only what this person needs" maxWidth="4xl">
       <div data-testid="permissions-scroll" className="space-y-2 [--control-on:color-mix(in_srgb,var(--text-strong)_55%,var(--elevated))]">
         <div className="flex items-center gap-3">
           <span>Preset</span>

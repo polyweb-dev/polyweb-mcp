@@ -23,13 +23,13 @@ import { WorkspaceAccessGate } from "./WorkspaceAccessGate"
 import { WorkspaceLanding } from "./WorkspaceLanding"
 import { WorkspaceRouteGate } from "./WorkspaceRouteGate"
 
-function routeElements(adminEmail: string, accountId: string): Record<TabId, ReactNode> {
+function routeElements(accountId: string): Record<TabId, ReactNode> {
   return {
     quotas: <QuotaAnalytics />,
     settings: <SettingsView />,
     projects: (
       <WorkspaceAccessGate>
-        <ProjectsPage defaultAdminEmail={adminEmail} />
+        <ProjectsPage />
       </WorkspaceAccessGate>
     ),
     account: <AccountPage />,
@@ -53,8 +53,7 @@ export function DashboardShell() {
   const { pathname, search } = useLocation()
   const keysDestination = legacyKeysDestination(pathname, search)
   const accountId = account?.id ?? ""
-  const adminEmail = account?.email ?? ""
-  const elements = useMemo(() => routeElements(adminEmail, accountId), [adminEmail, accountId])
+  const elements = useMemo(() => routeElements(accountId), [accountId])
 
   return (
     <div

@@ -171,14 +171,22 @@ export async function login(credentials: AuthCredentials): Promise<BrowserAccess
 /**
  * Create one account on the public route. The route returns no credential.
  *
- * The body holds the email and the password only: the backend rejects any
- * role or account-type field, and authority comes from explicit assignments.
+ * The body holds the email, the username, the first and last names, and the
+ * password only: the backend rejects any role or account-type field, and
+ * authority comes from explicit assignments.
  */
 export async function registerAccount(input: RegistrationCredentials): Promise<UserAccount> {
+  const payload: Record<string, string> = {
+    email: input.email,
+    password: input.password,
+    username: input.username,
+    first_name: input.first_name,
+    last_name: input.last_name,
+  }
   const body = await requestJson<unknown>(REGISTER_PATH, {
     auth: "public",
     method: "POST",
-    body: JSON.stringify({ email: input.email, password: input.password }),
+    body: JSON.stringify(payload),
   })
   return decodeAccount(body)
 }

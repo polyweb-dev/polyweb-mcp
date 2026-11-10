@@ -199,7 +199,14 @@ async def test_rejected_requests_create_no_trace_root(guard_client: TestClient) 
 def test_public_exceptions_need_no_credential(guard_client: TestClient) -> None:
     email = temp_email("guard-public")
     registered = guard_client.post(
-        "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+        "/auth/register",
+        json={
+            "email": email,
+            "password": TEMP_PASSWORD,
+            "username": email.split("@")[0][:64],
+            "first_name": "Test",
+            "last_name": "User",
+        },
     )
     assert registered.status_code == 201
     # A1: public signup returns the safe account projection with no role.

@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 from sqlalchemy import event as sa_event
@@ -194,7 +195,14 @@ async def _authed_headers(client: httpx.AsyncClient, prefix: str) -> dict[str, s
 
     email = temp_email(prefix)
     registered = await client.post(
-        "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+        "/auth/register",
+        json={
+            "email": email,
+            "password": TEMP_PASSWORD,
+            "username": f"tester-{uuid4().hex[:8]}",
+            "first_name": "Test",
+            "last_name": "User",
+        },
     )
     assert registered.status_code == 201
     logged_in = await client.post(

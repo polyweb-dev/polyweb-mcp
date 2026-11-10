@@ -10,6 +10,8 @@ import {
   revokeProjectApiKey,
   rotateProjectApiKey,
 } from "@/domains/projects"
+import { identityFromMember } from "./memberIdentity"
+import type { ContactIdentity } from "@/shared/lib/identity"
 import type {
   IssueApiKeyInput,
   IssuedApiKey,
@@ -27,8 +29,8 @@ export interface UseProjectApiKeysControllerOptions {
 
 export interface ProjectApiKeysController {
   keys: ScopedResource<ProjectApiKey[]>
-  /** Creator emails by user id, or `null` when members are not readable. */
-  emailsByUserId: ReadonlyMap<string, string> | null
+  /** Creator identity entries by user id, or `null` when members are not readable. */
+  identitiesByUserId: ReadonlyMap<string, ContactIdentity> | null
   pending: boolean
   message: string | null
   showMessage: (message: string | null) => void
@@ -91,9 +93,9 @@ export function useProjectApiKeysController(
     setMessage(null)
   }
 
-  const emailsByUserId = useMemo(() => {
+  const identitiesByUserId = useMemo(() => {
     if (members.status !== "ready") return null
-    return new Map(members.data.map((member) => [member.user_id, member.email]))
+    return new Map(members.data.map((member) => [member.user_id, identityFromMember(member)]))
   }, [members])
 
   const run = useCallback(
@@ -151,7 +153,7 @@ export function useProjectApiKeysController(
 
   return {
     keys,
-    emailsByUserId,
+    identitiesByUserId,
     pending,
     message,
     showMessage: setMessage,

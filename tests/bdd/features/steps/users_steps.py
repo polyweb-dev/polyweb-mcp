@@ -423,7 +423,7 @@ def step_when_users_search(context: Any) -> None:
     with TestClient(context.app) as client:
         registered = client.post(
             "/auth/register",
-            json={"email": "users-search@example.com", "password": _TEST_PASSWORD},
+            json=_auth_signup_payload("users-search@example.com", _TEST_PASSWORD),
         )
         assert registered.status_code == 201
         logged_in = client.post(
@@ -464,6 +464,27 @@ def step_then_case_insensitive_lookup(context: Any) -> None:
 
 _AUTH_PASSWORD = "StrongPass123!x-AuthBDD"
 
+_BDD_FIRST_NAME = "Ada"
+_BDD_LAST_NAME = "Lovelace"
+
+
+def _expected_username(email: str) -> str:
+    """Return the deterministic signup username derived from one email."""
+
+    return email.split("@")[0].strip().lower()[:64] or "user"
+
+
+def _auth_signup_payload(email: str, password: str = _AUTH_PASSWORD) -> dict[str, str]:
+    """Return one valid public-signup body with all mandatory profile fields."""
+
+    return {
+        "email": email,
+        "password": password,
+        "username": _expected_username(email),
+        "first_name": _BDD_FIRST_NAME,
+        "last_name": _BDD_LAST_NAME,
+    }
+
 
 def _configure_auth_secret(context: Any) -> None:
     """Point this scenario at a generated signing secret, restored on cleanup."""
@@ -488,7 +509,7 @@ def step_when_auth_register(context: Any, email: str) -> None:
     context.auth_email = email
     with _auth_client(context) as client:
         context.register_response = client.post(
-            "/auth/register", json={"email": email, "password": _AUTH_PASSWORD}
+            "/auth/register", json=_auth_signup_payload(email)
         )
 
 
@@ -498,6 +519,9 @@ def step_then_auth_register_ok(context: Any) -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["email"] == context.auth_email.lower()
+    assert body["username"] == _expected_username(context.auth_email)
+    assert body["first_name"] == _BDD_FIRST_NAME
+    assert body["last_name"] == _BDD_LAST_NAME
     assert "role" not in body
     assert "is_superuser" not in body
     assert body["is_active"] is True
@@ -542,6 +566,9 @@ def step_then_auth_me_ok(context: Any) -> None:
     assert context.me_response.status_code == 200
     body = context.me_response.json()
     assert body["email"] == context.auth_email.lower()
+    assert body["username"] == _expected_username(context.auth_email)
+    assert body["first_name"] == _BDD_FIRST_NAME
+    assert body["last_name"] == _BDD_LAST_NAME
     assert "role" not in body
     assert "hashed_password" not in body
 
@@ -559,6 +586,27 @@ def step_when_auth_wrong_password(context: Any) -> None:
 def step_then_auth_bad_login(context: Any) -> None:
     assert context.bad_login_response.status_code == 400
     assert "WrongPass123" not in context.bad_login_response.text
+
+
+@when("I sign up with profile names and sign in")
+def step_when_signup_with_profile_and_signin(context: Any) -> None:
+    context.auth_email = "self-service@example.com"
+    with _auth_client(context) as client:
+        registered = client.post(
+            "/auth/register", json=_auth_signup_payload(context.auth_email)
+        )
+        assert registered.status_code == 201, registered.text
+        context.register_response = registered
+        body = registered.json()
+        assert body["username"] == _expected_username(context.auth_email)
+        assert body["first_name"] == _BDD_FIRST_NAME
+        assert body["last_name"] == _BDD_LAST_NAME
+        logged_in = client.post(
+            "/auth/jwt/login",
+            data={"username": context.auth_email, "password": _AUTH_PASSWORD},
+        )
+        assert logged_in.status_code == 200, logged_in.text
+        context.auth_pair = logged_in.json()
 
 
 @when("I read my account without a token")
@@ -586,7 +634,7 @@ def step_when_auth_weak_password(context: Any, password: str) -> None:
     with _auth_client(context) as client:
         context.register_response = client.post(
             "/auth/register",
-            json={"email": f"weak-{uuid4().hex[:8]}@example.com", "password": password},
+            json=_auth_signup_payload(f"weak-{uuid4().hex[:8]}@example.com", password),
         )
 
 
@@ -623,18 +671,12 @@ def step_when_auth_registration_limit(context: Any) -> None:
         for index in range(5):
             probe = client.post(
                 "/auth/register",
-                json={
-                    "email": f"capped-{index}-{uuid4().hex[:6]}@example.com",
-                    "password": _AUTH_PASSWORD,
-                },
+                json=_auth_signup_payload(f"capped-{index}-{uuid4().hex[:6]}@example.com"),
             )
             assert probe.status_code == 201
         context.limit_response = client.post(
             "/auth/register",
-            json={
-                "email": f"capped-last-{uuid4().hex[:6]}@example.com",
-                "password": _AUTH_PASSWORD,
-            },
+            json=_auth_signup_payload(f"capped-last-{uuid4().hex[:6]}@example.com"),
         )
 
 
@@ -740,8 +782,7 @@ def step_when_auth_register_oversize(context: Any) -> None:
         context.oversize_response = client.post(
             "/auth/register",
             json={
-                "email": "oversize@example.com",
-                "password": _AUTH_PASSWORD,
+                **_auth_signup_payload("oversize@example.com"),
                 "pad": _OVERSIZE_PAD,
             },
         )
@@ -1174,7 +1215,8 @@ def step_when_register_with_role(context: Any, role: str, email: str) -> None:
     context.auth_role = role
     with _auth_client(context) as client:
         context.register_response = client.post(
-            "/auth/register", json={"email": email, "password": _AUTH_PASSWORD, "role": role}
+            "/auth/register",
+            json={**_auth_signup_payload(email), "role": role},
         )
 
 
@@ -1182,10 +1224,62 @@ def step_when_register_with_role(context: Any, role: str, email: str) -> None:
 def step_then_role_signup_refused(context: Any) -> None:
     response = context.register_response
     assert response.status_code == 422
-    assert response.json() == {"detail": "invalid authentication request"}
+    payload = response.json()
+    assert isinstance(payload, dict)
+    detail = payload.get("detail")
+    assert isinstance(detail, list) and detail
+    assert any(entry.get("loc") == ["body", "role"] for entry in detail)
     assert _AUTH_PASSWORD not in response.text
+    assert "role" in response.text
     with _auth_client(context) as client:
         login = client.post(
             "/auth/jwt/login", data={"username": context.auth_email, "password": _AUTH_PASSWORD}
         )
         assert login.status_code == 400
+
+
+@when("I create my first project with only a name")
+def step_when_first_project_name_only(context: Any) -> None:
+    token = context.auth_pair["access_token"]
+    with _auth_client(context) as client:
+        response = client.post(
+            "/api/v1/projects",
+            json={"name": "First Project"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 201, response.text
+        context.project_id = response.json()["id"]
+        login = client.post(
+            "/auth/jwt/login",
+            data={"username": context.auth_email, "password": _AUTH_PASSWORD},
+        )
+        assert login.status_code == 200
+        context.auth_pair = login.json()
+
+
+@then("the new project stays visible with durable creator administration and my profile")
+def step_then_first_project_admin_durable(context: Any) -> None:
+    from polyweb.models.projects import BuiltinRole
+
+    token = context.auth_pair["access_token"]
+    with _auth_client(context) as client:
+        listed = client.get(
+            "/api/v1/projects", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert listed.status_code == 200
+        assert context.project_id in {item["id"] for item in listed.json()}
+
+        access = client.get(
+            f"/api/v1/projects/{context.project_id}/access",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert access.status_code == 200
+        assert access.json()["project_id"] == context.project_id
+        assert BuiltinRole.PROJECT_ADMIN.value in access.json()["roles"]
+
+        me = client.get("/users/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+        body = me.json()
+        assert body["username"] == _expected_username(context.auth_email)
+        assert body["first_name"] == _BDD_FIRST_NAME
+        assert body["last_name"] == _BDD_LAST_NAME

@@ -372,12 +372,17 @@ class ProjectService:
             repository = ProjectRepository(session)
             resolved_create = project_create
             if resolved_create.initial_admin_user_id is None:
-                admin = await self._require_active_user_by_email(
-                    session, resolved_create.initial_admin_email
-                )
-                resolved_create = resolved_create.model_copy(
-                    update={"initial_admin_user_id": admin.id}
-                )
+                if resolved_create.initial_admin_email is None:
+                    resolved_create = resolved_create.model_copy(
+                        update={"initial_admin_user_id": actor.id}
+                    )
+                else:
+                    admin = await self._require_active_user_by_email(
+                        session, resolved_create.initial_admin_email
+                    )
+                    resolved_create = resolved_create.model_copy(
+                        update={"initial_admin_user_id": admin.id}
+                    )
             try:
                 project, member, _role = await repository.create_project_with_admin(
                     account_id=self._account_id,
@@ -488,7 +493,13 @@ class ProjectService:
                 or not user.is_active
             ):
                 return None
-            return ProviderOwnerRead(user_id=member.user_id, email=member.email)
+            return ProviderOwnerRead(
+                user_id=member.user_id,
+                email=member.email,
+                username=member.username,
+                first_name=member.first_name,
+                last_name=member.last_name,
+            )
 
     async def transfer_provider_owner(
         self, actor: UserPrincipal, project_id: UUID, target_id: UUID
@@ -540,7 +551,12 @@ class ProjectService:
                         "The provider owner changed or the target is not an active admin.",
                     )
                 return ProviderOwnerTransferRead(
-                    user_id=target_id, email=target.email, unassigned_pools=[]
+                    user_id=target_id,
+                    email=target.email,
+                    username=target.username,
+                    first_name=target.first_name,
+                    last_name=target.last_name,
+                    unassigned_pools=[],
                 )
             if not await repository.transfer_provider_owner(project_id, owner, target_id):
                 raise ProjectConflict(
@@ -563,6 +579,9 @@ class ProjectService:
             return ProviderOwnerTransferRead(
                 user_id=target_id,
                 email=target.email,
+                username=target.username,
+                first_name=target.first_name,
+                last_name=target.last_name,
                 unassigned_pools=[
                     UnassignedPoolRead(pool_id=pool.id, label=pool.label) for pool in removed_pools
                 ],

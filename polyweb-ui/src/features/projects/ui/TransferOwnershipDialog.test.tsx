@@ -54,3 +54,15 @@ it("disables transfer when the pool endpoint is not available", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("This action is not available yet")
   expect(screen.getByRole("button", { name: "Transfer ownership" })).toBeDisabled()
 })
+
+it("lists recipients and confirms with the display name and email fallback", async () => {
+  installFetchStub(() => ok([]))
+  const named = { ...admins[1]!, username: "newbie", first_name: "New", last_name: "Member" }
+  render(<TransferOwnershipDialog projectId="p1" projectName="Project" members={[admins[0]!, named]} ownerId="old" onClose={vi.fn()} onSaved={vi.fn()} />)
+  expect(await screen.findByRole("combobox", { name: "New provider owner" })).toHaveTextContent(
+    "New Member"
+  )
+  expect(screen.getAllByText("New Member (new@example.com)", { exact: false })).toHaveLength(2)
+  expect(screen.getByText(/becomes the provider owner of/)).toBeInTheDocument()
+  await act(async () => {})
+})
