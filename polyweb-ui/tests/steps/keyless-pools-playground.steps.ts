@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import type { Page, Response } from "@playwright/test";
+import type { Page, Response, TestInfo } from "@playwright/test";
 import { Before, Given, When, Then } from "./fixtures";
 import { projectStubId } from "./projectStub";
 import { chooseOption } from "./providerConfigUi";
@@ -65,6 +65,22 @@ Before({ tags: "@task-000065" }, async ({ page }) => {
 function expectNoExecution(page: Page): void {
   expect(evidence(page).execution).toEqual([]);
   expect(evidence(page).external).toEqual([]);
+}
+
+/**
+ * UI-evidence PNG helper (TASK-000065 Devin visual review, >=9 target).
+ *
+ * Captures at most one desktop PNG per call site and attaches it to the
+ * running scenario via `$testInfo.attach`. Playwright writes attachments
+ * under `test-results/` (picked up by `scripts/ci/upload_gitea.py` into
+ * `reports.zip`); the HTML reporter also lists them in `playwright-report`.
+ * Desktop-only: call sites never resize the viewport (worker runs
+ * Desktop Chrome per playwright.config.ts). Cloud-only execution: this runs
+ * inside the step on the CI worker, never locally.
+ */
+async function attachPng(page: Page, testInfo: TestInfo | undefined, name: string): Promise<void> {
+  const path = await page.screenshot({ fullPage: false });
+  await testInfo?.attach(name, { body: path, contentType: "image/png" });
 }
 
 function isResponse(response: Response, method: string, path: string): boolean {
@@ -218,11 +234,14 @@ Then("the no-pool error should not present as a timeout", async ({ page }) => {
   await expect(page.locator("main")).not.toContainText(/timed out|timeout/i);
 });
 
-Then("the playground shows no search results", async ({ page }) => {
+Then("the playground shows no search results", async ({ page, $testInfo }) => {
   // No-pool preflight: the disabled Search submit never runs, so absence is
   // asserted as zero execution calls plus no result content.
   await expect(page.locator("main").getByText(/% match/i)).toHaveCount(0);
   expectNoExecution(page);
+  // Optional setup-state capture for the no-pool @live flow: runs only when
+  // the live scenario itself is explicitly executed later.
+  await attachPng(page, $testInfo, "task-000065-no-pool-guidance.png");
 });
 
 // ---------------------------------------------------------------------------
@@ -293,7 +312,7 @@ When("I open the trace of the saved search response", async ({ page }) => {
   await expect(page.getByRole("dialog", { name: "Trace detail" })).toBeVisible({ timeout: 15_000 });
 });
 
-Then("the trace detail shows the Keenable response with its results", async ({ page }) => {
+Then("the trace detail shows the Keenable response with its results", async ({ page, $testInfo }) => {
   const dialog = page.getByRole("dialog", { name: "Trace detail" });
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   await expect(dialog).toContainText(/Keenable/i);
@@ -303,6 +322,9 @@ Then("the trace detail shows the Keenable response with its results", async ({ p
   if (!search) throw new Error("Search response was not captured");
   expect(search.results[0].title).not.toBe("");
   await expect(ranked.getByText(search.results[0].title, { exact: true }).first()).toBeVisible();
+  // Optional result-state capture for the keyless @live flow: runs only when
+  // the live scenario itself is explicitly executed later.
+  await attachPng(page, $testInfo, "task-000065-keyless-trace-results.png");
 });
 
 // ---------------------------------------------------------------------------
@@ -365,8 +387,11 @@ async function expectCreatedPools(page: Page, providers: string[]): Promise<void
   expectNoExecution(page);
 }
 
-Then("project Alpha has new pools for {string} assigned to Alpha", async ({ page }, list: string) => {
+Then("project Alpha has new pools for {string} assigned to Alpha", async ({ page, $testInfo }, list: string) => {
   await expectCreatedPools(page, list.split(",").map((entry) => PROVIDERS[entry.trim()]));
+  // Visual evidence (non-live, cloud only): created pool table with the rate
+  // column after bulk creation. Single PNG per scenario.
+  await attachPng(page, $testInfo, "task-000065-bulk-created-pools-rate-column.png");
 });
 
 When("I create the keyless free-tier default pools for project Alpha without an API key", async ({ page }) => {
@@ -384,12 +409,15 @@ When("I create the keyless free-tier default pools for project Alpha without an 
   expectNoExecution(page);
 });
 
-Then("project Alpha has new keyless pools for {string} assigned to Alpha", async ({ page }, list: string) => {
+Then("project Alpha has new keyless pools for {string} assigned to Alpha", async ({ page, $testInfo }, list: string) => {
   const providers = list.split(",").map((entry) => PROVIDERS[entry.trim()]);
   const keys = await Promise.all(evidence(page).keys);
   expect(keys).toHaveLength(providers.length);
   expect(keys.every((key) => key.auth_mode === "keyless")).toBe(true);
   await expectCreatedPools(page, providers);
+  // Visual evidence (non-live, cloud only): keyless defaults table showing the
+  // new keyless pools with no secret rendered. Single PNG per scenario.
+  await attachPng(page, $testInfo, "task-000065-keyless-defaults-pools.png");
 });
 
 // ---------------------------------------------------------------------------
@@ -410,7 +438,7 @@ When("I open the pool actions menu for the created pool", async ({ page }) => {
   await expect(page.locator("[data-slot=popover-content]").first()).toBeVisible({ timeout: 10_000 });
 });
 
-Then("the pool actions menu should show Edit pool, Copy to another project, Remove from project and Delete pool each with an icon", async ({ page }) => {
+Then("the pool actions menu should show Edit pool, Copy to another project, Remove from project and Delete pool each with an icon", async ({ page, $testInfo }) => {
   const popup = page.locator("[data-slot=popover-content]").first();
   await expect(popup).toBeVisible({ timeout: 10_000 });
   for (const label of ["Edit pool", "Copy to another project", "Remove from project", "Delete pool"]) {
@@ -419,4 +447,7 @@ Then("the pool actions menu should show Edit pool, Copy to another project, Remo
     await expect(item.locator("svg").first()).toBeVisible({ timeout: 5_000 });
   }
   expectNoExecution(page);
+  // Visual evidence (non-live, cloud only): pool table with the rate column
+  // and the open action popover showing its icons. Single PNG per scenario.
+  await attachPng(page, $testInfo, "task-000065-pool-popover-icons.png");
 });
