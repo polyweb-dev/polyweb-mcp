@@ -546,7 +546,7 @@ def _write_latency_report(rows: Sequence[dict[str, Any]], output_dir: Path) -> b
             "inputs do not depend on the charts.",
             "",
         ]
-    md_path.write_text(chr(10).join(lines), encoding="utf-8")
+    md_path.write_text("\n".join(lines), encoding="utf-8")
     return plotted
 
 

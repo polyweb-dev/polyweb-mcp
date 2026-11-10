@@ -18,6 +18,83 @@ from tests.fixtures.a2_execution import (
 )
 
 
+async def test_ranked_candidates_project_reads_do_not_scale_with_bindings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One planning snapshot must not re-read the project for every owned binding."""
+    import re
+
+    from sqlalchemy import event
+
+    from polyweb.models.contracts import UsageOperation
+    from polyweb.persistence.bindings import ProjectBindingRepository
+    from polyweb.services.provider_runtime import routing_policy
+    from tests.fixtures.a2_execution import RecordingAdapter
+    from tests.fixtures.execution import install_adapter_map
+    from tests.fixtures.latency import seed_latency_pools, warm_route_caches
+
+    all_providers = ("exa", "firecrawl", "tavily", "parallel", "you", "brave", "keenable")
+    project_reads = [0]
+    reads_by_bindings: dict[int, int] = {}
+
+    def count_project_selects(
+        conn: Any, cursor: Any, statement: str, params: Any, ctx: Any, many: Any
+    ) -> None:
+        if statement.lstrip().upper().startswith("SELECT") and re.search(
+            r"\bFROM\s+projects\b", statement, re.IGNORECASE
+        ):
+            project_reads[0] += 1
+
+    for binding_count in (1, 7):
+        world = await build_execution_world(tmp_path, monkeypatch, labels=(), limits=False)
+        try:
+            providers = all_providers[:binding_count]
+            adapters = [RecordingAdapter(provider) for provider in providers]
+            secrets: dict[str, str] = {}
+            await seed_latency_pools(
+                world.repository,
+                project_id=world.project.project_id,
+                actor_id=world.project.actor_id,
+                store=world.store,
+                providers=providers,
+                secrets=secrets,
+            )
+            install_adapter_map(monkeypatch, adapters, secrets=secrets)
+            await warm_route_caches(world.repository, providers)
+            policy = await routing_policy(world.repository)
+            async with world.repository.session() as session:
+                bindings = await ProjectBindingRepository(session).list_for_project(
+                    project_id=world.project.project_id
+                )
+            assert len(bindings) == binding_count
+            request = search_request(world)
+            engine = world.repository._engine.sync_engine
+            project_reads[0] = 0
+            event.listen(engine, "before_cursor_execute", count_project_selects)
+            try:
+                context, _, candidates = await world.service._ranked_candidates(
+                    world.context, request, UsageOperation.SEARCH, policy
+                )
+            finally:
+                event.remove(engine, "before_cursor_execute", count_project_selects)
+            reads_by_bindings[binding_count] = project_reads[0]
+            assert context.account_id == world.context.account_id
+            assert context.project_id == world.project.project_id
+            assert len(candidates) == binding_count
+            assert {candidate.provider for candidate in candidates} == set(providers)
+            assert {candidate.binding.id for candidate in candidates} == {
+                binding.id for binding in bindings
+            }
+            assert {candidate.credential_id for candidate in candidates} == {
+                binding.credential_id for binding in bindings
+            }
+        finally:
+            await world.aclose()
+
+    assert reads_by_bindings[1] > 0
+    assert reads_by_bindings[7] == reads_by_bindings[1], reads_by_bindings
+
+
 @pytest.mark.parametrize(
     ("fallback_policy", "allow_fallback", "operation"),
     [

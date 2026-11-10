@@ -169,9 +169,6 @@ async def _record_request(
     )
 
 
-_READS_UNAVAILABLE_REASONS: list[str] = []
-
-
 async def _run_mix(
     rows: list[dict[str, Any]],
     *,
@@ -186,9 +183,6 @@ async def _run_mix(
 ) -> None:
     clear_config_cache()
     clear_quota_poll_cache()
-    selects: list[int] = [0]
-    detach = attach_select_counter(repository, selects)
-    reads_start = selects[0]
     await _record_request(
         rows,
         commit=commit,
@@ -213,38 +207,46 @@ async def _run_mix(
             request_index=index,
             call=call,
         )
-    for index in range(_MEASURED_PER_MIX):
-        await _record_request(
-            rows,
-            commit=commit,
-            transport=transport,
-            operation=operation,
-            routing_mode=routing_mode,
-            providers=providers,
-            phase="measured",
-            request_index=index,
-            call=call,
-        )
-    if detach is not None:
-        detach()
+    selects: list[int] = [0]
+    detach = attach_select_counter(repository, selects)
+    try:
+        for index in range(_MEASURED_PER_MIX):
+            await _record_request(
+                rows,
+                commit=commit,
+                transport=transport,
+                operation=operation,
+                routing_mode=routing_mode,
+                providers=providers,
+                phase="measured",
+                request_index=index,
+                call=call,
+            )
+    finally:
+        if detach is not None:
+            detach()
     if db_reads is not None:
-        per_request = (selects[0] - reads_start) / float(1 + _WARMUP_PER_MIX + _MEASURED_PER_MIX)
+        measured_reads = selects[0] if detach is not None else None
         db_reads.append(
             {
                 "transport": transport,
                 "operation": operation,
                 "routing_mode": routing_mode,
                 "providers": providers,
-                "samples": 1 + _WARMUP_PER_MIX + _MEASURED_PER_MIX,
-                "foreground_selects": selects[0] - reads_start,
-                "selects_per_request": round(per_request, 2),
+                "samples": _MEASURED_PER_MIX,
+                "foreground_selects": measured_reads,
+                "selects_per_request": (
+                    round(measured_reads / _MEASURED_PER_MIX, 2)
+                    if measured_reads is not None
+                    else None
+                ),
                 "counter_available": detach is not None,
             }
         )
 
 
 def _write_db_reads_report(db_reads: Sequence[dict[str, Any]]) -> None:
-    """Write the per-mix foreground SELECT diagnostic (no timings, no gate)."""
+    """Write engine SELECTs per measured mix, including background reads (no gate)."""
 
     csv_path = _REPORT_DIR / "db_reads.csv"
     md_path = _REPORT_DIR / "db_reads.md"
@@ -266,23 +268,28 @@ def _write_db_reads_report(db_reads: Sequence[dict[str, Any]]) -> None:
         for row in db_reads:
             writer.writerow(row)
     lines = [
-        "# A3 authority foreground SELECT diagnostic",
+        "# A3 authority engine SELECT diagnostic",
         "",
-        "Foreground SELECT statements per mix on the shared repository engine,",
-        "counted with the existing `attach_select_counter` seam during each mix",
-        "(cold + warmup + measured samples). Counts include authorization,",
+        "Engine SELECT statements on the shared repository engine, counted with",
+        "the existing `attach_select_counter` seam during the measured loop only",
+        f"({_MEASURED_PER_MIX} requests per mix). Cold requests, cache warming, and warmup",
+        "requests are excluded. Counts include authorization,",
         "binding, credential, pool, allocation, order, settings, health, usage,",
         "and quota reads plus any background SELECT inside the mix window. They",
         "are a diagnostic, not a pass/fail limit: no threshold applies.",
+        "The legacy CSV column `foreground_selects` includes those background reads.",
+        "An unavailable counter leaves the SELECT count and per-request average blank.",
         "",
         "| transport | operation | routing | providers | samples | selects | each | counter |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for row in db_reads:
+        reads_cell = "" if row["foreground_selects"] is None else str(row["foreground_selects"])
+        each_cell = "" if row["selects_per_request"] is None else str(row["selects_per_request"])
         lines.append(
             f"| {row['transport']} | {row['operation']} | {row['routing_mode']} | "
-            f"{row['providers']} | {row['samples']} | {row['foreground_selects']} | "
-            f"{row['selects_per_request']} | "
+            f"{row['providers']} | {row['samples']} | {reads_cell} | "
+            f"{each_cell} | "
             f"{'available' if row['counter_available'] else 'unavailable'} |"
         )
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

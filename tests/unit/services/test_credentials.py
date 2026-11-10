@@ -19,7 +19,6 @@ from polyweb.models.projects import (
     CredentialInstanceRead,
     CredentialOwnerScope,
     CredentialProjectGrantRead,
-    ProjectRolloutState,
     ProjectStatus,
 )
 from polyweb.services.credentials import CredentialService
@@ -189,11 +188,11 @@ async def test_verified_flag_system_grant_returns_credential() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rollout_gate_raises_regardless_of_flag() -> None:
+@pytest.mark.parametrize("project_verified_in_session", [False, True])
+async def test_rollout_gate_raises_regardless_of_flag(project_verified_in_session: bool) -> None:
     service = _service(rollout_state="retired-state")  # type: ignore[arg-type]
-    assert ProjectRolloutState.PROJECTS_PREVIEW is not None
     with (
-        _repository_doubles(project_status=ProjectStatus.ACTIVE) as _,
+        _repository_doubles(project_status=ProjectStatus.ACTIVE),
         pytest.raises(ProjectStorageUnavailable),
     ):
         await service.usable_credential_in_session(
@@ -201,7 +200,7 @@ async def test_rollout_gate_raises_regardless_of_flag() -> None:
             project_id=uuid4(),
             credential_id=uuid4(),
             operation=CredentialOperation.SEARCH,
-            project_verified_in_session=True,
+            project_verified_in_session=project_verified_in_session,
         )
 
 
