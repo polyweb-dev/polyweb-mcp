@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { MoreHorizontal } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import { MENU_ITEM_CLASS, MENU_ITEM_DANGER_CLASS, MENU_TRIGGER_ICON_CLASS } from "./menuStyles"
 import { Popover, PopoverContent, PopoverTrigger } from "./popover"
 
@@ -7,6 +8,8 @@ export interface RowAction {
   key: string
   label: string
   onSelect: () => void
+  /** Leading action icon; decorative, hidden from assistive tech. */
+  icon?: LucideIcon
   /** Destructive items sit last, in the danger tone. */
   danger?: boolean
   disabled?: boolean
@@ -51,6 +54,7 @@ export function RowActionsMenu({ label, actions, disabled = false }: RowActionsM
                 action.onSelect()
               }}
             >
+              {action.icon !== undefined && <action.icon aria-hidden="true" />}
               {action.label}
             </button>
           ))}

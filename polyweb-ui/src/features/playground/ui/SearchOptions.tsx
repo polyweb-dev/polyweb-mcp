@@ -23,35 +23,30 @@ const providerFieldClass =
 export function SearchOptions({ controller }: { controller: PlaygroundController }) {
   const { setQuery, selectedProviderId, setSelectedProviderId, eligibleProviders, resultCount, setResultCount } = controller
   /**
-   * The input holds a draft string so it can be cleared naturally: a blank
-   * stays visibly blank, while the store always keeps a valid committed
-   * value — so submit (by click or by Enter, with or without a blur) always
-   * sends a sensible clamped limit. Typing a value commits its clamp at
-   * once; blur on a blank exits edit mode, revealing the committed floor.
+   * Whether the input is mid-edit on a blank: clearing stays visibly blank
+   * while the store always keeps a valid committed value — so submit (by
+   * click or by Enter, with or without a blur) always sends a sensible
+   * clamped limit. Every non-blank write normalizes through the controller
+   * at once, so no draft string needs tracking beyond the blank flag.
+   * Upstream moves while blank (rehydration, another setter) simply rebase
+   * to the new value because the flag only forces blank rendering.
    */
-  const [draft, setDraft] = useState<string | null>(null)
-  // Derive the shown value at render: a draft is preserved when it either is
-  // a blank in-progress edit or still matches the committed value; upstream
-  // moves (rehydration, another setter) rebase automatically without an
-  // effect or a cascading render.
-  const shown = draft !== null && (draft.trim() === "" || Number(draft) === resultCount)
-    ? draft
-    : String(resultCount)
+  const [clearing, setClearing] = useState(false)
+  const shown = clearing ? "" : String(resultCount)
   const commit = (raw: string) => {
     if (raw.trim() === "") {
-      // Blank stays visible as an in-progress edit; the store keeps the
-      // clamp floor so any submit is sensible, matching an explicit 0 → 1.
-      setDraft("")
+      // Blank is an in-progress edit; the store keeps the clamp floor so any
+      // submit is sensible, matching an explicit 0 → 1.
+      setClearing(true)
       setResultCount(clampLimit(Number(raw)))
       return
     }
-    const value = clampLimit(Number(raw))
-    setDraft(String(value))
-    setResultCount(value)
+    setClearing(false)
+    setResultCount(clampLimit(Number(raw)))
   }
   const blur = () => {
     // A blank loses focus: exit edit mode and reveal the committed value.
-    setDraft(null)
+    setClearing(false)
   }
   const providerOptions = [
     { value: "auto", label: "Auto" },

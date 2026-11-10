@@ -1,3 +1,4 @@
+import { MinusCircle, Pencil, Plus } from "lucide-react"
 import type { ProjectPool, ProviderOwner } from "@/domains/projects"
 import type { ProviderTypeView } from "@/domains/providers"
 import type { PoolOperation } from "@/domains/vault"
@@ -39,8 +40,8 @@ function renderPoolMenu({ pool, name, isOwner, edit, unassign }: {
 }) {
   if (!isOwner || !pool) return null
   return <RowActionsMenu label={`Actions for ${name}`} actions={[
-    { key: "edit", label: "Edit pool", onSelect: () => edit(pool) },
-    { key: "unassign", label: "Unassign", danger: true, onSelect: () => unassign(pool) },
+    { key: "edit", label: "Edit pool", icon: Pencil, onSelect: () => edit(pool) },
+    { key: "unassign", label: "Unassign", icon: MinusCircle, danger: true, onSelect: () => unassign(pool) },
   ]} />
 }
 
@@ -61,7 +62,7 @@ function renderReadyContent(props: Omit<Props, "pools"> & { pools: ProjectPool[]
       renderPool: (item, operation) => <ProjectPoolCell pool={pools.find((pool) => pool.provider_type === item.provider)} operation={operation} />,
       renderMenu: (item) => item.keyless
         ? isOwner && <RowActionsMenu label={`Actions for ${item.name}`} actions={[
-          { key: "add", label: "Add a key for higher limits", onSelect: () => props.add(item.provider) },
+          { key: "add", label: "Add a key for higher limits", icon: Plus, onSelect: () => props.add(item.provider) },
         ]} />
         : renderPoolMenu({ pool: pools.find((pool) => pool.provider_type === item.provider),
           name: item.name, isOwner, edit: props.edit, unassign: props.unassign }),

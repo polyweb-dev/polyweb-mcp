@@ -288,7 +288,7 @@ describe("KeysPoolsPage", () => {
     render(<KeysPoolsPage />)
     const user = userEvent.setup()
     expect(await screen.findByText("Disconnected")).toBeInTheDocument()
-    expect(screen.getByText("—")).toBeInTheDocument()
+    expect(screen.getAllByText("—")).toHaveLength(2)
     await user.click(await screen.findByRole("button", { name: "Actions for Main" }))
     await user.click(await screen.findByRole("button", { name: "Connect" }))
     expect(within(screen.getByRole("dialog", { name: "Connect Parallel" })).getByTestId("provider-logo-parallel")).toBeInTheDocument()
