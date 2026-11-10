@@ -40,6 +40,27 @@ def step_given_project(context: Any) -> None:
                 secrets=secrets,
             )
         )
+        # Free providers require an owned keyless pool just like paid providers.
+        key = client.post(
+            "/api/v1/account/vault/keys",
+            headers=context.admin_headers,
+            json={"provider_type": "keenable", "label": "Free search", "auth_mode": "keyless"},
+        )
+        assert key.status_code == 201, key.text
+        assert key.json()["auth_mode"] == "keyless"
+        pool = client.post(
+            f"/api/v1/account/vault/keys/{key.json()['id']}/pools",
+            headers=context.admin_headers,
+            json={
+                "label": "Free search",
+                "project_id": context.routing_project_id,
+                "operations": ["search"],
+            },
+        )
+        assert pool.status_code == 201, pool.text
+        assert pool.json()["credential_id"] == key.json()["id"]
+        assert pool.json()["provider_type"] == "keenable"
+        assert pool.json()["project_id"] == context.routing_project_id
 
     def factory(name: str) -> Any:
         adapter = next((item for item in context.adapters if item.name == name), None)
