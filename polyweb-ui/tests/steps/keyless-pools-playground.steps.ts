@@ -303,9 +303,14 @@ Then("the playground shows the returned Keenable results without an API-failure 
   for (const result of search.results) {
     const title = result.title.replace(/\s+/g, " ").trim();
     await expect(returned.getByRole("heading", { name: title, exact: true }).first()).toBeVisible();
-    await expect(returned.getByRole("link", { name: `Open ${title}`, exact: true }).first())
-      .toHaveAttribute("href", result.url);
   }
+  // Compare the whole ordered href list once: a provider may legitimately
+  // return the same title under different URLs, so a per-title lookup would
+  // pick the first matching link and mis-pair the rest.
+  const hrefs = await returned.getByRole("link", { name: /^Open / }).evaluateAll(
+    (links) => links.map((link) => link.getAttribute("href")),
+  );
+  expect(hrefs).toEqual(search.results.map((result) => result.url));
   await expect(page.locator("main").locator('p[style*="status-danger"]', {
     hasText: /unreachable|failed|error|unavailable|no provider|timed out|timeout/i,
   })).toHaveCount(0);
