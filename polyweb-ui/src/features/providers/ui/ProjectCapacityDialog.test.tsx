@@ -16,6 +16,12 @@ const key = {
   generation: 1, created_at: "2026-01-01", capacity: null, overcommit: true, contention_mode: "equal", pool_count: 0,
 }
 
+/** Tavily offers keyless access and defaults to it; keyed tests pick API key first. */
+async function chooseApiKey(dialog: HTMLElement) {
+  await userEvent.click(within(dialog).getByRole("combobox", { name: "Authentication" }))
+  await userEvent.click(await screen.findByRole("option", { name: "API key" }))
+}
+
 function open(provider = "tavily", onClose = vi.fn()) {
   return render(<ProjectCapacityDialog projectId="p1" projectName="Alpha" providers={[] as ProviderTypeView[]}
     provider={provider} onClose={onClose} onSaved={vi.fn()} />)
@@ -68,6 +74,7 @@ describe("ProjectProvidersPage private keys", () => {
   it("saves a key, shows only metadata, and keeps the key out of DOM, storage and URL", async () => {
     open()
     const dialog = await screen.findByRole("dialog", { name: "Add Tavily key" })
+    await chooseApiKey(dialog)
     const secret = within(dialog).getByLabelText("API key")
     expect(secret).toHaveAttribute("type", "password")
     await userEvent.type(secret, FAKE_PROVIDER_KEY)
@@ -92,6 +99,7 @@ describe("ProjectProvidersPage private keys", () => {
     api.createVaultKey.mockRejectedValue(new Error("secret-value"))
     open()
     const dialog = await screen.findByRole("dialog", { name: "Add Tavily key" })
+    await chooseApiKey(dialog)
     await userEvent.type(within(dialog).getByLabelText("API key"), "secret-value")
     await userEvent.click(within(dialog).getByRole("button", { name: "Add key" }))
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("The key did not save")
@@ -117,6 +125,7 @@ describe("ProjectProvidersPage private keys", () => {
     const close = vi.fn()
     const view = open("tavily", close)
     const dialog = await screen.findByRole("dialog", { name: "Add Tavily key" })
+    await chooseApiKey(dialog)
     await userEvent.type(within(dialog).getByLabelText("API key"), "secret-value")
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
     expect(close).toHaveBeenCalled()
