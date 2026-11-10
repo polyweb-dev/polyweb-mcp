@@ -5,7 +5,8 @@ Feature: New-project keyless pools, playground errors, trace storage and results
   #   guidance with the Search submit disabled; zero /search + /fetch execution
   #   calls observed on the live page (never submits a disabled button).
   # - Playground search: "Search the web" placeholder, "Search" submit;
-  #   live results carry "% match" text.
+  #   live results render in the "Returned results" region; a keyless provider
+  #   such as Keenable returns no score, so "% match" text is optional.
   # - Keys and pools: route /account/keys, "Keys and pools" heading, dialog
   #   "Add key" with "Add key" submit, Create pool via the key-row button.
   # - Settings: field "Payload detail", option "Full requests".
@@ -33,7 +34,7 @@ Feature: New-project keyless pools, playground errors, trace storage and results
     Given a fresh signup with a new project
     When I create a keyless pool for Keenable without an API key and assign it to the new project
     And I run the keyless search and save the payload with Full requests
-    Then the playground should show live search results without an API-failure alert
+    Then the playground shows the returned Keenable results without an API-failure alert
     When I open the trace of the saved search response
     Then the trace detail shows the Keenable response with its results
 

@@ -285,7 +285,30 @@ When("I run the keyless search and save the payload with Full requests", async (
   // execution count with no separate counter.
   expect(evidence(page).execution).toHaveLength(1);
   evidence(page).search = { traceId: traceId!, query, provider: result.provider, results: result.results };
-  await expect(page.locator("main").getByText(/% match/i).first()).toBeVisible({ timeout: 30_000 });
+  // Keenable returns no relevance score, so the UI renders no "% match" text
+  // for it; wait on the semantic results region instead.
+  await expect(page.getByRole("region", { name: "Returned results" })).toBeVisible({ timeout: 30_000 });
+});
+
+Then("the playground shows the returned Keenable results without an API-failure alert", async ({ page }) => {
+  const search = evidence(page).search;
+  if (!search) throw new Error("Search response was not captured");
+  const returned = page.getByRole("region", { name: "Returned results" });
+  await expect(returned).toBeVisible({ timeout: 30_000 });
+  // Every server result is rendered: the count line, one level-4 card heading
+  // each, and an "Open <title>" link carrying the result URL. Scores are
+  // optional for a keyless provider, so no "% match" text is required.
+  await expect(returned.getByText(`Returned results (${search.results.length})`, { exact: true })).toBeVisible();
+  await expect(returned.getByRole("heading", { level: 4 })).toHaveCount(search.results.length);
+  for (const result of search.results) {
+    const title = result.title.replace(/\s+/g, " ").trim();
+    await expect(returned.getByRole("heading", { name: title, exact: true }).first()).toBeVisible();
+    await expect(returned.getByRole("link", { name: `Open ${title}`, exact: true }).first())
+      .toHaveAttribute("href", result.url);
+  }
+  await expect(page.locator("main").locator('p[style*="status-danger"]', {
+    hasText: /unreachable|failed|error|unavailable|no provider|timed out|timeout/i,
+  })).toHaveCount(0);
 });
 
 When("I open the trace of the saved search response", async ({ page }) => {
