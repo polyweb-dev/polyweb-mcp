@@ -28,6 +28,31 @@ class ExecutionBindingMissing(ExecutionError):
     """No enabled usable binding exists for this project and operation."""
 
 
+def missing_pool_detail(providers: tuple[str, ...] | list[str] | None = None) -> str:
+    """Return the actionable refusal when no pool is assigned for a request.
+
+    The text keeps the historical ``no ... provider is configured`` prefix so
+    existing status assertions hold, then names pool creation/assignment for
+    the selected provider(s). It never mentions timeouts: a missing pool
+    fails before any provider call, while genuine timeouts surface through
+    the 429 deadline path and 5xx provider errors.
+    """
+
+    names = sorted({provider for provider in (providers or ()) if provider})
+    if names:
+        joined = ", ".join(names)
+        return (
+            f"no required provider is configured for this project: {joined} "
+            "has no assigned pool; create a pool for the selected provider "
+            "and assign it to this project, then retry"
+        )
+    return (
+        "no provider is configured for this project: the project has no "
+        "assigned pool; create a pool for the selected provider and assign "
+        "it to this project, then retry"
+    )
+
+
 class ExecutionNotPermitted(ExecutionBindingMissing):
     """The verified actor no longer holds live authority for this execution.
 
@@ -88,4 +113,5 @@ __all__ = [
     "ExecutionQueueSaturated",
     "ExecutionRequestInvalid",
     "ExecutionStorageUnavailable",
+    "missing_pool_detail",
 ]

@@ -104,6 +104,7 @@ from polyweb.models.execution_failures import (
     ExecutionQueueExpired,
     ExecutionRequestInvalid,
     ExecutionStorageUnavailable,
+    missing_pool_detail,
 )
 from polyweb.models.observability import (
     TRACE_EVENT_PROVIDER_REQUEST,
@@ -571,9 +572,7 @@ class _LegChain:
         required = preference.mode is RoutingMode.REQUIRE and bool(preference.providers)
         if self.resolved == 0:
             return ExecutionBindingMissing(
-                "no required provider is configured for this project"
-                if required
-                else "no provider is configured for this project"
+                missing_pool_detail(preference.providers if required else ())
             )
         if preference.binding_id is not None and self.capable and not self.pinned_capable:
             return ExecutionBindingMissing(
@@ -2028,8 +2027,8 @@ class ExecutionService:
         )
         if not candidates:
             if request.routing.mode is RoutingMode.REQUIRE and request.routing.providers:
-                raise ExecutionBindingMissing("no required provider is configured for this project")
-            raise ExecutionBindingMissing("no provider is configured for this project")
+                raise ExecutionBindingMissing(missing_pool_detail(request.routing.providers))
+            raise ExecutionBindingMissing(missing_pool_detail(()))
         hop_limit = self._hop_limit(request, policy, len(candidates))
         chain = _LegChain(self, candidates, request, operation, context, project_cap)
         try:
@@ -2313,9 +2312,13 @@ class ExecutionService:
         )
         if not legs:
             # Same contract as a single-provider call: a project with no
-            # usable binding has no provider configured.
+            # usable binding has no assigned pool. The historical "no
+            # eligible provider" prefix stays for status assertions; the
+            # guidance names pool assignment and never a timeout.
             raise ExecutionBindingMissing(
-                "no eligible provider: no provider is configured for this project"
+                "no eligible provider: no provider is configured for this project; "
+                "create a pool for the selected provider and assign it to this "
+                "project, then retry"
             )
         try:
             fanout_request = request.model_copy(

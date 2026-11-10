@@ -39,10 +39,6 @@ def keyless_credential_id(provider: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"polyweb:keyless-credential:{provider}"))
 
 
-def _keyless_binding_id(project_id: str, provider: str) -> str:
-    return str(uuid5(NAMESPACE_URL, f"polyweb:binding:{project_id}:{provider}:keyless"))
-
-
 async def ensure_keyless_credentials(session: AsyncSession) -> None:
     """Create the installation's non-vault public credentials, without secrets."""
 
@@ -81,41 +77,6 @@ async def provider_enabled(session: AsyncSession, provider: str) -> bool:
     payload = _config_payload(None if row is None else json.loads(row.value_json))
     base = _provider_base(name)
     return (base if payload is None else _current_config(name, base, payload)).enabled
-
-
-async def _insert_keyless(
-    session: AsyncSession, project: str, provider: str, creator: str, now: str
-) -> None:
-    args = {
-        "binding": _keyless_binding_id(project, provider),
-        "project": project,
-        "credential": keyless_credential_id(provider),
-        "provider": provider,
-        "creator": creator,
-        "now": now,
-        "operations": '["fetch", "search"]',
-    }
-    await session.execute(
-        text(
-            "INSERT INTO credential_project_grants "
-            "(credential_id,owner_scope,project_id,permitted_operations,granted_by,created_at,version)"
-            " VALUES (:credential,'system',:project,:operations,:creator,:now,1) "
-            "ON CONFLICT(credential_id,project_id) DO UPDATE SET "
-            "permitted_operations=excluded.permitted_operations"
-        ),
-        args,
-    )
-    await session.execute(
-        text(
-            "INSERT INTO project_provider_bindings "
-            "(id,project_id,credential_id,credential_scope,granted_project_id,route_label,"
-            "enabled_operations,priority,overrides,created_by,created_at,updated_at,version) "
-            "VALUES (:binding,:project,:credential,'system',:project,:provider,:operations,"
-            "100,'{}',:creator,:now,:now,1) ON CONFLICT(id) DO UPDATE SET "
-            "enabled_operations=excluded.enabled_operations"
-        ),
-        args,
-    )
 
 
 def _rate(pool: StoredKeyPool, operation: str) -> int | None:
@@ -276,7 +237,14 @@ async def detach_pool_allocations(session: AsyncSession, pool_id: UUID) -> None:
 async def materialize_pools(
     session: AsyncSession, *, project_id: UUID | None = None
 ) -> MaterializeResult:
-    """Synchronize project capacity in the caller's transaction; never commit."""
+    """Synchronize project capacity in the caller's transaction; never commit.
+
+    Only explicitly assigned key pools materialize bindings, grants, and
+    allocations for the selected provider. There is no implicit public
+    keyless grant: a project with no assigned pool resolves zero bindings,
+    and previously persisted automatic keyless bindings/grants for providers
+    with no assigned pool are pruned by the deletes below.
+    """
 
     await ensure_keyless_credentials(session)
     query = select(
@@ -286,18 +254,10 @@ async def materialize_pools(
         query = query.where(ProjectRow.id == str(project_id))
     projects = (await session.execute(query.order_by(ProjectRow.id))).all()
     count = 0
-    enabled = {
-        provider for provider in KEYLESS_PROVIDERS if await provider_enabled(session, provider)
-    }
-    for identifier, account_id, creator, created_at in projects:
+    for identifier, account_id, _creator, _created_at in projects:
         pools = await KeyPoolRepository(session).list_for_project(UUID(identifier))
-        keyless = enabled - {pool.provider_type for pool in pools}
-        binding_ids = [_runtime_id("binding", pool.id) for pool in pools] + [
-            _keyless_binding_id(identifier, provider) for provider in keyless
-        ]
-        credential_ids = [str(pool.credential_id) for pool in pools] + [
-            keyless_credential_id(provider) for provider in keyless
-        ]
+        binding_ids = [_runtime_id("binding", pool.id) for pool in pools]
+        credential_ids = [str(pool.credential_id) for pool in pools]
         allocation_keys = [
             (_runtime_id("credential-pool", pool.credential_id), operation)
             for pool in pools
@@ -324,8 +284,6 @@ async def materialize_pools(
         )
         for pool in pools:
             await _insert_pool(session, account_id, pool)
-        for provider in sorted(keyless):
-            await _insert_keyless(session, identifier, provider, creator, created_at)
         count += len(pools)
     await _prune_generated(session)
     return MaterializeResult(projects=len(projects), pools=count)
