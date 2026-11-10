@@ -193,7 +193,9 @@ class ProviderCredentialRow(Base):
         ),
         CheckConstraint(
             "(auth_mode = 'keyless' AND owner_scope = 'system' AND owner_user_id IS NULL "
-            "AND created_by IS NULL) OR (auth_mode != 'keyless' AND created_by IS NOT NULL)",
+            "AND created_by IS NULL) OR (auth_mode = 'keyless' AND owner_scope != 'system' "
+            "AND owner_user_id IS NOT NULL AND created_by IS NOT NULL) "
+            "OR (auth_mode != 'keyless' AND created_by IS NOT NULL)",
             name="provider_credentials_keyless_system",
         ),
         CheckConstraint(
@@ -231,7 +233,7 @@ class ProviderCredentialRow(Base):
             "account_id",
             "provider_type",
             unique=True,
-            sqlite_where=text("auth_mode = 'keyless'"),
+            sqlite_where=text("auth_mode = 'keyless' AND owner_user_id IS NULL"),
         ),
         Index("ix_provider_credentials_owner_project_id", "owner_project_id"),
     )

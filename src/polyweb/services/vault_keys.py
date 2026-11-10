@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
 from polyweb.models.credentials import (
+    CredentialAuthMode,
     CredentialCreate,
     CredentialOAuthStatusRead,
     CredentialOperation,
@@ -175,6 +176,12 @@ class VaultKeyService:
             if body.secret is not None:
                 await self._secrets.create_slot_in_session(
                     session, credential_secret_slot(created.id, 1), body.secret.get_secret_value()
+                )
+            elif body.auth_mode is CredentialAuthMode.API_KEY:
+                # Belt and braces: the contract forbids this combination, but a
+                # slotless api_key row would silently resolve unusable later.
+                raise ResourceInvalid(
+                    "INVALID_CREDENTIAL", "an api_key credential requires a secret"
                 )
             if body.capacity is not None:
                 await credentials.update_capacity(

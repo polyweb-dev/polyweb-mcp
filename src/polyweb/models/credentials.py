@@ -37,11 +37,14 @@ class CredentialAuthMode(StrEnum):
 
     An ``api_key`` credential stores its secret in the generation slot. An
     ``oauth`` credential stores no secret at creation: its tokens arrive
-    through the per-credential OAuth device flow.
+    through the per-credential OAuth device flow. A ``keyless`` credential
+    also stores no secret: it addresses a free-tier provider endpoint without
+    vendor credentials (see ``KEYLESS_PROVIDER_TYPES``).
     """
 
     API_KEY = "api_key"
     OAUTH = "oauth"
+    KEYLESS = "keyless"
 
 
 class CredentialStatus(StrEnum):
@@ -68,7 +71,8 @@ class CredentialCreate(ContractModel):
     """Request to create a provider credential instance.
 
     ``secret`` is required for ``api_key`` credentials and forbidden for
-    ``oauth`` credentials, which receive tokens through the device flow.
+    ``oauth`` credentials (which receive tokens through the device flow) and
+    ``keyless`` credentials (free-tier endpoints need no vendor secret).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -105,6 +109,8 @@ class CredentialCreate(ContractModel):
             raise ValueError("an api_key credential requires a secret")
         if self.auth_mode is CredentialAuthMode.OAUTH and self.secret is not None:
             raise ValueError("an oauth credential receives its tokens through the device flow")
+        if self.auth_mode is CredentialAuthMode.KEYLESS and self.secret is not None:
+            raise ValueError("a keyless credential needs no secret")
         return self
 
 

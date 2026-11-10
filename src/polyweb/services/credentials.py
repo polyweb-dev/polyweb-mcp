@@ -101,6 +101,14 @@ CREDENTIAL_GRANT_DELETED: Final[str] = "credential_grant.deleted"
 #: Providers whose credentials may use the per-credential OAuth device flow.
 OAUTH_PROVIDER_TYPES: Final[frozenset[str]] = frozenset({ProviderName.PARALLEL.value})
 
+#: Providers whose free-tier endpoints need no vendor secret. ``keyless``
+#: credentials are only accepted for these providers; keyed providers still
+#: require an API key. The membership matches the materializer's public
+#: keyless set so owned keyless pools resolve through the same providers.
+#: This is the user-facing allowlist; the system materializer owns its copy
+#: to stay import-safe at pool-sync time.
+KEYLESS_PROVIDER_TYPES: Final[frozenset[str]] = frozenset({"keenable", "tavily"})
+
 #: Conflict code for a rotation that named a stale generation.
 CREDENTIAL_GENERATION_CONFLICT: Final[str] = "CREDENTIAL_GENERATION_CONFLICT"
 #: Conflict code for a create that reuses a live owner-scoped label.
@@ -928,6 +936,10 @@ class CredentialService:
             raise CredentialValidationError(
                 "an oauth credential has no key to rotate; reconnect it through the device flow"
             )
+        if current.auth_mode == CredentialAuthMode.KEYLESS.value:
+            raise CredentialValidationError(
+                "a keyless credential has no secret to rotate; create a new key if needed"
+            )
         advanced = await credentials.advance_generation(
             credential_id=current.id,
             owner_scope=current.owner_scope,
@@ -1184,6 +1196,13 @@ class CredentialService:
         ):
             raise CredentialValidationError(
                 f"provider type {body.provider_type!r} does not support oauth credentials"
+            )
+        if (
+            body.auth_mode is CredentialAuthMode.KEYLESS
+            and body.provider_type not in KEYLESS_PROVIDER_TYPES
+        ):
+            raise CredentialValidationError(
+                f"provider type {body.provider_type!r} does not support keyless credentials"
             )
 
     async def _write(self, operation: Callable[[AsyncSession], Awaitable[_T]]) -> _T:
