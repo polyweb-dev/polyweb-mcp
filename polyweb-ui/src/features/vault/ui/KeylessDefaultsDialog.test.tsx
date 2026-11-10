@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { KeyPool, VaultKey, VaultProject } from "@/domains/vault"
+import { ApiError } from "@/shared/api/http"
 import { KeylessDefaultsDialog } from "./KeylessDefaultsDialog"
 import type { BulkVaultRow } from "../model/bulkPools"
 
@@ -104,12 +105,11 @@ describe("KeylessDefaultsDialog (TASK-000065 AC#2/AC#10)", () => {
     await user.click(screen.getByRole("combobox", { name: "Project" }))
     await user.click(await screen.findByRole("option", { name: "Alpha" }))
     await user.click(screen.getByRole("button", { name: "Create defaults" }))
-    await waitFor(() => expect(api.createVaultKey).toHaveBeenCalledTimes(1))
-    expect(await screen.findByRole("alert")).toHaveTextContent("The defaults did not save. Try again")
-    // Retry reuses the already-created keyless key instead of creating a duplicate.
-    // First attempt: keenable key ok, keenable pool fails, tavily never runs.
-    // Retry: keenable key reused, keenable pool succeeds, tavily key+pool created.
-    await user.click(screen.getByRole("button", { name: "Create defaults" }))
+    expect(await screen.findByText("Keenable: did not save — try again")).toBeInTheDocument()
+    expect(await screen.findByText(/Tavily: created pool/)).toBeInTheDocument()
+    // First attempt: keenable key ok, keenable pool fails, tavily key+pool created.
+    // Retry: the created keenable key is reused and only its pool is written.
+    await user.click(screen.getByRole("button", { name: "Retry remaining" }))
     await waitFor(() => expect(api.createKeyPool).toHaveBeenCalledTimes(3))
     const keenableKeys = api.createVaultKey.mock.calls.filter(([input]) => input.provider_type === "keenable")
     const tavilyKeys = api.createVaultKey.mock.calls.filter(([input]) => input.provider_type === "tavily")
@@ -117,6 +117,58 @@ describe("KeylessDefaultsDialog (TASK-000065 AC#2/AC#10)", () => {
     expect(tavilyKeys).toHaveLength(1)
     expect(await screen.findByText(/Keenable: created pool/)).toBeInTheDocument()
     expect(onSaved).toHaveBeenCalledWith("Keyless defaults ready for Alpha")
+  })
+
+  it("blocks a provider whose pool create is rejected and still provisions the rest", async () => {
+    const user = userEvent.setup()
+    const onSaved = vi.fn()
+    let rejectKeenable = true
+    api.createKeyPool.mockImplementation(async (keyId: string, input: { label: string; project_id: string }) => {
+      if (keyId === "key-keenable" && rejectKeenable) {
+        rejectKeenable = false
+        throw new ApiError(409, "a pool with this label already exists", null)
+      }
+      return keyPool({ credential_id: keyId, provider_type: keyId.replace("key-", ""), label: input.label, project_id: input.project_id })
+    })
+    render(<KeylessDefaultsDialog rows={[]} projects={projects} onClose={vi.fn()} onSaved={onSaved} />)
+    await user.click(screen.getByRole("combobox", { name: "Project" }))
+    await user.click(await screen.findByRole("option", { name: "Alpha" }))
+    await user.click(screen.getByRole("button", { name: "Create defaults" }))
+    // The rejected provider is named as blocked; the next provider still gets its pool.
+    expect(await screen.findByText("Keenable: conflicts with an existing pool or key — resolve it from the key row")).toBeInTheDocument()
+    expect(await screen.findByText(/Tavily: created pool/)).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(api.createKeyPool).toHaveBeenCalledTimes(2)
+    // Dismissing reloads with an accurate summary.
+    await user.click(screen.getByRole("button", { name: "Done" }))
+    expect(onSaved).toHaveBeenCalledWith("Keyless defaults for Alpha: Created 1 pool, 1 blocked")
+  })
+
+  it("retries only the blocked provider, reusing its created key and the completed provider", async () => {
+    const user = userEvent.setup()
+    const onSaved = vi.fn()
+    let rejectKeenable = true
+    api.createKeyPool.mockImplementation(async (keyId: string, input: { label: string; project_id: string }) => {
+      if (keyId === "key-keenable" && rejectKeenable) {
+        rejectKeenable = false
+        throw new ApiError(409, "a pool with this label already exists", null)
+      }
+      return keyPool({ credential_id: keyId, provider_type: keyId.replace("key-", ""), label: input.label, project_id: input.project_id })
+    })
+    render(<KeylessDefaultsDialog rows={[]} projects={projects} onClose={vi.fn()} onSaved={onSaved} />)
+    await user.click(screen.getByRole("combobox", { name: "Project" }))
+    await user.click(await screen.findByRole("option", { name: "Alpha" }))
+    await user.click(screen.getByRole("button", { name: "Create defaults" }))
+    expect(await screen.findByText(/Tavily: created pool/)).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Retry remaining" }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith("Keyless defaults ready for Alpha"))
+    const keys = api.createVaultKey.mock.calls.map(([input]) => input.provider_type)
+    expect(keys.filter((type) => type === "keenable")).toHaveLength(1)
+    expect(keys.filter((type) => type === "tavily")).toHaveLength(1)
+    const pools = api.createKeyPool.mock.calls.map(([keyId]) => keyId)
+    expect(pools.filter((id) => id === "key-keenable")).toHaveLength(2)
+    expect(pools.filter((id) => id === "key-tavily")).toHaveLength(1)
   })
 
   it("skips a provider already assigned through a keyed pool without creating a keyless key beside it", async () => {

@@ -182,6 +182,23 @@ describe("bulkPools planner (TASK-000065 AC#10)", () => {
     expect(defaultPoolLabel("keenable", "Alpha", ["Keenable · Beta"])).toBe("Keenable · Alpha")
   })
 
+  it("keeps a generated pool label within 100 characters, including the collision suffix", () => {
+    const projectName = "Research programme ".padEnd(100, "x")
+    expect(projectName).toHaveLength(100)
+    const first = defaultPoolLabel("brave", projectName, [])
+    expect(first.length).toBeLessThanOrEqual(100)
+    expect(first.startsWith("Brave Search · Research programme")).toBe(true)
+    const second = defaultPoolLabel("brave", projectName, [first])
+    expect(second.length).toBeLessThanOrEqual(100)
+    expect(second).not.toBe(first)
+    expect(second.endsWith(" (2)")).toBe(true)
+    const third = defaultPoolLabel("brave", projectName, [first, second])
+    expect(third.length).toBeLessThanOrEqual(100)
+    expect([first, second]).not.toContain(third)
+    expect(third.endsWith(" (3)")).toBe(true)
+    expect(defaultPoolLabel("tavily", "Alpha", [])).toBe("Tavily · Alpha")
+  })
+
   it("checks an existing assignment before project availability (real API shape)", () => {
     // The API excludes already-assigned providers from available_providers,
     // so the assigned check must come first to report accurately.
@@ -215,6 +232,25 @@ describe("bulkPools planner (TASK-000065 AC#10)", () => {
       .toMatchObject({ kind: "skip", outcome: { status: "assigned" } })
   })
 
+  it("blocks a provider whose write throws by name and still runs the rest", async () => {
+    const published: ProviderOutcome[] = []
+    const clients = {
+      createKey: async (input: { provider_type: string }) =>
+        key({ id: `new-${input.provider_type}`, provider_type: input.provider_type, auth_mode: "keyless" }),
+      createPool: async (keyId: string, input: { label: string }) => {
+        if (keyId === "new-keenable") throw new Error("network down: secret-token")
+        return pool({ credential_id: keyId, label: input.label })
+      },
+    }
+    await executeProvisionRun({
+      mode: "defaults", rows: [], projects: [], providerTypes: ["keenable", "tavily"],
+      projectId: "p1", projectName: "Alpha", kept: [],
+    }, { publish: (outcome) => published.push(outcome), reconcile: () => undefined, describeFailure: () => "did not save" }, clients)
+    expect(published.map(({ providerType, status }) => [providerType, status])).toEqual([["keenable", "blocked"], ["tavily", "created"]])
+    expect(published[0]?.message).toBe("Keenable: did not save")
+    expect(JSON.stringify(published)).not.toContain("secret-token")
+  })
+
   it("runs each provider once: creates keys, labels per credential, skips completed providers on retry", async () => {
     const created: unknown[] = []
     const clients = {
@@ -225,7 +261,7 @@ describe("bulkPools planner (TASK-000065 AC#10)", () => {
         return pool({ id: `pool-${created.length}`, credential_id: keyId, label: input.label })
       },
     }
-    const hooks = { publish: () => undefined, reconcile: () => undefined }
+    const hooks = { publish: () => undefined, reconcile: () => undefined, describeFailure: () => "failed" }
     const base = {
       mode: "defaults" as const, rows: [], projects: [], providerTypes: ["keenable", "tavily"],
       projectId: "p1", projectName: "Alpha", kept: [] as ProviderOutcome[],

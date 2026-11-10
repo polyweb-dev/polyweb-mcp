@@ -49,18 +49,26 @@ export function defaultPoolInputForKey(key: VaultKey, projectId: string, label?:
   }
 }
 
+/** Longest pool label the API accepts. */
+const MAX_POOL_LABEL_LENGTH = 100
+
 /** Project-scoped pool label that cannot collide on the owning credential:
  * the (credential_id, label) uniqueness constraint rejects a repeated label
  * even across projects ("Research" on Alpha then on Beta). An existing
  * unassigned same-name pool counts too, so a label of a deleted assignment
- * is never reused. Suffixes stay stable: (2), (3), …
+ * is never reused. Suffixes stay stable: (2), (3), … The project portion is
+ * shortened when needed so the whole label, suffix included, fits the API
+ * limit while the provider and the start of the project name stay readable.
  */
 export function defaultPoolLabel(providerType: string, projectName: string, existingLabels: readonly string[]): string {
-  const base = `${providerTypeName(providerType)} · ${projectName}`
+  const prefix = `${providerTypeName(providerType)} · `
+  const labelWith = (suffix: string) =>
+    `${prefix}${projectName.slice(0, MAX_POOL_LABEL_LENGTH - prefix.length - suffix.length).trimEnd()}${suffix}`
+  const base = labelWith("")
   if (!existingLabels.includes(base)) return base
-  let suffix = 2
-  while (existingLabels.includes(`${base} (${suffix})`)) suffix += 1
-  return `${base} (${suffix})`
+  let count = 2
+  while (existingLabels.includes(labelWith(` (${count})`))) count += 1
+  return labelWith(` (${count})`)
 }
 
 /** Resolve every selected provider to its single owned key. Multi-key
@@ -249,10 +257,14 @@ export interface ProvisionRun {
   kept: readonly ProviderOutcome[]
 }
 
-/** Callbacks a run reports through, one outcome or created record at a time. */
+/** Callbacks a run reports through, one outcome or created record at a time.
+ * `describeFailure` turns a rejected write into a safe, human reason (never
+ * the raw error), so one provider's failure is reported by name.
+ */
 export interface ProvisionHooks {
   publish: (outcome: ProviderOutcome) => void
   reconcile: (created: CreatedRecord) => void
+  describeFailure: (error: unknown) => string
 }
 
 /** Transport injected into the run so this module owns no API imports. */
@@ -285,9 +297,9 @@ async function provisionProvider(
 }
 
 /** Execute one run provider by provider, publishing each outcome as it
- * completes so a later failure keeps earlier successes visible. Created
- * records are reconciled as they happen, so a retry reuses the created key
- * and writes every pool once.
+ * completes. A rejected write blocks only that provider, by name, and the
+ * rest still run. Created records are reconciled as they happen, so a retry
+ * reuses a created key and writes every pool once.
  */
 export async function executeProvisionRun(
   run: ProvisionRun,
@@ -295,7 +307,12 @@ export async function executeProvisionRun(
   clients: ProvisionClients
 ): Promise<void> {
   for (const providerType of run.providerTypes) {
-    const done = run.kept.some((outcome) => outcome.providerType === providerType && outcome.status !== "blocked")
-    if (!done) hooks.publish(await provisionProvider(run, providerType, hooks, clients))
+    const settled = run.kept.some((outcome) => outcome.providerType === providerType && outcome.status !== "blocked")
+    if (settled) continue
+    try {
+      hooks.publish(await provisionProvider(run, providerType, hooks, clients))
+    } catch (error) {
+      hooks.publish({ providerType, status: "blocked", message: `${providerTypeName(providerType)}: ${hooks.describeFailure(error)}` })
+    }
   }
 }

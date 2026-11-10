@@ -30,13 +30,13 @@ export function BulkPoolsDialog({ rows, projects, onClose, onSaved }: {
   const projectName = projects.find((project) => project.id === projectId)?.name ?? "project"
   const run = useProvisionRun({
     mode: "bulk", rows, projects, providerTypes: selected, projectId, projectName,
-    failure: "The pools did not save. Try again", notice: summarizeOutcomes, onClose, onSaved,
+    notice: summarizeOutcomes, onClose, onSaved,
   })
   const toggle = (providerType: string) =>
     setSelected((current) =>
       current.includes(providerType) ? current.filter((entry) => entry !== providerType) : [...current, providerType]
     )
-  const done = run.outcomes.length > 0
+  const attempted = run.outcomes.length > 0
   const eligible = eligibleBulkProjects(projects, selected, run.planning)
   const project = eligible.find((entry) => entry.id === projectId)
   return (
@@ -44,7 +44,7 @@ export function BulkPoolsDialog({ rows, projects, onClose, onSaved }: {
       <div className="space-y-4">
         <p>One pool per selected provider, each on its owned key, assigned to one project. Keyless providers need no API key.</p>
         <Field id="bulk-project" label="Project" hint="Only projects where you are the provider owner">
-          <Select id="bulk-project" value={projectId} onValueChange={setProjectId} disabled={run.pending || done}
+          <Select id="bulk-project" value={projectId} onValueChange={setProjectId} disabled={run.pending || attempted}
             options={eligible.map((entry) => ({ value: entry.id, label: entry.name }))} placeholder="No available projects" />
         </Field>
         {project === undefined && projectId !== "" && <p>Select a project available for every selected provider</p>}
@@ -58,14 +58,14 @@ export function BulkPoolsDialog({ rows, projects, onClose, onSaved }: {
           {candidates.length === 0 && <p>You have no keys yet. Add a key first</p>}
           {selected.length === 0 && <p role="alert" className="fs-field-error">Select at least one provider</p>}
         </fieldset>
-        {done && (
+        {attempted && (
           <ul className="space-y-1 text-[13px]">
             {run.outcomes.map((outcome) => <li key={outcome.providerType}>{outcome.message}</li>)}
           </ul>
         )}
         {run.error && <p role="alert" className="fs-field-error">{run.error}</p>}
         <BulkDialogActions
-          done={done}
+          attempted={attempted}
           pending={run.pending}
           canSave={projectId !== "" && selected.length > 0}
           createLabel={selected.length > 1 ? `Create ${selected.length} pools` : "Create pool"}
