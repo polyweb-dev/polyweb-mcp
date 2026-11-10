@@ -280,6 +280,10 @@ When("I run the keyless search and save the payload with Full requests", async (
   const result = await response.json();
   expect(result).toMatchObject({ query, provider: "keenable" });
   expect(result.results.length).toBeGreaterThan(0);
+  // Exactly one execution /search request: the evidence hook records only
+  // POST calls whose path ends in /search (or /fetch), so its length is the
+  // execution count with no separate counter.
+  expect(evidence(page).execution).toHaveLength(1);
   evidence(page).search = { traceId: traceId!, query, provider: result.provider, results: result.results };
   await expect(page.locator("main").getByText(/% match/i).first()).toBeVisible({ timeout: 30_000 });
 });
