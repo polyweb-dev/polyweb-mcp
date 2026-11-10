@@ -24,10 +24,16 @@ steps:
         echo "=========================================================="
       - |
         bash scripts/ci/run-and-log.sh integration-tests.log bash -euo pipefail -c '
+          # Finite bounds. The repository timeout did not stop a 116 minute stall.
+          # GNU timeout signals its whole process group, so xdist workers and uv
+          # children stop too. SIGABRT makes faulthandler print every thread stack
+          # into this log; -k then force-kills what survives. Exit 124 means timeout.
+          command -v timeout >/dev/null || { echo "GNU timeout is required"; exit 127; }
+          export PYTHONFAULTHANDLER=1
           test -f .env || cp .env.example .env
           uv sync --frozen
-          uv run polyweb-db upgrade
-          uv run pytest tests/integration --ignore=tests/integration/latency -n auto -q
+          timeout -s ABRT -k 30 180 uv run polyweb-db upgrade || { echo "polyweb-db upgrade failed or hit its 180 s bound (exit status $?)"; exit 1; }
+          timeout -s ABRT -k 60 1200 uv run pytest tests/integration --ignore=tests/integration/latency -n auto -q || { echo "pytest failed or hit its 1200 s bound (exit status $?)"; exit 1; }
         '
 
   upload-artifacts:
