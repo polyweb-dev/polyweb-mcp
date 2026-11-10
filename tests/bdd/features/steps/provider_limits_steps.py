@@ -1933,9 +1933,21 @@ class _TavilyFakeSDK:
         self.search_error: Exception | None = None
         self.extract_response: Any = None
         self.extract_error: Exception | None = None
+        # Optional T20-only start barrier: when set, a failing search waits
+        # for the held sibling to start before raising, making the terminal
+        # 402 cancellation ordering deterministic. None keeps immediate raise.
+        self.search_start_gate: asyncio.Event | None = None
+        self.search_gate_waited: bool = False
+        self.search_gate_timed_out: bool = False
 
     async def search(self, **kwargs: Any) -> Any:
         self.search_calls.append(kwargs)
+        if self.search_error is not None and self.search_start_gate is not None:
+            self.search_gate_waited = True
+            try:
+                await asyncio.wait_for(self.search_start_gate.wait(), timeout=5)
+            except TimeoutError:
+                self.search_gate_timed_out = True
         if self.search_error is not None:
             raise self.search_error
         return self.search_response
@@ -3732,6 +3744,12 @@ def step_tavily_fanout_app(context: Any) -> None:
     )
     context.tavily_other_released = asyncio.Event()
     context.tavily_other_cancelled = False
+    # T20-only ordering: the 402 SDK waits for the held sibling to start, so
+    # cancellation is observable. Bounded (5s); a real regression still fails.
+    context.tavily_other_started = asyncio.Event()
+    # Arm the barrier on this fresh 402 SDK; all other _tavily_402_sdk()
+    # consumers keep search_start_gate=None (immediate raise).
+    context.tavily_fanout_sdk.search_start_gate = context.tavily_other_started
 
     from polyweb.adapters.base import ProviderAdapter
     from polyweb.models.contracts import (
@@ -3755,6 +3773,7 @@ def step_tavily_fanout_app(context: Any) -> None:
             return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
 
         async def search(self, request: SearchRequest) -> SearchResponse:
+            outer.tavily_other_started.set()
             try:
                 await outer.tavily_other_released.wait()
             except asyncio.CancelledError:
@@ -3839,13 +3858,27 @@ def step_tavily_fanout_run(context: Any) -> None:
 @then("the Tavily fanout held answer is terminal 402 with the other task cancelled")
 def step_tavily_fanout_held_assert(context: Any) -> None:
     response = context.tavily_fanout_held
-    assert response.status_code == 402
+    sdk = context.tavily_fanout_sdk
+    diagnostic = (
+        f"T20 held-answer diagnostics: status={response.status_code} "
+        f"body={response.text!r} "
+        f"other_started={context.tavily_other_started.is_set()} "
+        f"other_cancelled={context.tavily_other_cancelled} "
+        f"sdk_search_calls={len(sdk.search_calls)} "
+        f"sdk_gate_waited={sdk.search_gate_waited} "
+        f"sdk_gate_timed_out={sdk.search_gate_timed_out}"
+    )
+    assert response.status_code == 402, diagnostic
     body = response.json()
-    assert body.get("provider") == "tavily"
-    assert body.get("detail") == "Tavily is out of Credits. Wait until reset or upgrade."
-    assert body.get("results", None) is None
-    assert context.tavily_other_cancelled is True
-    assert len(context.tavily_fanout_sdk.search_calls) == 1
+    assert body.get("provider") == "tavily", diagnostic
+    assert body.get("detail") == "Tavily is out of Credits. Wait until reset or upgrade.", (
+        diagnostic
+    )
+    assert body.get("results", None) is None, diagnostic
+    assert context.tavily_other_cancelled is True, diagnostic
+    assert len(sdk.search_calls) == 1, diagnostic
+    assert sdk.search_gate_waited is True, diagnostic
+    assert sdk.search_gate_timed_out is False, diagnostic
 
 
 @then(
