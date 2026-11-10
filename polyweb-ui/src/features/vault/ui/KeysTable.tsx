@@ -20,7 +20,7 @@ export function KeysTable({ rows, projects, onKey, onPool }: {
       const open = expanded.includes(item.id)
       const actions = [
         { key: "create", label: "Create pool", icon: Plus, onSelect: () => onKey("create", row) },
-        ...(item.auth_mode === "oauth" ? [] : [{ key: "rotate", label: "Rotate key", icon: RefreshCw, onSelect: () => onKey("rotate", row) }]),
+        ...(item.auth_mode === "oauth" || item.auth_mode === "keyless" ? [] : [{ key: "rotate", label: "Rotate key", icon: RefreshCw, onSelect: () => onKey("rotate", row) }]),
         { key: "settings", label: "Edit key", icon: Pencil, onSelect: () => onKey("settings", row) },
         ...(item.auth_mode === "oauth" ? [{ key: "oauth", label: row.oauth === "connected" ? "Disconnect" : "Connect", icon: row.oauth === "connected" ? Unlink : Link2, onSelect: () => onKey(row.oauth === "connected" ? "disconnect" : "connect", row) }] : []),
         { key: "delete", label: "Delete key", icon: Trash2, danger: true, onSelect: () => onKey("delete", row) },

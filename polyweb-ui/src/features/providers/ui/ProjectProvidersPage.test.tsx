@@ -243,7 +243,10 @@ function capacityStub(ownerId = "acc", permissions = [...PROJECT_MEMBER_PERMISSI
 }
 
 describe("ProjectProvidersPage pool capacity", () => {
-  function keylessStub(ownerId = "acc", keys: unknown[] = [], failKey = false) {
+  const KEENABLE_POOL = {
+    ...CAPACITY_POOL, pool_id: "pool-k", label: "Keenable pool", provider_type: "keenable", key_label: "Keenable keyless",
+  }
+  function keylessStub(ownerId = "acc", keys: unknown[] = [], failKey = false, pools: unknown[] = [CAPACITY_POOL]) {
     const keyless = {
       provider_type: "keenable", capability: ["search", "fetch"], kill_switch: false,
       system_enabled_operations: ["search", "fetch"], available: true, enabled: true, keyless: true,
@@ -255,7 +258,7 @@ describe("ProjectProvidersPage pool capacity", () => {
       view: providerView({ extraProviders: [keyless] }),
       onMutation: (req) => {
         if (req.url === `${BASE}/provider-owner`) return ok({ user_id: ownerId, email: "owner@example.com" })
-        if (req.url === `${BASE}/pools`) return ok([CAPACITY_POOL])
+        if (req.url === `${BASE}/pools`) return ok(pools)
         if (failKey && req.method === "POST" && req.url === "/api/v1/account/vault/keys") {
           return err(422, { detail: "bad secret fake-provider-key-123" })
         }
@@ -272,33 +275,56 @@ describe("ProjectProvidersPage pool capacity", () => {
     })
   }
 
-  it("offers a key for a keyless provider without listing it as missing capacity", async () => {
+  it("lists a keyless provider without a pool under missing capacity with a working add path", async () => {
     keylessStub()
     renderInProject(<ProjectProvidersPage accountId="acc" />)
     const table = await screen.findByRole("table", { name: "Search provider order" })
     const row = within(table).getByText("Keenable").closest("tr")
     if (!row) throw new Error("Missing Keenable row")
+    // Keyless providers require assigned pools like every other provider: no
+    // pool means no row menu, and the provider is listed as missing capacity.
     expect(within(row).getByText("No key needed")).toBeInTheDocument()
-    expect(within(row).getAllByRole("cell")[2]).toHaveTextContent("—")
-    const pooled = within(table).getByText("Tavily").closest("tr")
-    if (!pooled) throw new Error("Missing Tavily row")
-    expect(within(pooled).queryByText("No key needed")).toBeNull()
-    expect(within(pooled).queryByText("No pool needed")).toBeNull()
+    expect(within(row).queryByRole("button", { name: "Actions for Keenable" })).toBeNull()
+    const missing = screen.getByRole("table", { name: "Without capacity" })
+    expect(within(missing).getByText("Keenable")).toBeInTheDocument()
+    // The guidance button leads to the usable create/assign flow for Keenable:
+    // a secret-free keyless key step, then the pool step.
+    await userEvent.click(within(missing).getByRole("button", { name: "Add capacity for Keenable" }))
+    const dialog = await screen.findByRole("dialog", { name: "Add Keenable key" })
+    expect(within(dialog).queryByLabelText("API key")).toBeNull()
+    expect(within(dialog).getByLabelText("Label")).toHaveValue("Keenable key")
+  })
+
+  it("offers pool CRUD for a keyless provider's assigned pool, keeping the key upgrade option", async () => {
+    const keenablePool = {
+      ...CAPACITY_POOL, pool_id: "pool-k", label: "Keenable pool", provider_type: "keenable", key_label: "Keenable keyless",
+    }
+    keylessStub("acc", [], false, [CAPACITY_POOL, keenablePool])
+    renderInProject(<ProjectProvidersPage accountId="acc" />)
+    const table = await screen.findByRole("table", { name: "Search provider order" })
+    const row = within(table).getByText("Keenable").closest("tr")
+    if (!row) throw new Error("Missing Keenable row")
+    // An assigned pool removes the provider from missing capacity.
     expect(within(screen.getByRole("table", { name: "Without capacity" })).queryByText("Keenable")).toBeNull()
     await userEvent.click(within(row).getByRole("button", { name: "Actions for Keenable" }))
-    expect(screen.queryByRole("button", { name: "Edit pool" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Unassign" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Edit pool" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Add a key for higher limits" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Unassign" })).toBeInTheDocument()
     await userEvent.click(screen.getByRole("button", { name: "Add a key for higher limits" }))
     const dialog = await screen.findByRole("dialog", { name: "Add Keenable key" })
     expect(within(dialog).getByLabelText("Label")).toHaveValue("Keenable key")
   })
 
   it("does not expose an echoed secret after a vault key failure", async () => {
-    keylessStub("acc", [], true)
+    keylessStub("acc", [], true, [CAPACITY_POOL, KEENABLE_POOL])
     renderInProject(<ProjectProvidersPage accountId="acc" />)
     await userEvent.click(await screen.findByRole("button", { name: "Actions for Keenable" }))
     await userEvent.click(screen.getByRole("button", { name: "Add a key for higher limits" }))
     const dialog = await screen.findByRole("dialog", { name: "Add Keenable key" })
+    // Keenable now defaults to keyless: explicitly choose the API key mode so
+    // the secret field exists, exactly as a keyed upgrade does.
+    await userEvent.click(within(dialog).getByRole("combobox", { name: "Authentication" }))
+    await userEvent.click(await screen.findByRole("option", { name: "API key" }))
     await userEvent.type(within(dialog).getByLabelText("API key"), "fake-provider-key-123")
     await userEvent.click(within(dialog).getByRole("button", { name: "Add key" }))
     expect(await within(dialog).findByRole("alert")).not.toHaveTextContent("fake-provider-key-123")
@@ -309,7 +335,7 @@ describe("ProjectProvidersPage pool capacity", () => {
     keylessStub("acc", [
       { ...VAULT_KEY, id: "k1", provider_type: "keenable", label: "First" },
       { ...VAULT_KEY, id: "k2", provider_type: "keenable", label: "Second" },
-    ])
+    ], false, [CAPACITY_POOL, KEENABLE_POOL])
     renderInProject(<ProjectProvidersPage accountId="acc" />)
     await userEvent.click(await screen.findByRole("button", { name: "Actions for Keenable" }))
     await userEvent.click(screen.getByRole("button", { name: "Add a key for higher limits" }))
