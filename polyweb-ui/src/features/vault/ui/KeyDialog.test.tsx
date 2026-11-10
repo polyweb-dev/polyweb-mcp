@@ -58,4 +58,28 @@ describe("KeyDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add key" }))
     await waitFor(() => expect(api.createVaultKey).toHaveBeenCalledWith(expect.objectContaining({ capacity: null })))
   })
+
+  describe("KeyDialog keyless creation (TASK-000065 AC#2)", () => {
+    it("offers a no-secret keyless mode for Keenable and saves without an API key", async () => {
+      const user = userEvent.setup()
+      render(<KeyDialog mode="add" onClose={vi.fn()} onSaved={vi.fn()} />)
+      await user.click(screen.getByRole("combobox", { name: "Provider" }))
+      await user.click(await screen.findByRole("option", { name: "Keenable" }))
+      // Anticipated contract: a keyless provider offers an Authentication
+      // choice with a no-secret keyless mode. Current source only renders
+      // Authentication for OAuth (Parallel), so this fails here.
+      const auth = screen.queryByRole("combobox", { name: "Authentication" })
+      expect(auth).toBeInTheDocument()
+      await user.click(auth!)
+      await user.click(await screen.findByRole("option", { name: /keyless/i }))
+      expect(screen.queryByLabelText("API key")).not.toBeInTheDocument()
+      await user.clear(screen.getByLabelText("Label"))
+      await user.type(screen.getByLabelText("Label"), "Keenable keyless")
+      await user.click(screen.getByRole("button", { name: "Add key" }))
+      await waitFor(() => expect(api.createVaultKey).toHaveBeenCalled())
+      expect(api.createVaultKey).not.toHaveBeenCalledWith(
+        expect.objectContaining({ secret: expect.anything() })
+      )
+    })
+  })
 })

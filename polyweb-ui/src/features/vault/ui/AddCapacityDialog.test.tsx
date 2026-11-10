@@ -140,4 +140,23 @@ describe("AddCapacityDialog", () => {
       project_id: "b", label: "Beta", budget: { limit: 5, period: "week" },
     })))
   })
+
+  describe("AddCapacityDialog keyless pool (TASK-000065 AC#2)", () => {
+    it("creates a Keenable keyless pool without an API key secret", async () => {
+      const user = userEvent.setup()
+      render(<AddCapacityDialog provider="keenable" projects={[{ id: "p1", name: "Alpha", available_providers: ["keenable"] }]}
+        onClose={vi.fn()} onSaved={vi.fn()} />)
+      // Anticipated contract: a keyless provider's key step needs no secret.
+      // Current source always shows the API key field for non-OAuth
+      // providers and refuses to save without it, so this fails here.
+      expect(screen.queryByLabelText("API key")).not.toBeInTheDocument()
+      await user.click(screen.getByRole("button", { name: "Add key" }))
+      await waitFor(() => expect(api.createVaultKey).toHaveBeenCalledWith(
+        expect.objectContaining({ provider_type: "keenable" })
+      ))
+      expect(api.createVaultKey).not.toHaveBeenCalledWith(
+        expect.objectContaining({ secret: expect.anything() })
+      )
+    })
+  })
 })
