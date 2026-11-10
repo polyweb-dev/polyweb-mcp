@@ -39,7 +39,6 @@ from tests.fixtures.auth import TEMP_PASSWORD, temp_email
 from tests.fixtures.execution import (
     install_adapter_map,
     seed_member_project,
-    seed_provider_bindings,
 )
 from tests.fixtures.latency import (
     REPO_ROOT,
@@ -50,6 +49,7 @@ from tests.fixtures.latency import (
     git_commit,
     percentile,
     search_payload,
+    seed_latency_pools,
     seed_repository,
     warm_route_caches,
 )
@@ -115,14 +115,17 @@ async def _bind_seven_providers(
     project_id: Any,
     actor_id: Any,
 ) -> None:
-    """A2: execution runs only on enabled project bindings; bind all seven fakes.
+    """Assign owned provider pools for all seven keyed fakes.
 
     Without bindings every sample is a fast 503, so the mix would measure the
     refusal path instead of routing.
     """
 
     secrets: dict[str, str] = {}
-    await seed_provider_bindings(
+    for adapter in adapters:
+        _PROVIDER_CLOCK.instrument(adapter)
+    install_adapter_map(monkeypatch, adapters, secrets=secrets)
+    await seed_latency_pools(
         repository,
         project_id=project_id,
         actor_id=actor_id,
@@ -130,9 +133,6 @@ async def _bind_seven_providers(
         providers=tuple(SEVEN_PROVIDERS),
         secrets=secrets,
     )
-    for adapter in adapters:
-        _PROVIDER_CLOCK.instrument(adapter)
-    install_adapter_map(monkeypatch, adapters, secrets=secrets)
 
 
 def _assert_measured_samples_succeeded(

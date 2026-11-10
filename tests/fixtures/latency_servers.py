@@ -42,7 +42,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import uuid4
 
 import httpx
@@ -63,7 +63,6 @@ from tests.fixtures.auth import (
 from tests.fixtures.execution import (
     install_adapter_map,
     seed_member_project,
-    seed_provider_bindings,
 )
 from tests.fixtures.latency import (
     FETCH_URL,
@@ -73,6 +72,7 @@ from tests.fixtures.latency import (
     fetch_payload,
     git_commit,
     search_payload,
+    seed_latency_pools,
     seed_repository,
     supports_operation,
     warm_route_caches,
@@ -85,7 +85,7 @@ from polyweb.configuration.provider_limits import provider_limit_defaults
 from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
 from polyweb.mcp.auth import STREAMABLE_HTTP_PATH, build_http_app
 from polyweb.mcp.server import create_server, shutdown_injected_observability
-from polyweb.models.provider_limits import LimitRecordUpdate, RateBlock, RateWindowName
+from polyweb.models.provider_limits import AuthMode, LimitRecordUpdate, RateBlock, RateWindowName
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
 from polyweb.services.monitoring import clear_quota_poll_cache
@@ -406,6 +406,7 @@ class RoutingLatencyHarness:
         )
         self._last_sent: dict[str, float] = {}
         self._targets: dict[str, _Target] = {}
+        self._keyless_adapters: dict[asyncio.AbstractEventLoop, dict[str, ProviderAdapter]] = {}
         self._client_loop: BackgroundLoop | None = None
         self._rest_client: httpx.AsyncClient | None = None
         self._rest_headers: dict[str, str] = {}
@@ -458,9 +459,6 @@ class RoutingLatencyHarness:
             else:
                 token = target.loop.run(self._start_mcp(target, database), _STARTUP_TIMEOUT_S)
                 self._open_mcp_session(target, token)
-            install_adapter_map(
-                self._adapter_patch, list(target.adapters.values()), secrets=target.secrets
-            )
             repository = target.repository
             assert repository is not None
             detach = attach_select_counter(repository, target.selects)
@@ -496,17 +494,60 @@ class RoutingLatencyHarness:
         target.base_url = f"http://127.0.0.1:{port}"
 
     async def _bind_providers(self, target: _Target, project_id: Any, actor_id: Any) -> None:
-        """Seed one enabled project binding with a staged secret per adapter."""
+        """Assign an owned provider pool and preserve each adapter's auth mode."""
 
         repository = target.repository
         assert repository is not None
-        await seed_provider_bindings(
+        patcher = self._adapter_patch
+        assert patcher is not None
+        install_adapter_map(patcher, list(target.adapters.values()), secrets=target.secrets)
+        # Keyless construction has no secret to distinguish the two served apps.
+        # Resolve it on the owning server loop so timing stays transport-local.
+        import polyweb.services.execution as execution
+
+        previous_factory = cast(Any, execution).adapter_factory
+        self._keyless_adapters[asyncio.get_running_loop()] = {
+            name: adapter
+            for name, adapter in target.adapters.items()
+            if adapter.limit_auth_mode == AuthMode.KEYLESS
+        }
+
+        def factory(name: str) -> Any:
+            previous = previous_factory(name)
+
+            def build(client: Any, api_key: Any = None) -> ProviderAdapter:
+                keyless = self._keyless_adapters.get(asyncio.get_running_loop(), {})
+                if api_key is None and name in keyless:
+                    return keyless[name]
+                assert previous is not None, "missing latency fixture adapter"
+                return cast(ProviderAdapter, previous(client, api_key=api_key))
+
+            return (
+                build
+                if any(name in adapters for adapters in self._keyless_adapters.values())
+                else previous
+            )
+
+        patcher.setattr(execution, "adapter_factory", factory)
+        await seed_latency_pools(
             repository,
             project_id=project_id,
             actor_id=actor_id,
             store=_secret_store(repository),
             providers=tuple(target.adapters),
             secrets=target.secrets,
+            auth_modes={
+                name: "keyless" if adapter.limit_auth_mode == AuthMode.KEYLESS else "api_key"
+                for name, adapter in target.adapters.items()
+            },
+            operations={
+                name: frozenset(
+                    operation
+                    for operation in ("search", "fetch")
+                    if supports_operation(adapter, operation)
+                )
+                for name, adapter in target.adapters.items()
+            },
         )
 
     async def _start_rest(self, target: _Target, database: Path) -> None:
@@ -632,6 +673,7 @@ class RoutingLatencyHarness:
             except Exception as error:
                 _report_error(errors, f"{target.transport} loop close", error)
         self._targets.clear()
+        self._keyless_adapters.clear()
         if client_loop is not None:
             try:
                 client_loop.close()

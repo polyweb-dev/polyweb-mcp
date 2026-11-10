@@ -16,11 +16,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from pydantic import AnyHttpUrl
 from sqlalchemy import event as sa_event
+from tests.fixtures.project_order import seed_order_pools
 
 from polyweb.adapters.base import ProviderAdapter
+from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
 from polyweb.infrastructure.secrets import ProviderName
 from polyweb.models.contracts import (
     CostEstimate,
@@ -37,7 +40,13 @@ from polyweb.models.contracts import (
     SearchResult,
     UsageOperation,
 )
+from polyweb.models.credentials import CredentialOperation
+from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
 from polyweb.models.provider_limits import AuthMode
+from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialRepository
+from polyweb.persistence.key_pools import KeyPoolRepository
+from polyweb.persistence.pools import PoolAllocationRepository, UpstreamPoolRepository
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.services.provider_runtime import (
     _BACKGROUND_TASKS,
@@ -220,6 +229,69 @@ async def warm_route_caches(repository: SQLiteRepository, providers: Iterable[st
     for provider_name in providers:
         await effective_config_for_name(repository, provider_name)
     await routing_policy(repository)
+
+
+async def seed_latency_pools(
+    repository: SQLiteRepository,
+    *,
+    project_id: UUID,
+    actor_id: UUID,
+    store: EncryptedDbSecretStore,
+    providers: tuple[str, ...],
+    secrets: dict[str, str],
+    auth_modes: dict[str, str] | None = None,
+    operations: dict[str, frozenset[str]] | None = None,
+) -> None:
+    """Seed owned, assigned pools and verify their runtime path before timing."""
+
+    modes = {name: (auth_modes or {}).get(name, "api_key") for name in providers}
+    enabled = operations or {name: frozenset({"search", "fetch"}) for name in providers}
+    await seed_order_pools(
+        repository,
+        project_id=project_id,
+        actor_id=actor_id,
+        store=store,
+        providers=providers,
+        secrets=secrets,
+        auth_modes=modes,
+        operations=enabled,
+        rate_limit=1_000_000,
+    )
+    async with repository.session() as session:
+        pools = await KeyPoolRepository(session).list_for_project(project_id)
+        bindings = await ProjectBindingRepository(session).list_for_project(project_id=project_id)
+        assert {pool.provider_type for pool in pools} == set(providers)
+        assert {binding.credential_id for binding in bindings} == {
+            pool.credential_id for pool in pools
+        }
+        for pool in pools:
+            owned = await CredentialRepository(session).get_owned(actor_id, pool.credential_id)
+            assert owned is not None and owned.owner_user_id == actor_id
+            credential = owned.credential
+            assert credential.provider_type == pool.provider_type
+            assert credential.auth_mode == modes[pool.provider_type]
+            assert (pool.provider_type in secrets) == (credential.auth_mode != "keyless")
+            binding = next(item for item in bindings if item.credential_id == credential.id)
+            assert {op.value for op in binding.enabled_operations} == enabled[pool.provider_type]
+            grant = await CredentialRepository(session).get_grant(
+                credential_id=credential.id, project_id=project_id
+            )
+            assert grant is not None and grant.permitted_operations == enabled[pool.provider_type]
+            for operation in pool.operations:
+                op = CredentialOperation(operation)
+                link = await UpstreamPoolRepository(session).pool_for_credential(
+                    credential_id=credential.id, operation=op
+                )
+                assert link is not None and link.provider_type == pool.provider_type
+                upstream = await UpstreamPoolRepository(session).get_pool(
+                    account_id=DEFAULT_INSTALLATION_ACCOUNT_ID, pool_id=link.pool_id
+                )
+                assert upstream is not None and upstream.provider_type == pool.provider_type
+                allocation = await PoolAllocationRepository(session).get(
+                    project_id=project_id, pool_id=link.pool_id, operation=op
+                )
+                assert allocation is not None and allocation.key_pool_id == pool.id
+                assert allocation.limit_scope == "pool"
 
 
 async def drain_background_tasks() -> None:

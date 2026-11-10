@@ -32,13 +32,6 @@ from pydantic import SecretStr
 from polyweb.configuration.config import get_settings
 from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
 from polyweb.mcp.server import create_server
-from polyweb.models.credentials import CredentialOperation
-from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from polyweb.models.schema_enums import UpstreamScope
-from polyweb.persistence.pools import (
-    PoolAllocationRepository,
-    UpstreamPoolRepository,
-)
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
 from polyweb.services.monitoring import clear_quota_poll_cache
@@ -48,7 +41,6 @@ from tests.fixtures.auth import TEMP_PASSWORD, temp_email
 from tests.fixtures.execution import (
     install_adapter_map,
     seed_member_project,
-    seed_provider_bindings,
 )
 from tests.fixtures.latency import (
     REPO_ROOT,
@@ -58,6 +50,7 @@ from tests.fixtures.latency import (
     git_commit,
     percentile,
     search_payload,
+    seed_latency_pools,
     seed_repository,
     warm_route_caches,
 )
@@ -106,52 +99,6 @@ def _latency_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
     return EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
 
 
-async def _seed_exa_pool(
-    repository: SQLiteRepository,
-    *,
-    project_id: Any,
-    actor_id: Any,
-) -> Any:
-    """Bind the exa credential to one pool so the authority queue is exercised.
-
-    A generous envelope keeps the latency samples routing instead of refusing;
-    the point of the mix is the per-provider added time of the authoritative
-    (fenced, pool-admitted) path, not a rate-limit stress.
-    """
-
-    constraints = [
-        {
-            "kind": "rate",
-            "algorithm": "trailing_window",
-            "window": 3600,
-            "limit": 10_000,
-        }
-    ]
-    async with repository.session() as session:
-        pools = UpstreamPoolRepository(session)
-        pool = await pools.create_pool(
-            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
-            provider_type="exa",
-            upstream_scope=UpstreamScope.ACCOUNT,
-            pool_key=f"a3-latency-{uuid4().hex[:8]}",
-            label="a3 latency pool",
-            constraints=constraints,
-        )
-        await PoolAllocationRepository(session).create(
-            project_id=project_id,
-            pool_id=pool.id,
-            operation=CredentialOperation.SEARCH,
-            base_rate=100,
-            rate_window_seconds=3600,
-            granted_by=actor_id,
-            borrow_enabled=True,
-            max_rate=10_000,
-            weight=4,
-        )
-        await session.commit()
-    return pool
-
-
 async def _bind_seven_providers(
     repository: SQLiteRepository,
     store: EncryptedDbSecretStore,
@@ -161,10 +108,13 @@ async def _bind_seven_providers(
     project_id: Any,
     actor_id: Any,
 ) -> None:
-    """Bind the seven offline adapters; the exa binding joins the seeded pool."""
+    """Assign owned pools with generous synthetic capacity to all seven fakes."""
 
     secrets: dict[str, str] = {}
-    await seed_provider_bindings(
+    for adapter in adapters:
+        _PROVIDER_CLOCK.instrument(adapter)
+    install_adapter_map(monkeypatch, adapters, secrets=secrets)
+    await seed_latency_pools(
         repository,
         project_id=project_id,
         actor_id=actor_id,
@@ -172,10 +122,6 @@ async def _bind_seven_providers(
         providers=tuple(SEVEN_PROVIDERS),
         secrets=secrets,
     )
-    await _seed_exa_pool(repository, project_id=project_id, actor_id=actor_id)
-    for adapter in adapters:
-        _PROVIDER_CLOCK.instrument(adapter)
-    install_adapter_map(monkeypatch, adapters, secrets=secrets)
 
 
 async def _record_request(
