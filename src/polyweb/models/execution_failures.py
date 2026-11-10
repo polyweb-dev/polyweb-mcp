@@ -53,6 +53,24 @@ def missing_pool_detail(providers: tuple[str, ...] | list[str] | None = None) ->
     )
 
 
+def unusable_credential_detail(providers: tuple[str, ...] | list[str] | None = None) -> str:
+    """Return the actionable refusal when an assigned credential cannot load.
+
+    Used when ranked candidates existed — the project holds bindings — but
+    none resolved to a dispatchable leg, e.g. an OAuth credential whose
+    material is missing because the grant is disconnected or expired. It
+    names the provider and reconnect guidance, never pool assignment or a
+    timeout.
+    """
+
+    names = sorted({provider for provider in (providers or ()) if provider})
+    joined = ", ".join(names) if names else "the configured provider"
+    return (
+        f"the configured {joined} credential is not usable for this project: "
+        "reconnect the provider credential or check its status, then retry"
+    )
+
+
 class ExecutionNotPermitted(ExecutionBindingMissing):
     """The verified actor no longer holds live authority for this execution.
 
@@ -114,4 +132,5 @@ __all__ = [
     "ExecutionRequestInvalid",
     "ExecutionStorageUnavailable",
     "missing_pool_detail",
+    "unusable_credential_detail",
 ]

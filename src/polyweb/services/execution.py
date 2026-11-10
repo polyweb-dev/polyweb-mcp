@@ -105,6 +105,7 @@ from polyweb.models.execution_failures import (
     ExecutionRequestInvalid,
     ExecutionStorageUnavailable,
     missing_pool_detail,
+    unusable_credential_detail,
 )
 from polyweb.models.observability import (
     TRACE_EVENT_PROVIDER_REQUEST,
@@ -571,6 +572,13 @@ class _LegChain:
         preference = self._request.routing
         required = preference.mode is RoutingMode.REQUIRE and bool(preference.providers)
         if self.resolved == 0:
+            if self._candidates:
+                # Ranked candidates existed but none resolved to a leg: the
+                # project holds bindings whose credentials cannot load
+                # (e.g. an OAuth grant disconnected or expired), so pool
+                # guidance would mislead — name the credential instead.
+                providers = [candidate.provider for candidate in self._candidates]
+                return ExecutionBindingMissing(unusable_credential_detail(providers))
             return ExecutionBindingMissing(
                 missing_pool_detail(preference.providers if required else ())
             )

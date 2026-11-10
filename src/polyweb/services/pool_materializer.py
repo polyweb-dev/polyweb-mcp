@@ -247,14 +247,12 @@ async def materialize_pools(
     """
 
     await ensure_keyless_credentials(session)
-    query = select(
-        ProjectRow.id, ProjectRow.account_id, ProjectRow.created_by, ProjectRow.created_at
-    )
+    query = select(ProjectRow.id, ProjectRow.account_id)
     if project_id is not None:
         query = query.where(ProjectRow.id == str(project_id))
     projects = (await session.execute(query.order_by(ProjectRow.id))).all()
     count = 0
-    for identifier, account_id, _creator, _created_at in projects:
+    for identifier, account_id in projects:
         pools = await KeyPoolRepository(session).list_for_project(UUID(identifier))
         binding_ids = [_runtime_id("binding", pool.id) for pool in pools]
         credential_ids = [str(pool.credential_id) for pool in pools]

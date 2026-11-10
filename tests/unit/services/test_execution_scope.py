@@ -18,8 +18,21 @@ from polyweb.infrastructure.observability import (
 from polyweb.models.contracts import SearchRequest, UsageOperation
 from polyweb.models.observability import TraceAttribute
 from polyweb.models.projects import ProjectTracePolicy
-from polyweb.services.execution import _LegChain
+from polyweb.services.execution import _Candidate, _LegChain
 from polyweb.services.execution_scope import resolve_trace_capture
+
+
+def _candidate(provider: str) -> _Candidate:
+    from unittest.mock import MagicMock
+
+    return _Candidate(
+        binding=MagicMock(),
+        provider=provider,
+        credential_id=uuid4(),
+        credential_generation=1,
+        config=MagicMock(),
+        health=None,
+    )
 
 
 def _search_request(**overrides: object) -> SearchRequest:
@@ -31,10 +44,10 @@ def _search_request(**overrides: object) -> SearchRequest:
     return SearchRequest(**payload)  # type: ignore[arg-type]
 
 
-def _chain(request: SearchRequest) -> _LegChain:
+def _chain(request: SearchRequest, candidates: list[_Candidate] | None = None) -> _LegChain:
     return _LegChain(
         SimpleNamespace(),
-        [],
+        list(candidates) if candidates is not None else [],
         request,
         UsageOperation.SEARCH,
         SimpleNamespace(),
@@ -95,11 +108,13 @@ def test_missing_pool_error_names_required_provider_pool_assignment() -> None:
     assert "timeout" not in error.detail.lower()
 
 
-def test_missing_pool_error_distinguishes_ineligible_required_provider() -> None:
+def test_missing_pool_error_distinguishes_unusable_configured_credential() -> None:
     error = _chain(
-        _search_request(routing={"mode": "require", "providers": ["keenable"]}),
+        _search_request(routing={"mode": "require", "providers": ["parallel"]}),
+        candidates=[_candidate("parallel")],
     ).missing_error()
 
-    assert "no required provider" in error.detail
-    assert "keenable" in error.detail
-    assert "pool" in error.detail
+    assert "parallel" in error.detail
+    assert "no assigned pool" not in error.detail
+    assert "reconnect" in error.detail
+    assert "timeout" not in error.detail.lower()

@@ -1,6 +1,7 @@
 """Required keyless pools: assigned pools only, actionable missing-pool errors."""
 
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -12,7 +13,14 @@ from polyweb.configuration.provider_config import ProviderConfigUpdate
 from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
 from polyweb.infrastructure.secrets import ProviderName
 from polyweb.models.execution_failures import ExecutionBindingMissing
-from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
+from polyweb.models.projects import (
+    DEFAULT_INSTALLATION_ACCOUNT_ID,
+    CredentialOwnerScope,
+    HumanPrincipal,
+    PermissionAction,
+    ProjectContext,
+)
+from polyweb.models.provider_limits import AuthMode
 from polyweb.persistence.bindings import ProjectBindingRepository
 from polyweb.persistence.credentials import CredentialRepository
 from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
@@ -209,8 +217,7 @@ async def test_cloud_assigned_owned_keyless_pool_succeeds_unassign_disables(
 
     world = await build_execution_world(tmp_path, monkeypatch, limits=False)
     try:
-        adapter = RecordingAdapter("keenable")
-        world.adapters_by_secret[""] = adapter
+        adapter = RecordingAdapter("keenable", auth_mode=AuthMode.KEYLESS)
         monkeypatch.setattr(
             "polyweb.services.execution.adapter_factory",
             lambda name: (lambda client, api_key=None: adapter) if name == "keenable" else None,
@@ -266,6 +273,11 @@ async def test_cloud_keyless_pool_isolation_across_projects(
 
     world = await build_execution_world(tmp_path, monkeypatch, limits=False)
     try:
+        adapter = RecordingAdapter("keenable", auth_mode=AuthMode.KEYLESS)
+        monkeypatch.setattr(
+            "polyweb.services.execution.adapter_factory",
+            lambda name: (lambda client, api_key=None: adapter) if name == "keenable" else None,
+        )
         async with world.repository.session() as session:
             credential = await CredentialRepository(session).insert_credential(
                 account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
@@ -287,6 +299,15 @@ async def test_cloud_keyless_pool_isolation_across_projects(
             await materialize_pools(session, project_id=world.project.project_id)
             await session.commit()
         foreign = await seed_execution_project(world.repository)
+        foreign_context = ProjectContext(
+            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+            project_id=foreign.project_id,
+            principal=HumanPrincipal(user_id=foreign.actor_id, session_id=uuid4()),
+            effective_permissions=frozenset(
+                {PermissionAction.SEARCH_EXECUTE, PermissionAction.FETCH_EXECUTE}
+            ),
+            policy_revision=1,
+        )
         async with world.repository.session() as session:
             bindings = await ProjectBindingRepository(session).list_for_project(
                 project_id=world.project.project_id
@@ -298,5 +319,14 @@ async def test_cloud_keyless_pool_isolation_across_projects(
                 )
                 == []
             )
+        calls_before = adapter.search_calls
+        with pytest.raises(ExecutionBindingMissing) as error:
+            await world.service.search(
+                search_request(world, routing={"mode": "require", "providers": ["keenable"]}),
+                attribution=foreign,
+                context=foreign_context,
+            )
+        assert "keenable" in error.value.detail and "pool" in error.value.detail
+        assert adapter.search_calls == calls_before
     finally:
         await world.aclose()
