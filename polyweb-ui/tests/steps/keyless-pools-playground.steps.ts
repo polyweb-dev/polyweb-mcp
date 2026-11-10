@@ -1,40 +1,75 @@
 import { expect } from "@playwright/test";
-import type { Page } from "@playwright/test";
-import { Given, When, Then } from "./fixtures";
-import { executionTraffic } from "./backendStub";
+import type { Page, Response } from "@playwright/test";
+import { Before, Given, When, Then } from "./fixtures";
 import { projectStubId } from "./projectStub";
-import { chooseOption, watchBrowserTraffic } from "./providerConfigUi";
+import { chooseOption } from "./providerConfigUi";
 import { lastCreatedPoolKeyLabel, lastCreatedPoolLabel } from "./vault.steps";
+import { seedVaultKey } from "./vaultStub";
 
-/**
- * TASK-000065 regression steps (test-only, no production changes).
- *
- * Real UI contracts reused from the mapped source:
- * - Register: heading "Create an account", labels Email/Username/First name/
- *   Last name/Password/Confirm password, button "Create account".
- * - Login: heading "Sign in", button "Sign in".
- * - Projects: label "Project name", button "Create project".
- * - Playground preflight: `noProviderForMode` renders ProviderSetupNotice
- *   with the Search submit disabled — the no-pool case asserts this preflight
- *   and observes zero /search + /fetch execution calls (never submits).
- * - Keys and pools: route /account/keys, heading "Keys and pools", dialog
- *   "Add key" with "Add key" submit, Create pool via the key-row button,
- *   "Pool name" field present only when creating from the row context.
- * - Pool menu: RowActionsMenu Popover of plain buttons inside
- *   [data-slot=popover-content]; icon consistency asserts one svg per button.
- * - Trace detail: dialog "Trace detail", results list "Ranked results".
- * - Settings: field "Payload detail", option "Full requests".
- * - Live results carry "% match" text.
- *
- * ANTICIPATED (deliberately missing) UI contracts these scenarios pin down:
- * - Keyless key creation with a no-secret keyless mode (automatic keyless
- *   creation without an Authentication choice also satisfies the contract).
- * - One-shot bulk pool creation and keyless free-tier default pools,
- *   each carrying the created pool identity + provider + assigned project.
- * - One icon (svg) per pool popup/menu button.
- * Until production implements them, the corresponding steps fail naturally
- * against the current source (missing control / missing icon / API 4xx).
- */
+interface PoolRecord {
+  id: string;
+  credential_id: string;
+  provider_type: string;
+  project_id: string;
+  label: string;
+}
+
+interface KeyRecord { id: string; label: string; provider_type: string; auth_mode: string }
+interface SearchRecord {
+  traceId: string;
+  query: string;
+  provider: string;
+  results: { title: string; url: string }[];
+}
+interface Evidence {
+  execution: string[];
+  external: string[];
+  pools: Promise<PoolRecord>[];
+  keys: Promise<KeyRecord>[];
+  seededKeys: KeyRecord[];
+  search: SearchRecord | null;
+}
+
+const evidenceByPage = new WeakMap<Page, Evidence>();
+const PROVIDERS: Record<string, string> = { "Brave Search": "brave", Tavily: "tavily", Keenable: "keenable" };
+const KEY_PATH = "/api/v1/account/vault/keys";
+const POOL_PATH = /^\/api\/v1\/account\/vault\/keys\/[^/]+\/pools$/;
+
+function evidence(page: Page): Evidence {
+  const value = evidenceByPage.get(page);
+  if (!value) throw new Error("TASK-000065 evidence was not initialized");
+  return value;
+}
+
+Before({ tags: "@task-000065" }, async ({ page }) => {
+  const value: Evidence = { execution: [], external: [], pools: [], keys: [], seededKeys: [], search: null };
+  evidenceByPage.set(page, value);
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "POST" && /\/(search|fetch)\/?$/.test(url.pathname)) value.execution.push(request.url());
+    if (["fetch", "xhr"].includes(request.resourceType()) && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
+      value.external.push(request.url());
+    }
+  });
+  page.on("response", (response) => {
+    if (response.request().method() !== "POST" || !response.ok()) return;
+    const path = new URL(response.url()).pathname;
+    if (POOL_PATH.test(path)) value.pools.push(response.json());
+    if (path === KEY_PATH) value.keys.push(response.json().then((key: KeyRecord) => {
+      if (key.auth_mode === "keyless") expect(response.request().postDataJSON().secret ?? null).toBeNull();
+      return key;
+    }));
+  });
+});
+
+function expectNoExecution(page: Page): void {
+  expect(evidence(page).execution).toEqual([]);
+  expect(evidence(page).external).toEqual([]);
+}
+
+function isResponse(response: Response, method: string, path: string): boolean {
+  return response.request().method() === method && new URL(response.url()).pathname === path;
+}
 
 // ---------------------------------------------------------------------------
 // Fresh-signup state (@live only; never exercised while authoring).
@@ -85,12 +120,11 @@ async function createFreshProject(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible({ timeout: 15_000 });
   await page.getByLabel("Project name").fill(freshProjectName);
   await page.getByRole("button", { name: "Create project" }).click();
-  await expect(page.getByRole("heading", { name: freshProjectName })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("button", { name: `Select project (current: ${freshProjectName})`, exact: true })).toBeVisible({ timeout: 15_000 });
 }
 
 async function selectFreshProject(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Select project" }).first().click();
-  await page.getByRole("menuitem", { name: freshProjectName, exact: false }).first().click();
+  // ProjectCreateForm already navigates to the newly created project.
   await expect(page).toHaveURL(/\/p\/[0-9a-f-]{36}/, { timeout: 15_000 });
   freshProjectUrl = page.url();
 }
@@ -111,7 +145,6 @@ async function restoreFreshProject(page: Page): Promise<void> {
 // ---------------------------------------------------------------------------
 
 let keylessKeyLabel = "";
-let keylessPoolName = "";
 
 async function createKeylessKey(page: Page): Promise<void> {
   keylessKeyLabel = `Keenable keyless ${uniqueSuffix()}`;
@@ -121,6 +154,11 @@ async function createKeylessKey(page: Page): Promise<void> {
   const dialog = page.getByRole("dialog", { name: "Add key" });
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   await chooseOption(dialog, "Provider", "Keenable");
+  const authentication = dialog.getByRole("combobox", { name: "Authentication", exact: true });
+  if (await authentication.count()) {
+    await authentication.click();
+    await page.getByRole("option", { name: /keyless|no (api )?key|free tier/i }).click();
+  }
   await dialog.getByLabel("Label", { exact: true }).fill(keylessKeyLabel);
   // No-secret contract: an automatic-keyless save needs no Authentication
   // choice and no API key field; a keyless-mode select also satisfies this —
@@ -132,22 +170,22 @@ async function createKeylessKey(page: Page): Promise<void> {
   await expect(page.getByRole("row").filter({ hasText: keylessKeyLabel }).first()).toBeVisible({ timeout: 15_000 });
 }
 
-async function createPoolOnKeyInProject(page: Page, keyLabel: string, projectName: string): Promise<string> {
-  keylessPoolName = `Keyless pool ${uniqueSuffix()}`;
+async function createPoolOnKeyInProject(page: Page, keyLabel: string, projectName: string): Promise<void> {
   await page.goto("/account/keys");
   await page.getByRole("row").filter({ hasText: keyLabel }).first().getByRole("button", { name: "Create pool" }).click();
   const dialog = page.getByRole("dialog", { name: "Create pool" });
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   // Explicit fresh-project selection inside the create-pool dialog.
   await chooseOption(dialog, "Project", projectName);
-  // "Pool name" is only present when creating from the row context for a
-  // scoped project; never invent a production field — read the label the
-  // run actually created.
-  const nameField = dialog.getByLabel("Pool name", { exact: true });
-  if (await nameField.count() > 0) await nameField.fill(keylessPoolName);
+  const key = (await Promise.all(evidence(page).keys)).find((entry) => entry.label === keyLabel);
+  if (!key) throw new Error("The new keyless credential was not observed");
+  expect(key).toMatchObject({ provider_type: "keenable", auth_mode: "keyless" });
+  const responsePromise = page.waitForResponse((response) => isResponse(response, "POST", `${KEY_PATH}/${key.id}/pools`));
   await dialog.getByRole("button", { name: "Create pool", exact: true }).click();
+  const response = await responsePromise;
+  expect(response.ok()).toBe(true);
+  expect(await response.json()).toMatchObject({ credential_id: key.id, provider_type: "keenable", project_id: freshProjectId() });
   await expect(dialog).toBeHidden({ timeout: 15_000 });
-  return keylessPoolName;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +214,7 @@ Then("the playground shows the create-or-assign pool guidance for the new projec
   await expect(page.getByRole("button", { name: "Search", exact: true })).toBeDisabled();
   // Direct live page-request observation: zero /search and /fetch execution
   // calls on this run (stub counters alone would not prove the live page).
-  expect(executionTraffic().filter((record) => record.operation === "search" || record.operation === "fetch")).toEqual([]);
+  expectNoExecution(page);
 });
 
 Then("the no-pool error should not present as a timeout", async ({ page }) => {
@@ -187,7 +225,7 @@ Then("the playground shows no search results", async ({ page }) => {
   // No-pool preflight: the disabled Search submit never runs, so absence is
   // asserted as zero execution calls plus no result content.
   await expect(page.locator("main").getByText(/% match/i)).toHaveCount(0);
-  expect(executionTraffic().filter((record) => record.operation === "search" || record.operation === "fetch")).toEqual([]);
+  expectNoExecution(page);
 });
 
 // ---------------------------------------------------------------------------
@@ -204,24 +242,57 @@ When("I run the keyless search and save the payload with Full requests", async (
   // Establish Payload detail = Full requests BEFORE execution, and persist it
   // with an explicit save — setting storage after the request is too late.
   await page.goto(`/p/${freshProjectId()}/settings`);
-  await page.getByRole("combobox", { name: "Payload detail" }).click();
-  await page.getByRole("option", { name: "Full requests" }).click();
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText(/saved|updated/i).first()).toBeVisible({ timeout: 15_000 });
+  await chooseOption(page, "Payload detail", "Full requests");
+  const save = page.getByRole("button", { name: "Save changes", exact: true });
+  if (await save.count()) {
+    await save.click();
+    await expect(save).toBeHidden();
+  }
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "Payload detail" })).toContainText("Full requests");
   await restoreFreshProject(page);
   await page.getByRole("navigation", { name: "Project" }).getByRole("link", { name: "Playground", exact: true }).click();
-  await page.getByPlaceholder(/Search the web/i).fill("fresh project keyless probe");
+  const query = `fresh project keyless probe ${uniqueSuffix()}`;
+  await page.getByPlaceholder(/Search the web/i).fill(query);
+  const responsePromise = page.waitForResponse((response) => response.request().method() === "POST" &&
+    /\/search\/?$/.test(new URL(response.url()).pathname));
   await page.getByRole("button", { name: "Search", exact: true }).click();
+  const response = await responsePromise;
+  expect(response.ok()).toBe(true);
+  const traceId = await response.headerValue("X-Trace-Id");
+  expect(traceId).toMatch(/^[0-9a-f]{32}$/);
+  const result = await response.json();
+  expect(result).toMatchObject({ query, provider: "keenable" });
+  expect(result.results.length).toBeGreaterThan(0);
+  evidence(page).search = { traceId: traceId!, query, provider: result.provider, results: result.results };
   await expect(page.locator("main").getByText(/% match/i).first()).toBeVisible({ timeout: 30_000 });
 });
 
 When("I open the trace of the saved search response", async ({ page }) => {
-  await page.getByRole("navigation", { name: "Project" }).getByRole("link", { name: "Activity", exact: true }).click();
-  // Inspect THAT trace: the Activity list never carries the query text, so
-  // correlate the newest search trace opened from the run above.
-  const row = page.getByRole("table").getByRole("row").first();
-  await expect(row).toBeVisible({ timeout: 30_000 });
-  await row.getByRole("button", { name: "View details", exact: true }).click();
+  const search = evidence(page).search;
+  if (!search) throw new Error("Search response was not captured");
+  const listPath = `/api/v1/projects/${freshProjectId()}/traces`;
+  let index = -1;
+  // Export is asynchronous. Locate the exact response trace in the UI's list
+  // response, then open its corresponding body row (never the table header).
+  await expect.poll(async () => {
+    const listPromise = page.waitForResponse((response) => isResponse(response, "GET", listPath));
+    await page.goto(`/p/${freshProjectId()}/activity`);
+    const response = await listPromise;
+    expect(response.ok()).toBe(true);
+    const list = await response.json();
+    index = list.items.findIndex((item: { trace_id: string }) => item.trace_id === search.traceId);
+    return index;
+  }, { timeout: 30_000 }).toBeGreaterThanOrEqual(0);
+  const detailPromise = page.waitForResponse((response) => isResponse(response, "GET", `${listPath}/${search.traceId}`));
+  await page.getByRole("table", { name: "Activity", exact: true }).locator("tbody > tr").nth(index)
+    .getByRole("button", { name: "View details", exact: true }).click();
+  const response = await detailPromise;
+  expect(response.ok()).toBe(true);
+  const detail = await response.json();
+  expect(detail).toMatchObject({ trace_id: search.traceId, provider: search.provider, input: search.query });
+  expect(detail.output).toMatchObject({ kind: "search_results", query: search.query });
+  expect(detail.output.results.map((result: { url: string }) => result.url)).toEqual(search.results.map((result) => result.url));
   await expect(page.getByRole("dialog", { name: "Trace detail" })).toBeVisible({ timeout: 15_000 });
 });
 
@@ -231,7 +302,10 @@ Then("the trace detail shows the Keenable response with its results", async ({ p
   await expect(dialog).toContainText(/Keenable/i);
   const ranked = dialog.getByRole("list", { name: "Ranked results" });
   await expect(ranked).toBeVisible({ timeout: 15_000 });
-  await expect(ranked.getByText(/% match/i).first()).toBeVisible({ timeout: 15_000 });
+  const search = evidence(page).search;
+  if (!search) throw new Error("Search response was not captured");
+  expect(search.results[0].title).not.toBe("");
+  await expect(ranked.getByText(search.results[0].title, { exact: true }).first()).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -239,15 +313,21 @@ Then("the trace detail shows the Keenable response with its results", async ({ p
 // Prove pool identity/provider/project assignment — never bare rows.
 // ---------------------------------------------------------------------------
 
-Then("no vendor request should have been made", async () => {
-  expect(executionTraffic()).toEqual([]);
+Given("I have vault keys for {string}", async ({ page }, list: string) => {
+  for (const name of list.split(",").map((entry) => entry.trim())) {
+    const provider = PROVIDERS[name];
+    if (!provider) throw new Error(`Unsupported test provider: ${name}`);
+    evidence(page).seededKeys.push(seedVaultKey(provider, `Bulk ${name}`, provider === "keenable" ? "keyless" : "api_key"));
+  }
+});
+
+Then("no vendor request should have been made", async ({ page }) => {
+  expectNoExecution(page);
 });
 
 When("I bulk create pools for {string} for project Alpha without provider calls", async ({ page }, list: string) => {
-  watchBrowserTraffic(page);
   const providers = list.split(",").map((entry) => entry.trim()).filter((entry) => entry !== "");
   expect(providers.length).toBeGreaterThan(1);
-  const before = executionTraffic().length;
   await page.goto("/account/keys");
   await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible({ timeout: 15_000 });
   // Anticipated bulk contract: one dialog creates pools for several
@@ -255,31 +335,44 @@ When("I bulk create pools for {string} for project Alpha without provider calls"
   await page.getByRole("button", { name: /Bulk create pools/i }).click();
   const dialog = page.getByRole("dialog", { name: /Bulk create pools/i });
   await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await chooseOption(dialog, "Project", "Alpha");
   for (const provider of providers) {
     await dialog.getByRole("checkbox", { name: provider, exact: false }).check();
   }
   await dialog.getByRole("button", { name: /Create pools/i }).click();
   await expect(dialog).toBeHidden({ timeout: 15_000 });
-  expect(executionTraffic().length).toBe(before);
+  expectNoExecution(page);
 });
 
-Then("project Alpha has new pools for {string} assigned to Alpha", async ({ page }, list: string) => {
-  const providers = list.split(",").map((entry) => entry.trim()).filter((entry) => entry !== "");
-  // Identity + provider + project assignment: the vault rows for the newly
-  // created pools must reference the Alpha project — provider rows or bare
-  // "Alpha" text alone would pass on pre-seeded fixtures.
+async function expectCreatedPools(page: Page, providers: string[]): Promise<void> {
+  const state = evidence(page);
+  const pools = await Promise.all(state.pools);
+  const keys = [...state.seededKeys, ...await Promise.all(state.keys)];
+  expect(pools).toHaveLength(providers.length);
+  expect(new Set(pools.map((pool) => pool.id)).size).toBe(providers.length);
+  expect(pools.map((pool) => pool.provider_type).sort()).toEqual([...providers].sort());
   await page.goto("/account/keys");
-  for (const provider of providers) {
-    const row = page.getByRole("row").filter({ hasText: new RegExp(provider, "i") }).last();
-    await expect(row).toBeVisible({ timeout: 15_000 });
-    await expect(row).toContainText(/Alpha/);
+  for (const pool of pools) {
+    expect(pool.id).toEqual(expect.any(String));
+    expect(pool.project_id).toBe(projectStubId("Alpha"));
+    const key = keys.find((candidate) => candidate.id === pool.credential_id);
+    if (!key) throw new Error(`No observed credential owns created pool ${pool.id}`);
+    expect(key.provider_type).toBe(pool.provider_type);
+    const toggle = page.getByRole("button", { name: `Pools of ${key.label}`, exact: true });
+    if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
+    // This scenario starts without pools and creates exactly one per key.
+    const row = toggle.locator("xpath=ancestor::tr/following-sibling::tr[1]");
+    await expect(row.getByRole("button", { name: `Actions for ${pool.label}`, exact: true })).toBeVisible();
+    await expect(row).toContainText("Alpha");
   }
-  expect(executionTraffic()).toEqual([]);
+  expectNoExecution(page);
+}
+
+Then("project Alpha has new pools for {string} assigned to Alpha", async ({ page }, list: string) => {
+  await expectCreatedPools(page, list.split(",").map((entry) => PROVIDERS[entry.trim()]));
 });
 
 When("I create the keyless free-tier default pools for project Alpha without an API key", async ({ page }) => {
-  watchBrowserTraffic(page);
-  const before = executionTraffic().length;
   await page.goto("/account/keys");
   await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible({ timeout: 15_000 });
   // Anticipated defaults contract: one control provisions the supported
@@ -287,21 +380,19 @@ When("I create the keyless free-tier default pools for project Alpha without an 
   await page.getByRole("button", { name: /Create keyless defaults/i }).click();
   const dialog = page.getByRole("dialog", { name: /Keyless defaults|Default pools/i });
   await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await chooseOption(dialog, "Project", "Alpha");
+  await expect(dialog.getByLabel("API key", { exact: true })).toHaveCount(0);
   await dialog.getByRole("button", { name: /Create|Save/i }).click();
   await expect(dialog).toBeHidden({ timeout: 15_000 });
-  expect(executionTraffic().length).toBe(before);
+  expectNoExecution(page);
 });
 
-Then("project Alpha has a new keyless pool for Keenable assigned to Alpha", async ({ page }) => {
-  await page.goto("/account/keys");
-  const keyRow = page.getByRole("row").filter({ hasText: /Keenable/ }).last();
-  await expect(keyRow).toBeVisible({ timeout: 15_000 });
-  await expect(keyRow).toContainText(/Alpha/);
-  await page.goto(`/p/${projectStubId("Alpha")}/providers`);
-  const row = page.getByRole("row").filter({ hasText: /Keenable/ }).first();
-  await expect(row).toBeVisible({ timeout: 15_000 });
-  await expect(row).toContainText(/No key needed/i);
-  expect(executionTraffic()).toEqual([]);
+Then("project Alpha has new keyless pools for {string} assigned to Alpha", async ({ page }, list: string) => {
+  const providers = list.split(",").map((entry) => PROVIDERS[entry.trim()]);
+  const keys = await Promise.all(evidence(page).keys);
+  expect(keys).toHaveLength(providers.length);
+  expect(keys.every((key) => key.auth_mode === "keyless")).toBe(true);
+  await expectCreatedPools(page, providers);
 });
 
 // ---------------------------------------------------------------------------
@@ -311,7 +402,6 @@ Then("project Alpha has a new keyless pool for Keenable assigned to Alpha", asyn
 // ---------------------------------------------------------------------------
 
 When("I open the pool actions menu for the created pool", async ({ page }) => {
-  watchBrowserTraffic(page);
   await page.goto("/account/keys");
   await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible({ timeout: 15_000 });
   // The pool popover lives inside the expanded key row's pools table: open
@@ -331,4 +421,5 @@ Then("the pool actions menu should show Edit pool, Copy to another project, Remo
     await expect(item).toBeVisible({ timeout: 10_000 });
     await expect(item.locator("svg").first()).toBeVisible({ timeout: 5_000 });
   }
+  expectNoExecution(page);
 });

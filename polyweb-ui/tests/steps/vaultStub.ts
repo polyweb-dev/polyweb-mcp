@@ -63,6 +63,11 @@ export function seedVaultBalance(provider: string, label: string, remaining: str
   balances.set(key.id, { remaining, native_unit: unit, observed_at: "2026-10-01T09:00:00Z" })
 }
 
+/** An existing fake credential for pool-management scenarios; no provider call. */
+export function seedVaultKey(provider: string, label: string, authMode = "api_key"): Key {
+  return createKey({ provider_type: provider, label, auth_mode: authMode })
+}
+
 export function vaultOwner(project: string, fallback: { user_id: string; email: string } | null): { user_id: string; email: string } | null {
   return owners.get(project) ?? fallback
 }
@@ -233,7 +238,7 @@ export async function installVaultRoutes(page: Page, bridge: Bridge): Promise<vo
     const method = route.request().method()
     if (resource === "projects" && method === "GET") {
       return json(route, bridge.projects().map((project) => ({
-        ...project, available_providers: ["brave", "tavily", "parallel", "exa", "you", "serper"],
+        ...project, available_providers: ["brave", "tavily", "parallel", "exa", "you", "serper", "keenable"],
       })))
     }
     if (resource === "keys") return handleKeys(route, parts, method)

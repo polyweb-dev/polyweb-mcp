@@ -41,6 +41,7 @@ Feature: New-project keyless pools, playground errors, trace storage and results
   Scenario: Bulk pool creation across providers without provider calls
     Given the projects backend is stubbed for a system administrator
     And I am a member of project Alpha with role project_admin
+    And I have vault keys for "Brave Search, Tavily, Keenable"
     When I bulk create pools for "Brave Search, Tavily, Keenable" for project Alpha without provider calls
     Then project Alpha has new pools for "Brave Search, Tavily, Keenable" assigned to Alpha
     And no vendor request should have been made
@@ -50,7 +51,7 @@ Feature: New-project keyless pools, playground errors, trace storage and results
     Given the projects backend is stubbed for a system administrator
     And I am a member of project Alpha with role project_admin
     When I create the keyless free-tier default pools for project Alpha without an API key
-    Then project Alpha has a new keyless pool for Keenable assigned to Alpha
+    Then project Alpha has new keyless pools for "Tavily, Keenable" assigned to Alpha
     And no vendor request should have been made
 
   @smoke @stub

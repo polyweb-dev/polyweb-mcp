@@ -52,7 +52,12 @@ When("I create a Search pool {string} for project Alpha on key {string}", async 
     createdPoolLabel = pool
   }
   await expect(dialog.getByRole("checkbox", { name: "Search", exact: true })).toBeChecked()
+  const created = page.waitForResponse((response) => response.request().method() === "POST" &&
+    /^\/api\/v1\/account\/vault\/keys\/[^/]+\/pools$/.test(new URL(response.url()).pathname))
   await dialog.getByRole("button", { name: "Create pool", exact: true }).click()
+  const response = await created
+  expect(response.ok()).toBe(true)
+  createdPoolLabel = (await response.json()).label
   await expect(dialog).toBeHidden()
   await expect(page.getByRole("row").filter({ hasText: key })).toBeVisible()
 })
@@ -71,7 +76,12 @@ When("I create a Search pool for project Alpha on key {string}", async ({ page }
     createdPoolLabel = "Alpha Search"
   }
   await expect(dialog.getByRole("checkbox", { name: "Search", exact: true })).toBeChecked()
+  const created = page.waitForResponse((response) => response.request().method() === "POST" &&
+    /^\/api\/v1\/account\/vault\/keys\/[^/]+\/pools$/.test(new URL(response.url()).pathname))
   await dialog.getByRole("button", { name: "Create pool", exact: true }).click()
+  const response = await created
+  expect(response.ok()).toBe(true)
+  createdPoolLabel = (await response.json()).label
   await expect(dialog).toBeHidden()
   await expect(page.getByRole("row").filter({ hasText: key })).toBeVisible()
 })

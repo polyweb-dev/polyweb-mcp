@@ -73,13 +73,15 @@ describe("KeyDialog", () => {
       const auth = screen.queryByRole("combobox", { name: "Authentication" })
       if (auth !== null) {
         await user.click(auth)
-        await user.click(await screen.findByRole("option", { name: /keyless/i }))
+        await user.click(await screen.findByRole("option", { name: /keyless|no (api )?key|free tier/i }))
       }
       expect(screen.queryByLabelText("API key")).not.toBeInTheDocument()
       await user.clear(screen.getByLabelText("Label"))
       await user.type(screen.getByLabelText("Label"), "Keenable keyless")
       await user.click(screen.getByRole("button", { name: "Add key" }))
-      await waitFor(() => expect(api.createVaultKey).toHaveBeenCalled())
+      await waitFor(() => expect(api.createVaultKey).toHaveBeenCalledWith(expect.objectContaining({
+        provider_type: "keenable", label: "Keenable keyless", auth_mode: "keyless",
+      })))
       await waitFor(() => expect(onSaved).toHaveBeenCalled())
       expect(api.createVaultKey).not.toHaveBeenCalledWith(
         expect.objectContaining({ secret: expect.anything() })

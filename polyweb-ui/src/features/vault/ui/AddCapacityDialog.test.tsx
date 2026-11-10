@@ -147,10 +147,13 @@ describe("AddCapacityDialog", () => {
       const onSaved = vi.fn()
       render(<AddCapacityDialog provider="keenable" projects={[{ id: "p1", name: "Alpha", available_providers: ["keenable"] }]}
         onClose={vi.fn()} onSaved={onSaved} />)
+      const auth = screen.queryByRole("combobox", { name: "Authentication" })
+      if (auth !== null) {
+        await user.click(auth)
+        await user.click(await screen.findByRole("option", { name: /keyless|no (api )?key|free tier/i }))
+      }
       // This step only creates/advances the key (the pool dialog follows once
       // the key exists): the pass criterion is a secret-free key save.
-      // Current source always shows the API key field for non-OAuth
-      // providers and refuses to save without it, so this fails here.
       expect(screen.queryByLabelText("API key")).not.toBeInTheDocument()
       await user.click(screen.getByRole("button", { name: "Add key" }))
       await waitFor(() => expect(api.createVaultKey).toHaveBeenCalledWith(
