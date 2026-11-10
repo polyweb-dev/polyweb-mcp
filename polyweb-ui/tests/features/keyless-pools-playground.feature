@@ -37,15 +37,16 @@ Feature: New-project keyless pools, playground errors, trace storage and results
     And I open the Full trace detail of the successful search
     Then the trace detail should show the recorded results
 
-  @stub
+  @smoke @stub
   Scenario: Bulk pool creation across providers without provider calls
     Given the projects backend is stubbed for a system administrator
     And I am a member of project Alpha with role project_admin
     When I bulk create pools for "Brave Search, Tavily, Keenable" for project Alpha without provider calls
+    And I create a Search pool "Alpha Bulk Brave" for project Alpha on key "Alpha Brave" with pool identity
     Then project Alpha should have pools for "Brave Search, Tavily, Keenable"
     And no vendor request should have been made
 
-  @stub
+  @smoke @stub
   Scenario: Keyless free-tier defaults without API keys and without provider calls
     Given the projects backend is stubbed for a system administrator
     And I am a member of project Alpha with role project_admin
@@ -53,11 +54,11 @@ Feature: New-project keyless pools, playground errors, trace storage and results
     Then project Alpha should have a keyless pool for Keenable without an API key
     And no vendor request should have been made
 
-  @stub
+  @smoke @stub
   Scenario: Pool popup and menu actions expose consistent icons
     Given the projects backend is stubbed for a system administrator
     And I am a member of project Alpha with role project_admin
-    And I add a Brave Search vault key labelled "Alpha Brave" with a fake secret
-    And I create a Search pool "Alpha Search" for project Alpha on key "Alpha Brave"
+    And I add a Keenable vault key labelled "Alpha Keyless" without a secret
+    And I create a Search pool "Alpha Search" for project Alpha on key "Alpha Keyless" with pool identity
     When I open the pool actions menu for "Alpha Search"
     Then the pool actions menu should show Edit pool, Copy to another project, Remove from project and Delete pool each with an icon
