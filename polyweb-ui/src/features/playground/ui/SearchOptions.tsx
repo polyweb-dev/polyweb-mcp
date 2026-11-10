@@ -1,3 +1,5 @@
+import { useState } from "react"
+import { clampLimit } from "@/domains/execution"
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { Button } from "@/shared/ui/button"
 import { NumericField } from "@/shared/ui/NumericField"
@@ -20,6 +22,37 @@ const providerFieldClass =
  */
 export function SearchOptions({ controller }: { controller: PlaygroundController }) {
   const { setQuery, selectedProviderId, setSelectedProviderId, eligibleProviders, resultCount, setResultCount } = controller
+  /**
+   * The input holds a draft string so it can be cleared naturally: a blank
+   * stays visibly blank, while the store always keeps a valid committed
+   * value — so submit (by click or by Enter, with or without a blur) always
+   * sends a sensible clamped limit. Typing a value commits its clamp at
+   * once; blur on a blank exits edit mode, revealing the committed floor.
+   */
+  const [draft, setDraft] = useState<string | null>(null)
+  // Derive the shown value at render: a draft is preserved when it either is
+  // a blank in-progress edit or still matches the committed value; upstream
+  // moves (rehydration, another setter) rebase automatically without an
+  // effect or a cascading render.
+  const shown = draft !== null && (draft.trim() === "" || Number(draft) === resultCount)
+    ? draft
+    : String(resultCount)
+  const commit = (raw: string) => {
+    if (raw.trim() === "") {
+      // Blank stays visible as an in-progress edit; the store keeps the
+      // clamp floor so any submit is sensible, matching an explicit 0 → 1.
+      setDraft("")
+      setResultCount(clampLimit(Number(raw)))
+      return
+    }
+    const value = clampLimit(Number(raw))
+    setDraft(String(value))
+    setResultCount(value)
+  }
+  const blur = () => {
+    // A blank loses focus: exit edit mode and reveal the committed value.
+    setDraft(null)
+  }
   const providerOptions = [
     { value: "auto", label: "Auto" },
     { value: "all", label: "All providers" },
@@ -76,8 +109,9 @@ export function SearchOptions({ controller }: { controller: PlaygroundController
             label="Number of results"
             min={1}
             step={1}
-            value={String(resultCount)}
-            onChange={(value) => setResultCount(Math.min(100, Math.max(1, Math.trunc(Number(value)))))}
+            value={shown}
+            onChange={commit}
+            onBlur={blur}
           />
         </div>
       </div>
