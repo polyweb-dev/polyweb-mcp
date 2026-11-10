@@ -10,24 +10,32 @@ Gate: ``api-integration`` on Woodpecker (root CI ledger owned by orchestrator).
 from __future__ import annotations
 
 import os
+import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
-from sqlalchemy import text
+from pydantic import SecretStr, ValidationError
+from sqlalchemy import URL, text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
 from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
 from polyweb.models.credentials import CredentialAuthMode
-from polyweb.models.projects import CredentialOwnerScope, ProjectCreate
+from polyweb.models.projects import (
+    DEFAULT_INSTALLATION_ACCOUNT_ID,
+    CredentialOwnerScope,
+    ProjectCreate,
+)
 from polyweb.models.vault import KeyPoolCreate, VaultKeyCreate
 from polyweb.persistence.credentials import CredentialRepository, ProviderCredentialRow
 from polyweb.persistence.key_pools import KeyPoolRepository
+from polyweb.persistence.oauth_grants import oauth_secret_slot
+from polyweb.persistence.projects import ProjectRepository
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
-from polyweb.services.authorization import AuthorizationDenied
 from polyweb.services.control_errors import ResourceNotFound
 from polyweb.services.credentials import (
     CredentialService,
@@ -41,7 +49,7 @@ from tests.fixtures.alpha_fixtures import AlphaBootstrapResult, bootstrap_fresh_
 from tests.fixtures.auth import (
     create_temp_user,
     raw_auth_headers,
-    register_system_admin_login,
+    register_and_login,
     temp_email,
     temp_principal,
 )
@@ -52,6 +60,23 @@ def _vault_services(
 ) -> tuple[CredentialService, VaultKeyService, EncryptedDbSecretStore]:
     store = EncryptedDbSecretStore(boot.repository, SecretCodec(MasterKey(os.urandom(32))))
     return CredentialService(boot.repository, store), VaultKeyService(boot.repository, store), store
+
+
+def _vault_snapshot(database: Path) -> dict[str, set[tuple[object, ...]]]:
+    """Compare persisted vault data, including encrypted slots, across the upgrade."""
+    tables = (
+        "provider_credentials",
+        "key_pools",
+        "credential_project_grants",
+        "project_provider_bindings",
+        "credential_oauth_grants",
+        "runtime_settings",
+    )
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        return {
+            table: set(connection.execute(f"SELECT * FROM {table}").fetchall()) for table in tables
+        }
 
 
 @pytest.mark.asyncio
@@ -66,7 +91,9 @@ async def test_cloud_keyless_vault_create_needs_no_secret_and_persists_owner(
         _, vault, store = _vault_services(boot)
         created = await vault.create(
             admin,
-            VaultKeyCreate(provider_type="keenable", label="free-tier", auth_mode="keyless"),
+            VaultKeyCreate(
+                provider_type="keenable", label="free-tier", auth_mode=CredentialAuthMode.KEYLESS
+            ),
         )
         assert created.auth_mode == CredentialAuthMode.KEYLESS.value
         assert created.generation == 1
@@ -89,23 +116,32 @@ async def test_cloud_keyless_pool_create_assign_and_unassign(tmp_path: Path) -> 
 
     boot = await bootstrap_fresh_alpha(tmp_path / "keyless-cloud-pool.db")
     try:
-        admin = temp_principal(boot.admin_user)
-        _, vault, _ = _vault_services(boot)
-        created = await vault.create(
-            admin,
-            VaultKeyCreate(provider_type="keenable", label="free-tier", auth_mode="keyless"),
-        )
+        owner = temp_principal(await create_temp_user(boot.repository, temp_email("creator")))
         project = await ProjectService(boot.repository).create_project(
-            admin,
+            owner,
             ProjectCreate(
                 name="Keyless",
                 slug=f"keyless-{uuid4().hex[:8]}",
-                initial_admin_user_id=admin.id,
+                initial_admin_user_id=owner.id,
+            ),
+        )
+        async with boot.repository.session() as session:
+            assert (
+                await ProjectRepository(session).get_system_role_assignments(
+                    account_id=DEFAULT_INSTALLATION_ACCOUNT_ID, user_id=owner.id
+                )
+                == []
+            )
+        _, vault, _ = _vault_services(boot)
+        created = await vault.create(
+            owner,
+            VaultKeyCreate(
+                provider_type="keenable", label="free-tier", auth_mode=CredentialAuthMode.KEYLESS
             ),
         )
         pools = KeyPoolService(boot.repository)
         pool = await pools.create(
-            admin,
+            owner,
             created.id,
             KeyPoolCreate(label="free-tier-pool", project_id=project.id),
         )
@@ -115,7 +151,7 @@ async def test_cloud_keyless_pool_create_assign_and_unassign(tmp_path: Path) -> 
             stored = await KeyPoolRepository(session).list_for_project(project.id)
             assert [item.id for item in stored] == [pool.id]
             await session.commit()
-        await pools.assign(admin, pool.id, None)
+        await pools.assign(owner, pool.id, None)
         async with boot.repository.session() as session:
             assert await KeyPoolRepository(session).list_for_project(project.id) == []
     finally:
@@ -132,25 +168,25 @@ async def test_cloud_keyless_foreign_user_cannot_copy_or_assign_pool(
     try:
         admin = temp_principal(boot.admin_user)
         outsider = temp_principal(await create_temp_user(boot.repository, temp_email("outsider")))
+        other_project = await ProjectService(boot.repository).create_project(
+            outsider,
+            ProjectCreate(name="Other", slug=f"other-{uuid4().hex[:8]}"),
+        )
         _, vault, _ = _vault_services(boot)
+        # The second owner passes the vault gate, so denial must check pool ownership.
+        assert await vault.list_keys(outsider) == []
         created = await vault.create(
             admin,
-            VaultKeyCreate(provider_type="tavily", label="free-tier", auth_mode="keyless"),
+            VaultKeyCreate(
+                provider_type="tavily", label="free-tier", auth_mode=CredentialAuthMode.KEYLESS
+            ),
         )
         pools = KeyPoolService(boot.repository)
         pool = await pools.create(admin, created.id, KeyPoolCreate(label="free-tier-pool"))
-        project = await ProjectService(boot.repository).create_project(
-            admin,
-            ProjectCreate(
-                name="Other",
-                slug=f"other-{uuid4().hex[:8]}",
-                initial_admin_user_id=admin.id,
-            ),
-        )
-        with pytest.raises(AuthorizationDenied):
-            await pools.copy(outsider, pool.id, project.id, None)
-        with pytest.raises(AuthorizationDenied):
-            await pools.assign(outsider, pool.id, project.id)
+        with pytest.raises(ResourceNotFound, match="pool is not available"):
+            await pools.copy(outsider, pool.id, other_project.id, None)
+        with pytest.raises(ResourceNotFound, match="pool is not available"):
+            await pools.assign(outsider, pool.id, other_project.id)
     finally:
         await boot.repository.close()
 
@@ -169,11 +205,16 @@ async def test_cloud_keyless_unsupported_provider_and_rotation_guards(
         credentials, vault, _ = _vault_services(boot)
         with pytest.raises(CredentialValidationError, match="does not support keyless"):
             await vault.create(
-                admin, VaultKeyCreate(provider_type="exa", label="nope", auth_mode="keyless")
+                admin,
+                VaultKeyCreate(
+                    provider_type="exa", label="nope", auth_mode=CredentialAuthMode.KEYLESS
+                ),
             )
         created = await vault.create(
             admin,
-            VaultKeyCreate(provider_type="keenable", label="free-tier", auth_mode="keyless"),
+            VaultKeyCreate(
+                provider_type="keenable", label="free-tier", auth_mode=CredentialAuthMode.KEYLESS
+            ),
         )
         with pytest.raises(CredentialValidationError, match="no secret to rotate"):
             await credentials.rotate_system_credential(
@@ -181,15 +222,12 @@ async def test_cloud_keyless_unsupported_provider_and_rotation_guards(
                 created.id,
                 CredentialRotate(expected_generation=1, secret=SecretStr("rotation-secret")),
             )
-        with pytest.raises(ResourceNotFound):
-            await vault.create(
-                admin,
-                VaultKeyCreate(
-                    provider_type="keenable",
-                    label="free-tier",
-                    auth_mode="keyless",
-                    secret=SecretStr("unexpected"),
-                ),
+        with pytest.raises(ValidationError, match="keyless credential needs no secret"):
+            VaultKeyCreate(
+                provider_type="keenable",
+                label="free-tier",
+                auth_mode=CredentialAuthMode.KEYLESS,
+                secret=SecretStr("unexpected"),
             )
     finally:
         await boot.repository.close()
@@ -203,8 +241,14 @@ async def test_cloud_keyless_rest_create_without_secret(tmp_path: Path) -> None:
     try:
         app = create_app([], repository=repository)
         with TestClient(app) as client:
-            pair = await register_system_admin_login(client, repository, temp_email("rest"))
+            pair = register_and_login(client, temp_email("rest"))
             headers = raw_auth_headers(pair["access_token"])
+            project = client.post(
+                "/api/v1/projects",
+                json={"name": "First project", "slug": f"first-{uuid4().hex[:8]}"},
+                headers=headers,
+            )
+            assert project.status_code == 201, project.text
             response = client.post(
                 "/api/v1/account/vault/keys",
                 json={"provider_type": "keenable", "label": "free-tier", "auth_mode": "keyless"},
@@ -225,11 +269,7 @@ async def test_cloud_keyless_rest_create_without_secret(tmp_path: Path) -> None:
 async def test_cloud_0007_populated_upgrade_preserves_and_coexists(
     tmp_path: Path,
 ) -> None:
-    """Populated 0007 DB (public keyless, keyed+pools) upgrades cleanly.
-
-    After upgrade: singleton still unique, existing credentials/pools/slots
-    intact, and two users each hold an owned same-provider keyless row.
-    """
+    """Upgrade real 0007 data, retaining secrets and allowing distinct keyless owners."""
 
     from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
@@ -246,18 +286,38 @@ async def test_cloud_0007_populated_upgrade_preserves_and_coexists(
     config.attributes["database_path"] = database
     alembic_command.upgrade(config, "0007_provider_budget_period")
 
-    repository = await SQLiteRepository.open(database)
+    # Unlike open()/initialize(), this constructor does not migrate the fixture.
+    repository = SQLiteRepository(
+        create_async_engine(URL.create("sqlite+aiosqlite", database=str(database)))
+    )
+    codec = SecretCodec(MasterKey(os.urandom(32)))
+    singleton_id = uuid4()
     try:
-        store = EncryptedDbSecretStore(repository, SecretCodec(MasterKey(os.urandom(32))))
+        store = EncryptedDbSecretStore(repository, codec)
         vault = VaultKeyService(repository, store)
-        from tests.fixtures.alpha_fixtures import seed_alpha_system_admin
-
-        admin_user, _ = await seed_alpha_system_admin(repository, email=temp_email("up"))
-
-        admin = temp_principal(admin_user)
+        admin = temp_principal(
+            await create_temp_user(repository, temp_email("up"), system_admin=True)
+        )
         second = temp_principal(
             await create_temp_user(repository, temp_email("up-two"), system_admin=True)
         )
+        # Explicit legacy data: public dispatch is no longer implicitly seeded by projects.
+        async with repository.session() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO provider_credentials "
+                    "(id,account_id,provider_type,owner_scope,label,auth_mode,generation,status,"
+                    "created_by,created_at,updated_at,version,owner_user_id) "
+                    "VALUES (:id,:account,'keenable','system','public-keenable','keyless',"
+                    "1,'active',NULL,:now,:now,1,NULL)"
+                ),
+                {
+                    "id": str(singleton_id),
+                    "account": str(DEFAULT_INSTALLATION_ACCOUNT_ID),
+                    "now": datetime.now(UTC).isoformat(),
+                },
+            )
+            await session.commit()
         keyed = await vault.create(
             admin,
             VaultKeyCreate(
@@ -266,60 +326,100 @@ async def test_cloud_0007_populated_upgrade_preserves_and_coexists(
                 secret=SecretStr("fake-keyless-upgrade-secret"),
             ),
         )
+        oauth = await vault.create(
+            admin,
+            VaultKeyCreate(
+                provider_type="parallel", label="oauth", auth_mode=CredentialAuthMode.OAUTH
+            ),
+        )
+        access_slot = oauth_secret_slot(oauth.id, "access", 1)
         async with repository.session() as session:
-            before_singleton = (
-                await session.execute(
-                    text(
-                        "SELECT id FROM provider_credentials "
-                        "WHERE auth_mode='keyless' AND owner_user_id IS NULL "
-                        "ORDER BY provider_type"
-                    )
-                )
-            ).all()
+            await session.execute(
+                text(
+                    "INSERT INTO credential_oauth_grants "
+                    "(credential_id,auth_mode,credential_generation,token_generation,status,"
+                    "updated_at,version) VALUES (:id,'oauth',1,1,'connected',:now,1)"
+                ),
+                {"id": str(oauth.id), "now": datetime.now(UTC).isoformat()},
+            )
+            await store.create_slot_in_session(session, access_slot, "fake-upgrade-access-token")
             await session.commit()
+        project = await ProjectService(repository).create_project(
+            admin, ProjectCreate(name="Preserved", slug=f"preserved-{uuid4().hex[:8]}")
+        )
+        await KeyPoolService(repository).create(
+            admin, keyed.id, KeyPoolCreate(label="preserved-pool", project_id=project.id)
+        )
     finally:
         await repository.close()
 
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0007_provider_budget_period",
+        )
+        assert connection.execute(
+            "SELECT id FROM provider_credentials WHERE auth_mode='keyless' "
+            "AND provider_type='keenable' AND owner_user_id IS NULL"
+        ).fetchall() == [(str(singleton_id),)]
+    before = _vault_snapshot(database)
+    assert before["key_pools"]
+    assert before["credential_oauth_grants"]
+    assert len(before["runtime_settings"]) >= 2
     alembic_command.upgrade(config, "head")
+    assert _vault_snapshot(database) == before
 
     repository = await SQLiteRepository.open(database)
     try:
         validate_database_schema(database)
-        store = EncryptedDbSecretStore(repository, SecretCodec(MasterKey(os.urandom(32))))
+        store = EncryptedDbSecretStore(repository, codec)
         vault = VaultKeyService(repository, store)
-        admin = temp_principal(admin_user)
-        async with repository.session() as session:
-            after_singleton = (
-                await session.execute(
-                    text(
-                        "SELECT id FROM provider_credentials "
-                        "WHERE auth_mode='keyless' AND owner_user_id IS NULL "
-                        "ORDER BY provider_type"
-                    )
-                )
-            ).all()
-            assert after_singleton == before_singleton
-            keyed_row = await session.get(ProviderCredentialRow, str(keyed.id))
-            assert keyed_row is not None and keyed_row.status == "active"
-            await session.commit()
+        assert await store.get(credential_secret_slot(keyed.id, 1)) == "fake-keyless-upgrade-secret"
+        assert await store.get(access_slot) == "fake-upgrade-access-token"
         first = await vault.create(
-            admin, VaultKeyCreate(provider_type="keenable", label="mine", auth_mode="keyless")
+            admin,
+            VaultKeyCreate(
+                provider_type="keenable", label="mine", auth_mode=CredentialAuthMode.KEYLESS
+            ),
         )
         other = await vault.create(
-            second, VaultKeyCreate(provider_type="keenable", label="mine", auth_mode="keyless")
+            second,
+            VaultKeyCreate(
+                provider_type="keenable", label="mine", auth_mode=CredentialAuthMode.KEYLESS
+            ),
         )
         assert first.id != other.id
         async with repository.session() as session:
-            count = (
-                await session.execute(
-                    text(
-                        "SELECT COUNT(*) FROM provider_credentials "
-                        "WHERE auth_mode='keyless' AND provider_type='keenable' "
-                        "AND owner_user_id IS NOT NULL"
+            owners = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT owner_user_id FROM provider_credentials "
+                            "WHERE auth_mode='keyless' AND provider_type='keenable' "
+                            "AND owner_user_id IS NOT NULL"
+                        )
                     )
                 )
-            ).scalar_one()
-            assert count == 2
+                .scalars()
+                .all()
+            )
+            assert set(owners) == {str(admin.id), str(second.id)}
+            for credential in (first, other):
+                assert (
+                    await store.get_in_session(session, credential_secret_slot(credential.id, 1))
+                    is None
+                )
             await session.commit()
     finally:
         await repository.close()
+    with (
+        sqlite3.connect(database) as connection,
+        pytest.raises(sqlite3.IntegrityError, match=r"provider_credentials\.account_id"),
+    ):
+        connection.execute(
+            "INSERT INTO provider_credentials "
+            "(id,account_id,provider_type,owner_scope,label,auth_mode,generation,status,"
+            "created_by,created_at,updated_at,version,owner_user_id) "
+            "VALUES (?,?,'keenable','system','duplicate-public','keyless',"
+            "1,'active',NULL,'now','now',1,NULL)",
+            (str(uuid4()), str(DEFAULT_INSTALLATION_ACCOUNT_ID)),
+        )

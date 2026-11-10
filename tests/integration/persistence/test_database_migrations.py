@@ -41,7 +41,8 @@ _VAULT = "0003_vault_rbac"
 _POOL_LIMITS = "0004_pool_limits"
 _POOL_BUDGET = "0005_pool_budget"
 _KEYLESS = "0006_keyless_credentials"
-_HEAD = "0007_provider_budget_period"
+_PROVIDER_BUDGET = "0007_provider_budget_period"
+_HEAD = "0008_owned_keyless_credentials"
 _OLDER_REVISION = "0009_provider_credentials"
 _UNKNOWN_REVISION = "ffffffffffff_not_a_polyweb_revision"
 
@@ -240,12 +241,14 @@ def test_exactly_one_migration_revision_is_the_alpha_baseline() -> None:
         "0005_pool_budget.py",
         "0006_keyless_credentials.py",
         "0007_provider_budget_period.py",
+        "0008_owned_keyless_credentials.py",
     ]
 
     script = ScriptDirectory.from_config(_config_for(Path("unused.db")))
     revisions = list(script.walk_revisions())
     assert [revision.revision for revision in revisions] == [
         _HEAD,
+        _PROVIDER_BUDGET,
         _KEYLESS,
         _POOL_BUDGET,
         _POOL_LIMITS,
@@ -273,9 +276,11 @@ def test_explicit_baseline_upgrade_adds_capacity_actor_columns(tmp_path: Path) -
     validate_database_schema(database)
     with sqlite3.connect(database) as connection:
         for table in ("provider_limit_admissions", "provider_rate_attempts"):
-            columns = {row[1]: row for row in connection.execute(f"PRAGMA table_info({table})")}
-            assert {"actor_type", "actor_id"} <= columns.keys()
-            assert columns["actor_type"][3] == columns["actor_id"][3] == 1
+            updated_columns = {
+                row[1]: row for row in connection.execute(f"PRAGMA table_info({table})")
+            }
+            assert {"actor_type", "actor_id"} <= updated_columns.keys()
+            assert updated_columns["actor_type"][3] == updated_columns["actor_id"][3] == 1
 
 
 def test_migration_result_has_no_backup_field() -> None:
@@ -1126,7 +1131,7 @@ def test_replace_blocked_by_another_process_reports_and_cleans_up(
     def held_open(*_: object, **__: object) -> None:
         raise PermissionError(13, "The process cannot access the file")
 
-    monkeypatch.setattr(migration_module.os, "replace", held_open)
+    monkeypatch.setattr("polyweb.persistence.database_migrations.os.replace", held_open)
     with pytest.raises(DatabaseMigrationError) as raised:
         upgrade_database(target)
     monkeypatch.undo()

@@ -64,12 +64,24 @@ def test_keyless_upgrade_preserves_credential_and_dependents(tmp_path: Path) -> 
             ("key",)
         ]
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        db.execute(
+            "INSERT INTO provider_credentials "
+            "(id,account_id,provider_type,owner_scope,label,auth_mode,generation,status,"
+            "created_by,created_at,updated_at,version,owner_user_id) "
+            "VALUES ('owned',?,'keenable','system','owned','keyless',1,'active',"
+            "'creator','now','now',1,'creator')",
+            (str(DEFAULT_INSTALLATION_ACCOUNT_ID),),
+        )
+        assert db.execute(
+            "SELECT owner_user_id FROM provider_credentials WHERE id='owned'"
+        ).fetchone() == ("creator",)
+        # An ownerless keyless row must still have no human creator.
         with pytest.raises(sqlite3.IntegrityError):
             db.execute(
                 "INSERT INTO provider_credentials "
                 "(id,account_id,provider_type,owner_scope,label,auth_mode,generation,status,"
                 "created_by,created_at,updated_at,version,owner_user_id) "
                 "VALUES ('bad',?,'keenable','system','bad','keyless',1,'active',"
-                "'creator','now','now',1,'creator')",
+                "'creator','now','now',1,NULL)",
                 (str(DEFAULT_INSTALLATION_ACCOUNT_ID),),
             )
