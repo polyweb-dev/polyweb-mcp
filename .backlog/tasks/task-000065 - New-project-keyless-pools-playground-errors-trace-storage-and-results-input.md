@@ -1,11 +1,11 @@
 ---
 id: TASK-000065
 title: New project keyless pools, playground errors, trace storage, and results input
-status: Done
+status: Testing
 assignee:
   - '@codex'
 created_date: '2026-11-10T09:48:00Z'
-updated_date: '2026-11-10T22:51:00Z'
+updated_date: '2026-11-11T22:41:00Z'
 labels:
   - backend frontend bug
 dependencies: []
@@ -38,6 +38,9 @@ A newly registered user creates a project and tries the Playground without assig
 - [x] #12 Relevant popup and menu actions with buttons display appropriate icons consistently across the UI, including pool-management actions shown in the supplied screenshot.
 - [x] #13 The no-pool and successful keyless Playground UI BDD scenarios are tagged @live; separate bulk-pool-creation and keyless-default-pool-creation BDD scenarios do not use @live and do not make provider calls.
 - [x] #14 Popup/menu icon consistency is verified through UI coverage without requiring live provider requests.
+- [ ] #15 Creating a new user automatically creates one owned default project with assigned supported keyless Tavily and Keenable pools, without API keys or provider calls during signup or login.
+- [ ] #16 After login the default project is visible; creating a project API key enables MCP through its keyless pools, preserving permissions, isolation and transactional creation.
+- [ ] #17 Update existing BDD scenarios for automatic default-project onboarding without adding scenarios; preserve empty-project guidance and pool-management coverage.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -49,6 +52,10 @@ A newly registered user creates a project and tries the Playground without assig
 4. Verify focused units locally and integration, offline BDD, latency and desktop smoke on explicit Woodpecker workflows. Keep the 150 ms asserted latency gate and add measured query-count evidence.
 5. Run exactly the two designated live UI flows on fresh temporary state, preserve credentials, and obtain independent Claude Code Sonnet 5.5 High code and UI-only visual acceptance. Claude implementation/testing is authorized after Muse quota exhaustion.
 6. Finalize all proven criteria through Backlog CLI, publish the task record and verification on PR70 targeting feature/signup-fix, preserve PR69, and do not merge.
+
+Signup extension: 1. Review the transactional creation boundary and reuse existing project/vault/pool authorization paths. 2. Capture focused red regressions, then provision one owned default project and supported keyless pools during runtime user creation, with no provider calls or automatic API key. 3. Update existing onboarding and keyless BDD scenarios without adding scenarios; retain deliberately empty-project guidance. 4. Run narrow local units/static gates, obtain independent Codex Sol High review, then push and select final cloud gates within the three remaining triggers. 5. Record exact evidence, update PR70 and finalize via CLI only; preserve PR69.
+
+Codex signup plan ACCEPT with corrections: user uniqueness mapping covers only the user flush; late provisioning/commit failures roll back unchanged. Reuse authorized in-session project/key/pool operations and preserve their audits, with one final signup materialization. Use default-fullUUID slug. Register/create-admin provision; seed-only standalone-account and raw/trusted fixtures remain bare. Login never provisions or restores deleted defaults; provider disablement remains enforced. Acceptance tests prove actual SQLite late rollback and explicit project API-key REST/MCP access. Gate plan: api-integration and api-bdd on final pushed reviewed candidate, last trigger reserved for retry or api-latency if both pass.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -283,6 +290,30 @@ Gate SHAs: UIquality86=c8a7889; UI smoke88=24ec697; integration85=4cd17b2; APIBD
 Final exact CI ledger:1=76ui-bddFAIL,2=77api-integrationFAIL,3=78api-integrationPASS,4=79api-bddFAIL,5=80api-bddPASS,6=81api-latencyFAIL,7=82api-latencyPASS,8=83api-integrationCANCELED(stalled),9=84api-bddPASS,10=85api-integrationPASS,11=86ui-qualityPASS,12=87ui-bddFAIL,13=88ui-bddPASS. TASK65 used13/16,3unused; priorTASK63used14,shared27/30. No further triggers needed.
 Provider ledger:2 observed browser/API searches, approximately2 inferred free public Keenable upstream calls,0 API credits. No-pool and nonlive flows made no execution calls. Temporary databases/secrets deleted; verified owned servers stopped; WT1 fixed ports free; live DB, credentials and .env preserved. Foreign stash76eb33a and recovery refs/backups remain intact.
 PR70 remains a separate stack layer into feature/signup-fix; PR69 remains OPEN and unmerged. Final record commit changes Backlog metadata only; tested source candidate is24ec697. Artifacts: .gitea-packages/reports-pipeline85-4cd17b2.zip, reports-pipeline88-24ec697.zip; .runtime-tmp/task65-visual-review/manifest.json and the two preserved live-run directories.
+
+User extends PR70 with signup default-project provisioning. Reopened; prior final evidence is historical. Claude Sonnet 5.5 High plans, develops and tests; Codex GPT6.1 Sol High reviews. No automatic API-key issuance. CI ledger13/16 used,3 remaining. Read-only planning launched; no source changes.
+
+Claude plan maps public registration and create_admin to AuthService-managed UserDatabase creation; proposed same-transaction callback reuses project/key/pool services via in-session methods. Seed-only standalone account and bare persistence fixture creation remain explicit exceptions pending independent Codex plan review. New AC15-17 unchecked. No implementation has started; CI still13/16.
+
+Independent Codex GPT6.1 Sol High plan review accepted with no P0-P2 architectural blockers. Claude acceptance tester owns integration and existing backend/UI BDD test files; implementation will own production and narrow unit files only, so overlapping files/tests remain sequential. Root CI ledger13/16 used3 remaining; no new triggers or provider calls.
+
+Signup test-first phase: d49a7cd updates existing UI keyless success to automatic default project and explicit separate poolless project. 6c6590e adds focused creation regressions:12 failed35passed on unchanged production; failures are missing planned hook/module seams, with source-confirmed no automatic workspace behavior. A scratch prototype passed47 but is not product verification. Production remains unchanged pending acceptance-test completion. Tester continues backend BDD/integration ownership; CI remains13/16, provider call total unchanged.
+
+Test-first milestone complete: d49a7cd existingUIBDD updates,6c6590e focused units(12red35existingpass),a87fa4f existingbackendBDD and2integrationupdates+9newsignupintegrationcases. Backend users.feature26scenarios unchanged,task65UI5 unchanged(2live3stubsmoke). Acceptance tests statically checked,not runtime-executed; missingprovisioning acknowledged from source. Root authorizes Phase2 implementation per accepted plan. Product label Default chosen to match existing acceptance workflow; slug default-fullUUID. Tester separately owns compatibility expectations in integration only; developer owns src/unit only. CI13/16used3remaining,0newproviderrequests.
+
+Signup production2277237 committed locally: atomic userflush/provision/commit hook; runtimeAuthServiceprovisioning; Default/fullUUIDproject+2ownedkeylesspools; onefinalmaterialization via reused authorized/audited in-session services. Actualsourcefocusedunits53passed/guardrun150passed, configuredmypy154clean,ruffsrcandchangedformatclean. Acceptance runtime stillunverified. Codex independentproduction+unitreviewstarted; Claude testcompatibilitybatch remainsisolatedtestpaths. No push/CI/providerrequest; ledger13/16used3left.
+
+Compatibility testbatch7bb5d14 committed: explicit bare_login fixtures preserve403no-vaultchecks; signupowners exactdefaultkeys/pools/projects and foreign404 contracts retained. Exact-IDcapacity reads and secretdeletion preservekeylessdefaults; singletonvsownedkeylessrows checked separately. BackendBDD26/UIBDD5counts unchanged, staticRuff/compile/configuredmypy154green; nonunitruntimepending. Tester flags lastprojectadmin deactivation safeguard now affects autodefaultowners; Codexproductionreview asked to assess policy impact beforechanginganyguard. No furtherCI/providers,13/16used3remaining.
+
+Codexproduction/securityreview2277237 ACCEPT noP0-P2sourceissues; callback/in-sessionreuse/onefinalmaterialization/auth/audit/disablementvalidatedstatistically. OverallNOTACCEPT pendingP2testclassification:12newcasesuseactualinmemorySQLite and belongintegration,earlierlocalreportedunitresultsincludeintegrationworkcontraryreposkill. Preserveall12assertions,relocateintointegration/sharedfixtures; no furtherlocalexecutionofDB-backedcases. NarrowP3doccorrection:JWTPlaygroundworksbeforeAPIkey,APIkeyneededforAPIkeyREST/MCPaccess. NewindependentCodexacceptance/lifecycle reviewassignedstable7bb5d14 plussoleDefaultadmin/deactivationconsequence. CI13/16used3left.
+
+Reviewcorrection8e2c382 relocatesall12DB-backedcaseswithoutassertionchanges:integrationpersistence20(14old+6moved),integrationservices6new,helpertests/fixtures/user_store.py;unitusersrestoredbyteidenticaltoddc5a5c35cases,newunitpersistencefiledeleted. Appropriatelocalunitrun47passed;collect-only26integrationcasesimportsresolvedbutnoruntime. Ruffsrc/changedformat/compile/configuredmypy154clean. SourcechangeonlyP3doccorrectionexplicitprojectAPIkeyREST/MCP;JWTPlaygroundusablewithoutissuedAPIkey. Acceptance/lifecyclereviewpending;CI13/16used3left,0newprovidercalls.
+
+Codexacceptancereview7bb5d14 NOTACCEPT2P2testfidelity:fakekeylessadaptersmustoverrideKEYLESSadmissionrail(integration+BDD),integrationMCPcallmustenternormalserverlifespanstartup/cleanup. No substantive9casebloat,existingauth/isolation/BDDcountsaccepted. LifecyclepolicyconfirmedarchivedANDactiveprojectslastadminprotected; no newexemption/disposal. Improveexistingdeactivationtestwithnormal signupowner:LAST_PROJECT_ADMIN untilpeeraddedtoDefault,thensuccess+poolunassignment. Relocation8e2c382completed;narrowClaudeTesterrepairassigned. CI13/16used3remaining;nofurtherproviderrequests.
+
+Reviewfixes0996a21+c5bc223committedtestonly:integration/BDDkeylesscountingadaptersdeclareKEYLESSadmission,MCPharnessentersnormalstartup/teardownlifespan. Existingdeactivationtestretainsnormalsignupowner,assertsLAST_PROJECT_ADMINandunchangedstate,addspeerDefaultadminthenretainsdeactivation/unassignmentcoverage. Ruff/format/compile/configuredmypy154green,acceptancefocusedmypyclean,nonunitruntimepending. FinalnarrowCodexrechecknext. Independent2designatedliveUIflowsrunningisolatedfreshstateagainstsamefrozenproduction,atmost1freeproviderrequest;nofurtherCIyet13/16used3remaining.
+
+FinalCodexnarrowreviewACCEPTc5bc223340a2922ab09d129ac425a1caa2713917:allblockingcorrectionspresent,12DBcasespreservedintegration,KEYLESSrail/lifespanfixed,lifecyclepolicyretained,productiononlydocchangesafter2277237acceptance. Readyforcloudpushedcandidate. ReserveexactCItrigger14/16api-integration and15/16api-bdd,explicitworkflowsonly;remaining1afteracceptedtriggers(shared29/30). Candidateincludesmetadatarecordandtest/sourcework,APIgateSHArecordedafterpush. No merge/PR69changes. Live2designatedflowsstillpendingseparateClaudecompletion,atmost1freecallauthorized.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
