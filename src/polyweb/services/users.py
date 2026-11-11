@@ -466,8 +466,36 @@ class AuthService:
         except SQLAlchemyError as error:
             raise AuthStorageUnavailable("the auth database is unavailable") from error
 
-    def _manager(self, session: AsyncSession, *, peer_address: str | None = None) -> UserManager:
-        return UserManager(UserDatabase(session, UserRow), peer_address=peer_address)
+    def _manager(
+        self,
+        session: AsyncSession,
+        *,
+        peer_address: str | None = None,
+        provision_workspace: bool = True,
+    ) -> UserManager:
+        """Build a manager over ``session``.
+
+        Runtime account creation (public registration and ``create_admin``)
+        provisions the default workspace in the creating transaction. Callers that
+        only read accounts never create one; seed-only provisioning opts out.
+        """
+
+        on_created = self._provision_workspace if provision_workspace else None
+        return UserManager(
+            UserDatabase(session, UserRow, on_created=on_created), peer_address=peer_address
+        )
+
+    async def _provision_workspace(self, session: AsyncSession, user: UserRow) -> None:
+        """Create the new account's default project and keyless pools in ``session``."""
+
+        from polyweb.services import signup_workspace
+
+        repository = self._repository
+        if repository is None:
+            raise AuthStorageUnavailable("the auth repository is not open")
+        await signup_workspace.provision_signup_workspace(
+            session, user, settings=self._settings, repository=repository
+        )
 
     def _strategy(
         self, session: AsyncSession, *, family_id: UUID | None = None
@@ -475,11 +503,15 @@ class AuthService:
         return get_jwt_strategy(self._settings, AuthSessionRepository(session), family_id=family_id)
 
     @asynccontextmanager
-    async def user_manager(self, *, peer_address: str | None = None) -> AsyncIterator[UserManager]:
+    async def user_manager(
+        self, *, peer_address: str | None = None, provision_workspace: bool = True
+    ) -> AsyncIterator[UserManager]:
         """Yield a user manager bound to one short-lived session."""
 
         async with self._session() as session:
-            yield self._manager(session, peer_address=peer_address)
+            yield self._manager(
+                session, peer_address=peer_address, provision_workspace=provision_workspace
+            )
 
     async def verify_token(self, token: str) -> UserPrincipal | None:
         """Return the principal of a live access token, else ``None``.
@@ -613,9 +645,10 @@ class AuthService:
         """Create one active local account and grant it ``system_admin`` (trusted bootstrap).
 
         The account is created as an ordinary account first, through the
-        library's default password helper and the accepted password rule. A
-        failed grant then leaves an ordinary account instead of a half-written
-        administrator.
+        library's default password helper and the accepted password rule. Like
+        public registration it creates the default workspace in the same
+        transaction. A failed grant then leaves an ordinary account instead of a
+        half-written administrator.
         """
 
         async with self._session() as session:
@@ -634,13 +667,14 @@ class AuthService:
 
         The library manager owns the password rule, the duplicate-email check, and
         the safe creation path. No role or privilege is created: the account has
-        no system role assignment and no project membership. The response is the
+        no system role assignment and no project membership, and no default
+        workspace (this seed-only path is bare by explicit choice). The response is the
         safe projection of the stored account, with no credential material. The
         caller owns the attempt reservation, the permission gate, and the HTTP
         mapping.
         """
 
-        async with self.user_manager() as manager:
+        async with self.user_manager(provision_workspace=False) as manager:
             created = await manager.create(
                 schemas.BaseUserCreate(email=email, password=password.get_secret_value()),
                 safe=True,

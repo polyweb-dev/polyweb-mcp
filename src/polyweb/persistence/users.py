@@ -8,6 +8,7 @@ in project memberships and role assignments.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -16,6 +17,7 @@ from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from fastapi_users_db_sqlalchemy.generics import GUID
 from sqlalchemy import Boolean, CheckConstraint, Index, String, Text, select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from polyweb.models.users import AuthProvider, normalize_email
@@ -134,8 +136,29 @@ def local_password_hash(user: UserRow) -> str | None:
     return str(user.hashed_password) if user.hashed_password is not None else None
 
 
+#: Callback run inside the creating transaction, after the new row is flushed.
+OnUserCreated = Callable[[AsyncSession, UserRow], Awaitable[None]]
+
+
 class UserDatabase(SQLAlchemyUserDatabase[UserRow, UUID]):
-    """SQLAlchemy user database adapter extending fastapi_users with case-folding."""
+    """SQLAlchemy user database adapter extending fastapi_users with case-folding.
+
+    ``on_created`` is optional. When set, :meth:`create` awaits it with the same
+    session after the user row is flushed and before the single commit, so
+    everything it writes shares the account's transaction. :meth:`create_trusted`
+    never runs it: seeding, SSO and raw fixtures stay bare by explicit composition.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        user_table: type[UserRow],
+        oauth_account_table: None = None,
+        *,
+        on_created: OnUserCreated | None = None,
+    ) -> None:
+        super().__init__(session, user_table, oauth_account_table)
+        self._on_created = on_created
 
     async def get_by_email(self, email: str) -> UserRow | None:
         """Find one account by email using case-insensitive comparison."""
@@ -165,11 +188,21 @@ class UserDatabase(SQLAlchemyUserDatabase[UserRow, UUID]):
         user = self.user_table(**clean)
         self.session.add(user)
         try:
-            await self.session.commit()
+            await self.session.flush()
         except IntegrityError as error:
             await self.session.rollback()
+            # Only this flush can mean "the account already exists".
             if _is_unique_violation(error):
                 raise exceptions.UserAlreadyExists() from error
+            raise
+        try:
+            if self._on_created is not None:
+                await self._on_created(self.session, user)
+            await self.session.commit()
+        except BaseException:
+            # A late failure undoes the account and everything the callback wrote,
+            # and surfaces unchanged: never relabeled as a duplicate account.
+            await self.session.rollback()
             raise
         await self.session.refresh(user)
         return user

@@ -361,54 +361,74 @@ class ProjectService:
         self._rollout.require_management()
 
         async def operation(session: AsyncSession) -> ProjectRead:
-            await self._authorization.require_in_session(
-                session,
-                system_query(
-                    actor,
-                    PermissionAction.PROJECT_CREATE,
-                    account_id=self._account_id,
-                ),
-            )
-            repository = ProjectRepository(session)
-            resolved_create = project_create
-            if resolved_create.initial_admin_user_id is None:
-                if resolved_create.initial_admin_email is None:
-                    resolved_create = resolved_create.model_copy(
-                        update={"initial_admin_user_id": actor.id}
-                    )
-                else:
-                    admin = await self._require_active_user_by_email(
-                        session, resolved_create.initial_admin_email
-                    )
-                    resolved_create = resolved_create.model_copy(
-                        update={"initial_admin_user_id": admin.id}
-                    )
-            try:
-                project, member, _role = await repository.create_project_with_admin(
-                    account_id=self._account_id,
-                    created_by=actor.id,
-                    project_create=resolved_create,
-                )
-            except ValueError as error:
-                raise ProjectValidationError(str(error)) from error
-            from polyweb.services.pool_materializer import materialize_pools
-
-            await materialize_pools(session, project_id=project.id)
-            await _project_event(
-                session,
-                project.id,
-                PROJECT_CREATED,
-                actor,
-                target_type="project",
-                target_id=project.id,
-                detail={
-                    "initial_admin_user_id": str(member.user_id),
-                    "role_key": BuiltinRole.PROJECT_ADMIN.value,
-                },
-            )
-            return project
+            return await self.create_project_in_session(session, actor, project_create)
 
         return await self._write(operation)
+
+    async def create_project_in_session(
+        self,
+        session: AsyncSession,
+        actor: UserPrincipal,
+        project_create: ProjectCreate,
+        *,
+        materialize: bool = True,
+    ) -> ProjectRead:
+        """Create a project, its first administrator and audit in the caller's transaction.
+
+        Shared by :meth:`create_project` and the signup workspace. A caller that
+        adds pools right away sets ``materialize=False`` and rebuilds the project
+        runtime once afterwards.
+        """
+
+        self._rollout.require_management()
+
+        await self._authorization.require_in_session(
+            session,
+            system_query(
+                actor,
+                PermissionAction.PROJECT_CREATE,
+                account_id=self._account_id,
+            ),
+        )
+        repository = ProjectRepository(session)
+        resolved_create = project_create
+        if resolved_create.initial_admin_user_id is None:
+            if resolved_create.initial_admin_email is None:
+                resolved_create = resolved_create.model_copy(
+                    update={"initial_admin_user_id": actor.id}
+                )
+            else:
+                admin = await self._require_active_user_by_email(
+                    session, resolved_create.initial_admin_email
+                )
+                resolved_create = resolved_create.model_copy(
+                    update={"initial_admin_user_id": admin.id}
+                )
+        try:
+            project, member, _role = await repository.create_project_with_admin(
+                account_id=self._account_id,
+                created_by=actor.id,
+                project_create=resolved_create,
+            )
+        except ValueError as error:
+            raise ProjectValidationError(str(error)) from error
+        from polyweb.services.pool_materializer import materialize_pools
+
+        if materialize:
+            await materialize_pools(session, project_id=project.id)
+        await _project_event(
+            session,
+            project.id,
+            PROJECT_CREATED,
+            actor,
+            target_type="project",
+            target_id=project.id,
+            detail={
+                "initial_admin_user_id": str(member.user_id),
+                "role_key": BuiltinRole.PROJECT_ADMIN.value,
+            },
+        )
+        return project
 
     async def archive_project(
         self,
