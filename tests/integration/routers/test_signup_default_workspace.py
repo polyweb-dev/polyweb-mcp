@@ -320,7 +320,7 @@ async def _mcp_search(repository: SQLiteRepository, raw_key: str, provider: str)
     try:
         # The normal MCP startup and teardown; the injected composition owns no
         # HTTP client, and the fake adapters make no external call.
-        async with server._mcp_server.lifespan(server):
+        async with server._mcp_server.lifespan(server):  # type: ignore[arg-type]
             result = await server.call_tool(
                 "search",
                 {
