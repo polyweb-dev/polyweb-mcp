@@ -916,6 +916,14 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
     with TestClient(app) as client:
         pair = await register_system_admin_login(client, repository, temp_email("control-delete"))
         headers = raw_auth_headers(pair["access_token"])
+        # Signup already gave the owner its two keyless default keys; deleting the
+        # key created here must leave exactly those behind.
+        defaults = {
+            item["id"]: item
+            for item in client.get("/api/v1/account/vault/keys", headers=headers).json()
+        }
+        assert {item["provider_type"] for item in defaults.values()} == {"keenable", "tavily"}
+        assert all(item["auth_mode"] == "keyless" for item in defaults.values())
         write = client.post(
             "/api/v1/account/vault/keys",
             headers=headers,
@@ -931,7 +939,9 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
         assert await app.state.secret_store.get(slot) is None
         assert await repository.get_runtime_setting("secret.enc:" + slot) is None
         listed = client.get("/api/v1/account/vault/keys", headers=headers)
-        assert listed.status_code == 200 and listed.json() == []
+        assert listed.status_code == 200
+        assert body["id"] not in {item["id"] for item in listed.json()}
+        assert {item["id"]: item for item in listed.json()} == defaults
 
 
 @pytest.mark.asyncio

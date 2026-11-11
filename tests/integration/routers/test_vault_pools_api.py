@@ -27,6 +27,7 @@ from tests.fixtures.a2_execution import build_execution_world
 from tests.fixtures.alpha_fixtures import ALPHA_ADMIN_PASSWORD
 from tests.fixtures.auth import (
     account_id_from_pair,
+    bare_login,
     raw_auth_headers,
     register_and_login,
     register_system_admin_login,
@@ -151,10 +152,14 @@ async def test_pool_lifecycle_authorization_and_materialization(repository, vaul
     with TestClient(create_app([], repository=repository)) as client:
         owner = await register_system_admin_login(client, repository, temp_email("pool-owner"))
         other = await register_system_admin_login(client, repository, temp_email("pool-other"))
+        # A normal signup owns a Default project, so it may use the vault (404 on
+        # foreign keys); only an account with no project at all is denied (403).
         developer = register_and_login(client, temp_email("pool-developer"))
+        bare = await bare_login(client, repository, temp_email("pool-bare"))
         headers = raw_auth_headers(owner["access_token"])
         other_headers = raw_auth_headers(other["access_token"])
         dev_headers = raw_auth_headers(developer["access_token"])
+        bare_headers = raw_auth_headers(bare["access_token"])
         project = await seed_execution_project(repository, user_id=account_id_from_pair(owner))
         foreign = await seed_execution_project(repository, user_id=account_id_from_pair(other))
         key = client.post(
@@ -164,7 +169,8 @@ async def test_pool_lifecycle_authorization_and_materialization(repository, vaul
         )
         assert key.status_code == 201, key.text
         key_path = f"{BASE}/keys/{key.json()['id']}/pools"
-        assert client.get(key_path, headers=dev_headers).status_code == 403
+        assert client.get(key_path, headers=bare_headers).status_code == 403
+        assert client.get(key_path, headers=dev_headers).status_code == 404
         assert client.get(key_path, headers=other_headers).status_code == 404
         for operations, code in [
             ([], "OPERATIONS_REQUIRED"),
@@ -191,14 +197,23 @@ async def test_pool_lifecycle_authorization_and_materialization(repository, vaul
             f"{url}/assign", headers=headers, json={"project_id": str(foreign.project_id)}
         )
         assert denied.status_code == 403
+        # The owner's provider-owner projects are exactly the signup Default project
+        # and the manual one. Available providers are the owner's key providers not yet
+        # assigned there: the Default project already holds both keyless pools.
+        owned = client.get("/api/v1/projects", headers=headers).json()
+        default_id = next(item["id"] for item in owned if item["name"] == "Default")
         projects = client.get(f"{BASE}/projects", headers=headers).json()
-        assert projects == [
-            {
-                "id": str(project.project_id),
-                "name": "Execution Project",
-                "available_providers": ["exa"],
-            }
-        ]
+        assert projects == sorted(
+            [
+                {"id": default_id, "name": "Default", "available_providers": ["exa"]},
+                {
+                    "id": str(project.project_id),
+                    "name": "Execution Project",
+                    "available_providers": ["exa", "keenable", "tavily"],
+                },
+            ],
+            key=lambda item: item["id"],
+        )
         assigned = client.post(
             f"{url}/assign", headers=headers, json={"project_id": str(project.project_id)}
         )
@@ -435,8 +450,10 @@ async def test_api_writes_change_execution_lookup(tmp_path, monkeypatch, auth_se
 @pytest.mark.asyncio
 async def test_deactivation_unassigns_owned_pools(repository, vault_env, auth_secret):
     with TestClient(create_app([], repository=repository)) as client:
-        owner = await register_system_admin_login(
-            client, repository, temp_email("deactivate-owner")
+        # The owner is a bare system administrator: this test is about the seeded
+        # project's owned pools, not about a signup Default project's sole administrator.
+        owner = await bare_login(
+            client, repository, temp_email("deactivate-owner"), system_admin=True
         )
         peer = register_and_login(client, temp_email("deactivate-peer"))
         owner_id = account_id_from_pair(owner)

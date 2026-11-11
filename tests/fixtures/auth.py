@@ -194,6 +194,30 @@ def register_and_login(
     return pair
 
 
+async def bare_login(
+    client: TestClient,
+    repository: SQLiteRepository,
+    email: str,
+    password: str = TEMP_PASSWORD,
+    *,
+    system_admin: bool = False,
+) -> dict[str, Any]:
+    """Create one BARE account through the fixture path, log in, return the pair.
+
+    Public signup now provisions an owned Default project with keyless pools, so
+    an account made by :func:`register_and_login` already holds project-admin
+    and vault authority. A test that needs an account with NO project (to prove
+    an unprivileged denial) uses this helper: the persistence-level creator adds
+    no workspace, and login never backfills one.
+    """
+
+    await create_temp_user(repository, email, system_admin=system_admin, password=password)
+    logged_in = login_http(client, email, password)
+    assert logged_in.status_code == 200
+    pair: dict[str, Any] = logged_in.json()
+    return pair
+
+
 async def promote_to_system_admin(repository: SQLiteRepository, email: str) -> UUID:
     """Grant ``system_admin`` to an account looked up by email; return its id."""
 

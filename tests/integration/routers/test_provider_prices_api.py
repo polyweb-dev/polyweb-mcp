@@ -8,6 +8,7 @@ from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
+    bare_login,
     raw_auth_headers,
     register_and_login,
     temp_email,
@@ -20,7 +21,9 @@ async def test_price_reads_require_authentication_and_scope(tmp_path, auth_secre
     async with await SQLiteRepository.open(tmp_path / "prices.db") as repository:
         with TestClient(create_app([], repository=repository)) as client:
             assert client.get("/api/v1/provider-prices").status_code == 401
-            pair = register_and_login(client, temp_email("no-price-scope"))
+            # A bare account owns no project, so it has neither vault nor project
+            # access. (A public signup now owns a Default project and may read prices.)
+            pair = await bare_login(client, repository, temp_email("no-price-scope"))
             assert (
                 client.get(
                     "/api/v1/provider-prices", headers=raw_auth_headers(pair["access_token"])

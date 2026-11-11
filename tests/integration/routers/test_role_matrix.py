@@ -48,6 +48,7 @@ from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     TEMP_PASSWORD,
     account_id_from_pair,
+    bare_login,
     raw_auth_headers,
     register_and_login,
     register_system_admin_login,
@@ -121,7 +122,10 @@ async def matrix_client(
         admin = await register_system_admin_login(client, repository, temp_email("matrix-admin"))
         # A project administrator holds project authority only.
         developer = register_and_login(client, temp_email("matrix-project-admin"))
-        agent = register_and_login(client, temp_email("matrix-agent"))
+        # The agent is a bare account: no project of its own, so it has no vault
+        # or project-admin authority and only the membership granted below. (A
+        # public signup would now own a Default project and hold vault use.)
+        agent = await bare_login(client, repository, temp_email("matrix-agent"))
         client.headers_admin = raw_auth_headers(admin["access_token"])  # type: ignore[attr-defined]
         client.headers_developer = raw_auth_headers(developer["access_token"])  # type: ignore[attr-defined]
         client.headers_agent = raw_auth_headers(agent["access_token"])  # type: ignore[attr-defined]

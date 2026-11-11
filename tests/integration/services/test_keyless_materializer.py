@@ -69,11 +69,13 @@ async def test_public_dispatch_pool_switch_kill_switch_and_vault(
                 await ensure_keyless_credentials(session)
                 await materialize_pools(session, project_id=project.project_id)
                 await materialize_pools(session, project_id=project.project_id)
+                # The ownerless public singletons keep their exact contract.
                 rows = (
                     await session.execute(
                         text(
                             "SELECT provider_type,owner_scope,owner_user_id,created_by FROM "
-                            "provider_credentials WHERE auth_mode='keyless' ORDER BY provider_type"
+                            "provider_credentials WHERE auth_mode='keyless' "
+                            "AND owner_user_id IS NULL ORDER BY provider_type"
                         )
                     )
                 ).all()
@@ -81,6 +83,32 @@ async def test_public_dispatch_pool_switch_kill_switch_and_vault(
                     ("keenable", "system", None, None),
                     ("tavily", "system", None, None),
                 ]
+                # Signup also gave this account exactly one owned keyless credential per
+                # supported provider; they are separate rows from the public singletons.
+                owner_id = str(account_id_from_pair(pair))
+                owned = (
+                    await session.execute(
+                        text(
+                            "SELECT provider_type,owner_scope,owner_user_id FROM "
+                            "provider_credentials WHERE auth_mode='keyless' "
+                            "AND owner_user_id IS NOT NULL ORDER BY provider_type"
+                        )
+                    )
+                ).all()
+                assert owned == [
+                    ("keenable", "system", owner_id),
+                    ("tavily", "system", owner_id),
+                ]
+                singleton_ids = set(
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT id FROM provider_credentials "
+                                "WHERE auth_mode='keyless' AND owner_user_id IS NULL"
+                            )
+                        )
+                    ).scalars()
+                )
                 bindings = await ProjectBindingRepository(session).list_for_project(
                     project_id=project.project_id
                 )
@@ -97,7 +125,14 @@ async def test_public_dispatch_pool_switch_kill_switch_and_vault(
             order = client.get(f"{path}/routing/order", headers=headers).json()
             assert "keenable" not in [p["provider"] for p in order["search"]["providers"]]
             vault = client.get("/api/v1/account/vault/keys", headers=headers)
-            assert vault.status_code == 200 and vault.json() == []
+            assert vault.status_code == 200, vault.text
+            # The vault lists exactly the two owned default keys, never a public singleton.
+            assert sorted(item["provider_type"] for item in vault.json()) == [
+                "keenable",
+                "tavily",
+            ]
+            assert all(item["auth_mode"] == "keyless" for item in vault.json())
+            assert singleton_ids.isdisjoint({item["id"] for item in vault.json()})
             request = {
                 "project_id": str(project.project_id),
                 "query": "keyless",

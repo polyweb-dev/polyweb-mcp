@@ -496,7 +496,7 @@ async def test_each_account_owns_its_own_isolated_default_workspace(
                 headers=b_headers,
                 json={"project_id": b_default["id"]},
             )
-            assert assign.status_code in (403, 404)
+            assert assign.status_code == 404
             issued = client.post(
                 f"/api/v1/projects/{a_default['id']}/api-keys",
                 headers=b_headers,
@@ -508,7 +508,7 @@ async def test_each_account_owns_its_own_isolated_default_workspace(
                 headers=b_headers,
                 json={"project_id": a_default["id"], "query": "foreign"},
             )
-            assert search.status_code in (403, 404)
+            assert search.status_code == 404
             assert ledger.built == [] and ledger.calls == []
             assert _api_keys(client, a_headers, a_default["id"]) == []
     finally:
