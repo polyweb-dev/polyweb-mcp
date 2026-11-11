@@ -8,8 +8,9 @@ authorization checks, audit events and runtime materialization behave exactly as
 for a signed-in user. The project's runtime is rebuilt once, after the last pool.
 
 Nothing here mints a session, token, project API key or secret, and nothing calls
-a provider: the keyless pools only become usable once the owner explicitly issues
-a project API key. A failure raises and rolls the whole account creation back.
+a provider: REST and MCP execution through these pools needs a project API key,
+which the owner issues explicitly. A failure raises and rolls the whole account
+creation back.
 """
 
 from uuid import uuid4

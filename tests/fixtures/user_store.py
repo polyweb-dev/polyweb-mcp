@@ -1,4 +1,4 @@
-"""In-memory account store shared by the account-creation unit tests.
+"""In-memory account store shared by the account-creation integration tests.
 
 Only the ``user`` table exists. A real SQLite engine is used so uniqueness and
 rollback behavior come from the database, not from a hand-built constraint
