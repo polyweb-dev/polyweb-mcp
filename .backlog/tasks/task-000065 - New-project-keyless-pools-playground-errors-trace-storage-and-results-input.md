@@ -1,11 +1,11 @@
 ---
 id: TASK-000065
 title: New project keyless pools, playground errors, trace storage, and results input
-status: Testing
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-11-10T09:48:00Z'
-updated_date: '2026-11-11T23:06:00Z'
+updated_date: '2026-11-11T23:27:00Z'
 labels:
   - backend frontend bug
 dependencies: []
@@ -19,7 +19,7 @@ ordinal: 54000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-A newly registered user creates a project and tries the Playground without assigning a provider pool. Requests currently appear to time out, with no actionable explanation that the project has no pool. The user also reports that traces are not stored despite the new project showing Full requests storage, and the numeric Results input is awkward to edit (changing 6 to 5 requires inserting 5 and then deleting 6). Free-tier/keyless providers cannot currently be used because creating a pool requires an API key; keyless providers should require pools too, while allowing keyless pools to be created without credentials. Implement and verify these flows with the requested separate UI BDD scenarios.
+Require provider-specific assigned pools for all execution, including supported keyless/free tiers, and make absent-pool Playground guidance actionable. New runtime users receive an owned Default project with assigned keyless Tavily and Keenable pools during signup, without provider calls, secrets or automatic API-key issuance; after login they can explicitly create a project API key for REST/MCP. Preserve provider isolation, ownership, transactional rollback and the inherited Full trace policy. Improve Results editing, pool rate visibility, action icons, bulk pool creation and reusable keyless defaults. Update existing BDD onboarding flows without adding scenarios, retaining a deliberately poolless project for guidance coverage.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -38,26 +38,22 @@ A newly registered user creates a project and tries the Playground without assig
 - [x] #12 Relevant popup and menu actions with buttons display appropriate icons consistently across the UI, including pool-management actions shown in the supplied screenshot.
 - [x] #13 The no-pool and successful keyless Playground UI BDD scenarios are tagged @live; separate bulk-pool-creation and keyless-default-pool-creation BDD scenarios do not use @live and do not make provider calls.
 - [x] #14 Popup/menu icon consistency is verified through UI coverage without requiring live provider requests.
-- [ ] #15 Creating a new user automatically creates one owned default project with assigned supported keyless Tavily and Keenable pools, without API keys or provider calls during signup or login.
-- [ ] #16 After login the default project is visible; creating a project API key enables MCP through its keyless pools, preserving permissions, isolation and transactional creation.
-- [ ] #17 Update existing BDD scenarios for automatic default-project onboarding without adding scenarios; preserve empty-project guidance and pool-management coverage.
+- [x] #15 Creating a new user automatically creates one owned default project with assigned supported keyless Tavily and Keenable pools, without API keys or provider calls during signup or login.
+- [x] #16 After login the default project is visible; creating a project API key enables MCP through its keyless pools, preserving permissions, isolation and transactional creation.
+- [x] #17 Update existing BDD scenarios for automatic default-project onboarding without adding scenarios; preserve empty-project guidance and pool-management coverage.
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Preserve the existing worktree and stacked branch; capture the reported regressions before fixes and retain provider-call isolation.
-2. Require provider-specific assigned pools, support owned keyless credentials without secrets, align migrations and distinguish missing pools, unusable credentials and real provider failures.
-3. Reuse existing UI components for keyless setup, Results editing, pool rate limits, action icons, bulk provisioning and supported keyless defaults; preserve completed writes and actionable per-provider failures.
-4. Verify focused units locally and integration, offline BDD, latency and desktop smoke on explicit Woodpecker workflows. Keep the 150 ms asserted latency gate and add measured query-count evidence.
-5. Run exactly the two designated live UI flows on fresh temporary state, preserve credentials, and obtain independent Claude Code Sonnet 5.5 High code and UI-only visual acceptance. Claude implementation/testing is authorized after Muse quota exhaustion.
-6. Finalize all proven criteria through Backlog CLI, publish the task record and verification on PR70 targeting feature/signup-fix, preserve PR69, and do not merge.
-
-Signup extension: 1. Review the transactional creation boundary and reuse existing project/vault/pool authorization paths. 2. Capture focused red regressions, then provision one owned default project and supported keyless pools during runtime user creation, with no provider calls or automatic API key. 3. Update existing onboarding and keyless BDD scenarios without adding scenarios; retain deliberately empty-project guidance. 4. Run narrow local units/static gates, obtain independent Codex Sol High review, then push and select final cloud gates within the three remaining triggers. 5. Record exact evidence, update PR70 and finalize via CLI only; preserve PR69.
-
-Codex signup plan ACCEPT with corrections: user uniqueness mapping covers only the user flush; late provisioning/commit failures roll back unchanged. Reuse authorized in-session project/key/pool operations and preserve their audits, with one final signup materialization. Use default-fullUUID slug. Register/create-admin provision; seed-only standalone-account and raw/trusted fixtures remain bare. Login never provisions or restores deleted defaults; provider disablement remains enforced. Acceptance tests prove actual SQLite late rollback and explicit project API-key REST/MCP access. Gate plan: api-integration and api-bdd on final pushed reviewed candidate, last trigger reserved for retry or api-latency if both pass.
-
-CI repair plan accepted by independent Sol: retain integration ownership denials via reviewed5393d27; correct observability BDD fixture to one client lifespan per scenario/app, explicitly close old client before deliberate fetch-app replacement and close final client before repository. Add only isolated mocked lifecycle unit guards. Preserve all BDD scenarios/assertions and genuine startup on app replacement; no production edits/retries/timeouts/skips/extra fixture flush. Exact SQLite lock holder remains unproven; cloud rerun required to determine persistence. Review concrete repair before push and request at least one additional trigger if both failed gates still need reruns with one authorized trigger remaining.
+1. Preserve the existing worktree and stacked feature/task-000065-keyless-pools branch into feature/signup-fix; keep PR69 unchanged and unmerged.
+2. Capture regressions and require provider-specific assigned pools, owned secret-free keyless setup, actionable failure classification and ownership isolation.
+3. Reuse existing UI components for Results editing, rate limits, action icons, bulk provisioning and reusable keyless defaults; preserve partial outcomes and safe retries.
+4. Provision the new user, Default project, normal creator permissions, owned keyless records and two assigned pools atomically through existing authorized/audited in-session service paths. Materialize once; leave API-key issuance explicit. Keep seed-only standalone accounts bare, and never provision during login or restore archived defaults.
+5. Update existing backend and designated live UI BDD scenarios without increasing their counts. Classify real SQLite coverage as integration; use mocked local units for fixture lifecycle. Preserve the last-project-administrator safeguard and all ownership/trace assertions.
+6. Complete independent source, security, isolation and bloat reviews. Final user-directed roles use Codex GPT-6.1 Sol High. Retain the earlier independent desktop visual acceptance at9.0/10 because UI application source remains unchanged by signup.
+7. Verify local isolated units/static checks, explicit Woodpecker integration and offline BDD/latency coverage, and exactly two sparse live UI flows on temporary state. Respect the user-authorized31 shared CI triggers, preserve credentials and collect exact tested-SHA artifacts.
+8. Finalize all proven criteria through Backlog CLI, publish a metadata-only task record and final PR evidence, stop the PR watch, and do not merge either PR.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -336,12 +332,29 @@ Solindependentreview5393d27ACCEPTnoownershipweakening;observabilityclient-lifecy
 SolBDDfixturecorrection36fa6e2c24770fa0b4ae90872faf03913c262169 committedONLYobservabilitysteps+canonicalmockunits. Oneenteredclientperscenario/app,explicitoldexitclearbeforefailingfetchappreplacement,existingfinalcleanupclosesbeforeinjectedrepo. ALLHTTP/auth/trace/isolationassertionsand7observabilityscenarios43steprefsunchanged. Fourmockguardsfailedredthenpass;new4+existingmonitoring3=7isolatedunitsPASS;Ruff/format/compile/diffcheck/configuredMyPy154clean. No DB/nonunitruntime/provideractivity. ExactlockholderUNPROVEN,cloudmaystillfail;fixjustifiedbyreviewedlifecyclefidelity. FinalnarrowSolrecheckassigned. Updatedgatechoice:lastcurrentlyauthorizedtrigger16willbeapi-bddretryafterpush/review tovalidateuncertainlock;integrationrerunneedsadditional1triggerifBDDgreen. Current15/16usedshared29/30,1remainingnotyetissued.
 
 FinalSolrecheck36fa6e2ACCEPTnoP2:clientcacheonlyaftersuccessfulstartup,nonowningborrows,oldexitclearbeforeappreplacement,finalclientexitbeforeinjectedrepo,actualhelpermockguards/traceflushcontractaccepted. No assertion/retry/timeout/skip/scenariochanges. Lockholderstillunprovenandcloudresultpending. ReserveLASTauthorizedtrigger16api-bddonreviewedpushedcandidate;TASK65will16/16,sharedTASK63+65will30/30,0remaining. api-integrationrerunof5393d27twotestrepairneedsnewexplicitauthorityafterBDDresult. Noapp/UIchangesorrunmoreproviders.
+
+CItrigger16accepted api-bddretry pipeline91 atpushed30702fe4486dbfa84231718cec9ba0ae1ecb65d5(metadataonlyafter36fa6e2). Exactledger16/16TASK65used,shared30/30used,0remaining. PipelineID/stepfromexecutorretained;waitwatchforresult,noadditionalworkflowallowedwithoutuserauthority. appsrc/UIsourceunchangedfrompassinglive/new21signupintegrationcases. api-integrationfinalretry5393d27repairpendingadditional1triggerauthorityafterBDDoutcome.
+
+CI16=91api-bddSUCCESSat30702fe4486dbfa84231718cec9ba0ae1ecb65d5:289scenariospassed0failed56skipped,23featurespassed10skipped,1343stepspassed0failed303skipped,5m24.980s. Observabilityerrorsdidnotrecurafterreviewedlifecyclefidelityfix;exactpreviouslockholderremainsunproven. Artifactreports-pipeline91-30702fe.zipmetadata/hashverifiedandpreserved. NewonboardingBDDandallpriorofflineflowsPASS;updated2liveUIScenariosPASSsameappsrc. api-integration89still1720pass2oldfixturefail,5393d27repairsreviewedbutnotcloudrerun. BudgetEXHAUSTED:16/16TASK65,shared30/30,0remaining. No furtherCIwithoutuserauthorization;requestoneadditionalapi-integrationtriggeronpushed30702fe. TaskremainsTesting/newACuncheckeduntilfinalgateproof;neitherPRmerged.
+
+User explicitly authorizes one additional final api-integration trigger (Yes, go ahead). Shared CI allowance increases30to31;TASK65allowance16to17. Currentused16TASK65/shared30;reserve17thTASK65/shared31stONLYapi-integration atpushedreviewed30702fe4486dbfa84231718cec9ba0ae1ecb65d5. No additionalworkflows/retriesauthorizedbeyondthisone. Finalizationawaitsobjectivegateproof.
+
+ExtraauthorizedCItrigger17accepted pipeline92 api-integration at30702fe4486dbfa84231718cec9ba0ae1ecb65d5,step289/upload290,verboseJUnit/faulthandlerdiagnostics. ExactTASK65used17/17,shared31/31,0remaining. Finalgatepending;PRwatchresumedforresult. No newcodepushneededcandidatealreadyreviewed/published.
+
+FINAL SIGNUP EXTENSION VERIFICATION:
+APIintegration92 SUCCESS at30702fe4486dbfa84231718cec9ba0ae1ecb65d5:1722passed0failed0errors0skipped,163.092sJUnit. Both repaired fixture IDs and all9signup acceptance cases have named PASS records; all12relocated creation cases also pass. Covers default ownership/no secret/APIkey/provider call, exact per-user pools, repeated login/duplicate/archived default, foreign denials, explicit projectAPIkey REST+MCP, provider disablement, manual poolless project, late rollback/retry and create-admin/seed distinction. Existing deactivation refusal/peer-admin/unassignment test passes.
+API BDD91 SUCCESS at same30702fe:289passed0failed56skipped,23featurespassed10skipped,1343stepspassed303skipped. New onboarding flow and seven observability scenarios pass. Original lock-holding transaction remains unidentified; errors did not recur after independently accepted lifecycle-fidelity correction. No timeout/retry/skip/assertion relaxation. Existing users.feature26scenarios and task UIfeature5scenarios unchanged(2live3nonlive).
+Updated designated live UI2/2PASS atc5bc223,chromium1worker0retries:automatic Defaultproject/keylessKeenable results/Full Activity trace detail,plus deliberately separate poolless-project guidance. App/UI tree equality with30702fe already verified. Three cumulative observed searches/~three inferred free publicKeenablecalls,zeroAPIcredits. Temporary DB/key material removed,ownserversstopped,liveDB/.env/credentials preserved.
+Current focused isolated local unit runs47plus7pass, configuredMyPy154sourcefilesclean,Ruff/changedformat/compile/diffcheckclean. Retained UIquality86atc8a7889:2625tests252files+build/static;desktop smoke88at24ec697:10/10,independentvisual9.0/10. UIapplication source unchanged for signup. OfflineREST/MCP latency scenarios pass within finalBDD91; standalone latency82at78fcbf8remains previous8pytest+30BDDpass2BDDskip,not falselyreportedrerun. Separate old report-only RESTfanout165.623ms remains outside the six asserted A3 gate.
+Exact finalCIledger:1=76ui-bddFAIL,2=77api-integrationFAIL,3=78api-integrationPASS,4=79api-bddFAIL,5=80api-bddPASS,6=81api-latencyFAIL,7=82api-latencyPASS,8=83api-integrationCANCELED,9=84api-bddPASS,10=85api-integrationPASS,11=86ui-qualityPASS,12=87ui-bddFAIL,13=88ui-bddPASS,14=89api-integrationFAIL,15=90api-bddFAIL,16=91api-bddPASS,17=92api-integrationPASS. User explicitly authorized shared allowance increase30to31;TASK65used17/17,priorTASK63used14,shared31/31,zero remaining.
+Artifacts preserved reports-pipeline91-30702fe.zip SHA2565f924ab42ec3fdd0a9130c3af4262e1fa42032b244d051759234c697d38261f8 and reports-pipeline92-30702fe.zip SHA25650d99f60e54b967ea2cb1a38dfbfffcba4c9b81c3d7cc113535858f455e2735b. BothmetadataSHA/workflow/status verified. Final commit changes only Backlog metadata; testedcandidate30702fe. Existingrecoveryrefs/backups preserved. PR70targetsfeature/signup-fix;neitherPRmerged. All17ACproven;no newfollowuptaskcreated.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Implemented provider-specific required pools with owned no-secret keyless setup and actionable Playground guidance, plus natural Results editing, rate-limit visibility, consistent action icons, bulk creation and reusable keyless defaults. Successful keyless Full trace/results storage is verified through the real UI and API; tracing policy continues to inherit Full by default.
-All14 criteria are proven. UIquality:2625 tests; desktop smoke:10; backend integration:1701; APIBDD:289passed56skipped; latency:8pytestpassed and30BDDpassed2skipped, all six asserted mixes under150ms. Both designated live flows pass. Independent Claude code reviews accepted the implementation and UI-only visual review scored9.0/10.
-Tested candidate24ec697; other gate and live SHAs are recorded in the evidence notes with source-tree equivalence.13/16 TASK65 CI triggers used;2 observed searches/about2 free Keenable calls,0credits. PR70 targets the still-open PR69 branch; neither is merged. Final commit records task metadata only.
+Completed all17criteria, including automatic signup provisioning of an owned Default project with assigned free keyless Tavily and Keenable pools. After login the user explicitly issues a project API key for REST/MCP; signup makes no provider calls and creates no secret or API key. Transactional rollback, isolation, provider disablement and existing administrator safeguards are verified.
+Required provider pools, actionable Playground guidance, Full trace/results, natural Results editing, rate limits, action icons, bulk creation and reusable defaults remain delivered. Existing BDD scenarios were updated without increasing counts. Final Sol reviews accepted production/security and all test repairs.
+Tested candidate30702fe:APIintegration1722/1722,APIBDD289passed56skipped. Both updated live UI flows pass at equivalent sourcec5bc223. Retained unchanged-UI evidence:2625unit tests,10desktop smoke,visual9.0/10. Final offline latency BDD passes; prior standalone latency results and limits are recorded accurately.
+TASK65used17authorizedCItriggers;combinedwithTASK63used31/31afterexplicitone-triggerextension. Three observed searches/aboutthree inferred freeKeenablecalls,zeroAPIcredits. Final task record is metadata-only. PR70remains stacked into PR69branch;neithermerged.
 <!-- SECTION:FINAL_SUMMARY:END -->
