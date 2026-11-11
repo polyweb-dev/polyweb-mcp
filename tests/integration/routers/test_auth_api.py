@@ -256,13 +256,20 @@ async def test_public_registration_creates_each_role_with_safe_projection(
     """T2-SIGNUP (A1): public signup creates an ordinary account with no system role.
 
     The old contract let a signup request choose admin/developer/agent. Now a
-    role request is refused, and the ordinary account that signup does create
-    has no system assignment, no project, and no control-plane access.
+    role request is refused and creates nothing. The ordinary account that
+    signup does create has no system assignment and no control-plane access.
+    TASK-000065: it owns exactly one automatic Default project, as project
+    administrator only, with no project API key and no provider secret.
     """
 
     from sqlalchemy import func, select
 
-    from polyweb.persistence.projects import ProjectMembershipRow, SystemRoleAssignmentRow
+    from polyweb.persistence.api_keys import ProjectApiKeyRow
+    from polyweb.persistence.projects import (
+        ProjectMembershipRow,
+        ProjectRow,
+        SystemRoleAssignmentRow,
+    )
 
     repository = await SQLiteRepository.open(tmp_path / "auth-signup.db")
     try:
@@ -302,7 +309,17 @@ async def test_public_registration_creates_each_role_with_safe_projection(
             assert me.json()["last_name"] == _PROFILE_LAST_NAME
             assert "role" not in me.json()
             assert client.get("/stats", headers=headers).status_code == 403
-            assert client.get("/api/v1/projects", headers=headers).json() == []
+            assert client.get("/api/v1/routing/config", headers=headers).status_code == 403
+            projects = client.get("/api/v1/projects", headers=headers).json()
+            assert [project["name"] for project in projects] == ["Default"]
+            assert projects[0]["created_by"] == body["id"]
+            default_id = projects[0]["id"]
+            access = client.get(f"/api/v1/projects/{default_id}/access", headers=headers)
+            assert access.status_code == 200
+            assert access.json()["roles"] == ["project_admin"]
+            assert (
+                client.get(f"/api/v1/projects/{default_id}/api-keys", headers=headers).json() == []
+            )
 
         async with repository.session() as session:
             assignments = await session.scalar(
@@ -311,8 +328,14 @@ async def test_public_registration_creates_each_role_with_safe_projection(
             memberships = await session.scalar(
                 select(func.count()).select_from(ProjectMembershipRow)
             )
+            project_count = await session.scalar(select(func.count()).select_from(ProjectRow))
+            api_keys = await session.scalar(select(func.count()).select_from(ProjectApiKeyRow))
+        # Still no system authority anywhere, and the refused role signups
+        # created nothing: the one accepted account owns the only project.
         assert assignments == 0
-        assert memberships == 0
+        assert memberships == 1
+        assert project_count == 1
+        assert api_keys == 0
     finally:
         await repository.close()
 

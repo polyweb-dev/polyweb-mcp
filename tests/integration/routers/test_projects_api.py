@@ -77,6 +77,20 @@ def _fresh_signup_payload(email: str) -> dict[str, str]:
     }
 
 
+def _only_default(client: TestClient, headers: dict[str, str], owner_id: UUID) -> dict[str, str]:
+    """Return the single automatic Default project a fresh signup owns."""
+
+    listed = client.get("/api/v1/projects", headers=headers)
+    assert listed.status_code == 200, listed.text
+    projects = listed.json()
+    assert [project["name"] for project in projects] == ["Default"]
+    assert projects[0]["created_by"] == str(owner_id)
+    assert projects[0]["status"] == "active"
+    assert projects[0]["slug"]
+    found: dict[str, str] = projects[0]
+    return found
+
+
 async def _count_admins(repository: SQLiteRepository, project_id: UUID) -> int:
     async with repository.session() as session:
         return await ProjectRepository(session).count_active_project_admins(project_id=project_id)
@@ -976,11 +990,16 @@ async def test_fresh_signup_creates_own_projects_with_isolation(
 
             first_headers = _login(client, first_email)
 
+            # TASK-000065: signup already created the owner's Default project, so
+            # the account holds vault use (as a project administrator) at once,
+            # and still no system authority.
+            first_default = _only_default(client, first_headers, first_user_id)
+            first_default_id = first_default["id"]
             system_access = client.get("/api/v1/system/access", headers=first_headers)
             assert system_access.status_code == 200, system_access.text
             assert system_access.json() == {
                 "rollout_state": "preview",
-                "permissions": ["project.create"],
+                "permissions": ["project.create", "vault.manage"],
             }
 
             first_created = client.post(
@@ -995,7 +1014,7 @@ async def test_fresh_signup_creates_own_projects_with_isolation(
             assert second_created.status_code == 201, second_created.text
             second_id = second_created.json()["id"]
 
-            # Creating projects grants vault use but no system authority.
+            # Creating more projects changes neither vault use nor system authority.
             after_create_access = client.get("/api/v1/system/access", headers=first_headers)
             assert after_create_access.status_code == 200, after_create_access.text
             assert after_create_access.json() == {
@@ -1014,9 +1033,13 @@ async def test_fresh_signup_creates_own_projects_with_isolation(
 
             listed = client.get("/api/v1/projects", headers=first_headers)
             assert listed.status_code == 200, listed.text
-            assert {item["id"] for item in listed.json()} == {first_id, second_id}
+            assert {item["id"] for item in listed.json()} == {
+                first_default_id,
+                first_id,
+                second_id,
+            }
 
-            for project_id in (first_id, second_id):
+            for project_id in (first_default_id, first_id, second_id):
                 access = client.get(f"/api/v1/projects/{project_id}/access", headers=first_headers)
                 assert access.status_code == 200, access.text
                 assert access.json()["project_id"] == project_id
@@ -1040,8 +1063,12 @@ async def test_fresh_signup_creates_own_projects_with_isolation(
             assert client.get("/api/v1/routing/config", headers=fresh_headers).status_code == 403
             relisted = client.get("/api/v1/projects", headers=fresh_headers)
             assert relisted.status_code == 200, relisted.text
-            assert {item["id"] for item in relisted.json()} == {first_id, second_id}
-            for project_id in (first_id, second_id):
+            assert {item["id"] for item in relisted.json()} == {
+                first_default_id,
+                first_id,
+                second_id,
+            }
+            for project_id in (first_default_id, first_id, second_id):
                 access = client.get(f"/api/v1/projects/{project_id}/access", headers=fresh_headers)
                 assert access.status_code == 200, access.text
                 assert access.json()["roles"] == [BuiltinRole.PROJECT_ADMIN.value]
@@ -1052,14 +1079,16 @@ async def test_fresh_signup_creates_own_projects_with_isolation(
             peer_user_id = UUID(peer_registered.json()["id"])
             peer_headers = _login(client, peer_email)
 
-            peer_listed = client.get("/api/v1/projects", headers=peer_headers)
-            assert peer_listed.status_code == 200, peer_listed.text
-            assert peer_listed.json() == []
+            # The peer owns its own Default project and nothing of the first account's.
+            peer_default = _only_default(client, peer_headers, peer_user_id)
+            peer_default_id = peer_default["id"]
+            assert peer_default_id != first_default_id
+            assert peer_default["slug"] != first_default["slug"]
             peer_access_before = client.get("/api/v1/system/access", headers=peer_headers)
             assert peer_access_before.status_code == 200, peer_access_before.text
             assert peer_access_before.json() == {
                 "rollout_state": "preview",
-                "permissions": ["project.create"],
+                "permissions": ["project.create", "vault.manage"],
             }
             assert client.get("/api/v1/routing/config", headers=peer_headers).status_code == 403
 
@@ -1071,15 +1100,20 @@ async def test_fresh_signup_creates_own_projects_with_isolation(
 
             creator_exact = client.get("/api/v1/projects", headers=first_headers)
             assert creator_exact.status_code == 200, creator_exact.text
-            assert {item["id"] for item in creator_exact.json()} == {first_id, second_id}
+            assert {item["id"] for item in creator_exact.json()} == {
+                first_default_id,
+                first_id,
+                second_id,
+            }
             peer_exact = client.get("/api/v1/projects", headers=peer_headers)
             assert peer_exact.status_code == 200, peer_exact.text
-            assert {item["id"] for item in peer_exact.json()} == {peer_id}
-            peer_own_access = client.get(
-                f"/api/v1/projects/{peer_id}/access", headers=peer_headers
-            )
-            assert peer_own_access.status_code == 200, peer_own_access.text
-            assert peer_own_access.json()["roles"] == [BuiltinRole.PROJECT_ADMIN.value]
+            assert {item["id"] for item in peer_exact.json()} == {peer_default_id, peer_id}
+            for own_id in (peer_default_id, peer_id):
+                peer_own_access = client.get(
+                    f"/api/v1/projects/{own_id}/access", headers=peer_headers
+                )
+                assert peer_own_access.status_code == 200, peer_own_access.text
+                assert peer_own_access.json()["roles"] == [BuiltinRole.PROJECT_ADMIN.value]
             async with repository.session() as session:
                 assert (
                     await ProjectRepository(session).get_system_role_assignments(
@@ -1089,7 +1123,7 @@ async def test_fresh_signup_creates_own_projects_with_isolation(
                     == []
                 )
 
-            for project_id in (first_id, second_id):
+            for project_id in (first_default_id, first_id, second_id):
                 peer_access = client.get(
                     f"/api/v1/projects/{project_id}/access", headers=peer_headers
                 )
@@ -1105,16 +1139,19 @@ async def test_fresh_signup_creates_own_projects_with_isolation(
                 )
                 assert peer_add.status_code == 404
             for headers in (first_headers, fresh_headers):
-                assert (
-                    client.get(f"/api/v1/projects/{peer_id}/access", headers=headers).status_code
-                    == 404
-                )
-                assert (
-                    client.get(
-                        f"/api/v1/projects/{peer_id}/members", headers=headers
-                    ).status_code
-                    == 404
-                )
+                for foreign_id in (peer_default_id, peer_id):
+                    assert (
+                        client.get(
+                            f"/api/v1/projects/{foreign_id}/access", headers=headers
+                        ).status_code
+                        == 404
+                    )
+                    assert (
+                        client.get(
+                            f"/api/v1/projects/{foreign_id}/members", headers=headers
+                        ).status_code
+                        == 404
+                    )
             unknown_access = client.get(f"/api/v1/projects/{uuid4()}/access", headers=peer_headers)
             assert unknown_access.status_code == 404
     finally:
