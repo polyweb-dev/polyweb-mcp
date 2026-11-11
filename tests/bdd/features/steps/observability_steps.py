@@ -10,6 +10,8 @@ app-scoped observability runtime exports spans to that scenario's database.
 import json
 import re
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -140,6 +142,7 @@ class _TraceStubAdapter(ProviderAdapter):
 def _reset_otel_state(context: Any) -> None:
     """Clear scenario-local observability state for isolation."""
     context.otel_app = None
+    context.otel_client = None
     context.otel_response = None
     context.otel_trace_id = None
     context.otel_wire_requests = []
@@ -215,9 +218,15 @@ def _keenable_adapter(client: httpx.AsyncClient) -> KeenableAdapter:
     return KeenableAdapter(client, api_key=SecretStr(_FAKE_API_KEY))
 
 
-def _client_for(context: Any) -> TestClient:
-    """Open a TestClient that captures handled and unhandled error responses."""
-    return TestClient(context.otel_app, raise_server_exceptions=False)
+@contextmanager
+def _client_for(context: Any) -> Iterator[TestClient]:
+    """Borrow the app's scenario-owned client; scenario cleanup ends its lifespan."""
+    client = getattr(context, "otel_client", None)
+    if client is None:
+        client = TestClient(context.otel_app, raise_server_exceptions=False)
+        client.__enter__()
+        context.otel_client = client
+    yield client
 
 
 def _post_search(context: Any, query: str, limit: int, *, fanout: bool = False) -> None:
@@ -413,6 +422,10 @@ def step_when_traced_fetch(context: Any, url: str) -> None:
 @when('I submit a traced fetch for "{url}" against a failing provider')
 def step_when_traced_fetch_failing(context: Any, url: str) -> None:
     """Rebuild the app with a failing stub and POST a fetch through it."""
+    client = getattr(context, "otel_client", None)
+    if client is not None:
+        client.__exit__(None, None, None)
+        context.otel_client = None
     context.otel_app = create_app(
         [_TraceStubAdapter("exploding-fetch", fail=True)],
         repository=context.repository,
