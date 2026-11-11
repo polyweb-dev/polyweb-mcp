@@ -22,7 +22,7 @@ from polyweb.persistence.projects import ProjectRepository
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.persistence.users import UserRow
 from polyweb.routers.api import create_app
-from polyweb.services.projects import ProjectService
+from polyweb.services.projects import LAST_PROJECT_ADMIN, ProjectConflict, ProjectService
 from tests.fixtures.a2_execution import build_execution_world
 from tests.fixtures.alpha_fixtures import ALPHA_ADMIN_PASSWORD
 from tests.fixtures.auth import (
@@ -450,10 +450,9 @@ async def test_api_writes_change_execution_lookup(tmp_path, monkeypatch, auth_se
 @pytest.mark.asyncio
 async def test_deactivation_unassigns_owned_pools(repository, vault_env, auth_secret):
     with TestClient(create_app([], repository=repository)) as client:
-        # The owner is a bare system administrator: this test is about the seeded
-        # project's owned pools, not about a signup Default project's sole administrator.
-        owner = await bare_login(
-            client, repository, temp_email("deactivate-owner"), system_admin=True
+        # A normal signup owner: its Default project has it as the sole administrator.
+        owner = await register_system_admin_login(
+            client, repository, temp_email("deactivate-owner")
         )
         peer = register_and_login(client, temp_email("deactivate-peer"))
         owner_id = account_id_from_pair(owner)
@@ -484,8 +483,37 @@ async def test_deactivation_unassigns_owned_pools(repository, vault_env, auth_se
         await _assert_bindings(repository, project.project_id, UUID(key["id"]))
         # The installation must retain an active system administrator.
         await register_system_admin_login(client, repository, temp_email("replacement-admin"))
+        default_id = UUID(
+            next(
+                item["id"]
+                for item in client.get("/api/v1/projects", headers=headers).json()
+                if item["name"] == "Default"
+            )
+        )
+        # The unchanged last-administrator policy covers every project, so the owner
+        # as sole administrator of its signup Default project cannot be deactivated.
+        # The refusal is atomic: no deactivation, no unassigned pool, no lost binding.
+        with pytest.raises(ProjectConflict) as refused:
+            await service.deactivate_accounts([owner_id], trusted=True)
+        assert refused.value.code == LAST_PROJECT_ADMIN
+        async with repository.session() as session:
+            owner_row = await session.get(UserRow, owner_id)
+            assert owner_row is not None and owner_row.is_active
+            pool = await KeyPoolRepository(session).get(UUID(created.json()["id"]))
+            assert pool is not None and pool.project_id == project.project_id
+            assert len(await KeyPoolRepository(session).list_for_project(default_id)) == 2
+            assert await ProjectRepository(session).get_provider_owner(default_id) == owner_id
+        await _assert_bindings(repository, project.project_id, UUID(key["id"]))
+        # Another administrator on the Default project, added through the normal path,
+        # lifts the block; the deactivation then unassigns every pool the owner supplied.
+        await service.add_member(
+            actor,
+            default_id,
+            ProjectMemberAdd(user_id=peer_id, initial_role=BuiltinRole.PROJECT_ADMIN),
+        )
         await service.deactivate_accounts([owner_id], trusted=True)
         await _assert_bindings(repository, project.project_id)
+        await _assert_bindings(repository, default_id)
         async with repository.session() as session:
             pool = await KeyPoolRepository(session).get(UUID(created.json()["id"]))
             assert pool is not None and pool.project_id is None

@@ -57,6 +57,7 @@ from polyweb.models.contracts import (
     UsageOperation,
 )
 from polyweb.models.projects import BuiltinRole
+from polyweb.models.provider_limits import AuthMode
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
 from polyweb.services.provider_runtime import patch_provider_config
@@ -115,6 +116,12 @@ class _KeylessAdapter(ProviderAdapter):
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def limit_auth_mode(self) -> AuthMode:
+        """Report the keyless rail so execution admits through the keyless limits."""
+
+        return AuthMode.KEYLESS
 
     @property
     def capabilities(self) -> ProviderCapabilities:
@@ -311,15 +318,18 @@ async def _mcp_search(repository: SQLiteRepository, raw_key: str, provider: str)
         stdio_token=SecretStr(raw_key),
     )
     try:
-        result = await server.call_tool(
-            "search",
-            {
-                "request": {
-                    "query": f"{provider} probe",
-                    "routing": {"mode": "require", "providers": [provider]},
-                }
-            },
-        )
+        # The normal MCP startup and teardown; the injected composition owns no
+        # HTTP client, and the fake adapters make no external call.
+        async with server._mcp_server.lifespan(server):
+            result = await server.call_tool(
+                "search",
+                {
+                    "request": {
+                        "query": f"{provider} probe",
+                        "routing": {"mode": "require", "providers": [provider]},
+                    }
+                },
+            )
     finally:
         await shutdown_injected_observability(server)
     assert isinstance(result, tuple) and isinstance(result[1], dict)

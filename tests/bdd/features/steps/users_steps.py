@@ -37,6 +37,7 @@ from polyweb.models.contracts import (
     UsageOperation,
 )
 from polyweb.models.project_permissions import ProjectPermission
+from polyweb.models.provider_limits import AuthMode
 from polyweb.models.users import AuthProvider, normalize_email
 from polyweb.persistence.database_migrations import (
     DatabaseResetRequired,
@@ -1251,6 +1252,12 @@ class _KeylessCountingAdapter(_UsersStubAdapter):
     def __init__(self, name: str, ledger: _KeylessLedger) -> None:
         super().__init__(name)
         self._ledger = ledger
+
+    @property
+    def limit_auth_mode(self) -> AuthMode:
+        """Report the keyless rail so execution admits through the keyless limits."""
+
+        return AuthMode.KEYLESS
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         self._ledger.calls.append(("search", self.name))
