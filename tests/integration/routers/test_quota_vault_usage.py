@@ -81,7 +81,11 @@ async def test_key_reads_and_refresh_are_owner_scoped(tmp_path, monkeypatch, aut
             email = temp_email("quota-owner")
             owner = await register_system_admin_login(client, repository, email)
             project = await seed_execution_project(repository, user_id=account_id_from_pair(owner))
-            admin = await register_system_admin_login(client, repository, temp_email("quota-admin"))
+            # This actor must lose all vault authority when its system role is
+            # removed below, so it cannot own a signup-created Default project.
+            admin = await bare_login(
+                client, repository, temp_email("quota-admin"), system_admin=True
+            )
             await add_execution_member(
                 repository,
                 project_id=project.project_id,

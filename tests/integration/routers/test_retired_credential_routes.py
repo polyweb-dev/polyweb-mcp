@@ -42,7 +42,40 @@ async def test_retired_routes_and_foreign_vault_key(tmp_path, monkeypatch, auth_
             )
             assert created.status_code == 201, created.text
             key_id = created.json()["id"]
-            assert client.get(base, headers=other_headers).json() == []
+            async with repository.session() as session:
+                defaults = await CredentialRepository(session).list_for_owner(
+                    account_id_from_pair(other)
+                )
+            default_ids = {
+                item.credential.provider_type: str(item.credential.id) for item in defaults
+            }
+            assert len(defaults) == 2
+            assert set(default_ids) == {"keenable", "tavily"}
+            listed = client.get(base, headers=other_headers)
+            assert listed.status_code == 200, listed.text
+            assert sorted(
+                (
+                    item["provider_type"],
+                    item["id"],
+                    item["auth_mode"],
+                    item["label"],
+                    item["status"],
+                    item["generation"],
+                    item["pool_count"],
+                )
+                for item in listed.json()
+            ) == [
+                (
+                    "keenable",
+                    default_ids["keenable"],
+                    "keyless",
+                    "Keenable keyless",
+                    "active",
+                    1,
+                    1,
+                ),
+                ("tavily", default_ids["tavily"], "keyless", "Tavily keyless", "active", 1, 1),
+            ]
             assert client.post(
                 f"{base}/{key_id}/rotate",
                 headers=other_headers,
@@ -56,7 +89,14 @@ async def test_retired_routes_and_foreign_vault_key(tmp_path, monkeypatch, auth_
                 403,
                 404,
             )
-            assert client.get(base, headers=owner_headers).json()[0]["generation"] == 1
+            assert (
+                next(
+                    item
+                    for item in client.get(base, headers=owner_headers).json()
+                    if item["id"] == key_id
+                )["generation"]
+                == 1
+            )
 
             project_context = await seed_execution_project(
                 repository, user_id=account_id_from_pair(other)
