@@ -13,17 +13,19 @@ Feature: New-project keyless pools, playground errors, trace storage and results
   # - Trace detail: dialog "Trace detail", results list "Ranked results".
   # - Pool menu: RowActionsMenu Popover plain buttons inside
   #   [data-slot=popover-content], one svg icon per action.
-  # Live preconditions (never exercised during authoring): an authenticated
-  # session with project-creation rights; "fresh" means a project created
-  # inside the scenario, so it starts with zero pools. @live scenarios make
-  # real backend requests only when executed, never while writing them.
-  # ANTICIPATED (missing product behavior these scenarios pin down): keyless
-  # key creation without a secret, one-shot bulk pool creation, keyless
-  # free-tier default pools, and one icon per pool menu item.
+  # Live preconditions (never exercised during authoring): a new signup owns an
+  # automatic "Default" project with keyless Tavily and Keenable pools, visible
+  # right after sign-in with no manual setup and no API key. The success flow
+  # uses that project and selects Keenable in the Playground Provider picker;
+  # the no-pool flow creates a SEPARATE project that has no pool. @live
+  # scenarios make real backend requests only when executed, never while
+  # writing them.
+  # Pool-management coverage (bulk creation, keyless defaults, icons) stays on
+  # stubbed backends and is unchanged by automatic onboarding.
 
   @live
   Scenario: Fresh project with no pool shows actionable create-or-assign guidance
-    Given a fresh signup with a new project with no provider pool
+    Given a fresh signup with a separately created project with no provider pool
     And I follow the "Playground" link of the Project navigation
     Then the playground shows the create-or-assign pool guidance for the new project
     And the playground shows no search results
@@ -31,9 +33,8 @@ Feature: New-project keyless pools, playground errors, trace storage and results
 
   @live
   Scenario: Fresh project with a keyless pool runs Playground and stores Full trace results
-    Given a fresh signup with a new project
-    When I create a keyless pool for Keenable without an API key and assign it to the new project
-    And I run the keyless search and save the payload with Full requests
+    Given a fresh signup whose default project already has keyless Tavily and Keenable pools
+    When I run the keyless Keenable search and save the payload with Full requests
     Then the playground shows the returned Keenable results without an API-failure alert
     When I open the trace of the saved search response
     Then the trace detail shows the Keenable response with its results

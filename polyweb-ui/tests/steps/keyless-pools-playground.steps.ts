@@ -3,7 +3,7 @@ import type { Page, Response, TestInfo } from "@playwright/test";
 import { Before, Given, When, Then } from "./fixtures";
 import { projectStubId } from "./projectStub";
 import { chooseOption } from "./providerConfigUi";
-import { lastCreatedPoolKeyLabel, lastCreatedPoolLabel, openVaultPoolDialog } from "./vault.steps";
+import { lastCreatedPoolKeyLabel, lastCreatedPoolLabel } from "./vault.steps";
 import { seedVaultKey } from "./vaultStub";
 
 interface PoolRecord {
@@ -90,7 +90,10 @@ function isResponse(response: Response, method: string, path: string): boolean {
 // ---------------------------------------------------------------------------
 // Fresh-signup state (@live only; never exercised while authoring).
 // Scenario-specific identity: one unique email/username per signup so the two
-// @live scenarios never share an account.
+// @live scenarios never share an account. A new account owns an automatic
+// "Default" project with keyless Tavily and Keenable pools, visible right
+// after sign-in. The success flow uses that project as-is; the no-pool flow
+// deliberately creates a separate project that has no pool.
 // ---------------------------------------------------------------------------
 
 const FRESH_PASSWORD = "Str0ng-Passw0rd!2026";
@@ -130,7 +133,22 @@ async function loginFreshAccount(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/projects|\/p\//, { timeout: 30_000 });
 }
 
-async function createFreshProject(page: Page): Promise<void> {
+const DEFAULT_PROJECT_NAME = "Default";
+
+/** Open the automatic Default project of the signed-in fresh account. */
+async function openDefaultProject(page: Page): Promise<void> {
+  await page.goto("/projects");
+  await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible({ timeout: 15_000 });
+  const table = page.getByRole("table", { name: "Projects", exact: true });
+  // Visible straight after login, and the only project of a new account.
+  await expect(table.locator("tbody > tr")).toHaveCount(1, { timeout: 15_000 });
+  await table.getByRole("link", { name: DEFAULT_PROJECT_NAME, exact: true }).click();
+  freshProjectName = DEFAULT_PROJECT_NAME;
+  await selectFreshProject(page);
+}
+
+/** Create a second, separate project that stays without any pool. */
+async function createPoollessProject(page: Page): Promise<void> {
   freshProjectName = `Keyless Probe ${uniqueSuffix()}`;
   await page.goto("/projects");
   await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible({ timeout: 15_000 });
@@ -157,66 +175,24 @@ async function restoreFreshProject(page: Page): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Shared key/pool creation helpers (single definitions, both flows reuse).
-// ---------------------------------------------------------------------------
-
-let keylessKeyLabel = "";
-
-async function createKeylessKey(page: Page): Promise<void> {
-  keylessKeyLabel = `Keenable keyless ${uniqueSuffix()}`;
-  await page.goto("/account/keys");
-  await expect(page.getByRole("heading", { name: "Keys and pools" })).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Add key", exact: true }).first().click();
-  const dialog = page.getByRole("dialog", { name: "Add key" });
-  await expect(dialog).toBeVisible({ timeout: 15_000 });
-  await chooseOption(dialog, "Provider", "Keenable");
-  const authentication = dialog.getByRole("combobox", { name: "Authentication", exact: true });
-  if (await authentication.count()) {
-    await authentication.click();
-    await page.getByRole("option", { name: /keyless|no (api )?key|free tier/i }).click();
-  }
-  await dialog.getByLabel("Label", { exact: true }).fill(keylessKeyLabel);
-  // No-secret contract: an automatic-keyless save needs no Authentication
-  // choice and no API key field; a keyless-mode select also satisfies this —
-  // either way the save must carry no secret.
-  const apiKeyField = dialog.getByLabel("API key", { exact: true });
-  await expect(apiKeyField).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Add key", exact: true }).click();
-  await expect(dialog).toBeHidden({ timeout: 15_000 });
-  await expect(page.getByRole("row").filter({ hasText: keylessKeyLabel }).first()).toBeVisible({ timeout: 15_000 });
-}
-
-async function createPoolOnKeyInProject(page: Page, keyLabel: string, projectName: string): Promise<void> {
-  const dialog = await openVaultPoolDialog(page, keyLabel);
-  // Explicit fresh-project selection inside the create-pool dialog.
-  await chooseOption(dialog, "Project", projectName);
-  const key = (await Promise.all(evidence(page).keys)).find((entry) => entry.label === keyLabel);
-  if (!key) throw new Error("The new keyless credential was not observed");
-  expect(key).toMatchObject({ provider_type: "keenable", auth_mode: "keyless" });
-  const responsePromise = page.waitForResponse((response) => isResponse(response, "POST", `${KEY_PATH}/${key.id}/pools`));
-  await dialog.getByRole("button", { name: "Create pool", exact: true }).click();
-  const response = await responsePromise;
-  expect(response.ok()).toBe(true);
-  expect(await response.json()).toMatchObject({ credential_id: key.id, provider_type: "keenable", project_id: freshProjectId() });
-  await expect(dialog).toBeHidden({ timeout: 15_000 });
-}
-
-// ---------------------------------------------------------------------------
 // No-pool guidance (@live scenario A): preflight only, zero execution.
 // ---------------------------------------------------------------------------
 
-Given("a fresh signup with a new project with no provider pool", async ({ page }) => {
+Given("a fresh signup with a separately created project with no provider pool", async ({ page }) => {
   await registerFreshAccount(page);
   await loginFreshAccount(page);
-  await createFreshProject(page);
+  await createPoollessProject(page);
   await selectFreshProject(page);
 });
 
-Given("a fresh signup with a new project", async ({ page }) => {
+Given("a fresh signup whose default project already has keyless Tavily and Keenable pools", async ({ page }) => {
   await registerFreshAccount(page);
   await loginFreshAccount(page);
-  await createFreshProject(page);
-  await selectFreshProject(page);
+  await openDefaultProject(page);
+  // The pools come from signup, never from manual setup in this scenario.
+  expect(await Promise.all(evidence(page).keys)).toEqual([]);
+  expect(await Promise.all(evidence(page).pools)).toEqual([]);
+  expectNoExecution(page);
 });
 
 Then("the playground shows the create-or-assign pool guidance for the new project", async ({ page }) => {
@@ -248,13 +224,7 @@ Then("the playground shows no search results", async ({ page, $testInfo }) => {
 // Keyless pool creation + Full trace detail (@live scenario B).
 // ---------------------------------------------------------------------------
 
-When("I create a keyless pool for Keenable without an API key and assign it to the new project", async ({ page }) => {
-  await createKeylessKey(page);
-  await createPoolOnKeyInProject(page, keylessKeyLabel, freshProjectName);
-  await restoreFreshProject(page);
-});
-
-When("I run the keyless search and save the payload with Full requests", async ({ page }) => {
+When("I run the keyless Keenable search and save the payload with Full requests", async ({ page }) => {
   // Establish Payload detail = Full requests BEFORE execution, and persist it
   // with an explicit save — setting storage after the request is too late.
   await page.goto(`/p/${freshProjectId()}/settings`);
@@ -269,6 +239,9 @@ When("I run the keyless search and save the payload with Full requests", async (
   await restoreFreshProject(page);
   await page.getByRole("navigation", { name: "Project" }).getByRole("link", { name: "Playground", exact: true }).click();
   const query = `fresh project keyless probe ${uniqueSuffix()}`;
+  // The default project holds Tavily and Keenable pools: pick Keenable so the
+  // one live request is deterministic (Auto may choose either provider).
+  await chooseOption(page, "Provider", "Keenable");
   await page.getByPlaceholder(/Search the web/i).fill(query);
   const responsePromise = page.waitForResponse((response) => response.request().method() === "POST" &&
     /\/search\/?$/.test(new URL(response.url()).pathname));
