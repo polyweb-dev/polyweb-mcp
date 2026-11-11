@@ -8,16 +8,11 @@ import {
   type MotionValue,
 } from "motion/react"
 
-import brave from "../assets/brave.webp"
-import exa from "../assets/exa.webp"
-import tavily from "../assets/tavily.webp"
+import { PROVIDERS, pickRandom } from "../providers"
 
 const QUERY = "latest climate research"
-const CARDS = [
-  { name: "Brave Search", src: brave },
-  { name: "Exa", src: exa },
-  { name: "Tavily", src: tavily },
-]
+// a search query only ever routes to search-capable providers
+const CARDS = pickRandom(PROVIDERS.filter((p) => p.search), 3)
 const RESULTS = [
   ["Global temperature record broken in 2026", "nature.com"],
   ["How cities adapt to a warming coastline", "reuters.com"],
@@ -56,11 +51,9 @@ function ProviderCard({
   index: number
 }) {
   const { name, src } = CARDS[index]
-  const num = index + 1
 
-  // numbers appear in phase a
-  const numOn = useTransform(progress, [0.08 + index * 0.04, 0.14 + index * 0.04], [0, 1], { clamp: true })
-  const numScale = useTransform(numOn, [0, 1], [0.5, 1])
+  // unused card stays quiet until the scene settles
+  const idleOn = useTransform(progress, [0.16, 0.22], [0, 1], { clamp: true })
 
   // Brave fails in phase b: shake + tint + "Rate limited"
   const shakeX = useTransform(
@@ -71,11 +64,11 @@ function ProviderCard({
   const failTint = useTransform(progress, [0.44, 0.54], [0, index === 0 ? 1 : 0], { clamp: true })
   const failLabel = useTransform(progress, [0.48, 0.56], [0, 1], { clamp: true })
 
-  // Exa answers in phase c: cobalt border + "Answered"
+  // Exa answers in phase c: accent border + "Answered"
   const answerOn = useTransform(progress, [0.62, 0.72], [0, index === 1 ? 1 : 0], { clamp: true })
 
   const idle = index === 2 ? "Not needed" : index === 0 ? "Rate limited" : "Answered"
-  const stateOpacity = index === 0 ? failLabel : index === 1 ? answerOn : numOn
+  const stateOpacity = index === 0 ? failLabel : index === 1 ? answerOn : idleOn
 
   return (
     <motion.div className="provider-card" style={{ x: shakeX }}>
@@ -89,12 +82,6 @@ function ProviderCard({
         style={{ opacity: answerOn }}
         aria-hidden="true"
       />
-      <motion.span
-        className="provider-num"
-        style={{ opacity: numOn, scale: numScale }}
-      >
-        {num}
-      </motion.span>
       <img src={src} alt="" width={72} height={72} />
       <span className="provider-card-name">{name}</span>
       <motion.span
@@ -165,7 +152,7 @@ export function RoutingScene() {
     <div className="routing-wrap section-paper" ref={ref} data-theme="paper">
       <div className="routing-sticky">
         <div className="routing-heads">
-          <Head progress={progress} from={0.0} to={0.3} text="Set the order" />
+          <Head progress={progress} from={0.0} to={0.3} text="Polyweb picks one" />
           <Head progress={progress} from={0.3} to={0.58} text="If one fails" />
           <Head
             progress={progress}
