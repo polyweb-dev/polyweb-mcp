@@ -1,0 +1,89 @@
+---
+title: Routing
+description: How Polyweb picks a provider for each call, and how fallback and fanout work.
+---
+
+Routing decides which provider serves a `search` or `fetch` call. A request tries providers one at a time, called legs, until one succeeds or the legs run out.
+
+## The routing object
+
+Send `routing` in a request body to steer the call:
+
+```json
+{
+  "query": "latest climate research",
+  "limit": 5,
+  "routing": {"mode": "prefer", "providers": ["exa"], "allow_fallback": true}
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `auto` | One of the modes below |
+| `providers` | empty | Provider names the mode applies to |
+| `allow_fallback` | `true` | Try the next leg when one fails. `false` tries one leg only |
+| `binding_id` | none | Pin one project binding when the project has several provider keys for the same provider |
+
+| Mode | What it does |
+| --- | --- |
+| `auto` | Polyweb picks a provider |
+| `prefer` | Tries the listed providers first, in order |
+| `require` | Uses only the listed providers |
+| `fanout` | Asks the listed providers at the same time and fuses the answers |
+
+`binding_id` only selects. Polyweb still checks that the binding belongs to your project, is enabled for the operation, and has a usable key.
+
+## Fallback
+
+With `allow_fallback: true`, a failed leg moves on to the next candidate. The installation-wide routing policy limits this: `first_only` tries a single leg, and `chained` (the default) tries up to `max_attempts` legs (default 3).
+
+Retries, fallback legs, and fanout siblings share one retry budget. A request that already retried does not get a free retry downstream. If a provider asks for a `Retry-After` longer than the request deadline, Polyweb does not retry and returns that leg's error.
+
+## Fanout
+
+Set `routing.mode` to `fanout` with two or more providers. The top-level `"fanout": true` also triggers it, and setting both is fine.
+
+```json
+{
+  "query": "latest climate research",
+  "limit": 5,
+  "routing": {"mode": "fanout", "providers": ["exa", "tavily"]}
+}
+```
+
+Each provider runs at the same time with its own binding. Polyweb fuses the answers with reciprocal rank fusion (RRF, k=60). It removes duplicate URLs first, lowercasing the host and stripping tracking parameters, then ranks results by fused score, number of sources, and first appearance.
+
+If one leg fails and another succeeds, you still get an answer and the outcome is `partial`. Only an error that affects the whole request, such as an auth or configuration error, aborts it.
+
+## Reading the answer
+
+Each answer reports `provider`, `participating_providers`, and one `waterfall` row per attempted provider with its latency, result count, and any error.
+
+```json
+{
+  "provider": "exa",
+  "participating_providers": ["exa", "tavily"],
+  "waterfall": [
+    {"provider": "exa", "latency_ms": 380, "status": "success", "results_count": 5},
+    {"provider": "tavily", "latency_ms": 410, "status": "error", "results_count": 0, "error": "timeout"}
+  ]
+}
+```
+
+Here Tavily timed out but Exa answered, so the caller got results and the outcome is `partial`.
+
+`providerOptions` never changes the provider, mode, or fallback. See [Request options](/providers/request-options/).
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `401` or `403` before routing starts | Bad key or missing scope | See [Authentication and keys](/concepts/authentication/) |
+| Provider error saying no usable provider or key | No enabled binding with a key for that operation | Add a provider key and bind it in the dashboard |
+| Fanout returns `partial` | One leg failed | Read `waterfall` for the failed provider |
+| Only one provider is ever tried | `allow_fallback: false`, or policy `first_only` | Set `allow_fallback: true` and check the routing policy |
+
+## Next steps
+
+- [POST /search](/api/search/) and the [`search` tool](/mcp/search-tool/) accept `routing`.
+- [Project providers](/dashboard/project-providers/) shows which providers a project can use.
