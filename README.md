@@ -59,8 +59,8 @@ Needs: Python `>= 3.12, < 3.14`, [uv](https://docs.astral.sh/uv/),
 Node.js `>= 20`, [pnpm](https://pnpm.io/).
 
 ```bash
-git clone https://github.com/sharathnirmala16/freesearch.git
-cd freesearch
+git clone https://github.com/polyweb-dev/polyweb-mcp.git
+cd polyweb-mcp
 cp .env.example .env
 # In .env set: POLYWEB_AUTH_JWT_SECRET (32+ random chars),
 # POLYWEB_API_PORT and POLYWEB_MCP_PORT (no defaults; missing = error).

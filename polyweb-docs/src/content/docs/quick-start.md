@@ -12,8 +12,8 @@ There is no prebuilt image, so you clone the repository and build it. The first 
 1. Clone the repository.
 
    ```bash
-   git clone https://github.com/sharathnirmala16/freesearch.git
-   cd freesearch
+   git clone https://github.com/polyweb-dev/polyweb-mcp.git
+   cd polyweb-mcp
    ```
 
 2. Create your `.env` file.
@@ -40,7 +40,7 @@ There is no prebuilt image, so you clone the repository and build it. The first 
    docker compose ps
    ```
 
-Wait until `api` shows `healthy` in `docker compose ps`. The dashboard starts after the API is healthy.
+Wait until `api` shows `healthy` in `docker compose ps`. The dashboard starts after the API is healthy. Docker checks `GET /health`, which returns only `{"status":"ok"}` and requires no credentials.
 
 | Service | Address | Host port setting |
 | --- | --- | --- |
@@ -50,7 +50,9 @@ Wait until `api` shows `healthy` in `docker compose ps`. The dashboard starts af
 
 To change a host port, add the variable to `.env`, for example `printf '\nUI_PORT=3100\n' >> .env`, and update `POLYWEB_AUTH_BROWSER_ORIGINS` to the new dashboard address. If you run Polyweb on another machine, replace `localhost` with that machine's address. Sign-in outside `localhost` needs HTTPS, so see [Configuration](/setup/configuration/#sign-in-from-a-browser).
 
-The database and the key that encrypts your provider keys live on a Docker volume named `polyweb-data`. Nothing else needs configuring.
+Compose uses the project name `polyweb`, even when the checkout folder has another name. The default containers are `polyweb-api-1`, `polyweb-mcp-1`, and `polyweb-ui-1`. Use `COMPOSE_PROJECT_NAME` or `docker compose -p NAME` for a separate stack.
+
+The database and encryption key share the `polyweb_polyweb-data` Docker volume. The volume name starts with your project name if you set a custom name.
 
 ## Create the first admin
 
