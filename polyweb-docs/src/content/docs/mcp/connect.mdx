@@ -1,0 +1,127 @@
+---
+title: Connect an agent
+description: Point Claude Code, Cursor, Claude Desktop, or any MCP client at the Polyweb MCP server.
+---
+
+The MCP server gives an agent two tools, `search` and `fetch`. They use the same request and response shapes as the [REST API](/api/overview/), run the same routing and limit checks, and write the same traces. Use MCP when an agent does the work, and REST when your own code does.
+
+You need a running Polyweb stack ([Quick start](/quick-start/)) and a project API key with the `search.execute` and `fetch.execute` scopes ([Project API keys](/dashboard/api-keys/)).
+
+## Server address
+
+With Docker, the MCP server listens at `http://localhost:8000/mcp` (host port `MCP_PORT`, default 8000). For another machine, replace `localhost` with your server's address. In a manual setup the port comes from `POLYWEB_MCP_PORT`, and the server binds to `127.0.0.1` unless you set `POLYWEB_MCP_HOST` or pass `--host`.
+
+Every request to `/mcp` must carry your project API key:
+
+```text
+Authorization: Bearer fs_live_REPLACE_ME
+```
+
+Only project API keys work. Sign-in tokens from the dashboard are rejected, and so are requests with no key.
+
+## Claude Code
+
+Replace `fs_live_REPLACE_ME` with your key.
+
+```bash
+claude mcp add --transport http polyweb http://localhost:8000/mcp \
+  --header "Authorization: Bearer fs_live_REPLACE_ME"
+```
+
+## Cursor and other HTTP clients
+
+Clients that read an `mcpServers` JSON file (Cursor's `mcp.json`, for example) accept a URL plus headers. Field names can differ between client versions, so check your client's docs if the file is rejected.
+
+```json
+{
+  "mcpServers": {
+    "polyweb": {
+      "url": "http://localhost:8000/mcp",
+      "headers": { "Authorization": "Bearer fs_live_REPLACE_ME" }
+    }
+  }
+}
+```
+
+Some clients, such as those that use `.mcp.json`, also want `"type": "http"` next to the URL.
+
+## Claude Desktop and other stdio clients
+
+Claude Desktop starts MCP servers as local processes, so it uses the stdio transport. With Docker, run the server inside the `mcp` container. Replace `/path/to/freesearch` with your clone and `fs_live_REPLACE_ME` with your key.
+
+```json
+{
+  "mcpServers": {
+    "polyweb": {
+      "command": "docker",
+      "args": [
+        "compose", "-f", "/path/to/freesearch/compose.yaml",
+        "exec", "-T",
+        "-e", "POLYWEB_MCP_BEARER_TOKEN=fs_live_REPLACE_ME",
+        "mcp", "uv", "run", "polyweb-mcp", "--transport", "stdio"
+      ]
+    }
+  }
+}
+```
+
+In a manual setup, run the server from your checkout instead:
+
+```json
+{
+  "mcpServers": {
+    "polyweb": {
+      "command": "uv",
+      "args": ["run", "polyweb-mcp", "--transport", "stdio"],
+      "cwd": "/path/to/freesearch",
+      "env": { "POLYWEB_MCP_BEARER_TOKEN": "fs_live_REPLACE_ME" }
+    }
+  }
+}
+```
+
+Over stdio the key comes from the `POLYWEB_MCP_BEARER_TOKEN` environment variable of the server process. Polyweb reads it from the process environment only, never from `.env`. Without it, every tool call is rejected. Stdio only works on the machine that runs the server, so remote agents should use the HTTP URL.
+
+## Check the connection
+
+Ask your agent to list its tools. It should see exactly two: `search` and `fetch`. Then ask it a question that needs the web, such as the prompt below.
+
+> You have two Polyweb tools: `search` and `fetch`. To answer "What is new in solar panels?", call `search` with that question and `limit` 5. Then call `fetch` on the best result URL. Quote the source URL in your answer.
+
+To test the key without an agent, send the same search over REST. A `200` response means the key and your provider setup work.
+
+```bash
+curl -X POST http://localhost:8001/search \
+  -H "Authorization: Bearer fs_live_REPLACE_ME" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "solar panel prices", "limit": 1}'
+```
+
+Each call shows up on the project's **Activity** page ([Activity and traces](/dashboard/activity/)).
+
+## Transport options
+
+| Option | Environment variable | Meaning |
+| --- | --- | --- |
+| `--transport streamable-http` (default) or `stdio` | `POLYWEB_MCP_TRANSPORT` | Which transport to serve. The flag wins over the variable. |
+| `--stateless` | `POLYWEB_MCP_STATELESS` (`true`) | Stateless HTTP, for proxies or several replicas. In Docker, set the variable on the `mcp` service. |
+| `--host`, `--port` | `POLYWEB_MCP_HOST`, `POLYWEB_MCP_PORT` | Bind address and port. A manual setup has no default port and refuses to start without one. |
+| none | `POLYWEB_MCP_BEARER_TOKEN` | Project API key for stdio only. HTTP never reads it. |
+
+## How keys are checked
+
+The server verifies the key on every tool call, not only when the session starts. A key that you revoke, rescope, or let expire stops working on its next call, and so does a key of an archived project. A rejected call fails before any provider is used, so it costs nothing.
+
+| What you see | Cause | Fix |
+| --- | --- | --- |
+| HTTP `401` on `/mcp` | No key, a malformed `Authorization` header, or an invalid key. | Send one `Authorization: Bearer fs_live_...` header with a valid key. |
+| Tool error `authentication is required` | The key is invalid, expired, or revoked (or, over stdio, `POLYWEB_MCP_BEARER_TOKEN` is unset). | Create a fresh project API key. |
+| Tool error `execution is not permitted` | The key lacks `search.execute` or `fetch.execute` for that tool. | Create a key with both scopes. |
+| Tool error `project is unavailable` | You passed a `project_id` that is not the key's project. | Omit `project_id`. |
+| Tool error `project is archived` | The key's project is archived. | Ask a project admin to unarchive it. |
+
+## Next steps
+
+- [`search` tool](/mcp/search-tool/): parameters and response fields.
+- [`fetch` tool](/mcp/fetch-tool/): read one page.
+- [Authentication and keys](/concepts/authentication/): how project API keys differ from sign-in sessions.

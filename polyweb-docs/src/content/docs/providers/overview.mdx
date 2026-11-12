@@ -1,0 +1,56 @@
+---
+title: Provider overview
+description: The eight search and fetch providers Polyweb supports, what each can do, and which ones work without a key.
+---
+
+Polyweb puts eight providers behind one `search` and one `fetch` call. You choose a provider with routing, and Polyweb calls the vendor for you with a provider key from the vault. Read this page to pick a provider, then use the [provider reference](/providers/reference/) for its options.
+
+## Compare providers
+
+| Provider | `search` | `fetch` | Key required | Good for |
+| --- | --- | --- | --- | --- |
+| `brave` | yes | no | yes | Web results, or token-budgeted context for an LLM |
+| `exa` | yes | yes | yes | Semantic and deep research search, page contents |
+| `firecrawl` | yes | yes | yes | Clean page text, JS-heavy pages, structured extraction |
+| `keenable` | yes | yes | no | Getting started with no signup |
+| `parallel` | yes | yes | yes | Objective-driven search and excerpts |
+| `tavily` | yes | yes | no | Search tuned for agents, news and finance topics |
+| `tinyfish` | yes | yes | yes | Search and fetch with no per-call charge |
+| `you` | yes | yes | yes | Web search with highlights or full pages |
+
+`keenable` and `tavily` work out of the box through built-in public credentials, so a fresh install can search before you add any key. Adding your own key gives you higher limits. All other providers need a provider key before Polyweb can use them.
+
+`brave` has no general fetch endpoint. Route `fetch` calls to any other provider.
+
+## Choose a provider in a request
+
+Every request accepts a `routing` object. The default mode is `auto`, which lets Polyweb choose from the providers your project can use.
+
+```json
+{
+  "query": "solar panel prices",
+  "limit": 5,
+  "routing": {"mode": "prefer", "providers": ["exa"], "allow_fallback": true}
+}
+```
+
+The same `routing` object works on REST `POST /search` and `POST /fetch` and on the MCP `search` and `fetch` tools. See [Routing](/concepts/routing/) for the modes (`auto`, `prefer`, `require`, `fanout`) and fallback behavior.
+
+## Make a provider available
+
+A provider runs for a project only after three things are in place:
+
+1. A provider key exists in the vault, unless the provider is keyless.
+2. The key sits in a key pool.
+3. The pool is bound to the project for the operation you need.
+
+Provider keys never go in `.env`. Add them in the dashboard under **Keys and pools** and bind them to a project as described in [Provider keys and pools](/dashboard/provider-keys/) and [Project providers](/dashboard/project-providers/).
+
+## Limits and costs
+
+Each provider has its own rate limits (how fast you can call) and budget (how much you can spend). A `429` means slow down, and a `402` usually means the budget is spent. [Rate limits and budgets](/concepts/limits-and-budgets/) explains both.
+
+## Next steps
+
+- [Provider reference](/providers/reference/) lists how to get a key and the options for each provider.
+- [Request options](/providers/request-options/) explains `providerOptions`, defaults, and precedence.

@@ -1,0 +1,54 @@
+---
+title: Projects and roles
+description: How projects, members, and roles decide who can do what in Polyweb.
+---
+
+A project is the unit everything in Polyweb belongs to: provider bindings, members, project API keys, traces, and usage. People get access to a project through a membership, and each membership carries roles.
+
+## How access is set up
+
+1. A system admin creates the project and names its first project admin.
+2. The project admin adds members and assigns roles.
+3. Members use the dashboard to search, inspect traces, and read usage.
+4. Machines use project API keys, which are scoped to one project.
+
+System authority is separate from membership. A system admin can create projects and manage the installation, but cannot open a project's pages without a role in that project.
+
+## Built-in roles
+
+| Role | Level | What it grants |
+| --- | --- | --- |
+| `system_admin` | Installation | Create projects, assign system roles, manage system settings, provider keys, key pools and allocations, read the audit log |
+| `project_admin` | Project | Everything a member can do, plus manage members and roles, edit settings, configure providers, manage private provider keys and API keys, archive the project |
+| `project_member` | Project | Read the project, members, settings, and providers; read traces and usage; run `search` and `fetch` |
+| `routing_editor` | Project, extra | Read the project, settings, and providers; update routing preferences |
+| `provider_editor` | Project, extra | Read the project, settings, and providers; configure providers and manage private provider keys |
+| `token_manager` | Project, extra | Issue, rotate, and revoke project API keys |
+
+The extra roles layer on top of a base role. `token_manager` grants no execution rights by itself, so to issue a key with `search.execute` the person also needs a role that holds that permission, such as `project_member`.
+
+Only the CLI can create a `system_admin`. Registering in the dashboard always creates an ordinary account. See [Admin accounts](/setup/admin-accounts/).
+
+## Rules worth knowing
+
+- Every project keeps at least one active `project_admin`. A change that would remove the last one is rejected.
+- A project API key belongs to exactly one project and holds only `search.execute` and `fetch.execute`. It never inherits the roles of the person who created it.
+- A person who is not a member sees a project as missing (`404`). A member without the needed permission gets `403`.
+- An archived project rejects key calls with `409`.
+
+The dashboard hides pages you cannot use. The same permission check runs when you open the URL directly, so a hidden page is not reachable by typing its address.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `404` opening a project | You are not a member | Ask a project admin or system admin to add you |
+| `403` on an action | Your roles lack the permission | Ask a project admin for the right role |
+| Cannot remove or demote an admin | The project would lose its last `project_admin` | Name another admin first |
+| System admin cannot see a project | System authority is not membership | Add the system admin as a project member |
+| Key call returns `409` | The project is archived | Ask a project admin to unarchive it |
+
+## Next steps
+
+- [Authentication and keys](/concepts/authentication/) covers sessions, project API keys, and scopes.
+- [Project settings and members](/dashboard/project/) shows where to manage roles.

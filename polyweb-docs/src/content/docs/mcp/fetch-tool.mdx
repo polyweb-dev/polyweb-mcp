@@ -1,0 +1,94 @@
+---
+title: fetch tool
+description: Parameters and response fields of the MCP fetch tool.
+---
+
+The `fetch` tool reads one web page through the best available provider and returns its text. It is the same operation as [`POST /fetch`](/api/fetch/), with the same routing, limits, and traces. The key must hold the `fetch.execute` scope ([Connect an agent](/mcp/connect/)). Brave has no fetch, so routing picks another provider.
+
+## Call shape
+
+The tool takes one argument named `request`. Put every field inside it. One call reads one URL, so ask twice for two pages.
+
+```json
+{
+  "request": {
+    "url": "https://example.com/article",
+    "max_chars": 8000
+  }
+}
+```
+
+Unknown fields are rejected.
+
+## Parameters
+
+| Field | Type | Required | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `url` | string (http or https URL) | yes | none | The page to read. |
+| `max_chars` | integer | no | none | Cut the content after this many characters, 1 to 2000000. |
+| `project_id` | UUID | no | the key's project | Must be the key's own project if you set it. |
+| `routing` | object | no | `{"mode": "auto"}` | Same object as in the [`search` tool](/mcp/search-tool/): `mode`, `providers`, `allow_fallback`, `binding_id`. |
+| `providerOptions` | object | no | none | Per-provider settings. They never change routing. See [Request options](/providers/request-options/). |
+| `url_count` | integer | no | `1` | URLs to try, 1 to 10000. |
+| `pdf_pages` | integer | no | `0` | PDF pages to read, 0 to 10000. |
+| `json_extract` | boolean | no | `false` | Ask for parsed output, for providers that support it. |
+| `enhanced` | boolean | no | `false` | Ask for a richer parse, for providers that support it. |
+| `zero_data_retention` | boolean | no | `false` | Ask the provider to retain no data, for providers that support it. |
+
+Prefer one provider, with fallback:
+
+```json
+{
+  "request": {
+    "url": "https://example.com/article",
+    "max_chars": 8000,
+    "routing": { "mode": "prefer", "providers": ["firecrawl"], "allow_fallback": true }
+  }
+}
+```
+
+## Response
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `provider` | string | The provider that fetched the page. |
+| `document` | object | The page, see below. |
+| `usage` | object or null | Measured usage when the provider meters the call. |
+| `provider_metadata` | object | Provider extras. Present only when the provider returned some. |
+
+The `document` object holds `url`, `content` (the page text), `title` (or null), `content_type` (or null), `fetched_at` (ISO 8601 time), and `metadata`.
+
+```json
+{
+  "provider": "firecrawl",
+  "document": {
+    "url": "https://example.com/article",
+    "content": "# Example\n\nPage text here.",
+    "title": "Example",
+    "content_type": null,
+    "fetched_at": "2026-11-09T00:00:00Z",
+    "metadata": {}
+  },
+  "usage": null
+}
+```
+
+## Errors
+
+A failed call comes back as an MCP tool error whose text holds the message below. Invalid fields (a bad URL, `max_chars` of 0, an unknown field) give a validation error that names the field.
+
+| Message | Cause |
+| --- | --- |
+| `authentication is required` | Invalid, expired, or revoked key. |
+| `execution is not permitted` | The key lacks `fetch.execute`. |
+| `project is unavailable` | `project_id` is not the key's project. |
+| `project is archived` | The key's project is archived. |
+| `execution is temporarily unavailable` | Storage or the execution service is down. Retry later. |
+| `the execution request deadline expired before dispatch` | The call waited too long before it could start. Retry. |
+
+Provider failures such as a blocked target page also surface as tool errors. Over REST they carry structured fields, see [`POST /fetch`](/api/fetch/).
+
+## Next steps
+
+- [`search` tool](/mcp/search-tool/): find pages to read.
+- [`POST /fetch`](/api/fetch/): the same call over REST.

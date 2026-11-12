@@ -1,0 +1,144 @@
+---
+title: search tool
+description: Parameters, routing options, and response fields of the MCP search tool.
+---
+
+The `search` tool runs a web search through the best available provider, or through several providers at once. It is the same operation as [`POST /search`](/api/search/), with the same routing, limits, and traces. The key must hold the `search.execute` scope ([Connect an agent](/mcp/connect/)).
+
+## Call shape
+
+The tool takes one argument named `request`. Put every field inside it.
+
+```json
+{
+  "request": {
+    "query": "solar panel prices",
+    "limit": 5
+  }
+}
+```
+
+Unknown fields are rejected. Leading and trailing whitespace in strings is trimmed.
+
+## Parameters
+
+| Field | Type | Required | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `query` | string | yes | none | Search text, 1 to 2000 characters. |
+| `limit` | integer | no | `10` | Number of results, 1 to 100. |
+| `project_id` | UUID | no | the key's project | Must be the key's own project if you set it. |
+| `routing` | object | no | `{"mode": "auto"}` | Provider selection, see below. |
+| `fanout` | boolean | no | `false` | Ask several providers at the same time. |
+| `providerOptions` | object | no | none | Per-provider settings. They never change routing. See [Request options](/providers/request-options/). |
+| `mode` | `turbo`, `fast`, `basic`, or `advanced` | no | none | Depth hint, passed to providers that support it. |
+| `extra_bundles` | integer | no | `0` | Extra result bundles, 0 to 10000, for providers that support it. |
+| `language` | string | no | none | 2 to 16 characters, for providers that support it. |
+| `country_code` | string | no | none | Exactly 2 characters, for providers that support it. |
+| `domains` | array of strings | no | `[]` | Restrict results to these domains, for providers that support it. |
+
+The `routing` object:
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `mode` | `auto`, `prefer`, `require`, or `fanout` | `auto` | `auto` lets Polyweb choose. `prefer` tries `providers` first. `require` uses only `providers`. `fanout` queries `providers` together. |
+| `providers` | array of strings | `[]` | Provider names, for example `exa` or `tavily`. |
+| `allow_fallback` | boolean | `true` | Try other providers if the preferred one fails. |
+| `binding_id` | UUID | none | Pin one project binding when the project has several keys for the same provider. |
+
+For how Polyweb picks a provider, see [Routing](/concepts/routing/).
+
+## Examples
+
+Prefer one provider, with fallback:
+
+```json
+{
+  "request": {
+    "query": "latest climate research",
+    "limit": 5,
+    "routing": { "mode": "prefer", "providers": ["exa"], "allow_fallback": true }
+  }
+}
+```
+
+Ask two providers at the same time:
+
+```json
+{
+  "request": {
+    "query": "latest climate research",
+    "limit": 5,
+    "fanout": true,
+    "routing": { "mode": "fanout", "providers": ["exa", "tavily"] }
+  }
+}
+```
+
+## Response
+
+The tool returns the same JSON as the REST endpoint.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `query` | string | The query that ran. |
+| `results` | array | The hits, see below. |
+| `provider` | string | The provider that produced the answer. |
+| `total_results` | integer or null | Total hit count when the provider reports one. |
+| `participating_providers` | array of strings | Every provider that took part. |
+| `waterfall` | array | One row per attempted provider: `provider`, `latency_ms`, `status`, `results_count`, `cost_credits`, `error`. |
+| `usage` | object or null | Measured usage (`provider`, `operation`, `units`, `unit_kind`, `display_unit`, `observed_at`, `request_id`, `metadata`, `latency_ms`, `status`) when the provider meters the call. |
+| `provider_metadata` | object | Provider extras. Present only when the provider returned some. |
+
+Each item in `results` has `title`, `url`, `snippet`, `published_at`, `source`, `score` (0 to 1, or null), `metadata`, and `sources`.
+
+```json
+{
+  "query": "solar panel prices",
+  "results": [
+    {
+      "title": "Example result",
+      "url": "https://example.com/article",
+      "snippet": "Short text from the page.",
+      "published_at": null,
+      "source": null,
+      "score": 0.9,
+      "metadata": {},
+      "sources": []
+    }
+  ],
+  "provider": "tavily",
+  "total_results": null,
+  "usage": null,
+  "participating_providers": ["tavily"],
+  "waterfall": [
+    {
+      "provider": "tavily",
+      "latency_ms": 420,
+      "status": "success",
+      "results_count": 1,
+      "cost_credits": 0.0,
+      "error": null
+    }
+  ]
+}
+```
+
+## Errors
+
+A failed call comes back as an MCP tool error whose text holds the message below. Invalid fields (an empty `query`, `limit` of 0, an unknown field) give a validation error that names the field.
+
+| Message | Cause |
+| --- | --- |
+| `authentication is required` | Invalid, expired, or revoked key. |
+| `execution is not permitted` | The key lacks `search.execute`. |
+| `project is unavailable` | `project_id` is not the key's project. |
+| `project is archived` | The key's project is archived. |
+| `execution is temporarily unavailable` | Storage or the execution service is down. Retry later. |
+| `the execution request deadline expired before dispatch` | The call waited too long before it could start. Retry. |
+
+Provider and limit failures use the execution error text. See [Troubleshooting](/reference/troubleshooting/) and [Rate limits and budgets](/concepts/limits-and-budgets/).
+
+## Next steps
+
+- [`fetch` tool](/mcp/fetch-tool/): read a result page.
+- [`POST /search`](/api/search/): the same call over REST.
