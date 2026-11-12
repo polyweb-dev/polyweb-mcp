@@ -43,6 +43,9 @@ export default defineConfig(({ mode }) => {
   const port = Number(env.VITE_PORT || 5174)
 
   return {
+    build: {
+      license: { fileName: "THIRD_PARTY_LICENSES.md" },
+    },
     plugins: [
       react(),
       babel({ presets: [reactCompilerPreset()] }),

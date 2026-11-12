@@ -1,7 +1,9 @@
 ---
 title: Quick start
-description: Run Polyweb with Docker, create the first admin, and sign in to the dashboard.
+description: Run Polyweb with Docker, sign in, create a project and API key, and connect an agent.
 ---
+
+import ConnectAgent from '../../components/ConnectAgent.mdx';
 
 Docker starts the dashboard, the API server, and the MCP server with one command. You need Docker with Docker Compose and `git`. Prefer to run it without Docker? See [Manual setup](/setup/manual/).
 
@@ -54,9 +56,9 @@ Compose uses the project name `polyweb`, even when the checkout folder has anoth
 
 The database and encryption key share the `polyweb_polyweb-data` Docker volume. The volume name starts with your project name if you set a custom name.
 
-## Create the first admin
+## Create an account
 
-Registration creates ordinary accounts only. A system admin, who can create projects, comes from the command line. The command asks for a password once at a masked prompt, so run it in an interactive terminal. Piping a password in does not work. The first run can take a few seconds while `uv` syncs inside the container.
+Registration on the dashboard sign-in page creates ordinary accounts only. A system admin, who can create projects, comes from the command line. For the first account, create an admin. The command asks for a password once at a masked prompt, so run it in an interactive terminal. Piping a password in does not work. The first run can take a few seconds while `uv` syncs inside the container.
 
 ```bash
 docker compose exec api uv run polyweb-users create-admin --email admin@example.com
@@ -70,9 +72,20 @@ Open `http://localhost:3000` and sign in with that email and password.
 
 ![The Polyweb sign-in form](../../assets/dashboard-sign-in.png)
 
-## Next steps
+## Create a project and an API key
 
-Create a project, add a provider key, and make a search with [Your first search](/guides/first-search/). Then connect an agent to `http://localhost:8000/mcp` with [Connect an agent](/mcp/connect/).
+1. Open **Projects** and create a project, then open it.
+2. Open **API keys** in the project sidebar.
+3. Enter a **Label**, tick **Search** and **Fetch**, and press **Issue key**.
+4. Press **Copy key**. Polyweb shows the key only once.
+
+More options are in [Project API keys](/dashboard/api-keys/). To make search work, bind a provider to the project with [Your first search](/guides/first-search/).
+
+## Connect an agent
+
+<ConnectAgent />
+
+For other clients, stdio, and error messages, see [Connect an agent](/mcp/connect/).
 
 ## Troubleshooting
 

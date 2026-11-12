@@ -32,7 +32,7 @@ curl -X POST http://localhost:8001/search \
   -d '{"query": "solar panel prices", "limit": 5}'
 ```
 
-For an MCP client, put the same header in its server configuration. See [Connect an agent](/mcp/connect/). For REST details, see [REST API overview](/api/overview/).
+For an agent, store the key in `POLYWEB_API_KEY` and follow [Connect an agent](/mcp/connect/). For REST details, see [REST API overview](/api/overview/).
 
 A key can only act for its own project. A key with only the **Search** scope gets a `403` from `fetch`, and the other way round.
 

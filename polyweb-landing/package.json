@@ -1,11 +1,12 @@
 {
   "name": "polyweb-landing",
+  "license": "Apache-2.0",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader native",
-    "build": "vite build",
+    "build": "vite build && node ../scripts/copy-license-files.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."

@@ -1,0 +1,90 @@
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+**1. Save your API key.** The key needs the `search.execute` and `fetch.execute` scopes. These commands save it for future terminal sessions and load it into the current session. Replace `fs_live_REPLACE_ME` with your key.
+
+<Tabs syncKey="os">
+  <TabItem label="Windows (PowerShell)">
+    Save the variable for your Windows user, then load it into this terminal:
+
+    ```powershell
+    [Environment]::SetEnvironmentVariable("POLYWEB_API_KEY", "fs_live_REPLACE_ME", "User")
+    $env:POLYWEB_API_KEY = [Environment]::GetEnvironmentVariable("POLYWEB_API_KEY", "User")
+    ```
+
+    Restart terminal and agent apps that were open before this change. See [PowerShell environment variables](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables#create-persistent-environment-variables-in-windows).
+  </TabItem>
+  <TabItem label="macOS (zsh)">
+    Run once to add the key to your zsh startup file and load it now:
+
+    ```zsh
+    printf '\nexport POLYWEB_API_KEY="fs_live_REPLACE_ME"\n' >> "${ZDOTDIR:-$HOME}/.zshrc"
+    source "${ZDOTDIR:-$HOME}/.zshrc"
+    ```
+
+    New interactive zsh terminals load this file. See [zsh startup files](https://zsh.sourceforge.io/Doc/Release/Files.html#Startup_002fShutdown-Files).
+  </TabItem>
+  <TabItem label="Linux (bash)">
+    Run once to add the key to your Bash startup file and load it now:
+
+    ```bash
+    printf '\nexport POLYWEB_API_KEY="fs_live_REPLACE_ME"\n' >> ~/.bashrc
+    source ~/.bashrc
+    ```
+
+    New interactive non-login Bash terminals load this file. For login shells, make sure your `~/.bash_profile` or `~/.profile` loads `~/.bashrc`. See [Bash startup files](https://www.gnu.org/software/bash/manual/html_node/Bash-Startup-Files.html).
+  </TabItem>
+</Tabs>
+
+On macOS and Linux, start your agent from the terminal. Desktop launchers do not load these shell profiles. To change the saved key later, edit the key line in the startup file.
+
+**2. Add the MCP server.** Pick your agent. The server address is `http://localhost:8000/mcp`.
+
+<Tabs>
+  <TabItem label="Codex">
+    The command reads the variable by name, so it is the same on every system.
+
+    ```text
+    codex mcp add polyweb --url http://localhost:8000/mcp --bearer-token-env-var POLYWEB_API_KEY
+    codex mcp list
+    ```
+
+    See the [Codex CLI reference](https://developers.openai.com/codex/cli/reference/#codex-mcp).
+  </TabItem>
+  <TabItem label="Claude Code">
+    Your shell expands the variable inside double quotes. Claude Code saves the expanded key in its user configuration.
+
+    In PowerShell:
+
+    ```powershell
+    claude mcp add --transport http --scope user polyweb http://localhost:8000/mcp --header "Authorization: Bearer $env:POLYWEB_API_KEY"
+    ```
+
+    In zsh or bash:
+
+    ```bash
+    claude mcp add --transport http --scope user polyweb http://localhost:8000/mcp --header "Authorization: Bearer $POLYWEB_API_KEY"
+    ```
+
+    Run `claude mcp list`, or type `/mcp` in Claude Code, to check the connection. See the [Claude Code MCP guide](https://code.claude.com/docs/en/mcp#option-1-add-a-remote-http-server).
+  </TabItem>
+  <TabItem label="OpenCode">
+    Add this to `opencode.json` in your project directory. OpenCode reads `{env:POLYWEB_API_KEY}` from your environment. The file is the same on every system and contains no API key. This format is for OpenCode v2, which uses `mcp.servers`.
+
+    ```json
+    {
+      "mcp": {
+        "servers": {
+          "polyweb": {
+            "type": "remote",
+            "url": "http://localhost:8000/mcp",
+            "oauth": false,
+            "headers": { "Authorization": "Bearer {env:POLYWEB_API_KEY}" }
+          }
+        }
+      }
+    }
+    ```
+
+    Run `opencode mcp list` to check the connection. See the [OpenCode MCP servers docs](https://opencode.ai/docs/mcp-servers/).
+  </TabItem>
+</Tabs>

@@ -1,11 +1,12 @@
 {
   "name": "polyweb-ui",
+  "license": "Apache-2.0",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader native",
-    "build": "tsc -b && vite build --configLoader native",
+    "build": "tsc -b && vite build --configLoader native && node ../scripts/copy-license-files.mjs",
     "lint": "eslint .",
     "preview": "vite preview --configLoader native",
     "test": "vitest run --configLoader native",
