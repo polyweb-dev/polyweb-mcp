@@ -29,12 +29,16 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # Build the static bundle (VITE_API_URL stays empty → same-origin calls,
 # so nginx can reverse-proxy /api/* to the backend with no rebuild per env).
 COPY polyweb-ui/ ./
+COPY scripts/copy-license-files.mjs /scripts/copy-license-files.mjs
+COPY LICENSE NOTICE LICENSING.md CONTRIBUTORS.md THIRD_PARTY_NOTICES.md /
 RUN pnpm build
 
 # --------------------------------------------------------------------------
 # Stage 2: Python runtime with the Polyweb package installed.
 # --------------------------------------------------------------------------
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS backend
+
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 WORKDIR /app
 
@@ -53,7 +57,7 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # Runtime source: package, migrations (alembic.ini points at
 # src/polyweb/persistence/migrations), and README (hatchling wheel metadata).
 COPY src/ ./src/
-COPY alembic.ini README.md ./
+COPY alembic.ini README.md LICENSE NOTICE LICENSING.md CONTRIBUTORS.md THIRD_PARTY_NOTICES.md ./
 
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
@@ -68,13 +72,15 @@ EXPOSE 8001 8000
 
 # Default: REST API. Compose overrides the mcp service command with
 # `polyweb-mcp --transport streamable-http --host 0.0.0.0 --port 8000`.
-CMD ["uv", "run", "polyweb-api", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uv", "run", "--no-sync", "polyweb-api", "--host", "0.0.0.0", "--port", "8001"]
 
 # --------------------------------------------------------------------------
 # Stage 3: nginx serving the built dashboard + proxying the API.
 # Docker-only: local development uses `pnpm dev`, never this.
 # --------------------------------------------------------------------------
 FROM nginx:alpine AS ui
+
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=ui-build /ui/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf

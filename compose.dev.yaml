@@ -41,7 +41,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "uv run --no-sync python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/stats?limit=1')\"",
+          "uv run --no-sync python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)\"",
         ]
 
   mcp:

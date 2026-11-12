@@ -30,6 +30,11 @@ function docsPort() {
 
 // https://starlight.astro.build/reference/configuration/
 export default defineConfig({
+  vite: {
+    build: {
+      license: { fileName: "THIRD_PARTY_LICENSES.md" },
+    },
+  },
   server: { host: "127.0.0.1", port: docsPort() },
   preview: { host: "127.0.0.1", port: docsPort() },
   integrations: [

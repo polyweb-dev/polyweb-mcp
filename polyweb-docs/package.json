@@ -1,11 +1,12 @@
 {
   "name": "polyweb-docs",
+  "license": "Apache-2.0",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && node ../scripts/copy-license-files.mjs",
     "preview": "astro preview",
     "typecheck": "tsc --noEmit"
   },

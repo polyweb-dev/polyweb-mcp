@@ -1,7 +1,9 @@
 ---
 title: Connect an agent
-description: Point Claude Code, Cursor, Claude Desktop, or any MCP client at the Polyweb MCP server.
+description: Point Codex, Claude Code, OpenCode, Cursor, Claude Desktop, or any MCP client at the Polyweb MCP server.
 ---
+
+import ConnectAgent from '../../../components/ConnectAgent.mdx';
 
 The MCP server gives an agent two tools, `search` and `fetch`. They use the same request and response shapes as the [REST API](/api/overview/), run the same routing and limit checks, and write the same traces. Use MCP when an agent does the work, and REST when your own code does.
 
@@ -19,14 +21,11 @@ Authorization: Bearer fs_live_REPLACE_ME
 
 Only project API keys work. Sign-in tokens from the dashboard are rejected, and so are requests with no key.
 
-## Claude Code
+## Codex, Claude Code, and OpenCode
 
-Replace `fs_live_REPLACE_ME` with your key.
+<ConnectAgent />
 
-```bash
-claude mcp add --transport http polyweb http://localhost:8000/mcp \
-  --header "Authorization: Bearer fs_live_REPLACE_ME"
-```
+For a remote server, replace `localhost` in the address with your server's address.
 
 ## Cursor and other HTTP clients
 
@@ -45,9 +44,13 @@ Clients that read an `mcpServers` JSON file (Cursor's `mcp.json`, for example) a
 
 Some clients, such as those that use `.mcp.json`, also want `"type": "http"` next to the URL.
 
-## Claude Desktop and other stdio clients
+## Local stdio clients
 
-Claude Desktop starts MCP servers as local processes, so it uses the stdio transport. With Docker, run the server inside the `mcp` container. Replace `/path/to/freesearch` with your clone and `fs_live_REPLACE_ME` with your key.
+**For Docker, use the HTTP setup above.** The published port serves HTTP only. Stdio requires the agent to start a process and connect to its stdin and stdout.
+
+The Docker example below starts a separate stdio process inside the container through `docker compose exec -T`. The agent needs the Docker CLI and access to the running `mcp` container. For agents on another machine, use HTTP.
+
+Replace `/path/to/polyweb-mcp` with your checkout path and `fs_live_REPLACE_ME` with your key.
 
 ```json
 {
@@ -55,10 +58,10 @@ Claude Desktop starts MCP servers as local processes, so it uses the stdio trans
     "polyweb": {
       "command": "docker",
       "args": [
-        "compose", "-f", "/path/to/freesearch/compose.yaml",
+        "compose", "-f", "/path/to/polyweb-mcp/compose.yaml",
         "exec", "-T",
         "-e", "POLYWEB_MCP_BEARER_TOKEN=fs_live_REPLACE_ME",
-        "mcp", "uv", "run", "polyweb-mcp", "--transport", "stdio"
+        "mcp", "uv", "run", "--no-sync", "polyweb-mcp", "--transport", "stdio"
       ]
     }
   }
@@ -73,14 +76,14 @@ In a manual setup, run the server from your checkout instead:
     "polyweb": {
       "command": "uv",
       "args": ["run", "polyweb-mcp", "--transport", "stdio"],
-      "cwd": "/path/to/freesearch",
+      "cwd": "/path/to/polyweb-mcp",
       "env": { "POLYWEB_MCP_BEARER_TOKEN": "fs_live_REPLACE_ME" }
     }
   }
 }
 ```
 
-Over stdio the key comes from the `POLYWEB_MCP_BEARER_TOKEN` environment variable of the server process. Polyweb reads it from the process environment only, never from `.env`. Without it, every tool call is rejected. Stdio only works on the machine that runs the server, so remote agents should use the HTTP URL.
+Over stdio the key comes from the `POLYWEB_MCP_BEARER_TOKEN` environment variable of the server process. Polyweb reads it from the process environment only, never from `.env`. Without it, every tool call is rejected.
 
 ## Check the connection
 

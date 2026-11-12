@@ -12,6 +12,9 @@ export default defineConfig(({ mode }) => {
   const port = Number(env.POLYWEB_LANDING_PORT || 5274)
 
   return {
+    build: {
+      license: { fileName: "THIRD_PARTY_LICENSES.md" },
+    },
     plugins: [react()],
     server: { port },
     preview: { port },

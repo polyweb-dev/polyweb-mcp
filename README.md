@@ -59,8 +59,8 @@ Needs: Python `>= 3.12, < 3.14`, [uv](https://docs.astral.sh/uv/),
 Node.js `>= 20`, [pnpm](https://pnpm.io/).
 
 ```bash
-git clone https://github.com/sharathnirmala16/freesearch.git
-cd freesearch
+git clone https://github.com/polyweb-dev/polyweb-mcp.git
+cd polyweb-mcp
 cp .env.example .env
 # In .env set: POLYWEB_AUTH_JWT_SECRET (32+ random chars),
 # POLYWEB_API_PORT and POLYWEB_MCP_PORT (no defaults; missing = error).
@@ -81,7 +81,7 @@ Open the printed URL (main: `http://127.0.0.1:5174`). Sign in, open a
 project, and search. Full steps: [Manual setup](polyweb-docs/src/content/docs/setup/manual.md),
 [Configuration](polyweb-docs/src/content/docs/setup/configuration.md).
 Docker and contributing:
-[Quick start](polyweb-docs/src/content/docs/quick-start.md),
+[Quick start](polyweb-docs/src/content/docs/quick-start.mdx),
 [Contributing](polyweb-docs/src/content/docs/reference/contributing.md).
 
 ## Project layout
@@ -99,3 +99,11 @@ Checks: backend `uv run pytest`; UI `pnpm test` from `polyweb-ui`;
 docs `pnpm build` from `polyweb-docs`.
 
 More: [Security](polyweb-docs/src/content/docs/reference/security.md).
+
+## License
+
+Polyweb's original application code uses the [Apache License 2.0](LICENSE).
+Bundled skills and third-party materials retain their own licenses.
+See [Licensing scope](LICENSING.md) for the exceptions.
+Distribution details appear in [Third-party notices](THIRD_PARTY_NOTICES.md).
+Project credits appear in [Contributors](CONTRIBUTORS.md).

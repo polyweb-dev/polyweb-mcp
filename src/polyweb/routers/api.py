@@ -469,6 +469,12 @@ def create_app(
     app.post("/search", response_model=SearchResponse)(search)
     app.post("/fetch", response_model=FetchResponse)(fetch)
 
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        """Return a public liveness status without account or provider data."""
+
+        return {"status": "ok"}
+
     @app.get("/stats", response_model=StatsResponse)
     async def stats(
         _principal: Annotated[UserPrincipal, Depends(require_control_reader)],

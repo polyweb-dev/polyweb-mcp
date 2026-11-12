@@ -69,6 +69,7 @@ RegistrationLimit = Callable[[str], Awaitable[int | None]]
 #: Explicit public API operations and documentation routes.
 PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {
+        ("GET", "/health"),
         ("POST", "/auth/register"),
         ("POST", "/auth/jwt/login"),
         ("GET", "/docs"),

@@ -21,6 +21,8 @@ coverage/
 *.pnpm-store/
 .runtime-tmp/
 /.gitea-packages/
+/docs/
+/scripts/license_audit/
 FEEDBACK/
 .tmp/
 .secret_key

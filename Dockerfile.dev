@@ -6,6 +6,8 @@
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS dev
 
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1
@@ -15,6 +17,7 @@ ENV PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
 
 # Match the production cache id/order, but include the dev dependency group.
 COPY pyproject.toml uv.lock ./
+COPY LICENSE NOTICE LICENSING.md CONTRIBUTORS.md THIRD_PARTY_NOTICES.md ./
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project
 
