@@ -7,7 +7,9 @@
  * identifier or timing raises `TraceDecodeError`.
  */
 
+import { displayNameFromProfile } from "@/shared/lib/identity"
 import type {
+  TraceActor,
   TraceDetail,
   TraceError,
   TraceEvent,
@@ -25,6 +27,7 @@ const SPAN_ID = /^[0-9a-f]{16}$/
 const OPERATIONS: readonly TraceOperation[] = ["search", "fetch"]
 const OUTCOMES: readonly TraceOutcome[] = ["success", "partial", "error"]
 const KINDS: readonly TraceSpanKind[] = ["internal", "server", "client"]
+const ACTOR_TYPES = ["human", "project_api_key"] as const
 
 export class TraceDecodeError extends Error {
   constructor(message: string) {
@@ -64,6 +67,36 @@ function asOutcome(value: unknown): TraceOutcome {
 
 function asKind(value: unknown): TraceSpanKind {
   return KINDS.find((kind) => kind === value) ?? "internal"
+}
+
+function asOptionalText(value: unknown): string | null {
+  if (value === undefined || value === null) return null
+  return typeof value === "string" ? value : null
+}
+
+/**
+ * Decode the trace actor: human rows resolve the saved profile through the
+ * shared fallback (full name, then username, then email); API-key rows stay
+ * key-identified and never borrow a human profile. Unknown actor fields stay
+ * `null`; wrong types drop to `null` rather than failing the row.
+ */
+function mapTraceActor(record: Record<string, unknown>): TraceActor {
+  const kind = (ACTOR_TYPES as readonly string[]).includes(record.actor_type as string)
+    ? (record.actor_type as TraceActor["kind"])
+    : null
+  if (kind === "project_api_key") {
+    return { kind, displayName: null, email: null }
+  }
+  const email = asOptionalText(record.email)
+  return {
+    kind,
+    displayName: displayNameFromProfile({
+      username: asOptionalText(record.username),
+      first_name: asOptionalText(record.first_name),
+      last_name: asOptionalText(record.last_name),
+    }),
+    email,
+  }
 }
 
 function asError(value: unknown): TraceError | null {
@@ -107,6 +140,7 @@ export function mapTraceSummary(payload: unknown): TraceSummary | null {
     outcome: asOutcome(record.outcome),
     resultCount: asCount(record.result_count),
     error: asError(record.error),
+    actor: mapTraceActor(record),
   }
 }
 

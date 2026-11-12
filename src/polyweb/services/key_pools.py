@@ -180,6 +180,67 @@ async def _owned_pool(session: AsyncSession, actor: UserPrincipal, pool_id: UUID
     return pool
 
 
+async def _create_pool(
+    session: AsyncSession, actor: UserPrincipal, key_id: UUID, body: KeyPoolCreate
+) -> StoredKeyPool:
+    key = await _owned(session, actor.id, key_id)
+    if body.project_id:
+        await _require_owner(session, actor, body.project_id)
+    return await KeyPoolRepository(session).create(
+        credential_id=key_id,
+        project_id=body.project_id,
+        provider_type=key.credential.provider_type,
+        created_by=actor.id,
+        values=pool_values(key.credential.provider_type, body),
+    )
+
+
+async def _record_change(
+    session: AsyncSession,
+    actor: UserPrincipal,
+    action: str,
+    before: StoredKeyPool | None,
+    after: StoredKeyPool | None,
+    *,
+    materialize: bool = True,
+) -> StoredKeyPool:
+    """Rebuild affected projects (unless deferred) and append the pool audit event."""
+
+    if materialize:
+        for project_id in {p.project_id for p in (before, after) if p and p.project_id}:
+            await materialize_pools(session, project_id=project_id)
+    pool = after or before
+    assert pool is not None
+    await record_system_event(
+        session,
+        account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+        actor=actor,
+        action=f"vault.pool_{action}",
+        target_type="key_pool",
+        target_id=str(pool.id),
+    )
+    return pool
+
+
+async def create_pool_in_session(
+    session: AsyncSession,
+    actor: UserPrincipal,
+    key_id: UUID,
+    body: KeyPoolCreate,
+    *,
+    materialize: bool = True,
+) -> StoredKeyPool:
+    """Create one owned pool and its audit event in the caller's transaction.
+
+    Ownership and provider-owner checks are the normal service checks. A caller
+    that creates several pools sets ``materialize=False`` and rebuilds the
+    project runtime once at the end.
+    """
+
+    pool = await _create_pool(session, actor, key_id, body)
+    return await _record_change(session, actor, "created", None, pool, materialize=materialize)
+
+
 async def _view(session: AsyncSession, pool: StoredKeyPool) -> KeyPoolRead:
     try:
         module = import_module("polyweb.services.pool_budget")
@@ -260,18 +321,7 @@ class KeyPoolService:
             changes.clear()
             before, after = await operation(session)
             changes.append((before, after))
-            for project_id in {p.project_id for p in (before, after) if p and p.project_id}:
-                await materialize_pools(session, project_id=project_id)
-            pool = after or before
-            assert pool is not None
-            await record_system_event(
-                session,
-                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
-                actor=actor,
-                action=f"vault.pool_{action}",
-                target_type="key_pool",
-                target_id=str(pool.id),
-            )
+            await _record_change(session, actor, action, before, after)
             return await _view(session, after) if after else None
 
         result = await run_control_write(self._repository, write, conflict_code="POOL_CONFLICT")
@@ -280,17 +330,7 @@ class KeyPoolService:
 
     async def create(self, actor: UserPrincipal, key_id: UUID, body: KeyPoolCreate) -> KeyPoolRead:
         async def write(session: AsyncSession) -> tuple[None, StoredKeyPool]:
-            key = await _owned(session, actor.id, key_id)
-            if body.project_id:
-                await _require_owner(session, actor, body.project_id)
-            pool = await KeyPoolRepository(session).create(
-                credential_id=key_id,
-                project_id=body.project_id,
-                provider_type=key.credential.provider_type,
-                created_by=actor.id,
-                values=pool_values(key.credential.provider_type, body),
-            )
-            return None, pool
+            return None, await _create_pool(session, actor, key_id, body)
 
         result = await self._write(actor, "created", write)
         assert result is not None

@@ -8,7 +8,8 @@ export interface ProviderOrderContext {
   revision?: number
   providers: readonly ProviderTypeView[]
   canConfigure: boolean
-  owner?: string | null
+  /** Display-only owner contact guidance, e.g. `Ada Lovelace (ada@example.com)`. */
+  ownerContact?: string | null
   isOwner?: boolean
   canEditSystem?: boolean
   addCapacity?: () => void

@@ -20,6 +20,7 @@ from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
     account_id_from_pair,
+    bare_login,
     raw_auth_headers,
     register_and_login,
     register_system_admin_login,
@@ -80,14 +81,20 @@ async def test_key_reads_and_refresh_are_owner_scoped(tmp_path, monkeypatch, aut
             email = temp_email("quota-owner")
             owner = await register_system_admin_login(client, repository, email)
             project = await seed_execution_project(repository, user_id=account_id_from_pair(owner))
-            admin = await register_system_admin_login(client, repository, temp_email("quota-admin"))
+            # This actor must lose all vault authority when its system role is
+            # removed below, so it cannot own a signup-created Default project.
+            admin = await bare_login(
+                client, repository, temp_email("quota-admin"), system_admin=True
+            )
             await add_execution_member(
                 repository,
                 project_id=project.project_id,
                 user_id=account_id_from_pair(admin),
                 granted_by=account_id_from_pair(owner),
             )
-            member = register_and_login(client, temp_email("quota-member"))
+            # The member has no project of its own and so no vault authority; a
+            # public signup would now own a Default project and hold vault use.
+            member = await bare_login(client, repository, temp_email("quota-member"))
             owner_headers = raw_auth_headers(owner["access_token"])
             admin_headers = raw_auth_headers(admin["access_token"])
             member_headers = raw_auth_headers(member["access_token"])

@@ -101,7 +101,7 @@ export function ProviderOrderSection({ context }: { context: ProviderOrderContex
               {context.isOwner && context.addCapacity && <Button variant="outline" size="sm" onClick={context.addCapacity}>Add capacity</Button>}
             </div>}
             {order.providers.length === 0 ? <EmptyState title={`No provider serves ${opLabel}`}
-              description={<>No pool of this project allows {opLabel}{!context.isOwner && `. Ask ${context.owner ?? "the provider owner"} to allow ${opLabel} in a pool`}</>}
+              description={<>No pool of this project allows {opLabel}{!context.isOwner && `. Ask ${context.ownerContact ?? "the provider owner"} to allow ${opLabel} in a pool`}</>}
               action={context.isOwner ? <a href="/account/keys" className="text-[var(--signal)]">Change pools</a> : undefined} /> : <>
               <div className="flex justify-between gap-4 text-[13px] text-[var(--muted)]">
                 <p>Calls use providers from top to bottom. Unhealthy providers move to the end</p>

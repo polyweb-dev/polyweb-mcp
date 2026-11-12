@@ -402,6 +402,7 @@ class ScopedAuthorizationService:
                 if definition is None or definition.scope_type is not ScopeType.SYSTEM:
                     continue
                 permissions.update(definition.permissions)
+            permissions.add(PermissionAction.PROJECT_CREATE)
             return frozenset(permissions)
 
         if scope_id is None:

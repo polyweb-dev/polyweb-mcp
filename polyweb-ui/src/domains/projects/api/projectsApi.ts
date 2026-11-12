@@ -123,17 +123,25 @@ export async function listSystemProjects(signal: AbortSignal): Promise<Project[]
   )
 }
 
-/** Create one project naming its first administrator by email. */
+/** Create one project. Omitting both admin identifiers defaults the initial
+ * administrator to the authenticated creator; supplying exactly one of them
+ * preserves the explicit-admin flow (the other-admin email or user id). */
 export async function createProject(input: {
   name: string
   slug?: string
-  initial_admin_email: string
+  initial_admin_email?: string
+  initial_admin_user_id?: string
 }): Promise<Project> {
   const body: Record<string, unknown> = {
     name: input.name,
-    initial_admin_email: input.initial_admin_email,
   }
   if (input.slug !== undefined && input.slug !== "") body.slug = input.slug
+  if (input.initial_admin_email !== undefined && input.initial_admin_email !== "") {
+    body.initial_admin_email = input.initial_admin_email
+  }
+  if (input.initial_admin_user_id !== undefined && input.initial_admin_user_id !== "") {
+    body.initial_admin_user_id = input.initial_admin_user_id
+  }
   return decodeProject(
     await requestJson<unknown>(`${BASE}/projects`, {
       method: "POST",

@@ -4,7 +4,8 @@ import { authErrorText } from "./authErrorText"
 
 const RULE =
   "Use 12 to 128 characters with an upper-case letter, a lower-case letter, a digit, and a symbol."
-const DUPLICATE = "That email address already has an account. Sign in instead."
+const DUPLICATE =
+  "That email address or username is already in use. Choose another, or sign in to your existing account."
 const BAD_CREDENTIALS = "The email address or the password is not correct."
 const INVALID_REQUEST = "Check the email address and the password rule."
 const SESSION_ENDED = "Your session ended. Sign in again."

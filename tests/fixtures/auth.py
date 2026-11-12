@@ -160,7 +160,16 @@ def install_auth_secret(monkeypatch: pytest.MonkeyPatch) -> str:
 def register_http(client: TestClient, email: str, password: str = TEMP_PASSWORD) -> Response:
     """POST one public registration; return the raw response without asserts."""
 
-    return client.post("/auth/register", json={"email": email, "password": password})
+    return client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": password,
+            "username": f"tester-{uuid4().hex[:8]}",
+            "first_name": "Test",
+            "last_name": "User",
+        },
+    )
 
 
 def login_http(client: TestClient, email: str, password: str = TEMP_PASSWORD) -> Response:
@@ -182,6 +191,30 @@ def register_and_login(
     assert pair["token_type"] == "bearer"
     assert pair["access_token"]
     assert pair["refresh_token"]
+    return pair
+
+
+async def bare_login(
+    client: TestClient,
+    repository: SQLiteRepository,
+    email: str,
+    password: str = TEMP_PASSWORD,
+    *,
+    system_admin: bool = False,
+) -> dict[str, Any]:
+    """Create one BARE account through the fixture path, log in, return the pair.
+
+    Public signup now provisions an owned Default project with keyless pools, so
+    an account made by :func:`register_and_login` already holds project-admin
+    and vault authority. A test that needs an account with NO project (to prove
+    an unprivileged denial) uses this helper: the persistence-level creator adds
+    no workspace, and login never backfills one.
+    """
+
+    await create_temp_user(repository, email, system_admin=system_admin, password=password)
+    logged_in = login_http(client, email, password)
+    assert logged_in.status_code == 200
+    pair: dict[str, Any] = logged_in.json()
     return pair
 
 

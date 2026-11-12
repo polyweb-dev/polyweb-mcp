@@ -1,3 +1,5 @@
+import { useState } from "react"
+import { clampLimit } from "@/domains/execution"
 import { ProviderSelect } from "@/shared/ui/ProviderSelect"
 import { Button } from "@/shared/ui/button"
 import { NumericField } from "@/shared/ui/NumericField"
@@ -20,6 +22,18 @@ const providerFieldClass =
  */
 export function SearchOptions({ controller }: { controller: PlaygroundController }) {
   const { setQuery, selectedProviderId, setSelectedProviderId, eligibleProviders, resultCount, setResultCount } = controller
+  /**
+   * Whether the input is mid-edit on a blank: clearing stays visibly blank
+   * while the store always keeps a valid clamped value (a blank commits the
+   * floor, like an explicit 0), so any submit sends a sensible limit. Blur
+   * ends the edit and reveals the committed value.
+   */
+  const [clearing, setClearing] = useState(false)
+  const shown = clearing ? "" : String(resultCount)
+  const commit = (raw: string) => {
+    setClearing(raw.trim() === "")
+    setResultCount(clampLimit(Number(raw)))
+  }
   const providerOptions = [
     { value: "auto", label: "Auto" },
     { value: "all", label: "All providers" },
@@ -76,8 +90,9 @@ export function SearchOptions({ controller }: { controller: PlaygroundController
             label="Number of results"
             min={1}
             step={1}
-            value={String(resultCount)}
-            onChange={(value) => setResultCount(Math.min(100, Math.max(1, Math.trunc(Number(value)))))}
+            value={shown}
+            onChange={commit}
+            onBlur={() => setClearing(false)}
           />
         </div>
       </div>

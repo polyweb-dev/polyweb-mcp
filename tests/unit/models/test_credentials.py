@@ -187,3 +187,99 @@ def test_project_projection_allows_manage_and_generation() -> None:
     )
     assert read.can_manage is True
     assert read.generation == 2
+
+
+# --- Owned keyless contract (TASK-000065) ------------------------------------
+#
+# A fresh signup can create an owned keyless/free-tier credential without an
+# API key and then assign a pool for it. Keyed/OAuth guards below stay green
+# through that change.
+
+
+def test_keyless_credential_create_needs_no_secret() -> None:
+    created = CredentialCreate.model_validate(
+        {
+            "provider_type": "keenable",
+            "label": "free-tier",
+            "auth_mode": "keyless",
+        }
+    )
+    assert created.auth_mode is CredentialAuthMode.KEYLESS
+    assert created.secret is None
+
+
+def test_api_key_credential_still_requires_secret() -> None:
+    with pytest.raises(ValidationError):
+        CredentialCreate.model_validate(
+            {
+                "provider_type": "tavily",
+                "label": "keyed",
+                "auth_mode": "api_key",
+            }
+        )
+
+
+def test_oauth_credential_still_forbids_secret() -> None:
+    with pytest.raises(ValidationError):
+        CredentialCreate.model_validate(
+            {
+                "provider_type": "tavily",
+                "label": "oauth",
+                "auth_mode": "oauth",
+                "secret": "fake-p08-secret-value",
+            }
+        )
+
+
+def test_oauth_credential_without_secret_still_valid() -> None:
+    created = CredentialCreate.model_validate(
+        {
+            "provider_type": "tavily",
+            "label": "oauth",
+            "auth_mode": "oauth",
+        }
+    )
+    assert created.auth_mode is CredentialAuthMode.OAUTH
+    assert created.secret is None
+
+
+def test_keyless_credential_forbids_secret() -> None:
+    with pytest.raises(ValidationError):
+        CredentialCreate.model_validate(
+            {
+                "provider_type": "keenable",
+                "label": "free-tier",
+                "auth_mode": "keyless",
+                "secret": "fake-p08-secret-value",
+            }
+        )
+
+
+def test_keyless_create_validation_rejects_unsupported_provider() -> None:
+    from polyweb.services.credentials import CredentialService, CredentialValidationError
+
+    with pytest.raises(CredentialValidationError, match="does not support keyless"):
+        CredentialService._validate_create(
+            CredentialCreate.model_validate(
+                {
+                    "provider_type": "exa",
+                    "label": "free-tier",
+                    "auth_mode": "keyless",
+                }
+            )
+        )
+
+
+def test_keyless_create_validation_accepts_supported_providers() -> None:
+    from polyweb.services.credentials import CredentialService
+
+    for provider in ("keenable", "tavily"):
+        CredentialService._validate_create(
+            CredentialCreate.model_validate(
+                {
+                    "provider_type": provider,
+                    "label": "free-tier",
+                    "auth_mode": "keyless",
+                }
+            )
+        )

@@ -76,3 +76,15 @@ it("shows progress and prevents duplicate saves while pending", async () => {
   finish(ok({ ...member, permissions: 13 }))
   await waitFor(() => expect(saved).toHaveBeenCalledOnce())
 })
+
+it("titles the dialog with the member display name and email fallback", () => {
+  render(
+    <MemberPermissionsDialog
+      projectId="p1"
+      member={{ ...member, username: "devvy", first_name: "Dev", last_name: "Eloper" }}
+      onClose={vi.fn()}
+      onSaved={vi.fn()}
+    />
+  )
+  expect(screen.getByRole("dialog", { name: "Permissions for Dev Eloper (dev@example.com)" })).toBeInTheDocument()
+})

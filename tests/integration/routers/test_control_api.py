@@ -916,6 +916,14 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
     with TestClient(app) as client:
         pair = await register_system_admin_login(client, repository, temp_email("control-delete"))
         headers = raw_auth_headers(pair["access_token"])
+        # Signup already gave the owner its two keyless default keys; deleting the
+        # key created here must leave exactly those behind.
+        defaults = {
+            item["id"]: item
+            for item in client.get("/api/v1/account/vault/keys", headers=headers).json()
+        }
+        assert {item["provider_type"] for item in defaults.values()} == {"keenable", "tavily"}
+        assert all(item["auth_mode"] == "keyless" for item in defaults.values())
         write = client.post(
             "/api/v1/account/vault/keys",
             headers=headers,
@@ -931,7 +939,9 @@ async def test_secret_delete_is_idempotent_and_removes_stored_value(
         assert await app.state.secret_store.get(slot) is None
         assert await repository.get_runtime_setting("secret.enc:" + slot) is None
         listed = client.get("/api/v1/account/vault/keys", headers=headers)
-        assert listed.status_code == 200 and listed.json() == []
+        assert listed.status_code == 200
+        assert body["id"] not in {item["id"] for item in listed.json()}
+        assert {item["id"]: item for item in listed.json()} == defaults
 
 
 @pytest.mark.asyncio
@@ -994,7 +1004,7 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
     tmp_path: Path,
     auth_secret: str,
 ) -> None:
-    """Origin: keyless transition; deletion cannot silently bypass a project binding."""
+    """Origin: keyless transition; deletion requires an explicit replacement pool."""
     import httpx
 
     from polyweb.adapters.keenable import KeenableAdapter
@@ -1035,7 +1045,36 @@ async def test_secret_delete_keenable_reverts_to_keyless_mode(
             return build
 
         monkeypatch.setattr("polyweb.services.execution.adapter_factory", keyless_factory)
-        assert client.post("/search", headers=headers, json=payload).status_code == 200
+        missing = client.post("/search", headers=headers, json=payload)
+        assert missing.status_code == 503, missing.text
+        assert "keenable" in missing.json()["detail"]
+        assert "pool" in missing.json()["detail"]
+        assert "timeout" not in missing.json()["detail"].lower()
+        assert adapter.search_calls == 1
+        keyless = client.post(
+            "/api/v1/account/vault/keys",
+            headers=headers,
+            json={"provider_type": "keenable", "label": "free-tier", "auth_mode": "keyless"},
+        )
+        assert keyless.status_code == 201, keyless.text
+        assert keyless.json()["auth_mode"] == "keyless"
+        # Creating a key alone must not grant execution access.
+        assert client.post("/search", headers=headers, json=payload).status_code == 503
+        assert adapter.search_calls == 1
+        pool = client.post(
+            f"/api/v1/account/vault/keys/{keyless.json()['id']}/pools",
+            headers=headers,
+            json={"label": "free-tier", "project_id": pid, "operations": ["search"]},
+        )
+        assert pool.status_code == 201, pool.text
+        response = client.post("/search", headers=headers, json=payload)
+        assert response.status_code == 200, response.text
+        assert adapter.search_calls == 2
+        unassigned = client.post(
+            f"/api/v1/account/vault/pools/{pool.json()['id']}/unassign", headers=headers
+        )
+        assert unassigned.status_code == 200, unassigned.text
+        assert client.post("/search", headers=headers, json=payload).status_code == 503
         assert adapter.search_calls == 2
         _create_bound_provider(client, pid, "keenable", "keenable-key-rotated", headers)
         install_adapter_map(monkeypatch, [adapter], secrets={"keenable": "keenable-key-rotated"})

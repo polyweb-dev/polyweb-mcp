@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
+from contextlib import closing
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +19,7 @@ from uuid import UUID, uuid4
 from behave import given, then, when  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 from fastapi_users.password import PasswordHelper
+from pydantic import SecretStr
 from sqlalchemy import select
 
 from polyweb.adapters.base import ProviderAdapter
@@ -35,6 +37,7 @@ from polyweb.models.contracts import (
     UsageOperation,
 )
 from polyweb.models.project_permissions import ProjectPermission
+from polyweb.models.provider_limits import AuthMode
 from polyweb.models.users import AuthProvider, normalize_email
 from polyweb.persistence.database_migrations import (
     DatabaseResetRequired,
@@ -46,7 +49,7 @@ from polyweb.persistence.database_migrations import (
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.persistence.users import UserDatabase, UserRow, local_password_hash
 from polyweb.routers.api import create_app
-from tests.fixtures.auth import account_id_from_pair, configure_bdd_secret
+from tests.fixtures.auth import account_id_from_pair, auth_service_for, configure_bdd_secret
 from tests.fixtures.execution import _install_bdd_adapters, bdd_project_id
 from tests.fixtures.project_order import seed_order_pools
 
@@ -423,7 +426,7 @@ def step_when_users_search(context: Any) -> None:
     with TestClient(context.app) as client:
         registered = client.post(
             "/auth/register",
-            json={"email": "users-search@example.com", "password": _TEST_PASSWORD},
+            json=_auth_signup_payload("users-search@example.com", _TEST_PASSWORD),
         )
         assert registered.status_code == 201
         logged_in = client.post(
@@ -464,6 +467,27 @@ def step_then_case_insensitive_lookup(context: Any) -> None:
 
 _AUTH_PASSWORD = "StrongPass123!x-AuthBDD"
 
+_BDD_FIRST_NAME = "Ada"
+_BDD_LAST_NAME = "Lovelace"
+
+
+def _expected_username(email: str) -> str:
+    """Return the deterministic signup username derived from one email."""
+
+    return email.split("@")[0].strip().lower()[:64] or "user"
+
+
+def _auth_signup_payload(email: str, password: str = _AUTH_PASSWORD) -> dict[str, str]:
+    """Return one valid public-signup body with all mandatory profile fields."""
+
+    return {
+        "email": email,
+        "password": password,
+        "username": _expected_username(email),
+        "first_name": _BDD_FIRST_NAME,
+        "last_name": _BDD_LAST_NAME,
+    }
+
 
 def _configure_auth_secret(context: Any) -> None:
     """Point this scenario at a generated signing secret, restored on cleanup."""
@@ -487,9 +511,7 @@ def _auth_client(context: Any) -> TestClient:
 def step_when_auth_register(context: Any, email: str) -> None:
     context.auth_email = email
     with _auth_client(context) as client:
-        context.register_response = client.post(
-            "/auth/register", json={"email": email, "password": _AUTH_PASSWORD}
-        )
+        context.register_response = client.post("/auth/register", json=_auth_signup_payload(email))
 
 
 @then("the registration should create an ordinary account without tokens")
@@ -498,6 +520,9 @@ def step_then_auth_register_ok(context: Any) -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["email"] == context.auth_email.lower()
+    assert body["username"] == _expected_username(context.auth_email)
+    assert body["first_name"] == _BDD_FIRST_NAME
+    assert body["last_name"] == _BDD_LAST_NAME
     assert "role" not in body
     assert "is_superuser" not in body
     assert body["is_active"] is True
@@ -542,6 +567,9 @@ def step_then_auth_me_ok(context: Any) -> None:
     assert context.me_response.status_code == 200
     body = context.me_response.json()
     assert body["email"] == context.auth_email.lower()
+    assert body["username"] == _expected_username(context.auth_email)
+    assert body["first_name"] == _BDD_FIRST_NAME
+    assert body["last_name"] == _BDD_LAST_NAME
     assert "role" not in body
     assert "hashed_password" not in body
 
@@ -559,6 +587,25 @@ def step_when_auth_wrong_password(context: Any) -> None:
 def step_then_auth_bad_login(context: Any) -> None:
     assert context.bad_login_response.status_code == 400
     assert "WrongPass123" not in context.bad_login_response.text
+
+
+@when("I sign up with profile names and sign in")
+def step_when_signup_with_profile_and_signin(context: Any) -> None:
+    context.auth_email = "self-service@example.com"
+    with _auth_client(context) as client:
+        registered = client.post("/auth/register", json=_auth_signup_payload(context.auth_email))
+        assert registered.status_code == 201, registered.text
+        context.register_response = registered
+        body = registered.json()
+        assert body["username"] == _expected_username(context.auth_email)
+        assert body["first_name"] == _BDD_FIRST_NAME
+        assert body["last_name"] == _BDD_LAST_NAME
+        logged_in = client.post(
+            "/auth/jwt/login",
+            data={"username": context.auth_email, "password": _AUTH_PASSWORD},
+        )
+        assert logged_in.status_code == 200, logged_in.text
+        context.auth_pair = logged_in.json()
 
 
 @when("I read my account without a token")
@@ -586,7 +633,7 @@ def step_when_auth_weak_password(context: Any, password: str) -> None:
     with _auth_client(context) as client:
         context.register_response = client.post(
             "/auth/register",
-            json={"email": f"weak-{uuid4().hex[:8]}@example.com", "password": password},
+            json=_auth_signup_payload(f"weak-{uuid4().hex[:8]}@example.com", password),
         )
 
 
@@ -623,18 +670,12 @@ def step_when_auth_registration_limit(context: Any) -> None:
         for index in range(5):
             probe = client.post(
                 "/auth/register",
-                json={
-                    "email": f"capped-{index}-{uuid4().hex[:6]}@example.com",
-                    "password": _AUTH_PASSWORD,
-                },
+                json=_auth_signup_payload(f"capped-{index}-{uuid4().hex[:6]}@example.com"),
             )
             assert probe.status_code == 201
         context.limit_response = client.post(
             "/auth/register",
-            json={
-                "email": f"capped-last-{uuid4().hex[:6]}@example.com",
-                "password": _AUTH_PASSWORD,
-            },
+            json=_auth_signup_payload(f"capped-last-{uuid4().hex[:6]}@example.com"),
         )
 
 
@@ -740,8 +781,7 @@ def step_when_auth_register_oversize(context: Any) -> None:
         context.oversize_response = client.post(
             "/auth/register",
             json={
-                "email": "oversize@example.com",
-                "password": _AUTH_PASSWORD,
+                **_auth_signup_payload("oversize@example.com"),
                 "pad": _OVERSIZE_PAD,
             },
         )
@@ -1174,7 +1214,8 @@ def step_when_register_with_role(context: Any, role: str, email: str) -> None:
     context.auth_role = role
     with _auth_client(context) as client:
         context.register_response = client.post(
-            "/auth/register", json={"email": email, "password": _AUTH_PASSWORD, "role": role}
+            "/auth/register",
+            json={**_auth_signup_payload(email), "role": role},
         )
 
 
@@ -1182,10 +1223,290 @@ def step_when_register_with_role(context: Any, role: str, email: str) -> None:
 def step_then_role_signup_refused(context: Any) -> None:
     response = context.register_response
     assert response.status_code == 422
-    assert response.json() == {"detail": "invalid authentication request"}
+    payload = response.json()
+    assert isinstance(payload, dict)
+    detail = payload.get("detail")
+    assert isinstance(detail, list) and detail
+    assert any(entry.get("loc") == ["body", "role"] for entry in detail)
     assert _AUTH_PASSWORD not in response.text
+    assert "role" in response.text
     with _auth_client(context) as client:
         login = client.post(
             "/auth/jwt/login", data={"username": context.auth_email, "password": _AUTH_PASSWORD}
         )
         assert login.status_code == 400
+
+
+_KEYLESS_PROVIDERS = ("keenable", "tavily")
+
+
+class _KeylessLedger:
+    """Every adapter construction and provider call of one scenario."""
+
+    def __init__(self) -> None:
+        self.built: list[str] = []
+        self.calls: list[tuple[str, str]] = []
+
+
+class _KeylessCountingAdapter(_UsersStubAdapter):
+    def __init__(self, name: str, ledger: _KeylessLedger) -> None:
+        super().__init__(name)
+        self._ledger = ledger
+
+    @property
+    def limit_auth_mode(self) -> AuthMode:
+        """Report the keyless rail so execution admits through the keyless limits."""
+
+        return AuthMode.KEYLESS
+
+    async def search(self, request: SearchRequest) -> SearchResponse:
+        self._ledger.calls.append(("search", self.name))
+        return await super().search(request)
+
+
+@given("keyless provider adapters that count every call")
+def step_given_keyless_counting_adapters(context: Any) -> None:
+    """Route Tavily and Keenable execution to counting fakes that refuse any secret."""
+
+    import pytest
+
+    import polyweb.services.execution as execution
+
+    ledger = _KeylessLedger()
+    context.keyless_ledger = ledger
+
+    def factory(name: str) -> Any:
+        if name not in _KEYLESS_PROVIDERS:
+            return None
+
+        def build(
+            client: Any,
+            api_key: Any = None,
+            key_environment: str = "dev",
+            paygo_enabled: bool = False,
+        ) -> Any:
+            del client, key_environment, paygo_enabled
+            assert api_key is None, "default keyless pools must never carry a secret"
+            ledger.built.append(name)
+            return _KeylessCountingAdapter(name, ledger)
+
+        return build
+
+    patcher = getattr(context, "_execution_patcher", None)
+    if patcher is None:
+        patcher = pytest.MonkeyPatch()
+        context._execution_patcher = patcher
+    patcher.setattr(execution, "adapter_factory", factory)
+
+
+def _bearer(context: Any) -> dict[str, str]:
+    return {"Authorization": f"Bearer {context.auth_pair['access_token']}"}
+
+
+def _database_count(context: Any, sql: str, *parameters: object) -> int:
+    with closing(sqlite3.connect(str(context.database_path))) as connection:
+        return int(connection.execute(sql, parameters).fetchone()[0])
+
+
+@then("the default project should be visible with creator administration and two keyless pools")
+def step_then_default_project_visible(context: Any) -> None:
+    from polyweb.models.projects import BuiltinRole
+
+    owner_id = context.register_response.json()["id"]
+    with _auth_client(context) as client:
+        listed = client.get("/api/v1/projects", headers=_bearer(context))
+        assert listed.status_code == 200, listed.text
+        projects = listed.json()
+        assert [project["name"] for project in projects] == ["Default"], projects
+        default = projects[0]
+        assert default["created_by"] == owner_id
+        assert default["status"] == "active"
+        context.default_project_id = default["id"]
+
+        access = client.get(
+            f"/api/v1/projects/{context.default_project_id}/access", headers=_bearer(context)
+        )
+        assert access.status_code == 200, access.text
+        assert access.json()["roles"] == [BuiltinRole.PROJECT_ADMIN.value]
+        # Project administration only: the creator gains no system authority.
+        assert client.get("/api/v1/routing/config", headers=_bearer(context)).status_code == 403
+
+        pools = client.get(
+            f"/api/v1/projects/{context.default_project_id}/pools", headers=_bearer(context)
+        )
+        assert pools.status_code == 200, pools.text
+        assert sorted(pool["provider_type"] for pool in pools.json()) == list(_KEYLESS_PROVIDERS)
+        assert all(pool["owner"]["user_id"] == owner_id for pool in pools.json())
+
+
+@then("signup and login should have created no API key, no secret and no provider call")
+def step_then_nothing_extra_created(context: Any) -> None:
+    owner_id = context.register_response.json()["id"]
+    with _auth_client(context) as client:
+        keys = client.get(
+            f"/api/v1/projects/{context.default_project_id}/api-keys", headers=_bearer(context)
+        )
+        assert keys.status_code == 200, keys.text
+        assert keys.json() == []
+    assert _database_count(context, "SELECT COUNT(*) FROM project_api_keys") == 0
+    assert (
+        _database_count(context, "SELECT COUNT(*) FROM runtime_settings WHERE key LIKE 'secret.%'")
+        == 0
+    )
+    assert (
+        _database_count(
+            context,
+            "SELECT COUNT(*) FROM provider_credentials "
+            "WHERE owner_user_id = ? AND auth_mode != 'keyless'",
+            owner_id,
+        )
+        == 0
+    )
+    assert context.keyless_ledger.built == []
+    assert context.keyless_ledger.calls == []
+
+
+@when("I sign in again twice")
+def step_when_sign_in_again_twice(context: Any) -> None:
+    with _auth_client(context) as client:
+        for _ in range(2):
+            logged_in = client.post(
+                "/auth/jwt/login",
+                data={"username": context.auth_email, "password": _AUTH_PASSWORD},
+            )
+            assert logged_in.status_code == 200, logged_in.text
+            context.auth_pair = logged_in.json()
+
+
+@then("the account should still own exactly one default project with two pools")
+def step_then_still_one_default_project(context: Any) -> None:
+    owner_id = context.register_response.json()["id"]
+    assert (
+        _database_count(context, "SELECT COUNT(*) FROM projects WHERE created_by = ?", owner_id)
+        == 1
+    )
+    assert _database_count(context, "SELECT COUNT(*) FROM key_pools") == len(_KEYLESS_PROVIDERS)
+    assert _database_count(
+        context,
+        "SELECT COUNT(*) FROM provider_credentials WHERE owner_user_id = ?",
+        owner_id,
+    ) == len(_KEYLESS_PROVIDERS)
+    assert context.keyless_ledger.built == []
+
+
+@when("I issue a project API key explicitly")
+def step_when_issue_project_key(context: Any) -> None:
+    with _auth_client(context) as client:
+        issued = client.post(
+            f"/api/v1/projects/{context.default_project_id}/api-keys",
+            json={"label": "default agent"},
+            headers=_bearer(context),
+        )
+    assert issued.status_code == 201, issued.text
+    context.project_key = issued.json()["key"]
+
+
+async def _users_mcp_search(context: Any, provider: str) -> Any:
+    from polyweb.mcp.server import create_server, shutdown_injected_observability
+
+    server = create_server(
+        context.adapters,
+        repository=context.repository,
+        auth_service=auth_service_for(context.repository),
+        stdio_token=SecretStr(context.project_key),
+    )
+    try:
+        async with server._mcp_server.lifespan(server):
+            return await server.call_tool(
+                "search",
+                {
+                    "request": {
+                        "query": f"{provider} mcp",
+                        "routing": {"mode": "require", "providers": [provider]},
+                    }
+                },
+            )
+    finally:
+        await shutdown_injected_observability(server)
+
+
+@then("that key should search the default pools over REST and MCP")
+def step_then_key_searches_default_pools(context: Any) -> None:
+    with _auth_client(context) as client:
+        rest = client.post(
+            "/search",
+            json={
+                "query": "keenable rest",
+                "routing": {"mode": "require", "providers": ["keenable"]},
+            },
+            headers={"Authorization": f"Bearer {context.project_key}"},
+        )
+    assert rest.status_code == 200, rest.text
+    assert rest.json()["provider"] == "keenable"
+    result = context.loop.run_until_complete(_users_mcp_search(context, "tavily"))
+    assert result[1]["provider"] == "tavily"
+    assert context.keyless_ledger.calls == [("search", "keenable"), ("search", "tavily")]
+
+
+@when("I create an additional project with only a name")
+def step_when_additional_project_name_only(context: Any) -> None:
+    token = context.auth_pair["access_token"]
+    with _auth_client(context) as client:
+        response = client.post(
+            "/api/v1/projects",
+            json={"name": "Additional Project"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 201, response.text
+        context.project_id = response.json()["id"]
+        login = client.post(
+            "/auth/jwt/login",
+            data={"username": context.auth_email, "password": _AUTH_PASSWORD},
+        )
+        assert login.status_code == 200
+        context.auth_pair = login.json()
+
+
+@then(
+    "the additional project stays visible beside the default with durable creator "
+    "administration, my profile and no pools"
+)
+def step_then_additional_project_admin_durable(context: Any) -> None:
+    from polyweb.models.projects import BuiltinRole
+
+    token = context.auth_pair["access_token"]
+    with _auth_client(context) as client:
+        listed = client.get("/api/v1/projects", headers={"Authorization": f"Bearer {token}"})
+        assert listed.status_code == 200
+        assert {item["id"] for item in listed.json()} == {
+            context.default_project_id,
+            context.project_id,
+        }
+
+        access = client.get(
+            f"/api/v1/projects/{context.project_id}/access",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert access.status_code == 200
+        assert access.json()["project_id"] == context.project_id
+        assert BuiltinRole.PROJECT_ADMIN.value in access.json()["roles"]
+
+        # A manual project stays empty: onboarding never copies pools into it.
+        manual_pools = client.get(
+            f"/api/v1/projects/{context.project_id}/pools",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert manual_pools.status_code == 200
+        assert manual_pools.json() == []
+        default_pools = client.get(
+            f"/api/v1/projects/{context.default_project_id}/pools",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert len(default_pools.json()) == len(_KEYLESS_PROVIDERS)
+
+        me = client.get("/users/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+        body = me.json()
+        assert body["username"] == _expected_username(context.auth_email)
+        assert body["first_name"] == _BDD_FIRST_NAME
+        assert body["last_name"] == _BDD_LAST_NAME

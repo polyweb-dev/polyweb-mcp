@@ -11,6 +11,9 @@ afterEach(() => {
 })
 
 const EMAIL = "new-agent@example.com"
+const USERNAME = "new-agent"
+const FIRST = "Ada"
+const LAST = "Lovelace"
 const PASSWORD = "correct-horse-battery-99"
 const MISMATCH = "different-horse-battery-11"
 
@@ -26,6 +29,9 @@ function fillForm(email: string, password: string, confirmation: string): void {
   if (email !== "") {
     fireEvent.change(screen.getByLabelText("Email"), { target: { value: email } })
   }
+  fireEvent.change(screen.getByLabelText("Username"), { target: { value: USERNAME } })
+  fireEvent.change(screen.getByLabelText("First name"), { target: { value: FIRST } })
+  fireEvent.change(screen.getByLabelText("Last name"), { target: { value: LAST } })
   if (password !== "") {
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: password } })
   }
@@ -37,11 +43,14 @@ function fillForm(email: string, password: string, confirmation: string): void {
 }
 
 describe("RegisterPage", () => {
-  it("renders the three labels and the 12-128 password hint", () => {
+  it("renders the profile fields and the 12-128 password hint", () => {
     stubUnreachable()
     renderRegister()
 
     expect(screen.getByLabelText("Email")).toBeInTheDocument()
+    expect(screen.getByLabelText("Username")).toBeInTheDocument()
+    expect(screen.getByLabelText("First name")).toBeInTheDocument()
+    expect(screen.getByLabelText("Last name")).toBeInTheDocument()
     expect(screen.getByLabelText("Password")).toBeInTheDocument()
     expect(screen.getByLabelText("Confirm password")).toBeInTheDocument()
     expect(screen.getByText("Use 12 to 128 characters.")).toBeInTheDocument()
@@ -66,9 +75,43 @@ describe("RegisterPage", () => {
     fillForm("", PASSWORD, PASSWORD)
     await user.click(screen.getByRole("button", { name: "Create account" }))
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Enter your email address.")
+    expect(await screen.findByText("Enter your email address.")).toBeInTheDocument()
+    expect(document.getElementById("register-email-error")).toHaveTextContent(
+      "Enter your email address."
+    )
+    expect(screen.getByLabelText("Email")).toHaveAttribute("aria-invalid", "true")
     expect(stub.requests).toHaveLength(0)
   })
+
+  it.each([
+    ["Username", "register-username-error", "", "Enter a username."],
+    ["Username", "register-username-error", "   ", "Enter a username."],
+    ["First name", "register-first-name-error", "", "Enter your first name."],
+    ["First name", "register-first-name-error", "   ", "Enter your first name."],
+    ["Last name", "register-last-name-error", "", "Enter your last name."],
+    ["Last name", "register-last-name-error", "   ", "Enter your last name."],
+  ] as Array<[string, string, string, string]>)(
+    "rejects a blank or whitespace-only %s without a fetch",
+    async (label, errorId, value, message) => {
+      const user = userEvent.setup()
+      const stub = stubUnreachable()
+      renderRegister()
+
+      fireEvent.change(screen.getByLabelText("Email"), { target: { value: EMAIL } })
+      fireEvent.change(screen.getByLabelText("Username"), { target: { value: USERNAME } })
+      fireEvent.change(screen.getByLabelText("First name"), { target: { value: FIRST } })
+      fireEvent.change(screen.getByLabelText("Last name"), { target: { value: LAST } })
+      fireEvent.change(screen.getByLabelText(label), { target: { value } })
+      fireEvent.change(screen.getByLabelText("Password"), { target: { value: PASSWORD } })
+      fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: PASSWORD } })
+      await user.click(screen.getByRole("button", { name: "Create account" }))
+
+      expect(await screen.findByText(message)).toBeInTheDocument()
+      expect(document.getElementById(errorId)).toHaveTextContent(message)
+      expect(screen.getByLabelText(label)).toHaveAttribute("aria-invalid", "true")
+      expect(stub.requests).toHaveLength(0)
+    }
+  )
 
   it("rejects mismatched passwords without a fetch", async () => {
     const user = userEvent.setup()
@@ -111,7 +154,7 @@ describe("RegisterPage", () => {
     expect(stub.requests).toHaveLength(0)
   })
 
-  it("creates the account and sends exactly the email and the password", async () => {
+  it("creates the account and sends the trimmed email, username, and names", async () => {
     const user = userEvent.setup()
     const stub = installFetchStub((req) => {
       if (req.url === "/auth/register" && req.method === "POST") {
@@ -121,7 +164,12 @@ describe("RegisterPage", () => {
     })
     renderRegister()
 
-    fillForm(EMAIL, PASSWORD, PASSWORD)
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: `  ${EMAIL}  ` } })
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: `  ${USERNAME}  ` } })
+    fireEvent.change(screen.getByLabelText("First name"), { target: { value: `  ${FIRST}  ` } })
+    fireEvent.change(screen.getByLabelText("Last name"), { target: { value: `  ${LAST}  ` } })
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: PASSWORD } })
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: PASSWORD } })
     await user.click(screen.getByRole("button", { name: "Create account" }))
 
     expect(await screen.findByText("Account created")).toBeInTheDocument()
@@ -132,7 +180,20 @@ describe("RegisterPage", () => {
     const [only] = stub.requests
     expect(only?.url).toBe("/auth/register")
     expect(only?.method).toBe("POST")
-    expect(only?.body).toEqual({ email: EMAIL, password: PASSWORD })
+    expect(only?.body).toEqual({
+      email: EMAIL,
+      password: PASSWORD,
+      username: USERNAME,
+      first_name: FIRST,
+      last_name: LAST,
+    })
+    expect(Object.keys(only?.body as object).sort()).toEqual([
+      "email",
+      "first_name",
+      "last_name",
+      "password",
+      "username",
+    ])
     expect(stub.requests.every((req) => req.url === "/auth/register")).toBe(true)
   })
 
@@ -167,6 +228,32 @@ describe("RegisterPage", () => {
     expect(screen.getByRole("link", { name: "Go to sign in" })).toBeInTheDocument()
     expect(stub.requests).toHaveLength(1)
     expect(stub.requests.some((req) => req.url.startsWith("/auth/jwt"))).toBe(false)
+  })
+
+  it("maps FastAPI 422 field details onto their fields", async () => {
+    const user = userEvent.setup()
+    const stub = installFetchStub((req) => {
+      if (req.url === "/auth/register" && req.method === "POST") {
+        return err(422, {
+          detail: [
+            { loc: ["body", "username"], msg: "Username is too short.", type: "string_too_short" },
+            { loc: ["body", "first_name"], msg: "First name is required.", type: "value_error" },
+          ],
+        })
+      }
+      return err(404, { detail: "unhandled test route" })
+    })
+    renderRegister()
+
+    fillForm(EMAIL, PASSWORD, PASSWORD)
+    await user.click(screen.getByRole("button", { name: "Create account" }))
+
+    expect(await screen.findByText("Username is too short.")).toBeInTheDocument()
+    expect(screen.getByText("First name is required.")).toBeInTheDocument()
+    expect(screen.getByLabelText("Username")).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByLabelText("First name")).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByLabelText("Last name")).not.toHaveAttribute("aria-invalid")
+    expect(stub.requests).toHaveLength(1)
   })
 
   it("shows the safe server message for a duplicate email", async () => {
@@ -227,7 +314,7 @@ describe("RegisterPage", () => {
     await user.click(screen.getByRole("button", { name: "Create account" }))
 
     const alert = await screen.findByRole("alert")
-    expect(alert).toHaveTextContent("That email address already has an account. Sign in instead.")
+    expect(alert).toHaveTextContent("That email address or username is already in use. Choose another, or sign in to your existing account.")
     expect(alert.textContent ?? "").not.toContain("REGISTER_USER_ALREADY_EXISTS")
   })
 

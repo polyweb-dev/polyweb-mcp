@@ -1,3 +1,4 @@
+import { MinusCircle, Pencil } from "lucide-react"
 import type { ProjectPool, ProviderOwner } from "@/domains/projects"
 import type { ProviderTypeView } from "@/domains/providers"
 import type { PoolOperation } from "@/domains/vault"
@@ -6,6 +7,7 @@ import type { ScopedResource } from "@/shared/lib/useScopedResource"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/EmptyState"
 import { RowActionsMenu } from "@/shared/ui/RowActionsMenu"
+import { identityDetailLabel } from "@/shared/lib/identity"
 import type { ProjectProvidersController } from "../model/useProjectProvidersController"
 import { ProjectPoolCell } from "./ProjectPoolCell"
 import { ProviderOrderSection } from "./ProviderOrderSection"
@@ -29,26 +31,13 @@ interface Props {
   operationPending: boolean
 }
 
-function renderPoolMenu({ pool, name, isOwner, edit, unassign }: {
-  pool: ProjectPool | undefined
-  name: string
-  isOwner: boolean
-  edit: (pool: ProjectPool) => void
-  unassign: (pool: ProjectPool) => void
-}) {
-  if (!isOwner || !pool) return null
-  return <RowActionsMenu label={`Actions for ${name}`} actions={[
-    { key: "edit", label: "Edit pool", onSelect: () => edit(pool) },
-    { key: "unassign", label: "Unassign", danger: true, onSelect: () => unassign(pool) },
-  ]} />
-}
-
 function renderReadyContent(props: Omit<Props, "pools"> & { pools: ProjectPool[]; providers: ProviderTypeView[] }) {
   const { projectId, revision, providers, pools, owner, isOwner, canConfigure, missing } = props
-  const ownerEmail = owner.status === "ready" ? owner.data?.email : null
+  const ownerEntry = owner.status === "ready" ? owner.data : null
+  const ownerContact = ownerEntry === null || ownerEntry === undefined ? null : identityDetailLabel(ownerEntry)
   return <>
     <ProviderOrderSection key={projectId} context={{
-      projectId, revision, providers, canConfigure, owner: ownerEmail, isOwner,
+      projectId, revision, providers, canConfigure, ownerContact, isOwner,
       canEditSystem: props.canEditSystem, addCapacity: missing.length > 0 ? () => props.add() : undefined,
       poolOperations: (provider) => pools.find((pool) => pool.provider_type === provider)?.operations,
       changePoolOperation: (provider, operation, enabled) => {
@@ -57,16 +46,21 @@ function renderReadyContent(props: Omit<Props, "pools"> & { pools: ProjectPool[]
       },
       operationPending: props.operationPending,
       renderPool: (item, operation) => <ProjectPoolCell pool={pools.find((pool) => pool.provider_type === item.provider)} operation={operation} />,
-      renderMenu: (item) => item.keyless
-        ? isOwner && <RowActionsMenu label={`Actions for ${item.name}`} actions={[
-          { key: "add", label: "Add a key for higher limits", onSelect: () => props.add(item.provider) },
-        ]} />
-        : renderPoolMenu({ pool: pools.find((pool) => pool.provider_type === item.provider),
-          name: item.name, isOwner, edit: props.edit, unassign: props.unassign }),
+      renderMenu: (item) => {
+        if (!isOwner) return null
+        const pool = pools.find((entry) => entry.provider_type === item.provider)
+        if (pool !== undefined) {
+          return <RowActionsMenu label={`Actions for ${item.name}`} actions={[
+            { key: "edit", label: "Edit pool", icon: Pencil, onSelect: () => props.edit(pool) },
+            { key: "unassign", label: "Unassign", icon: MinusCircle, danger: true, onSelect: () => props.unassign(pool) },
+          ]} />
+        }
+        return null
+      },
     }} />
     <ProvidersWithoutCapacity providers={missing} isOwner={isOwner} onAdd={props.add} />
     {providers.length === 0 && pools.length === 0 && <EmptyState title="No providers yet" description={isOwner
-      ? "Add provider capacity to use providers" : `No provider has capacity yet. Ask ${ownerEmail ?? "the provider owner"} to add it`} />}
+      ? "Add provider capacity to use providers" : `No provider has capacity yet. Ask ${ownerContact ?? "the provider owner"} to add it`} />}
   </>
 }
 

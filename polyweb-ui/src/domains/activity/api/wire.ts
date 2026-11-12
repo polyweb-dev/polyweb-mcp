@@ -20,6 +20,12 @@ export interface BackendTraceError {
 export interface BackendTraceSummary {
   trace_id: string
   user_id?: string | null
+  actor_type?: "human" | "project_api_key" | null
+  actor_id?: string | null
+  username?: string | null
+  first_name?: string | null
+  last_name?: string | null
+  email?: string | null
   operation: BackendTraceOperation | null
   started_at: string
   duration_ms: number

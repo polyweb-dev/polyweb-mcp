@@ -642,3 +642,179 @@ describe("mapTraceDetail span provider identity", () => {
     }
   })
 })
+
+/**
+ * TASK-000063 activity identity: backend snake_case
+ * (`user_id`, `actor_type`, `actor_id`, `username`, `first_name`,
+ * `last_name`, `email`) decodes into the optional actor
+ * (`kind`/`displayName`/`email`).
+ * Human rows resolve full name → username; API-key rows stay
+ * key-identified even with stray profile values; legacy rows without actor
+ * payload stay quiet with a null actor.
+ */
+describe("mapTraceSummary actor identity", () => {
+  it("decodes a human actor with full name, ids, and contact fields", () => {
+    const actor = mapTraceSummary(
+      traceSummaryFixture({
+        actor_type: "human",
+        actor_id: "actor-123",
+        user_id: "user-456",
+        username: "jdoe",
+        first_name: "Jane",
+        last_name: "Doe",
+        email: "jane@example.com",
+      })
+    )?.actor
+
+    expect(actor).toEqual({
+      kind: "human",
+      displayName: "Jane Doe",
+      email: "jane@example.com",
+    })
+  })
+
+  it("resolves partial personal names without inventing missing parts", () => {
+    expect(
+      mapTraceSummary(
+        traceSummaryFixture({ actor_type: "human", first_name: "Jane" })
+      )?.actor.displayName
+    ).toBe("Jane")
+    expect(
+      mapTraceSummary(traceSummaryFixture({ actor_type: "human", last_name: "Doe" }))
+        ?.actor.displayName
+    ).toBe("Doe")
+  })
+
+  it("falls back to username when no personal name is recorded", () => {
+    const actor = mapTraceSummary(
+      traceSummaryFixture({
+        actor_type: "human",
+        username: "jdoe",
+        email: "jane@example.com",
+      })
+    )?.actor
+
+    expect(actor).toMatchObject({
+      kind: "human",
+      displayName: "jdoe",
+      email: "jane@example.com",
+    })
+  })
+
+  it("keeps email-only humans with a null display name instead of coercing one", () => {
+    const actor = mapTraceSummary(
+      traceSummaryFixture({ actor_type: "human", email: "jane@example.com" })
+    )?.actor
+
+    expect(actor).toMatchObject({
+      kind: "human",
+      displayName: null,
+      email: "jane@example.com",
+    })
+  })
+
+  it("trims blank name parts and treats whitespace-only names as missing", () => {
+    expect(
+      mapTraceSummary(
+        traceSummaryFixture({
+          actor_type: "human",
+          first_name: "  Jane  ",
+          last_name: "   ",
+          username: "jdoe",
+        })
+      )?.actor.displayName
+    ).toBe("Jane")
+    expect(
+      mapTraceSummary(
+        traceSummaryFixture({
+          actor_type: "human",
+          first_name: "   ",
+          last_name: "  ",
+          username: "   ",
+        })
+      )?.actor.displayName
+    ).toBeNull()
+  })
+
+  it("keeps API-key rows key-identified even with stray human profile values", () => {
+    const actor = mapTraceSummary(
+      traceSummaryFixture({
+        actor_type: "project_api_key",
+        actor_id: "key-123",
+        user_id: "user-456",
+        username: "jdoe",
+        first_name: "Jane",
+        last_name: "Doe",
+        email: "jane@example.com",
+      })
+    )?.actor
+
+    expect(actor).toEqual({
+      kind: "project_api_key",
+      displayName: null,
+      email: null,
+    })
+  })
+
+  it("keeps legacy rows without actor payload quiet with a null actor", () => {
+    const summary = mapTraceSummary(traceSummaryFixture())
+
+    expect(summary?.traceId).toBe(SUCCESS_TRACE_ID)
+    expect(summary?.actor).toEqual({
+      kind: null,
+      displayName: null,
+      email: null,
+    })
+  })
+
+  it("drops unknown actor types to null kind without failing the row", () => {
+    const summary = mapTraceSummary(
+      traceSummaryFixture({ actor_type: "service_account", first_name: "Jane" })
+    )
+
+    expect(summary?.traceId).toBe(SUCCESS_TRACE_ID)
+    expect(summary?.actor.kind).toBeNull()
+  })
+
+  it("drops wrong-typed actor fields to null without failing the row", () => {
+    const summary = mapTraceSummary(
+      traceSummaryFixture({
+        actor_type: 42,
+        actor_id: 123,
+        user_id: {},
+        username: 42,
+        first_name: 42,
+        last_name: [],
+        email: 42,
+      })
+    )
+
+    expect(summary?.traceId).toBe(SUCCESS_TRACE_ID)
+    expect(summary?.actor).toEqual({
+      kind: null,
+      displayName: null,
+      email: null,
+    })
+  })
+
+  it("carries the decoded actor through mapTraceDetail", () => {
+    const detail = mapTraceDetail(
+      traceDetailFixture({
+        actor_type: "human",
+        actor_id: "actor-123",
+        user_id: "user-456",
+        username: "jdoe",
+        first_name: "Jane",
+        last_name: "Doe",
+        email: "jane@example.com",
+      })
+    )
+
+    expect(detail.traceId).toBe(SUCCESS_TRACE_ID)
+    expect(detail.actor).toEqual({
+      kind: "human",
+      displayName: "Jane Doe",
+      email: "jane@example.com",
+    })
+  })
+})

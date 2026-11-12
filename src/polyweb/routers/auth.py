@@ -42,7 +42,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi_users import exceptions, schemas
 from fastapi_users.router.common import ErrorCode
 from fastapi_users.router.register import get_register_router
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from polyweb.infrastructure.browser_auth import (
     REFRESH_COOKIE_PATH,
@@ -100,18 +100,38 @@ def _publish_bearer_scheme(app: FastAPI) -> None:
 
 
 class UserCreate(schemas.CreateUpdateDictModel):
-    """Registration body: email and password only.
+    """Registration body: email, password, and mandatory profile names.
 
     ``extra="forbid"`` rejects a role, a privilege or status flag, provider
     fields and any other field with HTTP 422, so no request can ask for
     authority. The password is hidden from the model representation, and the
     accepted rule is enforced by the user manager with a clear message.
+
+    ``username`` (max 64), ``first_name`` and ``last_name`` (max 100 each) are
+    required strings. Leading/trailing whitespace is trimmed before the
+    nonempty/length checks, so omitted, null, empty, or whitespace-only values
+    fail with a field-specific 422 and no account is created.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     email: EmailStr
     password: str = Field(repr=False)
+    username: str = Field(min_length=1, max_length=64)
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("username", "first_name", "last_name", mode="before")
+    @classmethod
+    def _strip_profile_field(cls, value: object) -> object:
+        """Trim profile text before nonempty/length validation, never echoing it."""
+
+        if not isinstance(value, str):
+            return value
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("must not be empty or whitespace-only")
+        return trimmed
 
 
 #: Account projection returned by registration and ``GET /users/me``.
@@ -347,13 +367,45 @@ async def get_user_manager(request: Request) -> AsyncIterator[UserManager]:
 async def auth_validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """Replace auth request-validation bodies with one fixed safe message.
+    """Replace auth request-validation bodies with safe, input-free details.
 
-    Non-auth routes keep the framework's detailed response, so this change cannot
-    weaken or alter any existing endpoint contract.
+    The public signup route returns a FastAPI field-error array with one entry
+    per invalid field (``loc`` ``["body", field]`` plus ``type``/``msg``), so
+    the frontend can show field-level messages for omitted, null, empty,
+    whitespace-only, overlong, or forbidden values. No entry echoes submitted
+    input, passwords, or provider credentials: ``input`` and ``ctx`` are
+    dropped. Other auth routes keep the fixed safe message, and non-auth
+    routes keep the framework's detailed response, so no other endpoint
+    contract changes.
     """
 
     path = request.url.path
+    if path == "/auth/register":
+        detail: list[dict[str, object]] = []
+        for error in exc.errors():
+            raw_loc = error.get("loc", ())
+            if len(raw_loc) >= 2 and raw_loc[0] == "body":
+                loc: list[str] = ["body", str(raw_loc[-1])]
+            elif len(raw_loc) == 1 and raw_loc[0] == "body":
+                loc = ["body"]
+            elif len(raw_loc) >= 1:
+                loc = ["body", str(raw_loc[-1])]
+            else:
+                loc = ["body"]
+            detail.append(
+                {
+                    "loc": loc,
+                    "msg": str(error.get("msg", "invalid authentication request")),
+                    "type": str(error.get("type", "value_error")),
+                }
+            )
+        if not detail:
+            detail.append(
+                {"loc": ["body"], "msg": _SAFE_VALIDATION_DETAIL, "type": "value_error"}
+            )
+        # The literal status avoids a Starlette deprecation alias while keeping
+        # the documented FastAPI 422 contract.
+        return JSONResponse(status_code=422, content={"detail": detail})
     if any(path.startswith(prefix) for prefix in _AUTH_VALIDATION_PREFIXES):
         # The literal status avoids a Starlette deprecation alias while keeping
         # the documented FastAPI 422 contract.

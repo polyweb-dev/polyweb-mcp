@@ -94,6 +94,56 @@ async def _after_key_change(session: AsyncSession, project_ids: set[UUID]) -> No
         await materialize_pools(session, project_id=project_id)
 
 
+async def create_vault_key_in_session(
+    session: AsyncSession,
+    actor: UserPrincipal,
+    body: VaultKeyCreate,
+    secrets: EncryptedDbSecretStore | None = None,
+) -> StoredVaultCredential:
+    """Create one owned vault key and its audit event in the caller's transaction.
+
+    Shared by ``VaultKeyService.create`` and the signup workspace. ``secrets`` is
+    only needed for a key that carries a secret; a keyless key never does.
+    """
+
+    await _require_vault(session, actor.id)
+    CredentialService._validate_create(body)
+    credentials = CredentialRepository(session)
+    created = await credentials.insert_credential(
+        account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+        provider_type=body.provider_type,
+        owner_scope=CredentialOwnerScope.SYSTEM,
+        owner_project_id=None,
+        label=body.label,
+        auth_mode=body.auth_mode.value,
+        created_by=actor.id,
+        owner_user_id=actor.id,
+    )
+    if body.secret is not None:
+        assert secrets is not None, "a keyed vault key needs the encrypted secret store"
+        await secrets.create_slot_in_session(
+            session, credential_secret_slot(created.id, 1), body.secret.get_secret_value()
+        )
+    if body.capacity is not None:
+        await credentials.update_capacity(
+            actor.id,
+            created.id,
+            rate=body.capacity.limit,
+            rate_window_seconds=body.capacity.window_seconds,
+            budget_micros=None,
+            window=None,
+        )
+    key = await credentials.update_policy(
+        actor.id,
+        created.id,
+        overcommit=body.overcommit,
+        contention_mode=body.contention_mode,
+    )
+    assert key is not None
+    await VaultKeyService._audit(session, actor, created.id, "vault.key_created")
+    return key
+
+
 class VaultKeyService:
     def __init__(
         self,
@@ -159,40 +209,7 @@ class VaultKeyService:
 
     async def create(self, actor: UserPrincipal, body: VaultKeyCreate) -> VaultKeyDetails:
         async def operation(session: AsyncSession) -> VaultKeyDetails:
-            await _require_vault(session, actor.id)
-            self._credentials._validate_create(body)
-            credentials = CredentialRepository(session)
-            created = await credentials.insert_credential(
-                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
-                provider_type=body.provider_type,
-                owner_scope=CredentialOwnerScope.SYSTEM,
-                owner_project_id=None,
-                label=body.label,
-                auth_mode=body.auth_mode.value,
-                created_by=actor.id,
-                owner_user_id=actor.id,
-            )
-            if body.secret is not None:
-                await self._secrets.create_slot_in_session(
-                    session, credential_secret_slot(created.id, 1), body.secret.get_secret_value()
-                )
-            if body.capacity is not None:
-                await credentials.update_capacity(
-                    actor.id,
-                    created.id,
-                    rate=body.capacity.limit,
-                    rate_window_seconds=body.capacity.window_seconds,
-                    budget_micros=None,
-                    window=None,
-                )
-            key = await credentials.update_policy(
-                actor.id,
-                created.id,
-                overcommit=body.overcommit,
-                contention_mode=body.contention_mode,
-            )
-            assert key is not None
-            await self._audit(session, actor, created.id, "vault.key_created")
+            key = await create_vault_key_in_session(session, actor, body, self._secrets)
             return await self._view(session, key)
 
         return await run_control_write(self._repository, operation, conflict_code="VAULT_CONFLICT")

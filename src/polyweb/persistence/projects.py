@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -58,6 +58,28 @@ def _get_user_row() -> type[UserRow]:
     from polyweb.persistence.users import UserRow
 
     return UserRow
+
+
+class _ProfileNames(TypedDict):
+    """Nullable identity fields shared by member/owner projections."""
+
+    username: str | None
+    first_name: str | None
+    last_name: str | None
+
+
+def _profile_names(user: UserRow) -> _ProfileNames:
+    """Project nullable profile names from a persisted ``UserRow``.
+
+    Legacy accounts predate signup name capture, so every field stays
+    nullable; callers must not substitute placeholders.
+    """
+
+    return {
+        "username": user.username,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+    }
 
 
 def _generate_slug(name: str) -> str:
@@ -505,6 +527,7 @@ class ProjectRepository:
             status=MembershipStatus.ACTIVE,
             roles=[BuiltinRole.PROJECT_ADMIN.value],
             version=1,
+            **_profile_names(admin_user),
         )
         role_read = RoleAssignmentRead(
             scope_type=ScopeType.PROJECT,
@@ -566,27 +589,28 @@ class ProjectRepository:
             roles_by_user.setdefault(r.user_id, []).append(r.role_key)
 
         user_cls = _get_user_row()
-        email_by_user: dict[str, str] = {}
+        user_by_id: dict[str, UserRow] = {}
         if membership_rows:
             user_stmt = select(user_cls).where(
                 cast(user_cls.id, CHAR(36)).in_([m.user_id for m in membership_rows])
             )
             user_rows = (await self._session.execute(user_stmt)).scalars().all()
-            email_by_user = {str(user.id): user.email for user in user_rows}
+            user_by_id = {str(user.id): user for user in user_rows}
 
         members: list[ProjectMemberRead] = []
         for m in membership_rows:
-            email = email_by_user.get(m.user_id)
-            if email is None:
+            user = user_by_id.get(m.user_id)
+            if user is None:
                 raise ValueError(f"User {m.user_id} does not exist")
             members.append(
                 ProjectMemberRead(
                     project_id=UUID(m.project_id),
                     user_id=UUID(m.user_id),
-                    email=email,
+                    email=user.email,
                     status=MembershipStatus(m.status),
                     roles=roles_by_user.get(m.user_id, []),
                     version=m.version,
+                    **_profile_names(user),
                 )
             )
         return members
@@ -661,6 +685,7 @@ class ProjectRepository:
             status=MembershipStatus.ACTIVE,
             roles=[role_key],
             version=1,
+            **_profile_names(user),
         )
         return member_read, role_read
 
@@ -1038,7 +1063,7 @@ class ProjectRepository:
         return {UUID(project_id): int(count) for project_id, count in rows}
 
     async def _membership_read(self, row: ProjectMembershipRow) -> ProjectMemberRead:
-        """Project one membership row with its current role keys and user email."""
+        """Project one membership row with its current role keys and user identity."""
 
         user_cls = _get_user_row()
         user = await self._session.get(user_cls, UUID(row.user_id))
@@ -1056,6 +1081,7 @@ class ProjectRepository:
             status=MembershipStatus(row.status),
             roles=sorted(role.role_key for role in role_rows),
             version=row.version,
+            **_profile_names(user),
         )
 
 

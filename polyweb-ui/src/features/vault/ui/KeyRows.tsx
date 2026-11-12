@@ -1,5 +1,6 @@
 import { ChevronRight } from "lucide-react"
 import { providerIdentity, providerTypeName } from "@/domains/providers"
+import { formatPoolRate } from "@/domains/vault"
 import type { KeyPool, VaultProject } from "@/domains/vault"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { OAuthStatusTag } from "@/shared/ui/OAuthStatusTag"
@@ -24,6 +25,7 @@ export function KeyRows({ row, open, projects, actions, onToggle, onPool }: {
       <td><div className="flex items-center gap-2"><button type="button" aria-label={`Pools of ${item.label}`} aria-expanded={open} onClick={onToggle}><ChevronRight className={`size-4 ${open ? "rotate-90" : ""}`} /></button><ProviderBadge providerId={providerIdentity(item.provider_type).id} name={providerTypeName(item.provider_type)} /></div></td>
       <td>{item.label} {item.auth_mode === "oauth" && <><Tag>OAuth</Tag> <OAuthStatusTag status={row.oauth} /></>} {item.status !== "active" && <Tag tone="warning">Needs attention</Tag>}</td>
       <td>{row.pools.length} {row.pools.length === 1 ? "pool" : "pools"}</td>
+      <td>{item.capacity === null ? <span aria-label="No key rate limit" className="text-[var(--muted)]">—</span> : <span className="tnum text-[var(--muted)]">{formatPoolRate(item.capacity, { short: true })}</span>}</td>
       <td>{projectNames.length ? projectNames.join(", ") : <span className="text-[var(--muted)]">—</span>}</td>
       <td className="w-16 !text-right"><RowActionsMenu label={`Actions for ${item.label}`} actions={actions} /></td>
     </tr>

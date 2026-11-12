@@ -361,49 +361,74 @@ class ProjectService:
         self._rollout.require_management()
 
         async def operation(session: AsyncSession) -> ProjectRead:
-            await self._authorization.require_in_session(
-                session,
-                system_query(
-                    actor,
-                    PermissionAction.PROJECT_CREATE,
-                    account_id=self._account_id,
-                ),
-            )
-            repository = ProjectRepository(session)
-            resolved_create = project_create
-            if resolved_create.initial_admin_user_id is None:
+            return await self.create_project_in_session(session, actor, project_create)
+
+        return await self._write(operation)
+
+    async def create_project_in_session(
+        self,
+        session: AsyncSession,
+        actor: UserPrincipal,
+        project_create: ProjectCreate,
+        *,
+        materialize: bool = True,
+    ) -> ProjectRead:
+        """Create a project, its first administrator and audit in the caller's transaction.
+
+        Shared by :meth:`create_project` and the signup workspace. A caller that
+        adds pools right away sets ``materialize=False`` and rebuilds the project
+        runtime once afterwards.
+        """
+
+        self._rollout.require_management()
+
+        await self._authorization.require_in_session(
+            session,
+            system_query(
+                actor,
+                PermissionAction.PROJECT_CREATE,
+                account_id=self._account_id,
+            ),
+        )
+        repository = ProjectRepository(session)
+        resolved_create = project_create
+        if resolved_create.initial_admin_user_id is None:
+            if resolved_create.initial_admin_email is None:
+                resolved_create = resolved_create.model_copy(
+                    update={"initial_admin_user_id": actor.id}
+                )
+            else:
                 admin = await self._require_active_user_by_email(
                     session, resolved_create.initial_admin_email
                 )
                 resolved_create = resolved_create.model_copy(
                     update={"initial_admin_user_id": admin.id}
                 )
-            try:
-                project, member, _role = await repository.create_project_with_admin(
-                    account_id=self._account_id,
-                    created_by=actor.id,
-                    project_create=resolved_create,
-                )
-            except ValueError as error:
-                raise ProjectValidationError(str(error)) from error
-            from polyweb.services.pool_materializer import materialize_pools
-
-            await materialize_pools(session, project_id=project.id)
-            await _project_event(
-                session,
-                project.id,
-                PROJECT_CREATED,
-                actor,
-                target_type="project",
-                target_id=project.id,
-                detail={
-                    "initial_admin_user_id": str(member.user_id),
-                    "role_key": BuiltinRole.PROJECT_ADMIN.value,
-                },
+        try:
+            project, member, _role = await repository.create_project_with_admin(
+                account_id=self._account_id,
+                created_by=actor.id,
+                project_create=resolved_create,
             )
-            return project
+        except ValueError as error:
+            raise ProjectValidationError(str(error)) from error
+        from polyweb.services.pool_materializer import materialize_pools
 
-        return await self._write(operation)
+        if materialize:
+            await materialize_pools(session, project_id=project.id)
+        await _project_event(
+            session,
+            project.id,
+            PROJECT_CREATED,
+            actor,
+            target_type="project",
+            target_id=project.id,
+            detail={
+                "initial_admin_user_id": str(member.user_id),
+                "role_key": BuiltinRole.PROJECT_ADMIN.value,
+            },
+        )
+        return project
 
     async def archive_project(
         self,
@@ -488,7 +513,13 @@ class ProjectService:
                 or not user.is_active
             ):
                 return None
-            return ProviderOwnerRead(user_id=member.user_id, email=member.email)
+            return ProviderOwnerRead(
+                user_id=member.user_id,
+                email=member.email,
+                username=member.username,
+                first_name=member.first_name,
+                last_name=member.last_name,
+            )
 
     async def transfer_provider_owner(
         self, actor: UserPrincipal, project_id: UUID, target_id: UUID
@@ -540,7 +571,12 @@ class ProjectService:
                         "The provider owner changed or the target is not an active admin.",
                     )
                 return ProviderOwnerTransferRead(
-                    user_id=target_id, email=target.email, unassigned_pools=[]
+                    user_id=target_id,
+                    email=target.email,
+                    username=target.username,
+                    first_name=target.first_name,
+                    last_name=target.last_name,
+                    unassigned_pools=[],
                 )
             if not await repository.transfer_provider_owner(project_id, owner, target_id):
                 raise ProjectConflict(
@@ -563,6 +599,9 @@ class ProjectService:
             return ProviderOwnerTransferRead(
                 user_id=target_id,
                 email=target.email,
+                username=target.username,
+                first_name=target.first_name,
+                last_name=target.last_name,
                 unassigned_pools=[
                     UnassignedPoolRead(pool_id=pool.id, label=pool.label) for pool in removed_pools
                 ],

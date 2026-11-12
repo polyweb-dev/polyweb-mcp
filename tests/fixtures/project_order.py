@@ -22,9 +22,13 @@ async def seed_order_pools(
     secrets: dict[str, str] | None = None,
     missing: frozenset[str] = frozenset(),
     operations: dict[str, frozenset[str]] | None = None,
+    auth_modes: dict[str, str] | None = None,
+    rate_limit: int | None = None,
+    rate_window_seconds: int = 60,
 ) -> None:
     async with repository.session() as session:
         for provider in providers:
+            auth_mode = (auth_modes or {}).get(provider, "api_key")
             credential = await CredentialRepository(session).insert_credential(
                 account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
                 provider_type=provider,
@@ -32,10 +36,10 @@ async def seed_order_pools(
                 owner_project_id=None,
                 owner_user_id=actor_id,
                 label=f"order-{provider}-{uuid4().hex[:8]}",
-                auth_mode="api_key",
+                auth_mode=auth_mode,
                 created_by=actor_id,
             )
-            if provider not in missing:
+            if provider not in missing and auth_mode != "keyless":
                 secret = f"fixture-key-{provider}-{uuid4().hex[:8]}"
                 await store.create_slot_in_session(
                     session, credential_secret_slot(credential.id, 1), secret
@@ -47,13 +51,17 @@ async def seed_order_pools(
                 project_id=project_id,
                 provider_type=provider,
                 created_by=actor_id,
-                values=KeyPoolValues(
-                    label=provider,
-                    operations=(
-                        operations[provider]
-                        if operations and provider in operations
-                        else frozenset(op.value for op in provider_capability(provider))
-                    ),
+                values=KeyPoolValues.model_validate(
+                    {
+                        "label": provider,
+                        "rate_limit": rate_limit,
+                        "rate_window_seconds": rate_window_seconds,
+                        "operations": (
+                            operations[provider]
+                            if operations and provider in operations
+                            else frozenset(op.value for op in provider_capability(provider))
+                        ),
+                    }
                 ),
             )
         await materialize_pools(session, project_id=project_id)

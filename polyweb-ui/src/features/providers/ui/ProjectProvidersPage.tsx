@@ -40,7 +40,7 @@ function renderDialogs({ isOwner, dialog, projectId, projectName, missing, pendi
 }
 
 function withoutCapacity(providers: readonly ProviderTypeView[], pools: readonly ProjectPool[]) {
-  return providers.filter((provider) => !provider.keyless && !provider.killSwitch && provider.systemEnabledOperations.length > 0 &&
+  return providers.filter((provider) => !provider.killSwitch && provider.systemEnabledOperations.length > 0 &&
     !pools.some((pool) => pool.provider_type === provider.providerType))
 }
 

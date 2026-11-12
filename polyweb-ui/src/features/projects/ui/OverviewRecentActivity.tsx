@@ -1,10 +1,12 @@
 import { useCallback, useState } from "react"
+import type { ReactNode } from "react"
 import { listProjectTraces } from "@/domains/activity"
-import type { TraceOutcome, TraceSummary } from "@/domains/activity"
+import type { TraceActor, TraceOutcome, TraceSummary } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
 import { formatDateTime, formatLatency, formatRelativeTime } from "@/shared/lib/formatTime"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
 import { EmptyState } from "@/shared/ui/EmptyState"
+import { IdentityLines } from "@/shared/ui/IdentityLines"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import { Section } from "@/shared/ui/Section"
 import { StatusDot, type StatusTone } from "@/shared/ui/StatusDot"
@@ -30,6 +32,17 @@ function operationLabel(summary: TraceSummary): string {
   if (summary.operation === "search") return "Search"
   if (summary.operation === "fetch") return "Fetch"
   return "Other"
+}
+
+/**
+ * Initiated-by cell: the human display name (full name, then username, then
+ * email); API-key rows stay key-identified; legacy rows stay quiet. The
+ * visible muted email line keeps two same-name creators distinguishable.
+ */
+function actorValue(actor: TraceActor): ReactNode {
+  if (actor.kind === "project_api_key") return "API key"
+  if (actor.displayName === null) return actor.email ?? "—"
+  return <IdentityLines primary={actor.displayName} secondary={actor.email} />
 }
 
 /** The latest traces of the project, payload-free, with a way into Activity. */
@@ -69,6 +82,7 @@ export function OverviewRecentActivity({ accountId, projectId }: { accountId: st
                 <th scope="col">Time</th>
                 <th scope="col">Operation</th>
                 <th scope="col">Provider</th>
+                <th scope="col">Initiated by</th>
                 <th scope="col">Status</th>
                 <th scope="col" className="text-right">Latency</th>
               </tr>
@@ -81,6 +95,7 @@ export function OverviewRecentActivity({ accountId, projectId }: { accountId: st
                   </td>
                   <td>{operationLabel(summary)}</td>
                   <td className="fs-cell-strong">{providerCell(summary)}</td>
+                  <td className="text-[var(--muted)]">{actorValue(summary.actor)}</td>
                   <td>
                     <StatusDot {...OUTCOME[summary.outcome]} />
                   </td>

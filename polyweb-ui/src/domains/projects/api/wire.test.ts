@@ -59,7 +59,27 @@ describe("projects wire decoders", () => {
     expect(decodeProjectMemberList([VALID_MEMBER, developer])).toEqual([VALID_MEMBER, developer])
   })
 
+  it("decodes named, legacy, and nullable member profile payloads", () => {
+    expect(
+      decodeProjectMemberList([
+        { ...VALID_MEMBER, username: "ada", first_name: "Ada", last_name: "Lovelace" },
+      ])
+    ).toEqual([{ ...VALID_MEMBER, username: "ada", first_name: "Ada", last_name: "Lovelace" }])
+    expect(decodeProjectMemberList([{ ...VALID_MEMBER, username: "ops-lead" }])).toEqual([
+      { ...VALID_MEMBER, username: "ops-lead", first_name: null, last_name: null },
+    ])
+    expect(decodeProjectMemberList([VALID_MEMBER])).toEqual([VALID_MEMBER])
+    expect(
+      decodeProjectMemberList([
+        { ...VALID_MEMBER, username: null, first_name: null, last_name: null },
+      ])
+    ).toEqual([{ ...VALID_MEMBER, username: null, first_name: null, last_name: null }])
+  })
+
   it.each([
+    ["member profile username of the wrong type", () => decodeProjectMemberList([{ ...VALID_MEMBER, username: 7 }])],
+    ["member profile first name of the wrong type", () => decodeProjectMemberList([{ ...VALID_MEMBER, first_name: 7 }])],
+    ["member profile last name of the wrong type", () => decodeProjectMemberList([{ ...VALID_MEMBER, last_name: 7 }])],
     ["system access with bad rollout", () => decodeSystemAccess({ rollout_state: "beta", permissions: [] })],
     ["system access with non-list permissions", () => decodeSystemAccess({ rollout_state: "preview", permissions: "x" })],
     ["project missing name", () => decodeProjectList([{ ...VALID_PROJECT, name: 7 }])],

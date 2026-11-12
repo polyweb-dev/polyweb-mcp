@@ -43,7 +43,7 @@ from polyweb.infrastructure.encrypted_store import (
     EncryptedDbSecretStore,
     SecretSlotConflict,
 )
-from polyweb.infrastructure.secrets import ProviderName
+from polyweb.infrastructure.secrets import KEYLESS_PROVIDER_TYPES, ProviderName
 from polyweb.models.credentials import (
     ALL_CREDENTIAL_OPERATIONS,
     CredentialAuthMode,
@@ -612,6 +612,7 @@ class CredentialService:
         project_id: UUID,
         credential_id: UUID,
         operation: CredentialOperation,
+        project_verified_in_session: bool = False,
     ) -> CredentialInstanceRead | None:
         """Return the credential usable by this project for this operation.
 
@@ -619,14 +620,22 @@ class CredentialService:
         active system credential holding a grant that lists ``operation``.
         ``None`` covers unknown, foreign, ungranted, deleted, and any project
         that is missing or archived inside this account.
+
+        ``project_verified_in_session`` skips only the ``get_project`` active
+        check. Set it only when the caller just proved this project active on
+        the SAME session inside the SAME read snapshot (execution
+        re-authorizes through ``_live_context_in_session`` first); it carries
+        no cache, and every owner, grant, operation, and rollout check still
+        runs. Direct callers leave the default so the project is validated.
         """
 
         self._rollout.require_management()
-        project = await ProjectRepository(session).get_project(
-            project_id=project_id, account_id=self._account_id
-        )
-        if project is None or project.status is not ProjectStatus.ACTIVE:
-            return None
+        if not project_verified_in_session:
+            project = await ProjectRepository(session).get_project(
+                project_id=project_id, account_id=self._account_id
+            )
+            if project is None or project.status is not ProjectStatus.ACTIVE:
+                return None
         credentials = CredentialRepository(session)
         private = await credentials.get_private_credential(
             account_id=self._account_id,
@@ -928,6 +937,10 @@ class CredentialService:
             raise CredentialValidationError(
                 "an oauth credential has no key to rotate; reconnect it through the device flow"
             )
+        if current.auth_mode == CredentialAuthMode.KEYLESS.value:
+            raise CredentialValidationError(
+                "a keyless credential has no secret to rotate; create a new key if needed"
+            )
         advanced = await credentials.advance_generation(
             credential_id=current.id,
             owner_scope=current.owner_scope,
@@ -1184,6 +1197,13 @@ class CredentialService:
         ):
             raise CredentialValidationError(
                 f"provider type {body.provider_type!r} does not support oauth credentials"
+            )
+        if (
+            body.auth_mode is CredentialAuthMode.KEYLESS
+            and body.provider_type not in KEYLESS_PROVIDER_TYPES
+        ):
+            raise CredentialValidationError(
+                f"provider type {body.provider_type!r} does not support keyless credentials"
             )
 
     async def _write(self, operation: Callable[[AsyncSession], Awaitable[_T]]) -> _T:

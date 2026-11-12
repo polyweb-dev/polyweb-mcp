@@ -15,7 +15,7 @@ import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest_asyncio
@@ -103,10 +103,22 @@ async def repository(tmp_path: Path) -> object:
     await repo.close()
 
 
-async def _register(client: httpx.AsyncClient, prefix: str) -> tuple[dict[str, str], UUID]:
+async def _register(
+    client: httpx.AsyncClient, prefix: str
+) -> tuple[dict[str, str], UUID, dict[str, str]]:
     email = temp_email(prefix)
+    username = f"tester-{uuid4().hex[:8]}"
+    first_name = "Test"
+    last_name = "User"
     registered = await client.post(
-        "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+        "/auth/register",
+        json={
+            "email": email,
+            "password": TEMP_PASSWORD,
+            "username": username,
+            "first_name": first_name,
+            "last_name": last_name,
+        },
     )
     assert registered.status_code == 201
     logged_in = await client.post(
@@ -118,7 +130,13 @@ async def _register(client: httpx.AsyncClient, prefix: str) -> tuple[dict[str, s
 
     claims = pyjwt.decode(pair["access_token"], options={"verify_signature": False})
     user_id = UUID(str(claims["sub"]))
-    return {"Authorization": f"Bearer {pair['access_token']}"}, user_id
+    profile = {
+        "email": email,
+        "username": username,
+        "first_name": first_name,
+        "last_name": last_name,
+    }
+    return {"Authorization": f"Bearer {pair['access_token']}"}, user_id, profile
 
 
 async def _post(
@@ -139,8 +157,8 @@ async def test_concurrent_two_project_requests_keep_full_ownership(
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            headers_a, user_a = await _register(client, "attr-alice")
-            headers_b, user_b = await _register(client, "attr-bob")
+            headers_a, user_a, _ = await _register(client, "attr-alice")
+            headers_b, user_b, _ = await _register(client, "attr-bob")
             attr_a = await seed_app_bound_project(
                 repository, user_id=user_a, app=app, monkeypatch=monkeypatch
             )
@@ -249,6 +267,118 @@ async def test_concurrent_two_project_requests_keep_full_ownership(
     assert failure_rows, "the failing fanout provider produced no failure row"
     for row in failure_rows:
         assert row[1] == pid_b
+
+
+async def test_authorized_trace_list_and_detail_carry_saved_human_and_key_identity(
+    repository: SQLiteRepository, auth_secret: str, monkeypatch
+) -> None:
+    """HTTP trace reads project the saved human profile and key identity.
+
+    One human search and one project-API-key search run in the same project
+    through the real execution path. The owning human's list and detail reads
+    must carry the saved username/first/last/email with stable human
+    actor_type/id, while the key-owned trace must carry the key UUID with all
+    human profile fields null. A foreign member's list and detail reads stay
+    denied.
+    """
+
+    app = create_app([_StubAdapter("alpha")], repository=repository)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            headers_a, user_a, profile_a = await _register(client, "attr-http-human")
+            headers_b, _user_b, _ = await _register(client, "attr-http-foreign")
+            attr_a = await seed_app_bound_project(
+                repository, user_id=user_a, app=app, monkeypatch=monkeypatch
+            )
+            attr_b = await seed_app_bound_project(
+                repository, user_id=_user_b, app=app, monkeypatch=monkeypatch
+            )
+            pid_a, pid_b = str(attr_a.project_id), str(attr_b.project_id)
+
+            issued = await client.post(
+                f"/api/v1/projects/{pid_a}/api-keys",
+                json={"label": "trace-key"},
+                headers=headers_a,
+            )
+            assert issued.status_code == 201, f"issue key failed: {issued.text}"
+            issued_body = issued.json()
+            key_id = str(issued_body["id"])
+            key_headers = {"Authorization": f"Bearer {issued_body['key']}"}
+
+            human_resp = await _post(
+                client, "/search", {"project_id": pid_a, "query": "human q"}, headers_a
+            )
+            key_resp = await _post(
+                client, "/search", {"project_id": pid_a, "query": "key q"}, key_headers
+            )
+            human_trace = human_resp.headers["x-trace-id"]
+            key_trace = key_resp.headers["x-trace-id"]
+            assert human_trace != key_trace
+            assert app.state.observability.force_flush() is True
+
+            listing = await client.get(f"/api/v1/projects/{pid_a}/traces", headers=headers_a)
+            assert listing.status_code == 200, f"list failed: {listing.text}"
+            by_id = {item["trace_id"]: item for item in listing.json()["items"]}
+            assert set(by_id) == {human_trace, key_trace}
+
+            human_item = by_id[human_trace]
+            assert human_item["actor_type"] == "human"
+            assert human_item["actor_id"] == str(user_a)
+            assert human_item["user_id"] == str(user_a)
+            assert human_item["username"] == profile_a["username"]
+            assert human_item["first_name"] == profile_a["first_name"]
+            assert human_item["last_name"] == profile_a["last_name"]
+            assert human_item["email"] == profile_a["email"]
+
+            key_item = by_id[key_trace]
+            assert key_item["actor_type"] == "project_api_key"
+            assert key_item["actor_id"] == key_id
+            assert key_item["actor_id"] != str(user_a)
+            assert key_item["user_id"] is None
+            assert key_item["username"] is None
+            assert key_item["first_name"] is None
+            assert key_item["last_name"] is None
+            assert key_item["email"] is None
+
+            human_detail_resp = await client.get(
+                f"/api/v1/projects/{pid_a}/traces/{human_trace}", headers=headers_a
+            )
+            assert human_detail_resp.status_code == 200, human_detail_resp.text
+            human_detail = human_detail_resp.json()
+            assert human_detail["actor_type"] == "human"
+            assert human_detail["actor_id"] == str(user_a)
+            assert human_detail["user_id"] == str(user_a)
+            assert human_detail["username"] == profile_a["username"]
+            assert human_detail["first_name"] == profile_a["first_name"]
+            assert human_detail["last_name"] == profile_a["last_name"]
+            assert human_detail["email"] == profile_a["email"]
+
+            key_detail_resp = await client.get(
+                f"/api/v1/projects/{pid_a}/traces/{key_trace}", headers=headers_a
+            )
+            assert key_detail_resp.status_code == 200, key_detail_resp.text
+            key_detail = key_detail_resp.json()
+            assert key_detail["actor_type"] == "project_api_key"
+            assert key_detail["actor_id"] == key_id
+            assert key_detail["user_id"] is None
+            assert key_detail["username"] is None
+            assert key_detail["first_name"] is None
+            assert key_detail["last_name"] is None
+            assert key_detail["email"] is None
+
+            foreign_list = await client.get(
+                f"/api/v1/projects/{pid_a}/traces", headers=headers_b
+            )
+            assert foreign_list.status_code == 404
+            foreign_detail = await client.get(
+                f"/api/v1/projects/{pid_a}/traces/{human_trace}", headers=headers_b
+            )
+            assert foreign_detail.status_code == 404
+            cross_detail = await client.get(
+                f"/api/v1/projects/{pid_b}/traces/{human_trace}", headers=headers_b
+            )
+            assert cross_detail.status_code == 404
 
 
 def _is_fanout(rows: list[tuple]) -> bool:

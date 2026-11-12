@@ -121,12 +121,14 @@ describe("login", () => {
 })
 
 describe("registerAccount", () => {
-  it("posts exactly the email and the password to /auth/register in public mode", async () => {
+  const PROFILE = { username: "ada", first_name: "Ada", last_name: "Lovelace" }
+
+  it("posts the email, the password, and the trimmed profile to /auth/register in public mode", async () => {
     const { authApi } = await loadAuth()
     const account = adminAccountFixture()
     const stub = installFetchStub(() => ok(account))
 
-    const result = await authApi.registerAccount({ ...CREDENTIALS })
+    const result = await authApi.registerAccount({ ...CREDENTIALS, ...PROFILE })
 
     expect(result).toEqual(account)
     expect(stub.requests).toHaveLength(1)
@@ -137,18 +139,24 @@ describe("registerAccount", () => {
     expect(stub.requests[0]?.headers["content-type"]).toContain("application/json")
     expect(stub.requests[0]?.headers["authorization"]).toBeUndefined()
     expect(stub.requests[0]?.headers["x-polyweb-client"]).toBeUndefined()
-    expect(stub.requests[0]?.body).toEqual({ ...CREDENTIALS })
-    expect(Object.keys(stub.requests[0]?.body as object).sort()).toEqual(["email", "password"])
+    expect(stub.requests[0]?.body).toEqual({ ...CREDENTIALS, ...PROFILE })
+    expect(Object.keys(stub.requests[0]?.body as object).sort()).toEqual([
+      "email",
+      "first_name",
+      "last_name",
+      "password",
+      "username",
+    ])
   })
 
   it("never sends a role or account-type field, whatever the caller passes", async () => {
     const { authApi } = await loadAuth()
     const stub = installFetchStub(() => ok(agentAccountFixture()))
-    const smuggled = { ...CREDENTIALS, role: "admin", account_type: "installation" }
+    const smuggled = { ...CREDENTIALS, ...PROFILE, role: "admin", account_type: "installation" }
 
     await authApi.registerAccount(smuggled)
 
-    expect(stub.requests[0]?.body).toEqual({ ...CREDENTIALS })
+    expect(stub.requests[0]?.body).toEqual({ ...CREDENTIALS, ...PROFILE })
     expect(stub.requests.every((req) => req.headers["authorization"] === undefined)).toBe(true)
   })
 
@@ -158,7 +166,9 @@ describe("registerAccount", () => {
     delete partial.is_verified
     installFetchStub(() => ok(partial))
 
-    await expect(authApi.registerAccount({ ...CREDENTIALS })).rejects.toMatchObject({
+    await expect(
+      authApi.registerAccount({ ...CREDENTIALS, ...PROFILE })
+    ).rejects.toMatchObject({
       status: 0,
       detail: INVALID_RESPONSE,
     })

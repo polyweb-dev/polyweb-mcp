@@ -207,6 +207,14 @@ async def test_delete_secret_is_idempotent_and_clears_encrypted_row(
     app = create_app([], repository=repository)
     with TestClient(app) as client:
         _, headers = await _admin(client, repository, "enc-delete")
+        # Signup already gave the owner two keyless default keys (no secret slot);
+        # deleting the key created here must leave exactly those behind.
+        defaults = {
+            item["id"]: item
+            for item in client.get("/api/v1/account/vault/keys", headers=headers).json()
+        }
+        assert {item["provider_type"] for item in defaults.values()} == {"keenable", "tavily"}
+        assert all(item["auth_mode"] == "keyless" for item in defaults.values())
         write = _put_secret(client, "exa", sentinel, headers)
         body = _assert_metadata(write, sentinel)
         slot = credential_secret_slot(UUID(body["id"]), body["generation"])
@@ -216,7 +224,9 @@ async def test_delete_secret_is_idempotent_and_clears_encrypted_row(
             assert_no_sentinels(response.text, (sentinel,), "delete credential")
         assert await app.state.secret_store.get(slot) is None
         listed = client.get("/api/v1/account/vault/keys", headers=headers)
-        assert listed.status_code == 200 and listed.json() == []
+        assert listed.status_code == 200
+        assert body["id"] not in {item["id"] for item in listed.json()}
+        assert {item["id"]: item for item in listed.json()} == defaults
     assert await repository.get_runtime_setting("secret.enc:" + slot) is None
 
 

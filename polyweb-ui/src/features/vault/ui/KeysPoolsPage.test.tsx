@@ -32,6 +32,65 @@ beforeEach(() => {
 })
 
 describe("KeysPoolsPage", () => {
+  it("keeps ambiguous and successful bulk providers visible, then reloads and summarises on Done", async () => {
+    api.listVaultKeys.mockResolvedValue([
+      { ...key, id: "b1", provider_type: "brave", label: "First" },
+      { ...key, id: "b2", provider_type: "brave", label: "Second" },
+      { ...key, id: "k-keenable", provider_type: "keenable", label: "Keenable key", auth_mode: "keyless" },
+    ])
+    api.listVaultProjects.mockResolvedValue([{ id: "p1", name: "Alpha", available_providers: ["brave", "keenable"] }])
+    api.listKeyPools.mockResolvedValue([])
+    api.createKeyPool.mockImplementation(async (keyId: string, input: { label: string; project_id: string }) =>
+      ({ ...pool, id: `pool-${keyId}`, credential_id: keyId, provider_type: "keenable", label: input.label, project_id: input.project_id }))
+    const showToast = vi.fn()
+    render(<NotificationsContext.Provider value={{ toasts: [], showToast, dismissToast: vi.fn() }}><KeysPoolsPage /></NotificationsContext.Provider>)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole("button", { name: "Bulk create pools" }))
+    const dialog = screen.getByRole("dialog", { name: "Bulk create pools" })
+    await user.click(within(dialog).getByRole("combobox", { name: "Project" }))
+    await user.click(await screen.findByRole("option", { name: "Alpha" }))
+    await user.click(within(dialog).getByRole("button", { name: "Create 2 pools" }))
+    // Both outcomes stay visible with named explanations; nothing auto-closes or reloads.
+    expect(await within(dialog).findByText(/Brave Search: 2 keys \(First, Second\)/)).toBeInTheDocument()
+    expect(await within(dialog).findByText(/Keenable: created pool/)).toBeInTheDocument()
+    expect(screen.getByRole("dialog", { name: "Bulk create pools" })).toBeInTheDocument()
+    expect(showToast).not.toHaveBeenCalled()
+    expect(api.listVaultKeys).toHaveBeenCalledTimes(1)
+    expect(api.createKeyPool).toHaveBeenCalledTimes(1)
+    // Done closes with a created/blocked summary and reloads the table.
+    await user.click(within(dialog).getByRole("button", { name: "Done" }))
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Bulk create pools" })).toBeNull())
+    expect(showToast).toHaveBeenCalledWith("Created 1 pool, 1 blocked", "success")
+    await waitFor(() => expect(api.listVaultKeys).toHaveBeenCalledTimes(2))
+  })
+
+  it("keeps a blocked keyless default visible after partial success until Done", async () => {
+    api.listVaultKeys.mockResolvedValue([
+      { ...key, id: "k1", provider_type: "keenable", label: "A", auth_mode: "keyless" },
+      { ...key, id: "k2", provider_type: "keenable", label: "B", auth_mode: "keyless" },
+    ])
+    api.listVaultProjects.mockResolvedValue([{ id: "p1", name: "Alpha", available_providers: ["keenable", "tavily"] }])
+    api.listKeyPools.mockResolvedValue([])
+    api.createVaultKey.mockImplementation(async (input: { provider_type: string }) => ({ ...key, id: `new-${input.provider_type}`, provider_type: input.provider_type, auth_mode: "keyless" }))
+    api.createKeyPool.mockImplementation(async (keyId: string, input: { label: string; project_id: string }) =>
+      ({ ...pool, id: `pool-${keyId}`, credential_id: keyId, label: input.label, project_id: input.project_id }))
+    const showToast = vi.fn()
+    render(<NotificationsContext.Provider value={{ toasts: [], showToast, dismissToast: vi.fn() }}><KeysPoolsPage /></NotificationsContext.Provider>)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole("button", { name: "Create keyless defaults" }))
+    const dialog = screen.getByRole("dialog", { name: "Keyless defaults" })
+    await user.click(within(dialog).getByRole("combobox", { name: "Project" }))
+    await user.click(await screen.findByRole("option", { name: "Alpha" }))
+    await user.click(within(dialog).getByRole("button", { name: "Create defaults" }))
+    expect(await within(dialog).findByText(/Keenable: 2 keyless keys \(A, B\)/)).toBeInTheDocument()
+    expect(await within(dialog).findByText(/Tavily: created pool/)).toBeInTheDocument()
+    expect(showToast).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole("button", { name: "Done" }))
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Keyless defaults" })).toBeNull())
+    expect(showToast).toHaveBeenCalledWith("Keyless defaults for Alpha: Created 1 pool, 1 blocked", "success")
+    await waitFor(() => expect(api.listVaultKeys).toHaveBeenCalledTimes(2))
+  })
+
   it("shows a calm state when the vault endpoint is not available", async () => {
     api.listVaultKeys.mockRejectedValue(new ApiError(404, "Not found", null))
     render(<KeysPoolsPage />)
@@ -288,7 +347,7 @@ describe("KeysPoolsPage", () => {
     render(<KeysPoolsPage />)
     const user = userEvent.setup()
     expect(await screen.findByText("Disconnected")).toBeInTheDocument()
-    expect(screen.getByText("—")).toBeInTheDocument()
+    expect(screen.getAllByText("—")).toHaveLength(2)
     await user.click(await screen.findByRole("button", { name: "Actions for Main" }))
     await user.click(await screen.findByRole("button", { name: "Connect" }))
     expect(within(screen.getByRole("dialog", { name: "Connect Parallel" })).getByTestId("provider-logo-parallel")).toBeInTheDocument()

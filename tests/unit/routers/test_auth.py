@@ -1,5 +1,6 @@
 """Unit tests for the auth transport seam without I/O (P2, PLAN Section 11)."""
 
+import json
 from uuid import uuid4
 
 import pytest
@@ -103,24 +104,60 @@ async def test_auth_validation_errors_hide_credentials() -> None:
         body={"password": "SubmittedPass123!x"},
     )
 
-    response = await auth_validation_exception_handler(_request("/auth/register"), error)
+    register_response = await auth_validation_exception_handler(_request("/auth/register"), error)
 
-    assert response.status_code == 422
-    assert response.body == b'{"detail":"invalid authentication request"}'
-    assert b"SubmittedPass123" not in response.body
+    assert register_response.status_code == 422
+    payload = json.loads(register_response.body)
+    assert isinstance(payload["detail"], list)
+    assert len(payload["detail"]) == 1
+    entry = payload["detail"][0]
+    assert entry["loc"] == ["body", "password"]
+    assert entry["msg"] == " test password rule"
+    assert entry["type"] == "value_error"
+    # The field-error entry never echoes input, context, or secrets.
+    assert set(entry) == {"loc", "msg", "type"}
+    assert b"SubmittedPass123" not in register_response.body
+
+    # Other auth paths keep the fixed safe string.
+    login_response = await auth_validation_exception_handler(_request("/auth/jwt/login"), error)
+    assert login_response.status_code == 422
+    assert login_response.body == b'{"detail":"invalid authentication request"}'
+    assert b"SubmittedPass123" not in login_response.body
+
+
+def _valid_signup_payload() -> dict[str, object]:
+    return {
+        "email": "unit@example.com",
+        "password": "StrongPass123!x-Unit",
+        "username": "unituser",
+        "first_name": "Unit",
+        "last_name": "Tester",
+    }
 
 
 def test_registration_body_accepts_each_role_with_agent_default() -> None:
-    """T2-SIGNUP (A1 replacement): signup carries email and password only.
+    """T2-SIGNUP: signup carries identity plus mandatory profile names.
 
-    The old contract accepted a requested role with an Agent default. Under A1
-    the body has no role field at all, so no request can ask for authority.
+    The old contract accepted a requested role with an Agent default. The body
+    has no role field at all, so no request can ask for authority; the valid
+    request now requires username, first_name, and last_name instead.
     """
 
-    created = UserCreate(email="unit@example.com", password="StrongPass123!x-Unit")
-    assert set(created.model_dump()) == {"email", "password"}
+    created = UserCreate.model_validate(_valid_signup_payload())
+    assert set(created.model_dump()) == {
+        "email",
+        "password",
+        "username",
+        "first_name",
+        "last_name",
+    }
+    assert created.username == "unituser"
+    assert created.first_name == "Unit"
+    assert created.last_name == "Tester"
     assert "role" not in UserCreate.model_fields
     assert "is_superuser" not in UserCreate.model_fields
+    assert "auth_provider" not in UserCreate.model_fields
+    assert "auth_provider_id" not in UserCreate.model_fields
 
 
 @pytest.mark.parametrize(
@@ -144,10 +181,100 @@ def test_registration_body_rejects_invalid_roles_and_provider_fields(
 ) -> None:
     """T2-SIGNUP (A1 replacement): every role, privilege or provider field is a 422."""
 
+    payload = dict(_valid_signup_payload())
+    payload[field] = value
     with pytest.raises(ValidationError):
-        UserCreate.model_validate(
-            {"email": "unit@example.com", "password": "StrongPass123!x-Unit", field: value}
-        )
+        UserCreate.model_validate(payload)
+
+
+@pytest.mark.parametrize("field", ["username", "first_name", "last_name"])
+@pytest.mark.parametrize(
+    "case,value",
+    [
+        ("omitted", None),
+        ("null", None),
+        ("empty", ""),
+        ("whitespace", "   "),
+        ("whitespace-tabs", "\t \n "),
+    ],
+)
+def test_registration_profile_fields_reject_missing_null_and_blank(
+    field: str, case: str, value: object
+) -> None:
+    """Signup profile names are mandatory: omitted, null, empty, blank rejected."""
+
+    base = _valid_signup_payload()
+    if case == "omitted":
+        omitted = dict(base)
+        del omitted[field]
+        with pytest.raises(ValidationError):
+            UserCreate.model_validate(omitted)
+    else:
+        payload = dict(base)
+        payload[field] = value
+        with pytest.raises(ValidationError):
+            UserCreate.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "field,max_len",
+    [("username", 64), ("first_name", 100), ("last_name", 100)],
+)
+def test_registration_profile_fields_reject_overlong(field: str, max_len: int) -> None:
+    """Overlong profile names are rejected at the documented per-field limit."""
+
+    payload = dict(_valid_signup_payload())
+    payload[field] = "x" * (max_len + 1)
+    with pytest.raises(ValidationError):
+        UserCreate.model_validate(payload)
+
+    payload[field] = "x" * max_len
+    assert UserCreate.model_validate(payload).model_dump()[field] == "x" * max_len
+
+
+def test_registration_profile_fields_trim_surrounding_whitespace() -> None:
+    """Valid profile names trim; blank-after-trim is already rejected above."""
+
+    created = UserCreate.model_validate(
+        {
+            **_valid_signup_payload(),
+            "username": "  unituser  ",
+            "first_name": "  Unit  ",
+            "last_name": "\tTester\n",
+        }
+    )
+    assert created.username == "unituser"
+    assert created.first_name == "Unit"
+    assert created.last_name == "Tester"
+
+
+async def test_registration_errors_hide_password_and_invalid_input() -> None:
+    """Real signup failures surface as input-free field errors on /auth/register."""
+
+    bad_payload: dict[str, object] = {
+        **_valid_signup_payload(),
+        "password": "SubmittedPass123!x",
+        "username": "   ",
+    }
+    try:
+        UserCreate.model_validate(bad_payload)
+    except ValidationError as model_error:
+        request_error = RequestValidationError(model_error.errors(), body=bad_payload)
+    else:  # pragma: no cover - the payload is invalid by construction
+        raise AssertionError("blank username must fail UserCreate validation")
+
+    response = await auth_validation_exception_handler(_request("/auth/register"), request_error)
+    assert response.status_code == 422
+    payload = json.loads(response.body)
+    assert isinstance(payload["detail"], list)
+    assert payload["detail"]
+    raw = response.body.decode("utf-8")
+    assert "SubmittedPass123" not in raw
+    for entry in payload["detail"]:
+        assert set(entry) == {"loc", "msg", "type"}
+        assert entry["loc"][0] == "body"
+    assert "input" not in raw
+    assert "ctx" not in raw
 
 
 def test_token_pair_response_defaults_to_bearer() -> None:

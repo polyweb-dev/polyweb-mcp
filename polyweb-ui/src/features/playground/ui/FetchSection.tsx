@@ -4,6 +4,7 @@ import { FetchErrorBanner } from "./FetchErrorBanner"
 import { FetchResult } from "./FetchResult"
 import { isNoProviderConfigured } from "./noProviderConfigured"
 import { ProviderSetupNotice } from "./ProviderSetupNotice"
+import { pinnedProviderName } from "./setupGuidance"
 
 /** Fetch panel: fixed composer position, error banner, document. */
 export function FetchSection({ controller }: { controller: PlaygroundController }) {
@@ -16,11 +17,11 @@ export function FetchSection({ controller }: { controller: PlaygroundController 
       >
         <FetchComposer controller={controller} />
       </div>
-      {controller.noProviderForMode && <ProviderSetupNotice projectId={controller.projectId} />}
+      {controller.noProviderForMode && <ProviderSetupNotice projectId={controller.projectId} providerName={pinnedProviderName(controller)} />}
 
       {controller.fetchError !== null &&
         (isNoProviderConfigured(controller.fetchError) ? (
-          <ProviderSetupNotice projectId={controller.projectId} />
+          <ProviderSetupNotice projectId={controller.projectId} providerName={pinnedProviderName(controller)} />
         ) : (
           <FetchErrorBanner error={controller.fetchError} />
         ))}

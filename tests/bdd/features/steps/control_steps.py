@@ -194,7 +194,16 @@ def _login_headers(context: Any, prefix: str, *, system_admin: bool = False) -> 
     # scenario exercises a system-scoped control surface (A1).
     email = temp_email(prefix)
     with _client(context) as client:
-        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        registered = client.post(
+            "/auth/register",
+            json={
+                "email": email,
+                "password": TEMP_PASSWORD,
+                "username": email.split("@")[0][:64],
+                "first_name": "Test",
+                "last_name": "User",
+            },
+        )
         assert registered.status_code == 201
         if system_admin:
             context.loop.run_until_complete(promote_to_system_admin(context.repository, email))

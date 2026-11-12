@@ -1,5 +1,6 @@
 """Vault pool API against real SQLite and materialized runtime bindings."""
 
+import json
 import sys
 from types import ModuleType
 from unittest.mock import AsyncMock
@@ -15,17 +16,18 @@ from polyweb.models.credentials import CredentialOperation
 from polyweb.models.projects import BuiltinRole, MembershipStatus, ProjectMemberAdd
 from polyweb.persistence.audit import SystemAuditEventRow
 from polyweb.persistence.bindings import ProjectBindingRepository
+from polyweb.persistence.credentials import CredentialProjectGrantRow
 from polyweb.persistence.key_pools import KeyPoolRepository
 from polyweb.persistence.projects import ProjectRepository
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.persistence.users import UserRow
 from polyweb.routers.api import create_app
-from polyweb.services.pool_materializer import keyless_credential_id
-from polyweb.services.projects import ProjectService
+from polyweb.services.projects import LAST_PROJECT_ADMIN, ProjectConflict, ProjectService
 from tests.fixtures.a2_execution import build_execution_world
 from tests.fixtures.alpha_fixtures import ALPHA_ADMIN_PASSWORD
 from tests.fixtures.auth import (
     account_id_from_pair,
+    bare_login,
     raw_auth_headers,
     register_and_login,
     register_system_admin_login,
@@ -119,13 +121,29 @@ async def _bindings(repository, project_id):
 
 async def _assert_bindings(repository, project_id, *exa_credential_ids):
     bindings = await _bindings(repository, project_id)
-    expected = {
-        (UUID(keyless_credential_id("keenable")), "keenable"),
-        (UUID(keyless_credential_id("tavily")), "tavily"),
-        *((credential_id, "exa") for credential_id in exa_credential_ids),
-    }
+    # Only explicitly assigned pools confer runtime access, including keyless providers.
+    expected = {(credential_id, "exa") for credential_id in exa_credential_ids}
     assert len(bindings) == len(expected)
     assert {(binding.credential_id, binding.route_label) for binding in bindings} == expected
+    async with repository.session() as session:
+        pools = await KeyPoolRepository(session).list_for_project(project_id)
+        assert {(pool.credential_id, pool.provider_type) for pool in pools} == expected
+        grants = (
+            await session.scalars(
+                select(CredentialProjectGrantRow).where(
+                    CredentialProjectGrantRow.project_id == str(project_id)
+                )
+            )
+        ).all()
+        assert len(grants) == len(exa_credential_ids)
+        assert {UUID(grant.credential_id) for grant in grants} == set(exa_credential_ids)
+        for grant in grants:
+            pool = next(pool for pool in pools if str(pool.credential_id) == grant.credential_id)
+            assert grant.owner_scope == "system"
+            assert set(json.loads(grant.permitted_operations)) == set(pool.operations)
+    for binding in bindings:
+        pool = next(pool for pool in pools if pool.credential_id == binding.credential_id)
+        assert {operation.value for operation in binding.enabled_operations} == set(pool.operations)
     return bindings
 
 
@@ -134,10 +152,14 @@ async def test_pool_lifecycle_authorization_and_materialization(repository, vaul
     with TestClient(create_app([], repository=repository)) as client:
         owner = await register_system_admin_login(client, repository, temp_email("pool-owner"))
         other = await register_system_admin_login(client, repository, temp_email("pool-other"))
+        # A normal signup owns a Default project, so it may use the vault (404 on
+        # foreign keys); only an account with no project at all is denied (403).
         developer = register_and_login(client, temp_email("pool-developer"))
+        bare = await bare_login(client, repository, temp_email("pool-bare"))
         headers = raw_auth_headers(owner["access_token"])
         other_headers = raw_auth_headers(other["access_token"])
         dev_headers = raw_auth_headers(developer["access_token"])
+        bare_headers = raw_auth_headers(bare["access_token"])
         project = await seed_execution_project(repository, user_id=account_id_from_pair(owner))
         foreign = await seed_execution_project(repository, user_id=account_id_from_pair(other))
         key = client.post(
@@ -147,7 +169,8 @@ async def test_pool_lifecycle_authorization_and_materialization(repository, vaul
         )
         assert key.status_code == 201, key.text
         key_path = f"{BASE}/keys/{key.json()['id']}/pools"
-        assert client.get(key_path, headers=dev_headers).status_code == 403
+        assert client.get(key_path, headers=bare_headers).status_code == 403
+        assert client.get(key_path, headers=dev_headers).status_code == 404
         assert client.get(key_path, headers=other_headers).status_code == 404
         for operations, code in [
             ([], "OPERATIONS_REQUIRED"),
@@ -174,14 +197,23 @@ async def test_pool_lifecycle_authorization_and_materialization(repository, vaul
             f"{url}/assign", headers=headers, json={"project_id": str(foreign.project_id)}
         )
         assert denied.status_code == 403
+        # The owner's provider-owner projects are exactly the signup Default project
+        # and the manual one. Available providers are the owner's key providers not yet
+        # assigned there: the Default project already holds both keyless pools.
+        owned = client.get("/api/v1/projects", headers=headers).json()
+        default_id = next(item["id"] for item in owned if item["name"] == "Default")
         projects = client.get(f"{BASE}/projects", headers=headers).json()
-        assert projects == [
-            {
-                "id": str(project.project_id),
-                "name": "Execution Project",
-                "available_providers": ["exa"],
-            }
-        ]
+        assert projects == sorted(
+            [
+                {"id": default_id, "name": "Default", "available_providers": ["exa"]},
+                {
+                    "id": str(project.project_id),
+                    "name": "Execution Project",
+                    "available_providers": ["exa", "keenable", "tavily"],
+                },
+            ],
+            key=lambda item: item["id"],
+        )
         assigned = client.post(
             f"{url}/assign", headers=headers, json={"project_id": str(project.project_id)}
         )
@@ -418,6 +450,7 @@ async def test_api_writes_change_execution_lookup(tmp_path, monkeypatch, auth_se
 @pytest.mark.asyncio
 async def test_deactivation_unassigns_owned_pools(repository, vault_env, auth_secret):
     with TestClient(create_app([], repository=repository)) as client:
+        # A normal signup owner: its Default project has it as the sole administrator.
         owner = await register_system_admin_login(
             client, repository, temp_email("deactivate-owner")
         )
@@ -450,8 +483,37 @@ async def test_deactivation_unassigns_owned_pools(repository, vault_env, auth_se
         await _assert_bindings(repository, project.project_id, UUID(key["id"]))
         # The installation must retain an active system administrator.
         await register_system_admin_login(client, repository, temp_email("replacement-admin"))
+        default_id = UUID(
+            next(
+                item["id"]
+                for item in client.get("/api/v1/projects", headers=headers).json()
+                if item["name"] == "Default"
+            )
+        )
+        # The unchanged last-administrator policy covers every project, so the owner
+        # as sole administrator of its signup Default project cannot be deactivated.
+        # The refusal is atomic: no deactivation, no unassigned pool, no lost binding.
+        with pytest.raises(ProjectConflict) as refused:
+            await service.deactivate_accounts([owner_id], trusted=True)
+        assert refused.value.code == LAST_PROJECT_ADMIN
+        async with repository.session() as session:
+            owner_row = await session.get(UserRow, owner_id)
+            assert owner_row is not None and owner_row.is_active
+            pool = await KeyPoolRepository(session).get(UUID(created.json()["id"]))
+            assert pool is not None and pool.project_id == project.project_id
+            assert len(await KeyPoolRepository(session).list_for_project(default_id)) == 2
+            assert await ProjectRepository(session).get_provider_owner(default_id) == owner_id
+        await _assert_bindings(repository, project.project_id, UUID(key["id"]))
+        # Another administrator on the Default project, added through the normal path,
+        # lifts the block; the deactivation then unassigns every pool the owner supplied.
+        await service.add_member(
+            actor,
+            default_id,
+            ProjectMemberAdd(user_id=peer_id, initial_role=BuiltinRole.PROJECT_ADMIN),
+        )
         await service.deactivate_accounts([owner_id], trusted=True)
         await _assert_bindings(repository, project.project_id)
+        await _assert_bindings(repository, default_id)
         async with repository.session() as session:
             pool = await KeyPoolRepository(session).get(UUID(created.json()["id"]))
             assert pool is not None and pool.project_id is None

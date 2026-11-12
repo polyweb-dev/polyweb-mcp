@@ -194,15 +194,31 @@ async def test_project_lifecycle_scope_and_system_admin_non_membership(
                 BuiltinRole.PROJECT_ADMIN.value,
             )
 
-        # A project administrator cannot create another project (system scope).
-        with pytest.raises(AuthorizationDenied):
-            await service.create_project(
-                admin,
-                ProjectCreate(
-                    name="Not Allowed",
-                    slug="not-allowed",
-                    initial_admin_user_id=admin.id,
-                ),
+        # An ordinary active human holds project.create at system scope, but
+        # no system role or foreign project access.
+        allowed = await service.create_project(
+            admin,
+            ProjectCreate(
+                name="Allowed",
+                slug="allowed",
+                initial_admin_user_id=admin.id,
+            ),
+        )
+        assert (await service.provider_owner(admin, allowed.id)).user_id == admin.id
+        with pytest.raises(ProjectNotFound):
+            await service.list_members(nonmember_system, allowed.id)
+        assert await ScopedAuthorizationService(repository).effective_permissions(
+            human_principal(admin),
+            scope_type=ScopeType.SYSTEM,
+            scope_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+        ) == frozenset({PermissionAction.PROJECT_CREATE})
+        async with repository.session() as session:
+            assert (
+                await ProjectRepository(session).get_system_role_assignments(
+                    account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                    user_id=admin.id,
+                )
+                == []
             )
 
         await service.transfer_provider_owner(system, project.id, admin.id)
@@ -321,15 +337,32 @@ async def test_legacy_admin_and_superuser_claims_do_not_grant_live_scope(
         )
         service = ProjectService(repository)
 
-        with pytest.raises(AuthorizationDenied):
-            await service.create_project(
-                forged,
-                ProjectCreate(
-                    name="Forged",
-                    slug="forged",
-                    initial_admin_user_id=forged.id,
-                ),
+        # Forged legacy flags add nothing beyond the ordinary project.create
+        # grant: creation succeeds, but no system role or foreign access follows.
+        forged_project = await service.create_project(
+            forged,
+            ProjectCreate(
+                name="Forged",
+                slug="forged",
+                initial_admin_user_id=forged.id,
+            ),
+        )
+        assert (await service.provider_owner(forged, forged_project.id)).user_id == forged.id
+        assert await ScopedAuthorizationService(repository).effective_permissions(
+            human_principal(forged),
+            scope_type=ScopeType.SYSTEM,
+            scope_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+        ) == frozenset({PermissionAction.PROJECT_CREATE})
+        async with repository.session() as session:
+            assert (
+                await ProjectRepository(session).get_system_role_assignments(
+                    account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                    user_id=forged.id,
+                )
+                == []
             )
+        with pytest.raises(ProjectNotFound):
+            await service.list_members(system, forged_project.id)
         with pytest.raises(AuthorizationDenied):
             await service.deactivate_accounts([forged.id], actor=forged)
 
@@ -341,7 +374,8 @@ async def test_legacy_admin_and_superuser_claims_do_not_grant_live_scope(
                 initial_admin_user_id=system.id,
             ),
         )
-        assert await service.list_projects(forged) == []
+        assert [item.id for item in await service.list_projects(forged)] == [forged_project.id]
+        assert project.id not in {item.id for item in await service.list_projects(forged)}
         assert (
             await ScopedAuthorizationService(repository).effective_permissions(
                 human_principal(forged), scope_type=ScopeType.PROJECT, scope_id=project.id
@@ -361,14 +395,22 @@ async def test_legacy_admin_and_superuser_claims_do_not_grant_live_scope(
             forged.id,
             system.id,
         }
-        with pytest.raises(AuthorizationDenied):
-            await service.create_project(
-                forged,
-                ProjectCreate(
-                    name="Still Forged",
-                    slug="still-forged",
-                    initial_admin_user_id=forged.id,
-                ),
+        still_forged = await service.create_project(
+            forged,
+            ProjectCreate(
+                name="Still Forged",
+                slug="still-forged",
+                initial_admin_user_id=forged.id,
+            ),
+        )
+        assert (await service.provider_owner(forged, still_forged.id)).user_id == forged.id
+        async with repository.session() as session:
+            assert (
+                await ProjectRepository(session).get_system_role_assignments(
+                    account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                    user_id=forged.id,
+                )
+                == []
             )
     finally:
         await repository.close()

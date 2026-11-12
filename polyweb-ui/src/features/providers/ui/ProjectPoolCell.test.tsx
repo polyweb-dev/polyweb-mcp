@@ -37,4 +37,21 @@ describe("ProjectPoolCell", () => {
     rerender(<ProjectPoolCell pool={separate} operation="fetch" />)
     expect(screen.getByText("20/h")).toBeInTheDocument()
   })
+
+  it("names the pool supplier with the owner display name and email tooltip", () => {
+    const named = { ...pool, owner: { user_id: "owner", email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" } }
+    const { container } = render(<ProjectPoolCell pool={named} operation="search" />)
+    expect(container.firstChild).toHaveAttribute(
+      "title",
+      "Pool: Alpha - Tinyfish. Key: Tinyfish key. Supplied by Ada Lovelace (ada@example.com)"
+    )
+  })
+
+  it("falls back to the email supplier for a legacy pool owner payload", () => {
+    const { container } = render(<ProjectPoolCell pool={pool} operation="search" />)
+    expect(container.firstChild).toHaveAttribute(
+      "title",
+      "Pool: Alpha - Tinyfish. Key: Tinyfish key. Supplied by owner@example.com"
+    )
+  })
 })

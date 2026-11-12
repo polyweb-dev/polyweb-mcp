@@ -101,4 +101,24 @@ describe("MemberActionsMenu", () => {
     await userEvent.click(screen.getByRole("button", { name: "Transfer provider ownership" }))
     expect(onTransfer).toHaveBeenCalledExactlyOnceWith(MEMBER)
   })
+
+  it("labels the trigger and confirmations with the display name and email fallback", async () => {
+    const named = { ...MEMBER, first_name: "Ada", last_name: "Lovelace", username: "ada" }
+    const { onConfirm } = renderMenu({ member: named, isSelf: false, ownerId: "other" })
+    expect(screen.getByRole("button", { name: "Actions for Ada Lovelace (me@example.com)" })).toBeInTheDocument()
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Remove from project" }))
+    expect(onConfirm).toHaveBeenCalledOnce()
+    expect(onConfirm.mock.calls[0]?.[0]).toMatchObject({
+      title: "Remove Ada Lovelace (me@example.com)",
+      body: "Ada Lovelace (me@example.com) loses all access to Search team",
+    })
+  })
+
+  it("uses the email alone for the trigger and confirmations when legacy has no profile", () => {
+    const { onConfirm } = renderMenu({ member: MEMBER, isSelf: false, ownerId: "other" })
+    expect(screen.getByRole("button", { name: "Actions for me@example.com" })).toBeInTheDocument()
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
 })

@@ -11,7 +11,9 @@ import { ConfirmDialog } from "@/shared/ui/ConfirmDialog"
 import { EmptyState } from "@/shared/ui/EmptyState"
 import { PageHeader } from "@/shared/ui/PageHeader"
 import { AddCapacityDialog } from "./AddCapacityDialog"
+import { BulkPoolsDialog } from "./BulkPoolsDialog"
 import { KeyDialog } from "./KeyDialog"
+import { KeylessDefaultsDialog } from "./KeylessDefaultsDialog"
 import { KeysTable } from "./KeysTable"
 import { PoolProjectDialog } from "./PoolProjectDialog"
 import { VaultOAuthDialog } from "./VaultOAuthDialog"
@@ -19,6 +21,8 @@ import type { KeyAction, PoolAction, VaultRow } from "./vaultTableTypes"
 
 type Dialog =
   | { type: "add" }
+  | { type: "bulk" }
+  | { type: "keyless-defaults" }
   | { type: KeyAction; row: VaultRow }
   | { type: PoolAction; row: VaultRow; pool: KeyPool }
 
@@ -44,8 +48,8 @@ export function KeysPoolsPage() {
   const reload = resource.reload
   const close = () => { setDialog(null); setError(null) }
   const saved = (notice?: string) => {
-    const message = notice ?? (dialog && successMessage(dialog))
-    if (message) notifications?.showToast(message, "success")
+    const message = notice ?? (dialog === null ? null : successMessage(dialog))
+    if (message !== null && message !== undefined) notifications?.showToast(message, "success")
     close()
     void reload()
   }
@@ -71,12 +75,13 @@ export function KeysPoolsPage() {
     }
   }
   const projects = resource.status === "ready" ? resource.data.projects : []
+  const rows = resource.status === "ready" ? resource.data.rows : []
   return (
     <section className="flex flex-1 flex-col">
       <PageHeader
         title="Keys and pools"
         description="Provider keys you own and the pools that give projects access"
-        actions={<Button size="form" onClick={() => setDialog({ type: "add" })}>Add key</Button>}
+        actions={<><Button size="form" variant="outline" onClick={() => setDialog({ type: "keyless-defaults" })}>Create keyless defaults</Button><Button size="form" variant="outline" onClick={() => setDialog({ type: "bulk" })}>Bulk create pools</Button><Button size="form" onClick={() => setDialog({ type: "add" })}>Add key</Button></>}
       />
       <div>
         {resource.status === "loading" && <p role="status">Wait while the keys load</p>}
@@ -89,7 +94,7 @@ export function KeysPoolsPage() {
               onKey={(type, row) => setDialog({ type, row })}
               onPool={(type, row, pool) => setDialog({ type, row, pool })} />)}
       </div>
-      {renderDialogs({ dialog, projects, close, saved, connected, pending, error, confirm })}
+      {renderDialogs({ dialog, rows, projects, close, saved, connected, pending, error, confirm })}
     </section>
   )
 }
@@ -106,6 +111,7 @@ function deletedKeyMessage(result: VaultKeyDeleteResult, pools: KeyPool[], proje
 
 interface DialogProps {
   dialog: Dialog | null
+  rows: VaultRow[]
   projects: VaultProject[]
   close: () => void
   saved: () => void
@@ -119,10 +125,12 @@ function renderDialogs(props: DialogProps) {
   return <>{renderEditDialogs(props)}{renderActionDialogs(props)}</>
 }
 
-function renderEditDialogs({ dialog, projects, close, saved }: DialogProps) {
+function renderEditDialogs({ dialog, rows, projects, close, saved }: DialogProps) {
   if (!dialog) return null
   return <>
     {dialog.type === "add" && <KeyDialog mode="add" onClose={close} onSaved={saved} />}
+    {dialog.type === "bulk" && <BulkPoolsDialog rows={rows} projects={projects} onClose={close} onSaved={saved} />}
+    {dialog.type === "keyless-defaults" && <KeylessDefaultsDialog rows={rows} projects={projects} onClose={close} onSaved={saved} />}
     {"row" in dialog && !("pool" in dialog) && (dialog.type === "settings" || dialog.type === "rotate") && <KeyDialog mode={dialog.type} item={dialog.row.key} onClose={close} onSaved={saved} />}
     {dialog.type === "create" && <AddCapacityDialog item={dialog.row.key} projects={projects} onClose={close} onSaved={saved} />}
     {"pool" in dialog && dialog.type === "edit" && <AddCapacityDialog item={dialog.row.key} pool={dialog.pool} projects={projects} onClose={close} onSaved={saved} />}
@@ -138,32 +146,46 @@ function renderActionDialogs({ dialog, projects, close, saved, connected, pendin
   </>
 }
 
-function successMessage(dialog: Dialog): string {
-  if (dialog.type === "add") return "Key saved"
-  if (dialog.type === "rotate") return "Key rotated"
-  if (dialog.type === "create") return "Pool created"
-  if (dialog.type === "copy") return "Pool copied"
-  if (dialog.type === "edit") return "Pool updated"
-  if (dialog.type === "delete") return "pool" in dialog ? "Pool deleted" : "Key deleted"
-  if (dialog.type === "settings") return "Key settings saved"
-  if (dialog.type === "assign") return "Pool assigned"
-  if (dialog.type === "unassign") return "Pool removed from project"
-  return "Key disconnected"
+function successMessage(dialog: Dialog): string | null {
+  const messages: Record<string, string> = {
+    add: "Key saved",
+    bulk: "Pools created",
+    "keyless-defaults": "Keyless defaults ready",
+    rotate: "Key rotated",
+    create: "Pool created",
+    copy: "Pool copied",
+    edit: "Pool updated",
+    settings: "Key settings saved",
+    assign: "Pool assigned",
+    unassign: "Pool removed from project",
+  }
+  if ("pool" in dialog && dialog.type === "delete") return "Pool deleted"
+  if (dialog.type === "delete") return "Key deleted"
+  if (dialog.type === "disconnect") return "Key disconnected"
+  return messages[dialog.type] ?? null
+}
+
+/** Dialog variants that carry a vault row; bulk and keyless-defaults do not. */
+function hasRow(dialog: Dialog): dialog is Extract<Dialog, { row: VaultRow }> {
+  return "row" in dialog
 }
 
 function confirmLabel(dialog: Exclude<Dialog, { type: "add" }>): string {
+  if (!hasRow(dialog)) return "Confirm"
   if (dialog.type === "unassign") return "Remove from project"
   if (dialog.type === "disconnect") return "Disconnect"
   return "pool" in dialog ? "Delete pool" : "Delete key"
 }
 
 function confirmTitle(dialog: Exclude<Dialog, { type: "add" }>, projects: VaultProject[]): string {
+  if (!hasRow(dialog)) return "Confirm"
   if (dialog.type === "unassign" && "pool" in dialog) return `Remove pool from ${projects.find((project) => project.id === dialog.pool.project_id)?.name ?? "project"}`
   if (dialog.type === "disconnect") return "Disconnect"
   return "pool" in dialog ? "Delete pool" : `Delete key ${dialog.row.key.label}`
 }
 
 function confirmMessage(dialog: Exclude<Dialog, { type: "add" }>, projects: VaultProject[]): string {
+  if (!hasRow(dialog)) return "Confirm this change"
   if (dialog.type === "unassign") return `${providerTypeName(dialog.row.key.provider_type)} calls stop in this project. The pool stays in your vault`
   if (dialog.type === "disconnect") return "Disconnect this key"
   if ("pool" in dialog) return "Delete this pool. This cannot be undone"

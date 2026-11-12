@@ -54,6 +54,39 @@ describe("ProjectMembersPage", () => {
     expect(screen.getByText("5 of 9 permissions")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /Actions for/ })).toBeNull()
   })
+
+  it("shows each member display name primary with the email kept for contact", async () => {
+    const admin = {
+      ...MEMBER, user_id: "u1", email: "ada@example.com", username: "ada",
+      first_name: "Ada", last_name: "Lovelace", permissions: 33023, provider_owner: true,
+    }
+    const developer = {
+      ...MEMBER, user_id: "u2", email: "ops@example.com", username: "ops-lead",
+      first_name: null, last_name: null, roles: ["project_member"], role: "developer" as const,
+      permissions: 15, provider_owner: false,
+    }
+    renderPage(["members.read"], [admin, developer], { user_id: "u1", email: admin.email })
+    const table = await screen.findByRole("table", { name: "Members" })
+    const firstRow = within(table).getAllByRole("row")[1]
+    expect(within(firstRow!).getByText("Ada Lovelace")).toBeInTheDocument()
+    expect(within(firstRow!).getByText("ada@example.com")).toBeInTheDocument()
+    const secondRow = within(table).getAllByRole("row")[2]
+    expect(within(secondRow!).getByText("ops-lead")).toBeInTheDocument()
+    expect(within(secondRow!).getByText("ops@example.com")).toBeInTheDocument()
+    expect(await screen.findByText("Provider owner")).toBeInTheDocument()
+  })
+
+  it("keeps the member action trigger usable with the display name when named", async () => {
+    const self = { ...MEMBER, user_id: "acc", email: "me@example.com" }
+    const named = {
+      ...MEMBER, email: "ada@example.com", username: "ada",
+      first_name: "Ada", last_name: "Lovelace",
+    }
+    renderPage(["members.read", "members.manage", "roles.assign"], [self, named])
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole("button", { name: "Actions for Ada Lovelace (ada@example.com)" }))
+    expect(await screen.findByRole("button", { name: "Suspend member" })).toBeInTheDocument()
+  })
   it("claims an unassigned provider owner for the current admin", async () => {
     const self = { ...MEMBER, user_id: "acc", permissions: 0, provider_owner: false }
     const toast = vi.fn()
@@ -65,8 +98,7 @@ describe("ProjectMembersPage", () => {
     await waitFor(() => expect(stub.requests.some((req) => req.url.endsWith("/provider-owner") && req.method === "POST" && JSON.stringify(req.body) === JSON.stringify({ user_id: "acc" }))).toBe(true))
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Provider ownership transferred", "success"))
   })
-  it("protects the last active admin when another admin account is inactive", async () => {
-    renderPage(["members.read", "members.manage", "roles.assign"],
+  it("protects the last active admin when another admin account is inactive", async () => {    renderPage(["members.read", "members.manage", "roles.assign"],
       [MEMBER, { ...SECOND_ADMIN, account_active: false }], null)
     expect(await screen.findByText("Account inactive")).toBeInTheDocument()
     await userEvent.click(screen.getByRole("button", { name: "Actions for admin@example.com" }))
@@ -282,8 +314,7 @@ describe("ProjectMembersPage", () => {
     expect(email.getAttribute("aria-describedby")).toBe(error.id)
     await waitFor(() => expect(email).toHaveFocus())
   })
-  it("clears the field and focuses it after a successful add", async () => {
-    const stub = installFetchStub((req) => {
+  it("clears the field and focuses it after a successful add", async () => {    const stub = installFetchStub((req) => {
       if (req.url === "/api/v1/system/access") return ok({ rollout_state: "preview", permissions: [] })
       if (req.url === "/api/v1/projects?include_archived=true") return ok([])
       if (req.url === "/api/v1/projects/p1/access") return ok(access(["members.read", "members.manage"]))

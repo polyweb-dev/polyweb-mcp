@@ -14,9 +14,15 @@ export {
 export type { ProjectProviderView } from "./api/providerViewApi";
 export { hasEffectiveRoute } from "./model/routeOrder";
 export {
+  KEYLESS_AUTH_LABEL,
+  KEYLESS_AUTH_MODE,
+  credentialAuthModes,
+  authModeNeedsSecret,
   credentialProviderTypes,
+  keylessProviderTypes,
   providerTypeName,
   supportedOperationsOf,
+  supportsKeyless,
   supportsOAuth,
 } from "./model/providerView";
 export type {

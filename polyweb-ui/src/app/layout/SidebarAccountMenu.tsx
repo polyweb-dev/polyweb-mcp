@@ -4,6 +4,7 @@ import { LogOut, UserRound } from "lucide-react"
 import { Link } from "react-router"
 import { cn } from "cn"
 import { accountDisplayName, authErrorText, useAuth } from "@/domains/auth"
+import { identityDetailLabel, identityInitial } from "@/shared/lib/identity"
 import { MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from "@/shared/ui/menuStyles"
 import { TAB_PATHS } from "../routes"
 
@@ -11,21 +12,26 @@ const SIGN_OUT_FAILURE = "Sign out failed. Try again."
 
 /** One letter of the text avatar: the display name's, else the email's. */
 function avatarLetter(name: string | null, email: string): string {
-  return (name ?? email).trim().slice(0, 1).toUpperCase() || "?"
+  return identityInitial(name, email)
 }
 
 /**
  * Identity lines of the account row and popup: the display name above the
  * email when the account has a name or username, else the email alone.
  */
-function identityLines(name: string | null, email: string) {
+function identityLines(account: { username: string | null; first_name: string | null; last_name: string | null; email: string }) {
+  const name = accountDisplayName(account)
+  const detail = identityDetailLabel({ ...account, email: account.email })
   return (
     <span className="flex min-w-0 flex-col text-left">
-      <span className="truncate text-[13px] font-medium text-[var(--text-strong)]">
-        {name ?? email}
+      <span
+        className="truncate text-[13px] font-medium text-[var(--text-strong)]"
+        title={name === null ? undefined : detail}
+      >
+        {name ?? account.email}
       </span>
       {name !== null && (
-        <span className="truncate text-[11px] text-[var(--muted)]">{email}</span>
+        <span className="truncate text-[11px] text-[var(--muted)]">{account.email}</span>
       )}
     </span>
   )
@@ -115,7 +121,7 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
       <PopoverPrimitive.Trigger
         type="button"
         aria-label="Open user menu"
-        title={collapsed ? account.email : undefined}
+        title={collapsed ? identityDetailLabel(account) : undefined}
         className={cn(
           "flex h-10 w-full items-center rounded-md text-[13px] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--raised)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] aria-expanded:bg-[var(--raised)] motion-reduce:transition-none",
           collapsed ? "justify-center px-0" : "gap-2.5 px-2"
@@ -127,7 +133,7 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
         >
           {avatarLetter(name, account.email)}
         </span>
-        {!collapsed && identityLines(name, account.email)}
+        {!collapsed && identityLines(account)}
       </PopoverPrimitive.Trigger>
 
       <PopoverPrimitive.Portal>
@@ -156,7 +162,7 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
                   >
                     {avatarLetter(name, account.email)}
                   </span>
-                  {identityLines(name, account.email)}
+                  {identityLines(account)}
                 </div>
                 <div className={MENU_SEPARATOR_CLASS} />
               </>

@@ -1,12 +1,14 @@
 import { useCallback, useState } from "react"
 import type { FormEvent } from "react"
-import { providerIdentity, providerTypeName, supportsOAuth } from "@/domains/providers"
+import { authModeNeedsSecret, credentialAuthModes, providerIdentity, providerTypeName, supportsKeyless, supportsOAuth } from "@/domains/providers"
 import { createVaultKey } from "@/domains/vault"
 import type { KeyPool, VaultKey, VaultProject } from "@/domains/vault"
 import { Button } from "@/shared/ui/button"
+import { Field } from "@/shared/ui/Field"
 import { FormActions } from "@/shared/ui/FormActions"
 import { Modal } from "@/shared/ui/Modal"
 import { ProviderDialogTitle } from "@/shared/ui/ProviderDialogTitle"
+import { Select } from "@/shared/ui/select"
 import { KeyFormFields } from "./KeyFormFields"
 import { keySaveError } from "./keySaveError"
 import { PoolCapacityDialog } from "./PoolCapacityDialog"
@@ -30,6 +32,7 @@ export function AddCapacityDialog({ item, provider, pool, projects, project, onC
   const [oauthKey, setOAuthKey] = useState<VaultKey>()
   const [connecting, setConnecting] = useState(false)
   const [label, setLabel] = useState(`${providerTypeName(provider ?? "")} key`)
+  const [auth, setAuth] = useState(() => credentialAuthModes(provider ?? "")[0]?.value ?? "api_key")
   const [secret, setSecret] = useState("")
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -42,10 +45,13 @@ export function AddCapacityDialog({ item, provider, pool, projects, project, onC
   if (!provider) return null
   if (connecting && oauthKey) return <VaultOAuthDialog keyId={oauthKey.id} onClose={() => setConnecting(false)} onConnected={connected} />
   const oauth = supportsOAuth(provider)
+  const keyless = supportsKeyless(provider)
+  const offerKeyChoice = keyless && !oauth
+  const secretRequired = !oauth && authModeNeedsSecret(auth)
   async function addKey(event: FormEvent) {
     event.preventDefault()
     setSubmitted(true)
-    if (!provider || !label.trim() || (!oauth && !secret.trim())) return
+    if (!provider || !label.trim() || (secretRequired && !secret.trim())) return
     if (oauthKey) {
       setConnecting(true)
       return
@@ -54,7 +60,7 @@ export function AddCapacityDialog({ item, provider, pool, projects, project, onC
     setError(null)
     try {
       const created = await createVaultKey({ provider_type: provider, label: label.trim(),
-        auth_mode: oauth ? "oauth" : "api_key", ...(oauth ? {} : { secret }), overcommit: true, contention_mode: "equal" })
+        auth_mode: oauth ? "oauth" : auth, ...(secretRequired ? { secret } : {}), overcommit: true, contention_mode: "equal" })
       if (oauth) {
         setOAuthKey(created)
         setConnecting(true)
@@ -71,7 +77,14 @@ export function AddCapacityDialog({ item, provider, pool, projects, project, onC
     <form onSubmit={(event) => void addKey(event)} className="space-y-4">
       <p>{keyStepCopy(provider, projects)}</p>
       <KeyFormFields idPrefix="capacity-key" label={label} setLabel={setLabel} secret={secret} setSecret={setSecret}
-        submitted={submitted} showSecret={!oauth} />
+        submitted={submitted} showSecret={secretRequired}>
+        {offerKeyChoice && (
+          <Field id="capacity-auth" label="Authentication">
+            <Select id="capacity-auth" value={auth} onValueChange={setAuth}
+              options={credentialAuthModes(provider)} />
+          </Field>
+        )}
+      </KeyFormFields>
       {error && <p role="alert" className="fs-field-error">{error}</p>}
       <FormActions><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button>
         <Button type="submit" size="form" pending={pending}>{oauth ? "Connect" : "Add key"}</Button></FormActions>

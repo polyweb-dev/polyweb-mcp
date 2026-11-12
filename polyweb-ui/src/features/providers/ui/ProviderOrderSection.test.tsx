@@ -190,7 +190,7 @@ describe("Provider order section", () => {
     const empty = document()
     empty.search.providers = []
     mocks.get.mockResolvedValue(empty)
-    const { rerender } = render(<ProviderOrderSection context={context({ owner: "owner@example.com" })} />)
+    const { rerender } = render(<ProviderOrderSection context={context({ ownerContact: "owner@example.com" })} />)
     expect(await screen.findByText(/Ask owner@example.com/)).toBeInTheDocument()
     rerender(<ProviderOrderSection context={context({ isOwner: true })} />)
     expect(screen.getByRole("link", { name: "Change pools" })).toHaveAttribute("href", "/account/keys")
@@ -217,7 +217,6 @@ describe("Provider order section", () => {
     const addCapacity = vi.fn()
     const { rerender } = render(<ProviderOrderSection context={context({ providers: [provider], isOwner: true, canEditSystem: true, addCapacity, poolOperations: () => undefined })} />)
     expect(await screen.findByText("No provider can serve Search in this project")).toBeInTheDocument()
-    expect(screen.queryByText("Always on")).toBeNull()
     expect(screen.getByRole("link", { name: "Turn on in System Providers" })).toHaveAttribute("href", "/system/providers")
     await userEvent.click(screen.getByRole("button", { name: "Add capacity" }))
     expect(addCapacity).toHaveBeenCalledOnce()
@@ -252,15 +251,19 @@ describe("Provider order section", () => {
     expect(within(rows[2] as HTMLElement).queryByLabelText(/Drag/)).toBeNull()
   })
 
-  it("shows always on for keyless access and the catalog price instead of the order price", async () => {
+  it("shows the catalog price instead of the order price for a keyless provider without a pool", async () => {
     const order = document()
     order.search.providers[0] = { provider: "tavily", name: "Tavily", callCostUsd: "99", keyless: true }
     mocks.get.mockResolvedValue(order)
     render(<ProviderOrderSection context={context({ isOwner: true, poolOperations: () => undefined })} />)
     const table = await screen.findByRole("table", { name: "Search provider order" })
+    // No pool means no operation switch and no "Always on" claim: the row is Off.
     expect(within(table).queryByRole("switch", { name: "Use Tavily for Search" })).toBeNull()
-    expect(within(table).getByText("Always on")).toBeInTheDocument()
-    expect(within(table).getByText("Free")).toBeInTheDocument()
+    expect(within(table).queryByText("Always on")).toBeNull()
+    const row = within(table).getByText("Tavily").closest("tr")
+    if (!row) throw new Error("Missing Tavily row")
+    expect(within(row).getByText("Off")).toBeInTheDocument()
+    expect(within(row).getByText("Free")).toBeInTheDocument()
     expect(within(table).queryByText(/99/)).toBeNull()
   })
 

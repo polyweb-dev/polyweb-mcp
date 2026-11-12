@@ -32,6 +32,7 @@ from sqlalchemy import (
     text,
     union_all,
 )
+from sqlalchemy import cast as sa_cast
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import (
@@ -53,6 +54,7 @@ from polyweb.models.contracts import (
     UsageStatus,
 )
 from polyweb.models.observability import (
+    ActorType,
     ExecutionAttribution,
     TraceDetail,
     TraceEventDetail,
@@ -485,6 +487,8 @@ def decode_metadata_json(raw: str) -> dict[str, object]:
 _SUMMARY_COLUMNS = (
     TraceSpanRow.trace_id,
     TraceSpanRow.user_id,
+    TraceSpanRow.actor_type,
+    TraceSpanRow.actor_id,
     TraceSpanRow.operation,
     TraceSpanRow.started_at,
     TraceSpanRow.duration_ms,
@@ -494,6 +498,16 @@ _SUMMARY_COLUMNS = (
     TraceSpanRow.status_message,
     TraceSpanRow.error_type,
 )
+
+
+@dataclass(frozen=True)
+class TraceProfile:
+    """Saved human identity for one trace actor (never for API keys)."""
+
+    username: str | None
+    first_name: str | None
+    last_name: str | None
+    email: str | None
 
 MIN_TRACE_LIMIT = 1
 MAX_TRACE_LIMIT = 100
@@ -523,16 +537,33 @@ def _trace_outcome(raw: str) -> TraceOutcome:
         return TraceOutcome.ERROR
 
 
-def _trace_summary(row: Any) -> TraceSummary:
+def _trace_actor_type(raw: str | None) -> ActorType | None:
+    """Parse a stored actor type, tolerating rows written by another reader."""
+
+    try:
+        return ActorType(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def _trace_summary(row: Any, profile: TraceProfile | None = None) -> TraceSummary:
     """Project a root row's summary columns into the list/detail summary.
 
     Accepts either the column projection returned by ``list_trace_summaries``
     or a whole :class:`TraceSpanRow`, so the list read can stay column-only.
+    ``profile`` carries the saved human identity for ``human`` actors; API-key
+    actors never receive one, so a key is never labeled as a human.
     """
 
     return TraceSummary(
         trace_id=str(row.trace_id),
         user_id=row.user_id,
+        actor_type=_trace_actor_type(getattr(row, "actor_type", None)),
+        actor_id=getattr(row, "actor_id", None),
+        username=profile.username if profile is not None else None,
+        first_name=profile.first_name if profile is not None else None,
+        last_name=profile.last_name if profile is not None else None,
+        email=profile.email if profile is not None else None,
         operation=_trace_operation(row.operation),
         started_at=datetime.fromisoformat(str(row.started_at)),
         duration_ms=int(row.duration_ms),
@@ -894,7 +925,66 @@ class SQLiteRepository:
             statement = statement.where(TraceSpanRow.outcome == outcome.value)
         async with self._session_factory() as session:
             rows = (await session.execute(statement)).all()
-        return [_trace_summary(row) for row in rows]
+            profiles = await self._trace_profiles_in_session(
+                session,
+                [
+                    (str(row.actor_type), str(row.actor_id), row.user_id)
+                    for row in rows
+                    if row.user_id is not None or row.actor_id is not None
+                ],
+            )
+        summaries: list[TraceSummary] = []
+        for row in rows:
+            key = str(row.user_id) if row.user_id is not None else None
+            if key is None and row.actor_type == ActorType.HUMAN.value and row.actor_id:
+                key = str(row.actor_id)
+            summaries.append(_trace_summary(row, profiles.get(key) if key else None))
+        return summaries
+
+    @staticmethod
+    async def _trace_profiles_in_session(
+        session: AsyncSession,
+        identities: Sequence[tuple[str, str, str | None]],
+    ) -> dict[str, TraceProfile]:
+        """Return saved human profiles for one trace window in one query.
+
+        Only ``human`` actors resolve to the ``user`` row keyed by the stored
+        account UUID (``user_id`` first, ``actor_id`` for rows that predate the
+        legacy column convention). ``project_api_key`` actors keep the key UUID
+        as their stable identity and never resolve to a human profile, so a key
+        is never labeled as a person. Missing or incomplete rows resolve to a
+        nullable profile and keep the existing ID fallback.
+        """
+
+        from polyweb.persistence.users import UserRow
+
+        user_ids = {
+            user_id if user_id is not None else actor_id
+            for actor_type, actor_id, user_id in identities
+            if actor_type == ActorType.HUMAN.value and (user_id or actor_id)
+        }
+        if not user_ids:
+            return {}
+        user_rows = (
+            (
+                await session.execute(
+                    select(UserRow).where(
+                        sa_cast(UserRow.id, CHAR(36)).in_(sorted(user_ids)),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return {
+            str(user.id): TraceProfile(
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                email=user.email,
+            )
+            for user in user_rows
+        }
 
     async def _trace_detail(self, trace_id: str, scope: ColumnElement[bool]) -> TraceDetail | None:
         root_statement = select(TraceSpanRow).where(
@@ -915,7 +1005,15 @@ class SQLiteRepository:
                 .order_by(TraceSpanRow.started_at, TraceSpanRow.span_id)
             )
             rows = (await session.scalars(span_statement)).all()
-        summary = _trace_summary(root)
+            profiles = await self._trace_profiles_in_session(
+                session,
+                [(str(root.actor_type), str(root.actor_id), root.user_id)],
+            )
+        key = str(root.user_id) if root.user_id is not None else None
+        if key is None and root.actor_type == ActorType.HUMAN.value and root.actor_id:
+            key = str(root.actor_id)
+        profile = profiles.get(key) if key else None
+        summary = _trace_summary(root, profile)
         return TraceDetail(
             **summary.model_dump(),
             input=root.input_text,

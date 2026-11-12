@@ -36,7 +36,7 @@ from polyweb.persistence.key_pools import KeyPoolRepository, KeyPoolValues
 from polyweb.persistence.storage import ProviderHealthRow
 from polyweb.routers.api import create_app
 from polyweb.services.credentials import credential_secret_slot
-from polyweb.services.pool_materializer import keyless_credential_id, materialize_pools
+from polyweb.services.pool_materializer import materialize_pools
 from polyweb.services.projects import ProjectService
 from polyweb.services.provider_runtime import persist_provider_config
 from tests.fixtures.alpha_fixtures import (
@@ -275,17 +275,35 @@ def test_keyless_health_uses_bound_system_credential_for_every_member(world: _Wo
     project = world.project_a.id
     checked_at = datetime(2026, 1, 1, 12, tzinfo=UTC)
 
-    async def seed() -> None:
+    async def seed() -> UUID:
         await persist_provider_config(world.repository, ProviderName.KEENABLE, ProviderConfig())
         async with world.repository.session() as session:
+            credential = await CredentialRepository(session).insert_credential(
+                account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                provider_type="keenable",
+                owner_scope=CredentialOwnerScope.SYSTEM,
+                owner_project_id=None,
+                owner_user_id=world.a_admin.id,
+                label="owned-keyless",
+                auth_mode="keyless",
+                created_by=world.a_admin.id,
+            )
+            await KeyPoolRepository(session).create(
+                credential_id=credential.id,
+                project_id=project,
+                provider_type="keenable",
+                created_by=world.a_admin.id,
+                values=KeyPoolValues(label="free-tier", operations=frozenset({"search"})),
+            )
             await materialize_pools(session, project_id=project)
             await session.commit()
         await world.repository.record_health(
             ProviderHealth(provider="keenable", status=HealthStatus.HEALTHY, checked_at=checked_at),
-            credential_id=UUID(keyless_credential_id("keenable")),
+            credential_id=credential.id,
         )
+        return credential.id
 
-    world.run(seed())
+    credential_id = world.run(seed())
     for headers in (world.a, world.a_member_h):
         view = _ok(world.client.get(f"/api/v1/projects/{project}/providers", headers=headers))
         keenable = next(row for row in view["providers"] if row["provider_type"] == "keenable")
@@ -294,6 +312,10 @@ def test_keyless_health_uses_bound_system_credential_for_every_member(world: _Wo
             checked_at
         )
         assert keenable["credentials"][0]["auth_mode"] == "keyless"
+        assert {key["id"] for key in keenable["credentials"]} == {str(credential_id)}
+        assert {binding["credential_id"] for binding in keenable["bindings"]} == {
+            str(credential_id)
+        }
         assert keenable["credentials"][0]["health_checked_at"] == keenable["health_checked_at"]
 
 

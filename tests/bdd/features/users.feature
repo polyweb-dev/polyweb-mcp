@@ -212,3 +212,19 @@ Feature: Local user accounts, migration, and settings
     Given an offline users API with account auth and stub adapters
     When I register account "t2-omitted-bdd@example.com"
     Then the registration should create an ordinary account without tokens
+
+  Scenario: A fresh signup receives a default keyless project and keeps creator administration
+    Given an offline users API with account auth and stub adapters
+    And keyless provider adapters that count every call
+    When I sign up with profile names and sign in
+    Then the registration should create an ordinary account without tokens
+    When I read my account with the access token
+    Then the account read should return my record without a hash
+    And the default project should be visible with creator administration and two keyless pools
+    And signup and login should have created no API key, no secret and no provider call
+    When I sign in again twice
+    Then the account should still own exactly one default project with two pools
+    When I issue a project API key explicitly
+    Then that key should search the default pools over REST and MCP
+    When I create an additional project with only a name
+    Then the additional project stays visible beside the default with durable creator administration, my profile and no pools

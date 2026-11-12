@@ -8,6 +8,7 @@ failed logins far below the attempt caps.
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import jwt as pyjwt
@@ -25,6 +26,9 @@ from tests.integration.routers.test_users_transport import _StubAdapter
 
 _ACCESS_LIFETIME = 900
 _REFRESH_LIFETIME = 604800
+
+_PROFILE_FIRST_NAME = "Ada"
+_PROFILE_LAST_NAME = "Lovelace"
 
 
 @pytest.fixture
@@ -49,12 +53,53 @@ async def auth_client(tmp_path: Path, auth_secret: str) -> TestClient:
     await repository.close()
 
 
+def _username_for(email: str) -> str:
+    """Return a unique valid username derived from one fixture email."""
+
+    local = email.split("@")[0].strip().lower()
+    return (local[:64] if local else "user") or "user"
+
+
+def _valid_signup_payload(email: str, password: str = TEMP_PASSWORD) -> dict[str, object]:
+    """Return one valid registration body with mandatory profile names."""
+
+    return {
+        "email": email,
+        "password": password,
+        "username": _username_for(email),
+        "first_name": _PROFILE_FIRST_NAME,
+        "last_name": _PROFILE_LAST_NAME,
+    }
+
+
 def _register(client: TestClient, email: str, password: str = TEMP_PASSWORD):
-    return client.post("/auth/register", json={"email": email, "password": password})
+    return client.post("/auth/register", json=_valid_signup_payload(email, password))
 
 
 def _login(client: TestClient, email: str, password: str = TEMP_PASSWORD):
     return client.post("/auth/jwt/login", data={"username": email, "password": password})
+
+
+def _assert_register_field_error(response: Any, field: str) -> None:
+    """Assert one /auth/register 422 carries a safe input-free field entry."""
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert isinstance(payload, dict)
+    detail = payload.get("detail")
+    assert isinstance(detail, list) and detail
+    matches = [
+        entry for entry in detail if isinstance(entry, dict) and entry.get("loc") == ["body", field]
+    ]
+    assert matches, f"expected field {field!r} in {detail!r}"
+    raw = response.text
+    assert TEMP_PASSWORD not in raw
+    assert '"input"' not in raw
+    assert '"ctx"' not in raw
+    for entry in detail:
+        assert set(entry) == {"loc", "msg", "type"}
+        loc = entry["loc"]
+        assert isinstance(loc, list) and loc and loc[0] == "body"
 
 
 def _decode(token: str, secret: str) -> dict:
@@ -95,6 +140,9 @@ def test_register_creates_agent_and_login_returns_verified_pair(
     assert "role" not in body
     assert "is_superuser" not in body
     assert body["is_active"] is True
+    assert body["username"] == _username_for(email)
+    assert body["first_name"] == _PROFILE_FIRST_NAME
+    assert body["last_name"] == _PROFILE_LAST_NAME
     assert "access_token" not in body
     assert "refresh_token" not in body
     assert "hashed_password" not in body
@@ -121,6 +169,9 @@ def test_register_creates_agent_and_login_returns_verified_pair(
 
     assert me.status_code == 200
     assert me.json()["id"] == body["id"]
+    assert me.json()["username"] == _username_for(email)
+    assert me.json()["first_name"] == _PROFILE_FIRST_NAME
+    assert me.json()["last_name"] == _PROFILE_LAST_NAME
     assert "hashed_password" not in me.json()
 
 
@@ -131,36 +182,72 @@ def test_login_accepts_caseblind_email(auth_client: TestClient) -> None:
     assert _login(auth_client, email.upper()).status_code == 200
 
 
+@pytest.mark.parametrize("duplicate_username", ["SharedName", "SHAREDNAME"])
+def test_registration_rejects_duplicate_username(
+    auth_client: TestClient, duplicate_username: str
+) -> None:
+    """Distinct emails cannot share a username: exact and case-variant both conflict."""
+
+    first_email = temp_email("dup-username-first")
+    first_payload = {**_valid_signup_payload(first_email), "username": "SharedName"}
+    created = auth_client.post("/auth/register", json=first_payload)
+    assert created.status_code == 201
+    created_body = created.json()
+    assert created_body["username"] == "SharedName"
+    assert created_body["first_name"] == _PROFILE_FIRST_NAME
+    assert created_body["last_name"] == _PROFILE_LAST_NAME
+
+    second_email = temp_email("dup-username-second")
+    second_payload = {**_valid_signup_payload(second_email), "username": duplicate_username}
+    conflict = auth_client.post("/auth/register", json=second_payload)
+    assert conflict.status_code == 400
+    assert conflict.json()["detail"] == ErrorCode.REGISTER_USER_ALREADY_EXISTS.value
+
+    unknown = _login(auth_client, second_email)
+    assert unknown.status_code == 400
+    assert unknown.json()["detail"] == ErrorCode.LOGIN_BAD_CREDENTIALS.value
+
+    pair = _login(auth_client, first_email)
+    assert pair.status_code == 200
+    me = auth_client.get("/users/me", headers=raw_auth_headers(pair.json()["access_token"]))
+    assert me.status_code == 200
+    assert me.json()["id"] == created_body["id"]
+    assert me.json()["email"] == first_email.lower()
+    assert me.json()["username"] == "SharedName"
+    assert me.json()["first_name"] == _PROFILE_FIRST_NAME
+    assert me.json()["last_name"] == _PROFILE_LAST_NAME
+
+
 def test_registration_rejects_extra_fields_and_bad_email(auth_client: TestClient) -> None:
     """T2-SIGNUP (A1): unknown, role and privilege fields are all rejected."""
 
+    extra_email = temp_email("extra")
     extra = auth_client.post(
         "/auth/register",
-        json={
-            "email": temp_email("extra"),
-            "password": TEMP_PASSWORD,
-            "extra": "agent",
-        },
+        json={**_valid_signup_payload(extra_email), "extra": "agent"},
     )
-    assert extra.status_code == 422
-    assert extra.json() == {"detail": "invalid authentication request"}
+    _assert_register_field_error(extra, "extra")
+    assert _login(auth_client, extra_email).status_code == 400
 
+    flagged_email = temp_email("flagged")
     flagged = auth_client.post(
         "/auth/register",
-        json={
-            "email": temp_email("flagged"),
-            "password": TEMP_PASSWORD,
-            "is_superuser": True,
-        },
+        json={**_valid_signup_payload(flagged_email), "is_superuser": True},
     )
-    assert flagged.status_code == 422
-    assert flagged.json() == {"detail": "invalid authentication request"}
+    _assert_register_field_error(flagged, "is_superuser")
+    assert _login(auth_client, flagged_email).status_code == 400
 
     bad_email = auth_client.post(
-        "/auth/register", json={"email": "not-an-email", "password": TEMP_PASSWORD}
+        "/auth/register",
+        json={
+            "email": "not-an-email",
+            "password": TEMP_PASSWORD,
+            "username": "bad-email-user",
+            "first_name": _PROFILE_FIRST_NAME,
+            "last_name": _PROFILE_LAST_NAME,
+        },
     )
-    assert bad_email.status_code == 422
-    assert bad_email.json() == {"detail": "invalid authentication request"}
+    _assert_register_field_error(bad_email, "email")
 
 
 async def test_public_registration_creates_each_role_with_safe_projection(
@@ -169,13 +256,20 @@ async def test_public_registration_creates_each_role_with_safe_projection(
     """T2-SIGNUP (A1): public signup creates an ordinary account with no system role.
 
     The old contract let a signup request choose admin/developer/agent. Now a
-    role request is refused, and the ordinary account that signup does create
-    has no system assignment, no project, and no control-plane access.
+    role request is refused and creates nothing. The ordinary account that
+    signup does create has no system assignment and no control-plane access.
+    TASK-000065: it owns exactly one automatic Default project, as project
+    administrator only, with no project API key and no provider secret.
     """
 
     from sqlalchemy import func, select
 
-    from polyweb.persistence.projects import ProjectMembershipRow, SystemRoleAssignmentRow
+    from polyweb.persistence.api_keys import ProjectApiKeyRow
+    from polyweb.persistence.projects import (
+        ProjectMembershipRow,
+        ProjectRow,
+        SystemRoleAssignmentRow,
+    )
 
     repository = await SQLiteRepository.open(tmp_path / "auth-signup.db")
     try:
@@ -185,18 +279,19 @@ async def test_public_registration_creates_each_role_with_safe_projection(
                 email = temp_email(f"public-{role}")
                 refused = client.post(
                     "/auth/register",
-                    json={"email": email, "password": TEMP_PASSWORD, "role": role},
+                    json={**_valid_signup_payload(email), "role": role},
                 )
-                assert refused.status_code == 422
+                _assert_register_field_error(refused, "role")
                 assert _login(client, email).status_code == 400
 
             email = temp_email("public-ordinary")
-            created = client.post(
-                "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
-            )
+            created = client.post("/auth/register", json=_valid_signup_payload(email))
             assert created.status_code == 201
             body = created.json()
             assert body["email"] == email.lower()
+            assert body["username"] == _username_for(email)
+            assert body["first_name"] == _PROFILE_FIRST_NAME
+            assert body["last_name"] == _PROFILE_LAST_NAME
             assert "role" not in body
             assert "is_superuser" not in body
             assert body["is_active"] is True
@@ -209,9 +304,22 @@ async def test_public_registration_creates_each_role_with_safe_projection(
             headers = raw_auth_headers(logged_in.json()["access_token"])
             me = client.get("/users/me", headers=headers)
             assert me.status_code == 200
+            assert me.json()["username"] == _username_for(email)
+            assert me.json()["first_name"] == _PROFILE_FIRST_NAME
+            assert me.json()["last_name"] == _PROFILE_LAST_NAME
             assert "role" not in me.json()
             assert client.get("/stats", headers=headers).status_code == 403
-            assert client.get("/api/v1/projects", headers=headers).json() == []
+            assert client.get("/api/v1/routing/config", headers=headers).status_code == 403
+            projects = client.get("/api/v1/projects", headers=headers).json()
+            assert [project["name"] for project in projects] == ["Default"]
+            assert projects[0]["created_by"] == body["id"]
+            default_id = projects[0]["id"]
+            access = client.get(f"/api/v1/projects/{default_id}/access", headers=headers)
+            assert access.status_code == 200
+            assert access.json()["roles"] == ["project_admin"]
+            assert (
+                client.get(f"/api/v1/projects/{default_id}/api-keys", headers=headers).json() == []
+            )
 
         async with repository.session() as session:
             assignments = await session.scalar(
@@ -220,8 +328,14 @@ async def test_public_registration_creates_each_role_with_safe_projection(
             memberships = await session.scalar(
                 select(func.count()).select_from(ProjectMembershipRow)
             )
+            project_count = await session.scalar(select(func.count()).select_from(ProjectRow))
+            api_keys = await session.scalar(select(func.count()).select_from(ProjectApiKeyRow))
+        # Still no system authority anywhere, and the refused role signups
+        # created nothing: the one accepted account owns the only project.
         assert assignments == 0
-        assert memberships == 0
+        assert memberships == 1
+        assert project_count == 1
+        assert api_keys == 0
     finally:
         await repository.close()
 
@@ -230,14 +344,193 @@ def test_public_registration_rejects_invalid_roles_safely(auth_client: TestClien
     """T2-SIGNUP: null, unknown, and uppercase roles return safe HTTP 422."""
 
     for bad in ("superadmin", "ADMIN", None):
-        rejected = auth_client.post(
-            "/auth/register",
-            json={"email": temp_email("bad-role"), "password": TEMP_PASSWORD, "role": bad},
-        )
-        assert rejected.status_code == 422
-        assert rejected.json() == {"detail": "invalid authentication request"}
+        email = temp_email("bad-role")
+        payload = dict(_valid_signup_payload(email))
+        payload["role"] = bad
+        rejected = auth_client.post("/auth/register", json=payload)
+        _assert_register_field_error(rejected, "role")
         assert "superadmin" not in rejected.text
         assert TEMP_PASSWORD not in rejected.text
+        assert _login(auth_client, email).status_code == 400
+
+
+@pytest.mark.parametrize("field", ["username", "first_name", "last_name"])
+@pytest.mark.parametrize("case", ["omitted", "null", "empty", "whitespace", "whitespace-tabs"])
+def test_registration_profile_fields_reject_missing_null_and_blank(
+    auth_client: TestClient, field: str, case: str
+) -> None:
+    """Signup profile names are mandatory: omitted, null, empty, blank rejected."""
+
+    email = temp_email(f"profile-{field}-{case}")
+    payload = dict(_valid_signup_payload(email))
+    if case == "omitted":
+        del payload[field]
+    elif case == "null":
+        payload[field] = None
+    elif case == "empty":
+        payload[field] = ""
+    elif case == "whitespace":
+        payload[field] = "   "
+    else:
+        payload[field] = "\t \n "
+    response = auth_client.post("/auth/register", json=payload)
+    _assert_register_field_error(response, field)
+    assert _login(auth_client, email).status_code == 400
+
+
+@pytest.mark.parametrize(
+    "field,max_len",
+    [("username", 64), ("first_name", 100), ("last_name", 100)],
+)
+def test_registration_profile_fields_enforce_max_lengths(
+    auth_client: TestClient, field: str, max_len: int
+) -> None:
+    """Overlong profile names reject with a field error; boundary lengths persist."""
+
+    overlong_email = temp_email(f"overlong-{field}")
+    overlong = dict(_valid_signup_payload(overlong_email))
+    overlong[field] = "x" * (max_len + 1)
+    refused = auth_client.post("/auth/register", json=overlong)
+    _assert_register_field_error(refused, field)
+    assert _login(auth_client, overlong_email).status_code == 400
+
+    boundary_email = temp_email(f"boundary-{field}")
+    boundary = dict(_valid_signup_payload(boundary_email))
+    boundary[field] = "y" * max_len
+    created = auth_client.post("/auth/register", json=boundary)
+    assert created.status_code == 201
+    assert created.json()[field] == "y" * max_len
+    logged_in = _login(auth_client, boundary_email)
+    assert logged_in.status_code == 200
+    me = auth_client.get("/users/me", headers=raw_auth_headers(logged_in.json()["access_token"]))
+    assert me.status_code == 200
+    assert me.json()[field] == "y" * max_len
+
+
+def test_registration_trims_and_persists_profile_through_login_and_me(
+    auth_client: TestClient,
+) -> None:
+    """Valid padded profile names trim and persist through login, me, and re-login."""
+
+    email = temp_email("trimmed")
+    padded_username = f"  {_username_for(email)}  "
+    registered = auth_client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": TEMP_PASSWORD,
+            "username": padded_username,
+            "first_name": "  Ada  ",
+            "last_name": "\tGrace\n",
+        },
+    )
+    assert registered.status_code == 201
+    body = registered.json()
+    assert body["username"] == _username_for(email)
+    assert body["first_name"] == "Ada"
+    assert body["last_name"] == "Grace"
+
+    logged_in = _login(auth_client, email)
+    assert logged_in.status_code == 200
+    me = auth_client.get("/users/me", headers=raw_auth_headers(logged_in.json()["access_token"]))
+    assert me.status_code == 200
+    assert me.json()["username"] == _username_for(email)
+    assert me.json()["first_name"] == "Ada"
+    assert me.json()["last_name"] == "Grace"
+    assert "hashed_password" not in me.json()
+
+    again = _login(auth_client, email)
+    assert again.status_code == 200
+    reread = auth_client.get("/users/me", headers=raw_auth_headers(again.json()["access_token"]))
+    assert reread.status_code == 200
+    assert reread.json()["username"] == _username_for(email)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("role", "admin"),
+        ("is_superuser", True),
+        ("is_active", False),
+        ("is_verified", True),
+        ("system_role", "system_admin"),
+        ("account_type", "human"),
+        ("auth_provider", "workos"),
+        ("auth_provider_id", "sso-1"),
+        ("extra", "agent"),
+    ],
+)
+def test_registration_rejects_privilege_and_provider_injection_without_account(
+    auth_client: TestClient, field: str, value: object
+) -> None:
+    """Privilege, provider, and unknown fields stay forbidden with no account."""
+
+    email = temp_email(f"inject-{field}")
+    payload = dict(_valid_signup_payload(email))
+    payload[field] = value
+    response = auth_client.post("/auth/register", json=payload)
+    _assert_register_field_error(response, field)
+    assert TEMP_PASSWORD not in response.text
+    if isinstance(value, str):
+        assert value not in response.text
+    assert _login(auth_client, email).status_code == 400
+
+
+async def test_legacy_nullable_profile_login_and_read_still_usable(
+    tmp_path: Path, auth_secret: str
+) -> None:
+    """Trusted rows with null or partial profile still log in and read."""
+
+    from fastapi_users.password import PasswordHelper
+
+    repository = await SQLiteRepository.open(tmp_path / "auth-legacy.db")
+    try:
+        app = create_app([_StubAdapter("stubby")], repository=repository)
+        with TestClient(app) as client:
+            null_email = temp_email("legacy-null")
+            partial_email = temp_email("legacy-partial")
+            async with repository.session() as session:
+                database = UserDatabase(session, UserRow)
+                helper = PasswordHelper()
+                await database.create_trusted(
+                    email=null_email,
+                    hashed_password=helper.hash(TEMP_PASSWORD),
+                    username=None,
+                    first_name=None,
+                    last_name=None,
+                )
+                await database.create_trusted(
+                    email=partial_email,
+                    hashed_password=helper.hash(TEMP_PASSWORD),
+                    username=_username_for(partial_email),
+                    first_name=None,
+                    last_name=None,
+                )
+
+            null_pair = _login(client, null_email)
+            assert null_pair.status_code == 200
+            null_me = client.get(
+                "/users/me",
+                headers=raw_auth_headers(null_pair.json()["access_token"]),
+            )
+            assert null_me.status_code == 200
+            assert null_me.json()["username"] is None
+            assert null_me.json()["first_name"] is None
+            assert null_me.json()["last_name"] is None
+            assert "hashed_password" not in null_me.json()
+
+            partial_pair = _login(client, partial_email)
+            assert partial_pair.status_code == 200
+            partial_me = client.get(
+                "/users/me",
+                headers=raw_auth_headers(partial_pair.json()["access_token"]),
+            )
+            assert partial_me.status_code == 200
+            assert partial_me.json()["username"] == _username_for(partial_email)
+            assert partial_me.json()["first_name"] is None
+            assert partial_me.json()["last_name"] is None
+    finally:
+        await repository.close()
 
 
 def test_bad_credentials_share_one_generic_error(auth_client: TestClient) -> None:

@@ -22,6 +22,7 @@ from polyweb.routers.api import create_app
 from polyweb.services.credentials import credential_secret_slot
 from tests.fixtures.auth import (
     account_id_from_pair,
+    bare_login,
     raw_auth_headers,
     register_and_login,
     register_system_admin_login,
@@ -31,6 +32,28 @@ from tests.fixtures.execution import seed_execution_project
 from tests.integration.services.oauth.oauth_stubs import StubOAuthServer, stub_client
 
 BASE = "/api/v1/account/vault/keys"
+_DEFAULT_KEYLESS = {"keenable", "tavily"}
+
+
+def _listed_key(client: TestClient, headers: dict[str, str], key_id: str) -> dict:
+    """Return the one listed key with this exact id."""
+
+    matches = [item for item in client.get(BASE, headers=headers).json() if item["id"] == key_id]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _default_keys(client: TestClient, headers: dict[str, str]) -> dict[str, dict]:
+    """Return the owner's signup-created keyless keys by id (exactly the two defaults)."""
+
+    listed = client.get(BASE, headers=headers)
+    assert listed.status_code == 200, listed.text
+    keys = {item["id"]: item for item in listed.json()}
+    assert len(keys) == len(listed.json()) == len(_DEFAULT_KEYLESS)
+    assert {item["provider_type"] for item in keys.values()} == _DEFAULT_KEYLESS
+    assert all(item["auth_mode"] == "keyless" for item in keys.values())
+    assert all(item["pool_count"] == 1 for item in keys.values())
+    return keys
 
 
 @pytest_asyncio.fixture
@@ -71,7 +94,7 @@ async def test_key_capacity_round_trip_and_clear(repository, vault_env, auth_sec
         assert created.status_code == 201, created.text
         key_id = created.json()["id"]
         assert created.json()["capacity"] == capacity
-        assert client.get(BASE, headers=headers).json()[0]["capacity"] == capacity
+        assert _listed_key(client, headers, key_id)["capacity"] == capacity
         async with repository.session() as session:
             row = await session.get(ProviderCredentialRow, key_id)
             assert row is not None
@@ -96,7 +119,7 @@ async def test_key_capacity_round_trip_and_clear(repository, vault_env, auth_sec
         cleared = client.patch(f"{BASE}/{key_id}", headers=headers, json={"capacity": None})
         assert cleared.status_code == 200, cleared.text
         assert cleared.json()["capacity"] is None
-        assert client.get(BASE, headers=headers).json()[0]["capacity"] is None
+        assert _listed_key(client, headers, key_id)["capacity"] is None
         async with repository.session() as session:
             row = await session.get(ProviderCredentialRow, key_id)
             assert row is not None
@@ -108,11 +131,19 @@ async def test_vault_key_lifecycle_and_ownership(repository, vault_env, auth_sec
     with TestClient(create_app([], repository=repository)) as client:
         owner = await register_system_admin_login(client, repository, temp_email("owner"))
         other = await register_system_admin_login(client, repository, temp_email("other"))
-        developer = register_and_login(client, temp_email("developer"))
+        # A bare account owns no project, so vault use is denied (403). A normal
+        # signup owns a Default project and may use the vault, but only its own keys.
+        developer = await bare_login(client, repository, temp_email("developer"))
+        signup_admin = register_and_login(client, temp_email("signup-admin"))
         headers = raw_auth_headers(owner["access_token"])
         other_headers = raw_auth_headers(other["access_token"])
         denied_headers = raw_auth_headers(developer["access_token"])
+        signup_headers = raw_auth_headers(signup_admin["access_token"])
         assert client.get(BASE, headers=denied_headers).status_code == 403
+        signup_defaults = _default_keys(client, signup_headers)
+        defaults = _default_keys(client, headers)
+        assert set(defaults).isdisjoint(signup_defaults)
+        assert set(defaults).isdisjoint(_default_keys(client, other_headers))
         created = client.post(
             BASE,
             headers=headers,
@@ -124,10 +155,15 @@ async def test_vault_key_lifecycle_and_ownership(repository, vault_env, auth_sec
         assert "first-secret" not in created.text
         listed = client.get(BASE, headers=headers)
         assert listed.status_code == 200
-        assert listed.json() == [key]
+        # Exactly the two owned default keys plus the key created here, by identity.
+        assert {item["id"]: item for item in listed.json()} == {**defaults, key["id"]: key}
+        assert len(listed.json()) == len(defaults) + 1
         assert "first-secret" not in listed.text
-        assert client.patch(f"{BASE}/{key_id}", headers=other_headers, json={}).status_code == 404
-        assert client.delete(f"{BASE}/{key_id}", headers=other_headers).status_code == 404
+        # A foreign vault user (including one who owns only keyless defaults) sees 404.
+        for foreign in (other_headers, signup_headers):
+            assert client.patch(f"{BASE}/{key_id}", headers=foreign, json={}).status_code == 404
+            assert client.delete(f"{BASE}/{key_id}", headers=foreign).status_code == 404
+        assert _default_keys(client, signup_headers) == signup_defaults
         project = await seed_execution_project(repository, user_id=account_id_from_pair(owner))
         async with repository.session() as session:
             pool = await KeyPoolRepository(session).create(
@@ -190,7 +226,8 @@ async def test_vault_key_lifecycle_and_ownership(repository, vault_env, auth_sec
         assert deleted.json() == {
             "deleted_pools": [{"id": str(pool.id), "project_id": str(project.project_id)}]
         }
-        assert client.get(BASE, headers=headers).json() == []
+        # Only the created key went away; the owner's default keyless keys persist.
+        assert _default_keys(client, headers) == defaults
         async with repository.session() as session:
             assert await KeyPoolRepository(session).get(pool.id) is None
             audit = (

@@ -57,7 +57,6 @@ function poolCell(props: ProviderOrderRowProps) {
 }
 
 function operationCell(props: ProviderOrderRowProps, enabled: boolean, opLabel: string) {
-  if (!props.poolOperations && props.item.keyless && enabled) return <span className="whitespace-nowrap text-[12px] text-[var(--muted)]">Always on</span>
   if (!props.poolOperations) return <Tag>Off</Tag>
   if (!props.isOwner) return <Switch checked={enabled} disabled ariaLabel={`Use ${props.item.name} for ${opLabel}`} onChange={props.onToggle} />
   return <Switch checked={props.poolOperations.includes(props.operation)} disabled={props.pending} ariaLabel={`Use ${props.item.name} for ${opLabel}`} onChange={props.onToggle} />

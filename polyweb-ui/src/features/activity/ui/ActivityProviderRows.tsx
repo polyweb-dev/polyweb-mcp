@@ -10,7 +10,7 @@ import { TraceStatusPill } from "./TraceStatusPill"
 
 /** Nested rows sit one shade above the page so the hierarchy is visible. */
 const CHILD_CELL = "bg-[color-mix(in_srgb,var(--elevated)_55%,transparent)]"
-const COLUMN_COUNT = 7
+const COLUMN_COUNT = 8
 
 export interface ActivityProviderRowsProps {
   /** Id the parent row's expander points at with `aria-controls`. */
@@ -118,6 +118,7 @@ function attemptRow(
       </td>
       <td className={`${CHILD_CELL} text-[var(--muted)]`}>Response</td>
       <td className={`${CHILD_CELL} fs-cell-strong`}>{providerValue(attempt)}</td>
+      <td className={CHILD_CELL} aria-hidden="true" />
       <td className={CHILD_CELL}>
         <TraceStatusPill outcome={attempt.outcome} />
       </td>

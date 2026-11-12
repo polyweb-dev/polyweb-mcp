@@ -32,13 +32,6 @@ from pydantic import SecretStr
 from polyweb.configuration.config import get_settings
 from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore, load_secret_codec
 from polyweb.mcp.server import create_server
-from polyweb.models.credentials import CredentialOperation
-from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
-from polyweb.models.schema_enums import UpstreamScope
-from polyweb.persistence.pools import (
-    PoolAllocationRepository,
-    UpstreamPoolRepository,
-)
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
 from polyweb.services.monitoring import clear_quota_poll_cache
@@ -48,16 +41,17 @@ from tests.fixtures.auth import TEMP_PASSWORD, temp_email
 from tests.fixtures.execution import (
     install_adapter_map,
     seed_member_project,
-    seed_provider_bindings,
 )
 from tests.fixtures.latency import (
     REPO_ROOT,
     OfflineAdapter,
+    attach_select_counter,
     drain_background_tasks,
     fetch_payload,
     git_commit,
     percentile,
     search_payload,
+    seed_latency_pools,
     seed_repository,
     warm_route_caches,
 )
@@ -106,52 +100,6 @@ def _latency_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
     return EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
 
 
-async def _seed_exa_pool(
-    repository: SQLiteRepository,
-    *,
-    project_id: Any,
-    actor_id: Any,
-) -> Any:
-    """Bind the exa credential to one pool so the authority queue is exercised.
-
-    A generous envelope keeps the latency samples routing instead of refusing;
-    the point of the mix is the per-provider added time of the authoritative
-    (fenced, pool-admitted) path, not a rate-limit stress.
-    """
-
-    constraints = [
-        {
-            "kind": "rate",
-            "algorithm": "trailing_window",
-            "window": 3600,
-            "limit": 10_000,
-        }
-    ]
-    async with repository.session() as session:
-        pools = UpstreamPoolRepository(session)
-        pool = await pools.create_pool(
-            account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
-            provider_type="exa",
-            upstream_scope=UpstreamScope.ACCOUNT,
-            pool_key=f"a3-latency-{uuid4().hex[:8]}",
-            label="a3 latency pool",
-            constraints=constraints,
-        )
-        await PoolAllocationRepository(session).create(
-            project_id=project_id,
-            pool_id=pool.id,
-            operation=CredentialOperation.SEARCH,
-            base_rate=100,
-            rate_window_seconds=3600,
-            granted_by=actor_id,
-            borrow_enabled=True,
-            max_rate=10_000,
-            weight=4,
-        )
-        await session.commit()
-    return pool
-
-
 async def _bind_seven_providers(
     repository: SQLiteRepository,
     store: EncryptedDbSecretStore,
@@ -161,10 +109,13 @@ async def _bind_seven_providers(
     project_id: Any,
     actor_id: Any,
 ) -> None:
-    """Bind the seven offline adapters; the exa binding joins the seeded pool."""
+    """Assign owned pools with generous synthetic capacity to all seven fakes."""
 
     secrets: dict[str, str] = {}
-    await seed_provider_bindings(
+    for adapter in adapters:
+        _PROVIDER_CLOCK.instrument(adapter)
+    install_adapter_map(monkeypatch, adapters, secrets=secrets)
+    await seed_latency_pools(
         repository,
         project_id=project_id,
         actor_id=actor_id,
@@ -172,10 +123,6 @@ async def _bind_seven_providers(
         providers=tuple(SEVEN_PROVIDERS),
         secrets=secrets,
     )
-    await _seed_exa_pool(repository, project_id=project_id, actor_id=actor_id)
-    for adapter in adapters:
-        _PROVIDER_CLOCK.instrument(adapter)
-    install_adapter_map(monkeypatch, adapters, secrets=secrets)
 
 
 async def _record_request(
@@ -232,6 +179,7 @@ async def _run_mix(
     providers: str,
     repository: SQLiteRepository,
     call: Callable[[], Awaitable[Any]],
+    db_reads: list[dict[str, Any]] | None = None,
 ) -> None:
     clear_config_cache()
     clear_quota_poll_cache()
@@ -259,18 +207,92 @@ async def _run_mix(
             request_index=index,
             call=call,
         )
-    for index in range(_MEASURED_PER_MIX):
-        await _record_request(
-            rows,
-            commit=commit,
-            transport=transport,
-            operation=operation,
-            routing_mode=routing_mode,
-            providers=providers,
-            phase="measured",
-            request_index=index,
-            call=call,
+    selects: list[int] = [0]
+    detach = attach_select_counter(repository, selects)
+    try:
+        for index in range(_MEASURED_PER_MIX):
+            await _record_request(
+                rows,
+                commit=commit,
+                transport=transport,
+                operation=operation,
+                routing_mode=routing_mode,
+                providers=providers,
+                phase="measured",
+                request_index=index,
+                call=call,
+            )
+    finally:
+        if detach is not None:
+            detach()
+    if db_reads is not None:
+        measured_reads = selects[0] if detach is not None else None
+        db_reads.append(
+            {
+                "transport": transport,
+                "operation": operation,
+                "routing_mode": routing_mode,
+                "providers": providers,
+                "samples": _MEASURED_PER_MIX,
+                "foreground_selects": measured_reads,
+                "selects_per_request": (
+                    round(measured_reads / _MEASURED_PER_MIX, 2)
+                    if measured_reads is not None
+                    else None
+                ),
+                "counter_available": detach is not None,
+            }
         )
+
+
+def _write_db_reads_report(db_reads: Sequence[dict[str, Any]]) -> None:
+    """Write engine SELECTs per measured mix, including background reads (no gate)."""
+
+    csv_path = _REPORT_DIR / "db_reads.csv"
+    md_path = _REPORT_DIR / "db_reads.md"
+    with open(csv_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "transport",
+                "operation",
+                "routing_mode",
+                "providers",
+                "samples",
+                "foreground_selects",
+                "selects_per_request",
+                "counter_available",
+            ],
+        )
+        writer.writeheader()
+        for row in db_reads:
+            writer.writerow(row)
+    lines = [
+        "# A3 authority engine SELECT diagnostic",
+        "",
+        "Engine SELECT statements on the shared repository engine, counted with",
+        "the existing `attach_select_counter` seam during the measured loop only",
+        f"({_MEASURED_PER_MIX} requests per mix). Cold requests, cache warming, and warmup",
+        "requests are excluded. Counts include authorization,",
+        "binding, credential, pool, allocation, order, settings, health, usage,",
+        "and quota reads plus any background SELECT inside the mix window. They",
+        "are a diagnostic, not a pass/fail limit: no threshold applies.",
+        "The legacy CSV column `foreground_selects` includes those background reads.",
+        "An unavailable counter leaves the SELECT count and per-request average blank.",
+        "",
+        "| transport | operation | routing | providers | samples | selects | each | counter |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for row in db_reads:
+        reads_cell = "" if row["foreground_selects"] is None else str(row["foreground_selects"])
+        each_cell = "" if row["selects_per_request"] is None else str(row["selects_per_request"])
+        lines.append(
+            f"| {row['transport']} | {row['operation']} | {row['routing_mode']} | "
+            f"{row['providers']} | {row['samples']} | {reads_cell} | "
+            f"{each_cell} | "
+            f"{'available' if row['counter_available'] else 'unavailable'} |"
+        )
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _assert_mixes_routed(
@@ -400,7 +422,14 @@ async def test_a3_rest_and_mcp_authority_latency(
         ):
             email = temp_email("a3-latency")
             registered = await client.post(
-                "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+                "/auth/register",
+                json={
+                    "email": email,
+                    "password": TEMP_PASSWORD,
+                    "username": f"tester-{uuid4().hex[:8]}",
+                    "first_name": "Test",
+                    "last_name": "User",
+                },
             )
             assert registered.status_code == 201
             logged_in = await client.post(
@@ -448,6 +477,7 @@ async def test_a3_rest_and_mcp_authority_latency(
                 ("search", "auto"): rest_search_auto,
                 ("fetch", "require"): rest_fetch_require,
             }
+            db_reads: list[dict[str, Any]] = []
 
             # REST mixes run against the live app.
             for transport_name, operation, mode, providers in _MIXES:
@@ -462,6 +492,7 @@ async def test_a3_rest_and_mcp_authority_latency(
                     providers=providers,
                     repository=repository,
                     call=rest_calls[(operation, mode)],
+                    db_reads=db_reads,
                 )
 
         # MCP mixes run against a separate stdio composition of the same DB.
@@ -517,13 +548,17 @@ async def test_a3_rest_and_mcp_authority_latency(
                 providers=providers,
                 repository=repository,
                 call=call_mcp,
+                db_reads=db_reads,
             )
 
         _assert_mixes_routed(rows)
         table = _added_stats(rows)
         _write_report(rows, table)
+        _write_db_reads_report(db_reads)
         assert (_REPORT_DIR / "routing_latency.csv").exists()
         assert (_REPORT_DIR / "routing_latency.md").exists()
+        assert (_REPORT_DIR / "db_reads.csv").exists()
+        assert (_REPORT_DIR / "db_reads.md").exists()
         _assert_added_p95_under_limit(table)
     finally:
         await drain_background_tasks()

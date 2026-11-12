@@ -365,3 +365,39 @@ describe("SidebarAccountMenu SB4 refinements", () => {
     )
   })
 })
+
+describe("SidebarAccountMenu named identity fallback", () => {
+  it("shows the full name primary with the email secondary and the name initial", () => {
+    renderMenu(
+      adminAccountFixture({ email: "ada@example.com", first_name: "Ada", last_name: "Lovelace", username: "ada" })
+    )
+
+    const trigger = screen.getByRole("button", { name: "Open user menu" })
+    expect(trigger).toHaveTextContent("Ada Lovelace")
+    expect(trigger).toHaveTextContent("ada@example.com")
+    const avatar = trigger.querySelector('span[aria-hidden="true"]')
+    expect(avatar?.textContent).toBe("A")
+    const nameLine = trigger.querySelector('span[title]')
+    expect(nameLine?.getAttribute("title")).toBe("Ada Lovelace (ada@example.com)")
+  })
+
+  it("uses the username initial and the detail title on the collapsed avatar for a username-only account", () => {
+    renderMenu(adminAccountFixture({ email: "ops@example.com", username: "zeta" }), true)
+
+    const trigger = screen.getByRole("button", { name: "Open user menu" })
+    expect(trigger).toHaveAttribute("title", "zeta (ops@example.com)")
+    expect(trigger).toHaveTextContent("Z")
+  })
+
+  it("treats blank names as absent and shows the email alone", () => {
+    renderMenu(
+      adminAccountFixture({ email: "lead@example.com", first_name: "  ", last_name: " ", username: "  " })
+    )
+
+    const trigger = screen.getByRole("button", { name: "Open user menu" })
+    expect(trigger).toHaveTextContent("lead@example.com")
+    expect(trigger.textContent).not.toContain("(")
+    const avatar = trigger.querySelector('span[aria-hidden="true"]')
+    expect(avatar?.textContent).toBe("L")
+  })
+})

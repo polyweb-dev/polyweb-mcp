@@ -1,3 +1,4 @@
+import { RefreshCw, Trash2 } from "lucide-react"
 import type { ProjectApiKey } from "@/domains/projects"
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog"
 import { RowActionsMenu, type RowAction } from "@/shared/ui/RowActionsMenu"
@@ -22,9 +23,9 @@ export function ApiKeyRowActions({ apiKey, canRotate, controller }: ApiKeyRowAct
 
   const actions: RowAction[] = [
     ...(canRotate
-      ? [{ key: "rotate", label: "Rotate key", onSelect: () => controller.openRotate(apiKey) }]
+      ? [{ key: "rotate", label: "Rotate key", icon: RefreshCw, onSelect: () => controller.openRotate(apiKey) }]
       : []),
-    { key: "revoke", label: "Revoke key", danger: true, onSelect: () => controller.requestRevoke(apiKey.id) },
+    { key: "revoke", label: "Revoke key", icon: Trash2, danger: true, onSelect: () => controller.requestRevoke(apiKey.id) },
   ]
   return (
     <>

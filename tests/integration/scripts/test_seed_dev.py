@@ -65,7 +65,13 @@ async def test_fresh_seed_accounts_memberships_and_encrypted_bindings(tmp_path: 
         service = ProjectService(repository)
         for index, user in enumerate(users):
             system_access = await service.system_access(user)
-            assert ("project.create" in system_access.permissions) == (index < 2)
+            if index < 2:
+                assert "project.create" in system_access.permissions
+                assert any(
+                    permission.startswith("system.") for permission in system_access.permissions
+                )
+            else:
+                assert system_access.permissions == ["project.create"]
         for project, (_, _, admins, members) in zip(projects, PROJECTS, strict=True):
             administrator = users[admins[0]]
             listed = await service.list_members(administrator, project.id)

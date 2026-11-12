@@ -279,7 +279,14 @@ async def _login_and_run(
 
     email = temp_email("profile-steps")
     registered = await client.post(
-        "/auth/register", json={"email": email, "password": TEMP_PASSWORD}
+        "/auth/register",
+        json={
+            "email": email,
+            "password": TEMP_PASSWORD,
+            "username": email.split("@")[0][:64],
+            "first_name": "Test",
+            "last_name": "User",
+        },
     )
     registered.raise_for_status()
     logged_in = await client.post(

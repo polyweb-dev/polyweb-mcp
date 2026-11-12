@@ -10,6 +10,8 @@ app-scoped observability runtime exports spans to that scenario's database.
 import json
 import re
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +65,12 @@ _FETCH_TITLE = "Example Article"
 _LIST_ITEM_KEYS = {
     "trace_id",
     "user_id",
+    "actor_type",
+    "actor_id",
+    "username",
+    "first_name",
+    "last_name",
+    "email",
     "operation",
     "started_at",
     "duration_ms",
@@ -134,6 +142,7 @@ class _TraceStubAdapter(ProviderAdapter):
 def _reset_otel_state(context: Any) -> None:
     """Clear scenario-local observability state for isolation."""
     context.otel_app = None
+    context.otel_client = None
     context.otel_response = None
     context.otel_trace_id = None
     context.otel_wire_requests = []
@@ -162,7 +171,16 @@ def _register_agent(context: Any) -> dict[str, str]:
     # Search and fetch need any role, dashboard and stats need the Reader role.
     email = temp_email("trace-dev")
     with _client_for(context) as client:
-        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        registered = client.post(
+            "/auth/register",
+            json={
+                "email": email,
+                "password": TEMP_PASSWORD,
+                "username": email.split("@")[0][:64],
+                "first_name": "Test",
+                "last_name": "User",
+            },
+        )
         assert registered.status_code == 201
         # Stats/dashboard are system-scoped reads (A1): trusted system_admin.
         context.loop.run_until_complete(promote_to_system_admin(context.repository, email))
@@ -200,9 +218,15 @@ def _keenable_adapter(client: httpx.AsyncClient) -> KeenableAdapter:
     return KeenableAdapter(client, api_key=SecretStr(_FAKE_API_KEY))
 
 
-def _client_for(context: Any) -> TestClient:
-    """Open a TestClient that captures handled and unhandled error responses."""
-    return TestClient(context.otel_app, raise_server_exceptions=False)
+@contextmanager
+def _client_for(context: Any) -> Iterator[TestClient]:
+    """Borrow the app's scenario-owned client; scenario cleanup ends its lifespan."""
+    client = getattr(context, "otel_client", None)
+    if client is None:
+        client = TestClient(context.otel_app, raise_server_exceptions=False)
+        client.__enter__()
+        context.otel_client = client
+    yield client
 
 
 def _post_search(context: Any, query: str, limit: int, *, fanout: bool = False) -> None:
@@ -398,6 +422,10 @@ def step_when_traced_fetch(context: Any, url: str) -> None:
 @when('I submit a traced fetch for "{url}" against a failing provider')
 def step_when_traced_fetch_failing(context: Any, url: str) -> None:
     """Rebuild the app with a failing stub and POST a fetch through it."""
+    client = getattr(context, "otel_client", None)
+    if client is not None:
+        client.__exit__(None, None, None)
+        context.otel_client = None
     context.otel_app = create_app(
         [_TraceStubAdapter("exploding-fetch", fail=True)],
         repository=context.repository,
@@ -490,6 +518,14 @@ def step_then_trace_detail_query(context: Any, query: str, count: int) -> None:
     assert len(listing["items"]) == 1
     item = listing["items"][0]
     assert set(item) == _LIST_ITEM_KEYS, f"list row is not summary-only: {sorted(item)}"
+    owner = _account_uuid(context.otel_auth_headers)
+    assert item["actor_type"] == "human"
+    assert item["actor_id"] == owner
+    assert item["user_id"] == owner
+    assert item["first_name"] == "Test"
+    assert item["last_name"] == "User"
+    assert item["email"] is not None and item["email"].endswith("@example.com")
+    assert item["username"] == item["email"].split("@")[0][:64]
     list_text = json.dumps(listing)
     assert query not in list_text, "full query leaked into the trace list"
     for expected in _SEARCH_RESULTS:
@@ -744,7 +780,16 @@ def step_then_list_rows_carry_owner(context: Any) -> None:
 def step_when_second_reader(context: Any) -> None:
     email = temp_email("trace-second")
     with _client_for(context) as client:
-        registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+        registered = client.post(
+            "/auth/register",
+            json={
+                "email": email,
+                "password": TEMP_PASSWORD,
+                "username": email.split("@")[0][:64],
+                "first_name": "Test",
+                "last_name": "User",
+            },
+        )
         assert registered.status_code == 201
         logged_in = client.post(
             "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}

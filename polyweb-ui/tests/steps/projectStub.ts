@@ -705,19 +705,55 @@ export async function installProjectStub(
         return empty(route, 403)
       }
       const body = readBody(route) ?? {}
-      const email = typeof body.initial_admin_email === "string" ? body.initial_admin_email : ""
-      if (email.trim().toLowerCase() !== state.userEmail) {
-        return json(route, {}, 400)
+      const rawEmail =
+        typeof body.initial_admin_email === "string" ? body.initial_admin_email.trim() : ""
+      const rawUserId =
+        typeof body.initial_admin_user_id === "string" ? body.initial_admin_user_id.trim() : ""
+      // The backend schema allows at most one admin identifier.
+      if (rawEmail !== "" && rawUserId !== "") {
+        return json(
+          route,
+          { detail: "at most one of initial_admin_user_id or initial_admin_email must be set" },
+          422
+        )
+      }
+      // Omitting both identifiers defaults the initial administrator to the
+      // authenticated creator; the creator is always a project_admin member,
+      // even when another admin is named explicitly.
+      const creatorId = state.accountId
+      const creatorEmail = state.userEmail
+      const members: StubMember[] = [
+        { user_id: creatorId, email: creatorEmail, status: "active", roles: ["project_admin"], version: 1 },
+      ]
+      if (rawEmail !== "") {
+        if (rawEmail.toLowerCase() === creatorEmail.toLowerCase()) {
+          // Explicit self-administration: the creator is already listed.
+        } else if (rawEmail.toLowerCase() === "alpha-peer@example.com") {
+          members.push({
+            user_id: PEER_ID,
+            email: "alpha-peer@example.com",
+            status: "active",
+            roles: ["project_admin"],
+            version: 1,
+          })
+        } else {
+          // Unknown or inactive addresses fail like an unknown user id.
+          return json(route, {}, 400)
+        }
+      } else if (rawUserId !== "") {
+        if (rawUserId !== creatorId) {
+          return json(route, {}, 400)
+        }
       }
       const created: StubProject = {
         id: GAMMA_ID,
         name: String(body.name ?? "New project"),
         status: "active",
-        members: [
-          { user_id: USER_ID, email: state.userEmail, status: "active", roles: ["project_admin"], version: 1 },
-        ],
+        members,
         apiKeys: [],
       }
+      // Replace a previous Gamma creation so repeated submits stay deterministic.
+      state.projects = state.projects.filter((p) => p.id !== GAMMA_ID)
       state.projects.push(created)
       return json(route, projectWire(created), 201)
     }

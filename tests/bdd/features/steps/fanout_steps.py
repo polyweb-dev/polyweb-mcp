@@ -91,7 +91,16 @@ def _ensure_agent_headers(client: TestClient, context: Any) -> dict[str, str]:
     if existing is not None:
         return existing
     email = temp_email("fanout-agent")
-    registered = client.post("/auth/register", json={"email": email, "password": TEMP_PASSWORD})
+    registered = client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": TEMP_PASSWORD,
+            "username": email.split("@")[0][:64],
+            "first_name": "Test",
+            "last_name": "User",
+        },
+    )
     assert registered.status_code == 201
     logged_in = client.post("/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD})
     assert logged_in.status_code == 200
