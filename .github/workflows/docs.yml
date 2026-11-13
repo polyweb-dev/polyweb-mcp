@@ -34,8 +34,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: polyweb-docs/pnpm-lock.yaml
       - name: Install
         working-directory: polyweb-docs
         run: pnpm install --frozen-lockfile
