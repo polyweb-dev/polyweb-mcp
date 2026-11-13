@@ -2,7 +2,7 @@
 
 One dashboard, one API, and one MCP server for web search and page fetch across 8 providers.
 
-![Polyweb dashboard home](polyweb-docs/src/assets/dashboard-home.png)
+![Polyweb trace detail](polyweb-docs/src/assets/dashboard-trace-detail.png)
 
 ## Use the dashboard
 

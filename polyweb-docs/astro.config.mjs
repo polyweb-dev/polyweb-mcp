@@ -47,6 +47,9 @@ export default defineConfig({
         alt: "Polyweb",
       },
       favicon: "/favicon.png",
+      components: {
+        Hero: "./src/components/Hero.astro",
+      },
       sidebar: [
         {
           label: "Get started",

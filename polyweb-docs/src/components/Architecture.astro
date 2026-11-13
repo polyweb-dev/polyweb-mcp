@@ -1,0 +1,216 @@
+---
+import { Image } from "astro:assets";
+import logo from "../assets/logo.webp";
+import brave from "../assets/providers/brave.webp";
+import exa from "../assets/providers/exa.webp";
+import firecrawl from "../assets/providers/firecrawl.webp";
+import tavily from "../assets/providers/tavily.webp";
+import parallel from "../assets/providers/parallel.webp";
+import youcom from "../assets/providers/youcom.webp";
+import keenable from "../assets/providers/keenable.webp";
+import tinyfish from "../assets/providers/tinyfish.webp";
+
+const callers = ["Coding agent", "Research agent", "Custom agent", "Your code"];
+const providers = [
+  { name: "Brave Search", logo: brave },
+  { name: "Exa", logo: exa },
+  { name: "Firecrawl", logo: firecrawl },
+  { name: "Tavily", logo: tavily },
+  { name: "Parallel", logo: parallel },
+  { name: "You.com", logo: youcom },
+  { name: "Keenable", logo: keenable },
+  { name: "Tinyfish", logo: tinyfish },
+];
+
+// Every row is ROW px tall, so the HTML chips and the SVG curves share one
+// Y coordinate system. Both columns are centred on the same midline.
+const ROW = 34;
+const GAP = 6;
+const PITCH = ROW + GAP;
+const leftRows = callers.length + 1; // + "any MCP client"
+const rightRows = providers.length + 1; // + "more providers"
+const stackHeight = (rows: number) => rows * PITCH - GAP;
+const height = stackHeight(rightRows);
+const mid = height / 2;
+const leftOffset = (height - stackHeight(leftRows)) / 2;
+
+const rowCenters = (rows: number) => {
+  const top = (height - stackHeight(rows)) / 2;
+  return Array.from({ length: rows }, (_, i) => top + i * PITCH + ROW / 2);
+};
+const leftY = rowCenters(leftRows);
+const rightY = rowCenters(rightRows);
+
+// Curves live in a 0..100 wide box that stretches to the gap between columns.
+const curve = (y: number, side: "left" | "right") =>
+  side === "left"
+    ? `M0 ${y} C 55 ${y}, 45 ${mid}, 100 ${mid}`
+    : `M0 ${mid} C 55 ${mid}, 45 ${y}, 100 ${y}`;
+---
+
+<figure
+  class="arch"
+  style={`--h:${height}px;--row:${ROW}px;--gap:${GAP}px`}
+  aria-label="Agents and your code call Polyweb, which routes each call to the search providers you configured."
+>
+  <div class="col">
+    <p class="label">Your agents</p>
+    <div class="stack" style={`margin-top:${leftOffset}px`}>
+      {callers.map((c) => <div class="chip">{c}</div>)}
+      <div class="chip chip-more">+ any MCP client</div>
+    </div>
+  </div>
+
+  <svg class="wires" viewBox={`0 0 100 ${height}`} preserveAspectRatio="none" aria-hidden="true">
+    {leftY.map((y) => <path d={curve(y, "left")} />)}
+  </svg>
+
+  <div class="hub">
+    <Image src={logo} alt="" width={96} height={96} class="hub-logo" />
+    <strong>Polyweb</strong>
+  </div>
+
+  <svg class="wires" viewBox={`0 0 100 ${height}`} preserveAspectRatio="none" aria-hidden="true">
+    {rightY.map((y) => <path d={curve(y, "right")} />)}
+  </svg>
+
+  <div class="col">
+    <p class="label">Your providers</p>
+    <div class="stack">
+      {providers.map((p) => (
+        <div class="chip">
+          <Image src={p.logo} alt="" width={40} height={40} class="chip-logo" />
+          {p.name}
+        </div>
+      ))}
+      <div class="chip chip-more">+ more providers</div>
+    </div>
+  </div>
+</figure>
+
+<style>
+  .arch {
+    --label: 1.4rem;
+    display: grid;
+    grid-template-columns: 8.75rem minmax(1.5rem, 1fr) 4.5rem minmax(1.5rem, 1fr) 9.5rem;
+    align-items: start;
+    margin: 0;
+    width: 100%;
+    padding: 1rem 1.25rem 1.25rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 1rem;
+    background-color: color-mix(in srgb, var(--sl-color-bg-nav) 60%, transparent);
+    background-image: radial-gradient(
+      color-mix(in srgb, var(--sl-color-text) 8%, transparent) 1px,
+      transparent 1px
+    );
+    background-size: 14px 14px;
+  }
+  .label {
+    height: var(--label);
+    margin: 0;
+    text-align: center;
+    font-family: var(--sl-font-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+  }
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    height: var(--row);
+    padding: 0 0.7rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 0.55rem;
+    background: var(--sl-color-bg-nav);
+    color: var(--sl-color-white);
+    font-size: 0.8rem;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .chip-logo {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    object-fit: contain;
+    flex: none;
+  }
+  .chip-more {
+    border-style: dashed;
+    background: transparent;
+    color: var(--sl-color-accent-high);
+    font-weight: 400;
+  }
+
+  /* Wires and hub start below the label row so they line up with the chips. */
+  .wires {
+    width: 100%;
+    height: var(--h);
+    margin-top: var(--label);
+    overflow: visible;
+  }
+  .wires path {
+    fill: none;
+    stroke: var(--sl-color-accent);
+    stroke-opacity: 0.55;
+    stroke-width: 1.5;
+    stroke-dasharray: 3 5;
+    vector-effect: non-scaling-stroke;
+    animation: flow 1.6s linear infinite;
+  }
+  /* Positive offset moves the dashes against the path direction, i.e. from
+     the providers back toward the callers. */
+  @keyframes flow {
+    to { stroke-dashoffset: 16; }
+  }
+
+  .hub {
+    margin-top: var(--label);
+    height: var(--h);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.1rem;
+    text-align: center;
+  }
+  .hub-logo {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 0.25rem;
+  }
+  .hub strong {
+    font-size: 0.95rem;
+    color: var(--sl-color-white);
+  }
+
+  /* Narrow screens: drop the wires and stack the three parts. */
+  @media (max-width: 50rem) {
+    .arch {
+      grid-template-columns: 1fr;
+      row-gap: 1rem;
+      margin-top: 1rem;
+    }
+    .wires { display: none; }
+    .stack { margin-top: 0 !important; }
+    .hub {
+      margin-top: 0;
+      height: auto;
+      flex-direction: row;
+      justify-content: flex-start;
+      gap: 0.6rem;
+    }
+    .hub-logo { margin: 0; width: 36px; height: 36px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wires path { animation: none; }
+  }
+</style>
