@@ -47,6 +47,13 @@ export default defineConfig({
         alt: "Polyweb",
       },
       favicon: "/favicon.png",
+      social: [
+        {
+          icon: "github",
+          label: "GitHub",
+          href: "https://github.com/polyweb-dev/polyweb-mcp",
+        },
+      ],
       components: {
         Hero: "./src/components/Hero.astro",
       },
