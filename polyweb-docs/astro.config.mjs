@@ -30,6 +30,7 @@ function docsPort() {
 
 // https://starlight.astro.build/reference/configuration/
 export default defineConfig({
+  site: "https://docs.polyweb.dev",
   vite: {
     build: {
       license: { fileName: "THIRD_PARTY_LICENSES.md" },
