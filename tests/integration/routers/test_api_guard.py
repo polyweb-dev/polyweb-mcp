@@ -112,7 +112,6 @@ _ANONYMOUS_SURFACES: tuple[tuple[str, str, dict], ...] = (
     ("GET", "/api/v1/providers", {}),
     ("GET", "/api/v1/providers/tavily", {}),
     ("PATCH", "/api/v1/providers/tavily", {"enabled": False}),
-    ("GET", "/api/v1/providers/tavily/oauth/status", {}),
     ("GET", "/api/v1/projects/00000000-0000-4000-8000-0000000000aa/traces", {}),
     ("GET", "/no-such-route", {}),
 )
@@ -210,7 +209,7 @@ def test_refresh_credential_fails_on_access_surfaces(guard_client: TestClient) -
 
 
 @pytest.mark.asyncio
-async def test_docs_are_public_and_unknown_paths_need_a_token(
+async def test_docs_and_health_are_public_and_unknown_paths_need_a_token(
     tmp_path: Path, auth_secret: str
 ) -> None:
     repository = await SQLiteRepository.open(tmp_path / "guard-docs.db")
@@ -219,6 +218,9 @@ async def test_docs_are_public_and_unknown_paths_need_a_token(
         with TestClient(app) as client:
             assert client.get("/docs").status_code == 200
             assert client.get("/openapi.json").status_code == 200
+            health = client.get("/health")
+            assert health.status_code == 200
+            assert health.json() == {"status": "ok"}
             assert client.get("/no-such-route").status_code == 401
             pair = register_and_login(client, temp_email("guard-docs"))
             headers = raw_auth_headers(pair["access_token"])

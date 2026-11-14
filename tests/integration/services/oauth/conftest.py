@@ -7,8 +7,6 @@ from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.scoped_oauth import open_scoped_oauth
 from tests.integration.services.oauth.oauth_stubs import StubOAuthServer, install_network_guard
 
-NON_PARALLEL_IDS = ("exa", "tavily", "firecrawl", "you", "brave", "keenable")
-
 
 @pytest.fixture(autouse=True)
 def _network_guard(monkeypatch):

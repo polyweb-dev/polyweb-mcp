@@ -20,7 +20,7 @@ from tests.integration.services.oauth.oauth_stubs import (
 )
 
 
-async def test_oracle_cents_to_usd_exact(oauth_case):
+async def test_oracle_cents_to_usd_exact():
     """Origin test_adv_oauth_balance.py::test_oracle_cents_to_usd_exact."""
     assert cents_to_usd(101) == Decimal("1.01")
     assert cents_to_usd(1) == Decimal("0.01")

@@ -709,21 +709,6 @@ async def test_control_status_shape_and_terminal_views(repository):
         await case.close()
 
 
-async def test_control_rejects_other_and_unknown_providers(repository):
-    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
-    case = await open_scoped_oauth(repository)
-    try:
-        for provider in ("exa", "tavily", "unknown"):
-            for method, suffix in (("post", "/device-code"), ("get", "/status"), ("delete", "")):
-                response = getattr(case.client, method)(
-                    f"/api/v1/providers/{provider}/oauth" + suffix, headers=case.headers
-                )
-                assert response.status_code == 404
-        assert case.stub.register_calls == case.stub.poll_calls == 0
-    finally:
-        await case.close()
-
-
 async def test_control_disconnect_is_idempotent_204(repository):
     """Origin singleton case: migrated to real A4 credential-scoped behavior."""
     case = await open_vault_oauth(repository)

@@ -347,7 +347,7 @@ def test_a_valid_key_is_rejected_by_every_non_execution_route(world: _World) -> 
     checked = 0
     checked_paths: set[str] = set()
     for route in _api_routes(world.client.app.routes):  # type: ignore[attr-defined]
-        if route.path in {"/search", "/fetch", "/auth/register", "/auth/jwt/login"}:
+        if route.path in {"/search", "/fetch", "/health", "/auth/register", "/auth/jwt/login"}:
             continue
         path = route.path
         for name, value in substitutions.items():

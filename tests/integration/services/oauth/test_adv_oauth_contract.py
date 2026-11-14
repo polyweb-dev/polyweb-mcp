@@ -10,7 +10,6 @@ import pytest
 from polyweb.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
 from polyweb.models.schema_enums import OAuthGrantStatus
 from tests.fixtures.vault_oauth import vault_oauth_case as vault_oauth_case
-from tests.integration.services.oauth.conftest import NON_PARALLEL_IDS
 from tests.integration.services.oauth.oauth_stubs import (
     DEVICE_CODE_VALUE,
 )
@@ -90,27 +89,6 @@ async def test_device_terminal_edges(oauth_case, outcome, status):
     assert (await case.poll()).status is OAuthGrantStatus.DISCONNECTED
     assert case.stub.poll_calls == 1
     assert not any((await case.slots()).values())
-
-
-@pytest.mark.parametrize("provider_id", NON_PARALLEL_IDS)
-async def test_non_parallel_oauth_always_404(oauth_case, provider_id):
-    """Origin test_adv_oauth_contract.py::test_non_parallel_oauth_always_404."""
-    case = oauth_case
-    base = f"/api/v1/providers/{provider_id}/oauth"
-    assert case.client.post(base + "/device-code", headers=case.headers).status_code == 404
-    assert case.client.get(base + "/status", headers=case.headers).status_code == 404
-    assert case.client.delete(base, headers=case.headers).status_code == 404
-    assert case.stub.register_calls == 0
-
-
-async def test_unknown_provider_oauth_404(oauth_case):
-    """Origin test_adv_oauth_contract.py::test_unknown_provider_oauth_404."""
-    case = oauth_case
-    base = "/api/v1/providers/ghost/oauth"
-    assert case.client.get(base + "/status").status_code == 401
-    for method, suffix in (("post", "/device-code"), ("get", "/status"), ("delete", "")):
-        assert getattr(case.client, method)(base + suffix, headers=case.headers).status_code == 404
-    assert case.stub.register_calls == case.stub.poll_calls == 0
 
 
 async def test_status_responses_carry_no_token_fields(vault_oauth_case):
