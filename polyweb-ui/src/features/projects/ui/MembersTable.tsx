@@ -56,16 +56,19 @@ export function MembersTable({ members, accountId, projectName, canManage, canAs
                 <td className="fs-cell-strong">
                   <span className="flex items-center gap-2">
                     <span className="flex min-w-0 flex-col">
-                      <span className="truncate">{contactLabel(member)}</span>
+                      {/* The "(you)" mark stays on the name line, right after the name. */}
+                      <span className="flex min-w-0 items-baseline gap-1.5">
+                        <span className="truncate">{contactLabel(member)}</span>
+                        {isSelf && (
+                          <span aria-hidden="true" className="shrink-0 font-normal text-[var(--muted)]">
+                            (you)
+                          </span>
+                        )}
+                      </span>
                       {contactLabel(member) !== member.email && (
                         <span className="truncate text-[12px] font-normal text-[var(--muted)]">{member.email}</span>
                       )}
                     </span>
-                    {isSelf && (
-                      <span aria-hidden="true" className="font-normal text-[var(--muted)]">
-                        (you)
-                      </span>
-                    )}
                     {member.status === "suspended" && <Tag tone="warning">Suspended</Tag>}
                     {!member.account_active && <Tag tone="warning">Account inactive</Tag>}
                   </span>

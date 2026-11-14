@@ -158,6 +158,10 @@ describe("ProjectMembersPage", () => {
     const table = await screen.findByRole("table", { name: "Members" })
     const ownRow = within(table).getByRole("row", { name: /me@example\.com/ })
     expect(ownRow).toHaveTextContent("(you)")
+    // The mark sits on the name line itself, not beside the name/email column.
+    const youMark = within(ownRow).getByText("(you)")
+    expect(youMark.previousElementSibling).toHaveTextContent("me@example.com")
+    expect(youMark.parentElement?.parentElement).toContainElement(within(ownRow).getByText("me@example.com"))
     await user.click(screen.getByRole("button", { name: "Actions for me@example.com" }))
     expect(await screen.findByRole("button", { name: "Remove from project" })).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Suspend member" })).toBeNull()
