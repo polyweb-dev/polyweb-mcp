@@ -10,8 +10,8 @@ import {
   revokeProjectApiKey,
   rotateProjectApiKey,
 } from "@/domains/projects"
-import { identityFromMember } from "./memberIdentity"
-import type { ContactIdentity } from "@/shared/lib/identity"
+import { profileFromMember } from "./memberIdentity"
+import type { IdentityProfile } from "@/shared/lib/identity"
 import type {
   IssueApiKeyInput,
   IssuedApiKey,
@@ -23,14 +23,14 @@ export interface UseProjectApiKeysControllerOptions {
   accountId: string
   projectId: string
   refreshAccess: () => void
-  /** Load the member list for creator emails only with `members.read`. */
+  /** Load the member list for creator names only with `members.read`. */
   canReadMembers: boolean
 }
 
 export interface ProjectApiKeysController {
   keys: ScopedResource<ProjectApiKey[]>
-  /** Creator identity entries by user id, or `null` when members are not readable. */
-  identitiesByUserId: ReadonlyMap<string, ContactIdentity> | null
+  /** Creator name-only profiles by user id, or `null` when members are not readable. */
+  identitiesByUserId: ReadonlyMap<string, IdentityProfile> | null
   pending: boolean
   message: string | null
   showMessage: (message: string | null) => void
@@ -95,7 +95,7 @@ export function useProjectApiKeysController(
 
   const identitiesByUserId = useMemo(() => {
     if (members.status !== "ready") return null
-    return new Map(members.data.map((member) => [member.user_id, identityFromMember(member)]))
+    return new Map(members.data.map((member) => [member.user_id, profileFromMember(member)]))
   }, [members])
 
   const run = useCallback(

@@ -97,10 +97,10 @@ function installProvidersStub(options: StubOptions = {}) {
         const order = { strategy: "lowest_cost", providers, has_saved_custom: false, not_allowed: [] }
         return ok({ revision: 1, search: order, fetch: { ...order, providers: providers.filter((row) => row.provider !== "brave") } })
       }
-      if (req.method === "GET" && req.url === `${BASE}/provider-owner`) return ok({ user_id: "acc", email: "owner@example.com" })
+      if (req.method === "GET" && req.url === `${BASE}/provider-owner`) return ok({ user_id: "acc", username: "owner" })
       if (req.method === "GET" && req.url === `${BASE}/pools`) return ok([{
         pool_id: "pool-1", label: "Team Tavily", provider_type: "tavily", key_label: "Team Tavily",
-        owner: { user_id: "acc", email: "owner@example.com" }, rate: { limit: 60, window_seconds: 60 },
+        owner: { user_id: "acc", username: "owner" }, rate: { limit: 60, window_seconds: 60 },
         budget: null, budget_used: 0, operations: ["search", "fetch"],
       }])
       if (req.method === "POST" && req.url === `${BASE}/credentials`) {
@@ -144,7 +144,7 @@ describe("ProjectProvidersPage view", () => {
     installProvidersStub({ view: providerView({ extraProviders: [BRAVE_ROUTED] }), onMutation: (req) => {
       if (req.method === "GET" && req.url === `${BASE}/pools`) return ok([{
         pool_id: "brave-pool", label: "Brave pool", provider_type: "brave", key_label: "Brave key",
-        owner: { user_id: "acc", email: "owner@example.com" }, rate: { limit: 10, window_seconds: 60 },
+        owner: { user_id: "acc", username: "owner" }, rate: { limit: 10, window_seconds: 60 },
         budget: null, budget_used: 0, operations: ["search"],
       }])
       return null
@@ -211,7 +211,7 @@ describe("ProjectProvidersPage routes", () => {
 
 const CAPACITY_POOL = {
   pool_id: "pool-1", label: "Tavily pool", provider_type: "tavily", key_label: "Team Tavily",
-  owner: { user_id: "acc", email: "owner@example.com" }, rate: { limit: 60, window_seconds: 60 },
+  owner: { user_id: "acc", username: "owner" }, rate: { limit: 60, window_seconds: 60 },
   budget: { limit: 10, period: "month" }, budget_used: 2, operations: ["search"],
 }
 const VAULT_KEY = {
@@ -224,7 +224,7 @@ function capacityStub(ownerId = "acc", permissions = [...PROJECT_MEMBER_PERMISSI
   return installProvidersStub({
     permissions,
     onMutation: (req) => {
-      if (req.method === "GET" && req.url === `${BASE}/provider-owner`) return ok({ user_id: ownerId, email: "owner@example.com" })
+      if (req.method === "GET" && req.url === `${BASE}/provider-owner`) return ok({ user_id: ownerId, username: "owner" })
       if (req.method === "GET" && req.url === `${BASE}/pools`) return ok([CAPACITY_POOL])
       if (req.method === "GET" && req.url === "/api/v1/account/vault/keys") return ok([VAULT_KEY])
       if (req.method === "POST" && req.url === "/api/v1/account/vault/keys/par/pools") return ok({
@@ -254,7 +254,7 @@ describe("ProjectProvidersPage pool capacity", () => {
       permissions: [...PROJECT_MEMBER_PERMISSIONS, "providers.configure", "providers.supply"],
       view: providerView({ extraProviders: [keyless] }),
       onMutation: (req) => {
-        if (req.url === `${BASE}/provider-owner`) return ok({ user_id: ownerId, email: "owner@example.com" })
+        if (req.url === `${BASE}/provider-owner`) return ok({ user_id: ownerId, username: "owner" })
         if (req.url === `${BASE}/pools`) return ok(pools)
         if (failKey && req.method === "POST" && req.url === "/api/v1/account/vault/keys") {
           return err(422, { detail: "bad secret fake-provider-key-123" })
@@ -352,7 +352,7 @@ describe("ProjectProvidersPage pool capacity", () => {
   it("shows pool details and providers without capacity to the owner", async () => {
     capacityStub()
     renderInProject(<ProjectProvidersPage accountId="acc" />)
-    expect(await screen.findByText(/Provider owner: owner@example.com/)).toHaveTextContent("(you)")
+    expect(await screen.findByText(/Provider owner: owner/)).toHaveTextContent("(you)")
     expect(await screen.findByTitle(/Pool: Tavily pool\./)).toBeInTheDocument()
     expect(screen.getByText("60/min · $2.00 of $10.00 this month")).toBeInTheDocument()
     const missing = screen.getByRole("table", { name: "Without capacity" })
@@ -379,7 +379,7 @@ describe("ProjectProvidersPage pool capacity", () => {
   it("hides capacity controls from other users", async () => {
     const stub = capacityStub("another", [...PROJECT_MEMBER_PERMISSIONS, "providers.supply"])
     renderInProject(<ProjectProvidersPage accountId="acc" />)
-    expect(await screen.findByText(/Provider owner: owner@example.com/)).toBeInTheDocument()
+    expect(await screen.findByText(/Provider owner: owner/)).toBeInTheDocument()
     expect(await screen.findByText("The provider owner must add capacity")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /Add (provider )?capacity/ })).toBeNull()
     expect(screen.queryByRole("button", { name: "Actions for Tavily" })).toBeNull()
@@ -415,7 +415,7 @@ describe("ProjectProvidersPage pool operations", () => {
   function stub(operations: string[], owner = "acc") {
     let current = operations
     return installProvidersStub({ permissions: [...PROJECT_MEMBER_PERMISSIONS, "providers.configure", "providers.supply"], onMutation: (req) => {
-      if (req.url === `${BASE}/provider-owner`) return ok({ user_id: owner, email: "owner@example.com" })
+      if (req.url === `${BASE}/provider-owner`) return ok({ user_id: owner, username: "owner" })
       if (req.url === `${BASE}/pools`) return ok([{ ...CAPACITY_POOL, operations: current }])
       if (req.method === "GET" && req.url === `${BASE}/routing/order`) {
         const entry = { provider: "tavily", name: "Tavily", call_cost_usd: null }

@@ -39,7 +39,7 @@ function installKeysStub(options: StubOptions = {}) {
       return ok({ project_id: PROJECT_ALPHA_ID, permissions, roles: [], policy_revision: 1 })
     }
     if (req.url === `${base}/members`) {
-      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", status: "active", roles: ["project_admin"], role: "admin", permissions: 15, provider_owner: false, account_active: true, version: 1 }])
+      return ok([{ project_id: PROJECT_ALPHA_ID, user_id: CREATOR, email: "lead@example.com", first_name: "Lead", last_name: "Admin", status: "active", roles: ["project_admin"], role: "admin", permissions: 15, provider_owner: false, account_active: true, version: 1 }])
     }
     if (req.url === `${base}/api-keys` && req.method === "GET") return ok(keys)
     const override = options.onMutation?.(req)
@@ -219,7 +219,7 @@ describe("ProjectApiKeysPage issue and reveal", () => {
 })
 
 describe("ProjectApiKeysPage list", () => {
-  it("lists keys newest first with creator email, never-used and status columns", async () => {
+  it("lists keys newest first with the creator name, never-used and status columns", async () => {
     installKeysStub({
       keys: [
         apiKeyFixture({ id: "old", label: "Old", created_at: "2026-09-01T00:00:00Z", status: "revoked", revoked_at: "2026-09-02T00:00:00Z" }),
@@ -234,7 +234,8 @@ describe("ProjectApiKeysPage list", () => {
     const rows = await within(table).findAllByRole("row")
     expect(rows[1]).toHaveTextContent("New")
     expect(rows[2]).toHaveTextContent("Old")
-    await waitFor(() => expect(rows[1]).toHaveTextContent("lead@example.com"))
+    await waitFor(() => expect(rows[1]).toHaveTextContent("Lead Admin"))
+    expect(table.textContent).not.toContain("lead@example.com")
     expect(rows[1]).toHaveTextContent("Never")
     expect(rows[1]).toHaveTextContent("Active")
     expect(rows[2]).toHaveTextContent("Revoked")

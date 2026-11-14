@@ -14,7 +14,6 @@ interface KeyBalancesProps {
   providerName: string
   accountId: string
   isAdmin: boolean
-  email: string | null
   refreshDashboard: () => Promise<void>
 }
 

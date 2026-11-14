@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
+from uuid import UUID
 
 import httpx
 from pydantic import SecretStr
@@ -84,6 +85,7 @@ class ExecutionForwarder:
         request: SearchRequest,
         *,
         credential: SecretStr,
+        project_id: UUID | None = None,
         trace_id: str | None = None,
         parent_span_id: str | None = None,
         deadline_ms: int | None = None,
@@ -92,6 +94,7 @@ class ExecutionForwarder:
             "/search",
             request.model_dump(mode="json", by_alias=True),
             credential=credential,
+            project_id=project_id,
             trace_id=trace_id,
             parent_span_id=parent_span_id,
             deadline_ms=deadline_ms,
@@ -103,6 +106,7 @@ class ExecutionForwarder:
         request: FetchRequest,
         *,
         credential: SecretStr,
+        project_id: UUID | None = None,
         trace_id: str | None = None,
         parent_span_id: str | None = None,
         deadline_ms: int | None = None,
@@ -111,6 +115,7 @@ class ExecutionForwarder:
             "/fetch",
             request.model_dump(mode="json", by_alias=True),
             credential=credential,
+            project_id=project_id,
             trace_id=trace_id,
             parent_span_id=parent_span_id,
             deadline_ms=deadline_ms,
@@ -123,6 +128,7 @@ class ExecutionForwarder:
         payload: dict[str, Any],
         *,
         credential: SecretStr,
+        project_id: UUID | None,
         trace_id: str | None,
         parent_span_id: str | None,
         deadline_ms: int | None,
@@ -131,6 +137,7 @@ class ExecutionForwarder:
             path,
             payload,
             credential=credential,
+            project_id=project_id,
             trace_id=trace_id,
             parent_span_id=parent_span_id,
             deadline_ms=deadline_ms,
@@ -163,6 +170,7 @@ class ExecutionForwarder:
         payload: dict[str, Any],
         *,
         credential: SecretStr,
+        project_id: UUID | None,
         trace_id: str | None,
         parent_span_id: str | None,
         deadline_ms: int | None,
@@ -176,7 +184,9 @@ class ExecutionForwarder:
         }
         if trace_id and parent_span_id:
             timestamp = int(time.time())
-            project_id = str(payload.get("project_id", ""))
+            resolved_project_id = (
+                str(project_id) if project_id is not None else str(payload.get("project_id") or "")
+            )
             headers[TRACE_HEADER] = trace_id
             headers[PARENT_SPAN_HEADER] = parent_span_id
             headers[FORWARD_TIMESTAMP_HEADER] = str(timestamp)
@@ -184,7 +194,7 @@ class ExecutionForwarder:
                 secret,
                 trace_id=trace_id,
                 parent_span_id=parent_span_id,
-                project_id=project_id,
+                project_id=resolved_project_id,
                 timestamp=timestamp,
                 method="POST",
                 path=path,

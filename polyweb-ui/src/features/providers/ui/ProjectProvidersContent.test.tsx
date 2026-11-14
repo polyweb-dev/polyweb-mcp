@@ -44,7 +44,7 @@ function servingPool(): ProjectPool {
     label: "Tavily pool",
     provider_type: "tavily",
     key_label: "Team Tavily",
-    owner: { user_id: "u1", email: "ada@example.com" },
+    owner: { user_id: "u1" },
     rate: { limit: 60, window_seconds: 60 },
     budget: null,
     budget_used: 0,
@@ -90,17 +90,17 @@ beforeEach(() => {
 })
 
 describe("ProjectProvidersContent owner contact wiring", () => {
-  it("wires the named owner contact into the empty order Ask line", async () => {
-    renderContent({ user_id: "u1", email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" })
+  it("wires the owner display name into the empty order Ask line, without an email", async () => {
+    renderContent({ user_id: "u1", username: "ada", first_name: "Ada", last_name: "Lovelace" })
 
-    // A bare-email wiring would render "Ask ada@example.com"; the shared
-    // detail label renders the display name with the email for disambiguation.
-    expect(await screen.findByText(/Ask Ada Lovelace \(ada@example\.com\) to allow Search/)).toBeInTheDocument()
+    expect(await screen.findByText(/Ask Ada Lovelace to allow Search/)).toBeInTheDocument()
+    expect(screen.queryByText(/@/)).not.toBeInTheDocument()
   })
 
-  it("falls back to the owner email for a legacy owner payload", async () => {
-    renderContent({ user_id: "u1", email: "lead@example.com" })
+  it("asks the generic provider owner, never an email, for a nameless owner payload", async () => {
+    renderContent({ user_id: "u1", email: "lead@example.com" } as ProviderOwner)
 
-    expect(await screen.findByText(/Ask lead@example\.com to allow Search/)).toBeInTheDocument()
+    expect(await screen.findByText(/Ask the provider owner to allow Search/)).toBeInTheDocument()
+    expect(screen.queryByText(/lead@example\.com/)).not.toBeInTheDocument()
   })
 })

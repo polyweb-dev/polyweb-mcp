@@ -1,7 +1,7 @@
 import { ClaimProviderOwnership } from "@/domains/projects"
 import type { ProviderOwner } from "@/domains/projects"
 import { ApiError } from "@/shared/api/http"
-import { identityDetailLabel, identityLabel } from "@/shared/lib/identity"
+import { identityLabel } from "@/shared/lib/identity"
 import type { ScopedResource } from "@/shared/lib/useScopedResource"
 import { LinkButton } from "@/shared/ui/LinkButton"
 
@@ -46,15 +46,14 @@ function renderAssignedOwner({ current, projectId, isAdmin, canConfigure, isOwne
   isOwner: boolean
 }) {
   const ownerLabel = identityLabel(current)
-  const ownerDetail = identityDetailLabel(current)
   const canTransfer = isAdmin
   const needsAdminHelp = !isOwner && !isAdmin && !canConfigure
   return <>
-    <p role="note" title={ownerLabel === current.email ? undefined : ownerDetail}>Provider owner: {ownerLabel}{isOwner && " (you)"}
+    <p role="note">Provider owner: {ownerLabel}{isOwner && " (you)"}
       {canTransfer && <LinkButton className="ml-2" to={`/p/${encodeURIComponent(projectId)}/members`}>Transfer ownership</LinkButton>}
       {needsAdminHelp && <span className="ml-2 text-[var(--muted)]">Ask a project admin to change this</span>}
     </p>
-    {!isOwner && isAdmin && <p>Only the provider owner can add or remove capacity. Ask {ownerDetail}</p>}
+    {!isOwner && isAdmin && <p>Only the provider owner can add or remove capacity. Ask {ownerLabel}</p>}
   </>
 }
 

@@ -287,8 +287,13 @@ describe("TraceDetailDialog", () => {
     await user.click(screen.getByRole("button", { name: "Timeline" }))
     const trajectory = screen.getByRole("list", { name: "Trace trajectory" })
     const row = within(trajectory).getByRole("button", { name: /Keenable request/i })
-    expect(within(row).getByText("Keenable")).toBeInTheDocument()
-    expect(within(row).getByText("request")).toBeInTheDocument()
+    // Logo, provider name, and `request` are ONE text element in one centered
+    // flex row, so they share a baseline instead of "Keenable" riding higher.
+    const label = within(row).getByText("Keenable request")
+    expect(label).toBeInTheDocument()
+    expect(within(row).getByTestId("provider-logo-keenable").parentElement).toBe(label.parentElement)
+    expect(label.parentElement).toHaveClass("inline-flex", "items-center")
+    expect(row.querySelector('[title="Keenable request"]')).toHaveClass("flex", "items-center")
     expect(within(trajectory).getByText(/^2,?025 ?ms$/)).toBeInTheDocument()
   })
 
@@ -477,8 +482,103 @@ describe("TraceDetailDialog actor identity", () => {
       "Total latency",
       "Results",
     ])
-    expect(railValues()[2]).toContain("Ada Lovelace")
-    expect(railValues()[2]).toContain("ada@example.com")
+    expect(railValues()[2]).toBe("Ada Lovelace")
+    expect(document.body.innerHTML).not.toContain("ada@example.com")
+  })
+
+  it("shows the API key name and prefix in the Initiated by cell", () => {
+    renderDialog(
+      detailWithActor({
+        actor_type: "project_api_key",
+        api_key_name: "test-key",
+        api_key_prefix: "pw_live_ab12",
+      })
+    )
+
+    expect(railValues()[2]).toBe("test-keyAPI key · pw_live_ab12")
+  })
+})
+
+/**
+ * Old backend bug: a FETCH root stored with `started_at` after `ended_at`
+ * (duration 0) while its children are correct. The dialog must show the span
+ * envelope, not a 0 ms total, and scale the whole timeline to it.
+ */
+describe("TraceDetailDialog inconsistent root timeline", () => {
+  const at = (seconds: string) => `2026-10-01T10:00:${seconds}Z`
+  const span = (
+    id: string,
+    parent: string | null,
+    name: string,
+    stage: string,
+    start: string,
+    end: string,
+    ms: number,
+    extra: Record<string, unknown> = {}
+  ) => ({
+    span_id: id.padEnd(16, "0"),
+    parent_span_id: parent === null ? null : parent.padEnd(16, "0"),
+    name,
+    stage,
+    kind: "internal",
+    started_at: at(start),
+    ended_at: at(end),
+    duration_ms: ms,
+    outcome: "success",
+    error: null,
+    events: [],
+    ...extra,
+  })
+
+  function brokenRoot(): TraceDetail {
+    return mapTraceDetail(
+      traceDetailFixture({
+        operation: "fetch",
+        started_at: at("20.568000"),
+        duration_ms: 0,
+        spans: [
+          span("aa", null, "POST /fetch", "Fetch request", "20.568000", "19.352000", 0, { kind: "server" }),
+          span("bb", "aa", "polyweb.route", "Route selection", "18.888000", "18.922000", 34),
+          span("cc", "aa", "polyweb.provider", "Provider request", "18.923000", "19.318000", 394, {
+            kind: "client",
+            provider: "keenable",
+          }),
+          span("dd", "aa", "polyweb.results", "Results", "19.351000", "19.351000", 0),
+          span("ee", "aa", "polyweb.response", "Response", "19.352000", "19.352000", 1),
+        ],
+      })
+    )
+  }
+
+  it("shows the envelope as the total latency in the header, not 0 ms", () => {
+    renderDialog(brokenRoot())
+
+    const rail = document.querySelector("dl")!
+    const values = Array.from(rail.querySelectorAll(":scope > div dd")).map((value) => value.textContent)
+    expect(values[3]).toBe("464 ms")
+  })
+
+  it("scales the timeline axis to the envelope and derives the phases from it", async () => {
+    const user = userEvent.setup()
+    renderDialog(brokenRoot())
+
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
+
+    expect(screen.getByText("Timeline scale 0 to 464 milliseconds")).toBeInTheDocument()
+    expect(screen.queryByText(/Timeline scale 0 to 1 milliseconds/)).not.toBeInTheDocument()
+    const phase = (label: string) => screen.getByText(label).nextElementSibling?.textContent
+    expect(phase("Before providers")).toBe("35 ms")
+    expect(phase("Provider active")).toBe("394 ms")
+    expect(phase("After providers")).toBe("35 ms")
+    const trajectory = screen.getByRole("list", { name: "Trace trajectory" })
+    // The root row spans the whole envelope; the child bars stay inside the track.
+    expect(within(trajectory).getByText("464 ms")).toBeInTheDocument()
+    for (const bar of trajectory.querySelectorAll<HTMLElement>("[aria-hidden='true'] > span")) {
+      const left = Number.parseFloat(bar.style.left)
+      const width = Number.parseFloat(bar.style.width)
+      expect(left).toBeGreaterThanOrEqual(0)
+      expect(left + width).toBeLessThanOrEqual(100.0001)
+    }
   })
 })
 

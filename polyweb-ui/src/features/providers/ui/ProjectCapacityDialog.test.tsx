@@ -45,7 +45,7 @@ describe("ProjectProvidersPage private keys", () => {
     })
     render(<ProjectCapacityDialog projectId="p1" projectName="Alpha" providers={[]} onClose={vi.fn()} onSaved={vi.fn()}
       pool={{ pool_id: "pool", label: "Alpha", provider_type: "tavily", key_label: "Old name",
-        owner: { user_id: "u1", email: "admin@example.com" }, rate: { limit: 60, window_seconds: 60 },
+        owner: { user_id: "u1" }, rate: { limit: 60, window_seconds: 60 },
         budget: null, budget_used: 0, operations: ["search", "fetch"] }} />)
     expect(await screen.findByText("Renamed")).toBeInTheDocument()
   })

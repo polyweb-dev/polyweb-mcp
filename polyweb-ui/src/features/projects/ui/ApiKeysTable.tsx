@@ -2,7 +2,6 @@ import type { ApiKeyStatus, ProjectApiKey } from "@/domains/projects"
 import { StatusDot, type StatusTone } from "@/shared/ui/StatusDot"
 import {
   canRotateKey,
-  creatorContactDetail,
   creatorLabel,
   expiresLabel,
   formatKeyDate,
@@ -67,10 +66,7 @@ export function ApiKeysTable({ keys, controller, archived }: ApiKeysTableProps) 
                   </span>
                   <span
                     className={`block truncate text-[12px] font-normal text-[var(--muted)] ${KEY_CELL_MAX}`}
-                    title={
-                      creatorContactDetail(key.created_by, controller.identitiesByUserId) ??
-                      creatorLabel(key.created_by, controller.identitiesByUserId)
-                    }
+                    title={creatorLabel(key.created_by, controller.identitiesByUserId)}
                   >
                     {creatorLabel(key.created_by, controller.identitiesByUserId)}
                   </span>

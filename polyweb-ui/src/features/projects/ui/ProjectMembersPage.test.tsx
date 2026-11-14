@@ -21,7 +21,7 @@ function renderPage(permissions: string[], members: unknown[] = [MEMBER], owner:
     if (req.url === "/api/v1/projects/p1/members" && req.method === "GET") return ok(members)
     if (req.url === "/api/v1/projects/p1/provider-owner" && owner !== undefined) {
       if (req.method === "GET") return ok(owner)
-      return ok({ user_id: "acc", email: "me@example.com", unassigned_pools: [] })
+      return ok({ user_id: "acc", unassigned_pools: [] })
     }
     return err(404, null)
   })

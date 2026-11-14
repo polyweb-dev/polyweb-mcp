@@ -8,6 +8,8 @@
  */
 
 import { displayNameFromProfile } from "@/shared/lib/identity"
+import { ENVELOPE_TOLERANCE_MS, deriveEnvelope } from "./traceTiming"
+import type { SpanEnvelope, SpanTiming } from "./traceTiming"
 import type {
   TraceActor,
   TraceDetail,
@@ -76,18 +78,23 @@ function asOptionalText(value: unknown): string | null {
 
 /**
  * Decode the trace actor: human rows resolve the saved profile through the
- * shared fallback (full name, then username, then email); API-key rows stay
- * key-identified and never borrow a human profile. Unknown actor fields stay
- * `null`; wrong types drop to `null` rather than failing the row.
+ * shared fallback (full name, then username); the payload's `email`, if any,
+ * is deliberately never read. API-key rows carry the key name and prefix and
+ * never borrow a human profile. Unknown actor fields stay `null`; wrong types
+ * drop to `null` rather than failing the row, so older payloads still decode.
  */
 function mapTraceActor(record: Record<string, unknown>): TraceActor {
   const kind = (ACTOR_TYPES as readonly string[]).includes(record.actor_type as string)
     ? (record.actor_type as TraceActor["kind"])
     : null
   if (kind === "project_api_key") {
-    return { kind, displayName: null, email: null }
+    return {
+      kind,
+      displayName: null,
+      apiKeyName: asNonBlankText(record.api_key_name),
+      apiKeyPrefix: asNonBlankText(record.api_key_prefix),
+    }
   }
-  const email = asOptionalText(record.email)
   return {
     kind,
     displayName: displayNameFromProfile({
@@ -95,8 +102,14 @@ function mapTraceActor(record: Record<string, unknown>): TraceActor {
       first_name: asOptionalText(record.first_name),
       last_name: asOptionalText(record.last_name),
     }),
-    email,
+    apiKeyName: null,
+    apiKeyPrefix: null,
   }
+}
+
+function asNonBlankText(value: unknown): string | null {
+  const text = asOptionalText(value)
+  return text === null || text.trim() === "" ? null : text
 }
 
 function asError(value: unknown): TraceError | null {
@@ -236,9 +249,9 @@ function mapEvents(value: unknown): TraceEvent[] {
   return events
 }
 
-function mapStages(value: unknown, traceStart: number): TraceStage[] {
+function readSpanTimings(value: unknown): SpanTiming[] {
   if (!Array.isArray(value)) return []
-  const stages: TraceStage[] = []
+  const timings: SpanTiming[] = []
   for (const item of value) {
     const record = asRecord(item)
     if (record === null) continue
@@ -246,17 +259,44 @@ function mapStages(value: unknown, traceStart: number): TraceStage[] {
     const name = asString(record.name)
     if (spanId === null || !SPAN_ID.test(spanId) || name === null) continue
     const startedAt = asTimestamp(record.started_at) ?? ""
-    const started = Date.parse(startedAt)
+    const startMs = Date.parse(startedAt)
+    if (Number.isNaN(startMs)) {
+      timings.push({ record, spanId, name, startedAt, startMs, endMs: Number.NaN, inconsistent: false })
+      continue
+    }
+    const endedAt = asTimestamp(record.ended_at)
+    const endMs = endedAt === null ? startMs + (asCount(record.duration_ms) ?? 0) : Date.parse(endedAt)
+    timings.push({ record, spanId, name, startedAt, startMs, endMs, inconsistent: endMs < startMs })
+  }
+  return timings
+}
+
+function mapStages(timings: readonly SpanTiming[], envelope: SpanEnvelope | null, traceStart: number): TraceStage[] {
+  const origin = envelope === null ? traceStart : envelope.startMs
+  const spanIds = new Set(timings.map((timing) => timing.spanId))
+  const stages: TraceStage[] = []
+  for (const timing of timings) {
+    const { record } = timing
+    const parentSpanId = asString(record.parent_span_id)
+    const recorded = asCount(record.duration_ms) ?? 0
+    const isRoot = parentSpanId === null || !spanIds.has(parentSpanId)
+    // A root that is corrupt or shorter than the work under it spans the
+    // whole envelope instead, so the child bars stay inside the root bar.
+    const coversEnvelope =
+      envelope !== null &&
+      isRoot &&
+      (timing.inconsistent || envelope.spansTotalMs - recorded >= ENVELOPE_TOLERANCE_MS)
     stages.push({
-      spanId,
-      parentSpanId: asString(record.parent_span_id),
-      name,
+      spanId: timing.spanId,
+      parentSpanId,
+      name: timing.name,
       label: asString(record.stage) ?? "Stage",
       providerId: asString(record.provider),
       kind: asKind(record.kind),
-      startedAt,
-      durationMs: asCount(record.duration_ms) ?? 0,
-      offsetMs: Number.isNaN(started) ? 0 : Math.max(0, started - traceStart),
+      startedAt: timing.startedAt,
+      durationMs: coversEnvelope ? Math.max(recorded, envelope.totalMs) : recorded,
+      offsetMs:
+        coversEnvelope || Number.isNaN(timing.startMs) ? 0 : Math.max(0, timing.startMs - origin),
       outcome: asOutcome(record.outcome),
       error: asError(record.error),
       events: mapEvents(record.events),
@@ -265,18 +305,36 @@ function mapStages(value: unknown, traceStart: number): TraceStage[] {
   return stages
 }
 
-/** Decode one detail payload; throws when the summary itself is unusable. */
+/**
+ * Decode one detail payload; throws when the summary itself is unusable.
+ *
+ * The timeline is scaled to the envelope of all recorded spans, not to the
+ * root alone: a root stored with `ended_at` before `started_at` (duration 0)
+ * would otherwise collapse the axis to 0..1 ms and make every child bar and
+ * phase total meaningless. When the root is shorter than that envelope the
+ * envelope duration becomes the total latency.
+ */
 export function mapTraceDetail(payload: unknown): TraceDetail {
   const summary = mapTraceSummary(payload)
   if (summary === null) {
     throw new TraceDecodeError("trace detail is missing a valid identifier or timing")
   }
   const record = asRecord(payload) ?? {}
+  const timings = readSpanTimings(record.spans)
+  const summaryStartMs = Date.parse(summary.startedAt)
+  const envelope = deriveEnvelope(timings, { startedAt: summary.startedAt, startMs: summaryStartMs })
+  const earlierStart = envelope !== null && envelope.startMs < summaryStartMs
+  const rootShort =
+    envelope !== null && envelope.spansTotalMs - summary.durationMs >= ENVELOPE_TOLERANCE_MS
+  const durationMs = rootShort ? envelope.spansTotalMs : summary.durationMs
   return {
     ...summary,
+    // Event offsets and "Started at" follow the corrected start.
+    startedAt: earlierStart ? envelope.startedAt : summary.startedAt,
+    durationMs,
     input: asString(record.input),
     output: mapOutput(record.output),
-    stages: mapStages(record.spans, Date.parse(summary.startedAt)),
-    totalMs: Math.max(summary.durationMs, 1),
+    stages: mapStages(timings, envelope, summaryStartMs),
+    totalMs: Math.max(durationMs, envelope?.totalMs ?? 0, 1),
   }
 }

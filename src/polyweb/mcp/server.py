@@ -491,6 +491,7 @@ async def _tool_body(
                     response = await forwarder.search(
                         cast(SearchRequest, request),
                         credential=credential,
+                        project_id=context.project_id,
                         trace_id=trace_id,
                         parent_span_id=parent_span_id,
                         deadline_ms=deadline_ms,
@@ -499,6 +500,7 @@ async def _tool_body(
                     response = await forwarder.fetch(
                         cast(FetchRequest, request),
                         credential=credential,
+                        project_id=context.project_id,
                         trace_id=trace_id,
                         parent_span_id=parent_span_id,
                         deadline_ms=deadline_ms,

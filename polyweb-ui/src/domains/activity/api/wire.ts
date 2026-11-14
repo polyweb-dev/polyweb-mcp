@@ -25,7 +25,9 @@ export interface BackendTraceSummary {
   username?: string | null
   first_name?: string | null
   last_name?: string | null
-  email?: string | null
+  /** Only for `project_api_key` actors; `null` once the key no longer exists. */
+  api_key_name?: string | null
+  api_key_prefix?: string | null
   operation: BackendTraceOperation | null
   started_at: string
   duration_ms: number

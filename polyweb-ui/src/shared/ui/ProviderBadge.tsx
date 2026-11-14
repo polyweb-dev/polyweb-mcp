@@ -7,6 +7,13 @@ export interface ProviderBadgeProps {
   name: string
   className?: string
   logoClassName?: string
+  /**
+   * Text that belongs to the same line as the name (for example ` request`).
+   * It renders inside the name element, so the logo, the name, and the suffix
+   * are one vertically centered flex row rather than a badge followed by loose
+   * inline text on a different baseline.
+   */
+  suffix?: string
   /** The mark of an identity with no catalog logo; the letter avatar is the default. */
   fallback?: ReactNode
 }
@@ -21,6 +28,7 @@ export function ProviderBadge({
   name,
   className,
   logoClassName,
+  suffix,
   fallback,
 }: ProviderBadgeProps): ReactNode {
   return (
@@ -31,7 +39,10 @@ export function ProviderBadge({
         className={logoClassName}
         fallback={fallback}
       />
-      <span className="min-w-0 [overflow-wrap:anywhere]">{name}</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        {name}
+        {suffix}
+      </span>
     </span>
   )
 }

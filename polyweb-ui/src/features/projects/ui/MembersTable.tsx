@@ -2,7 +2,7 @@ import { memberPermissionSummary } from "@/domains/projects"
 import type { ProjectMember } from "@/domains/projects"
 import { Tag } from "@/shared/ui/Tag"
 import type { ProjectMembersController } from "../model/useProjectMembersController"
-import { identityLabel } from "@/shared/lib/identity"
+import { contactLabel } from "@/shared/lib/identity"
 import { memberSortLabel } from "../model/memberIdentity"
 import { MemberRowActions } from "./MemberRowActions"
 
@@ -56,8 +56,8 @@ export function MembersTable({ members, accountId, projectName, canManage, canAs
                 <td className="fs-cell-strong">
                   <span className="flex items-center gap-2">
                     <span className="flex min-w-0 flex-col">
-                      <span className="truncate">{identityLabel(member)}</span>
-                      {identityLabel(member) !== member.email && (
+                      <span className="truncate">{contactLabel(member)}</span>
+                      {contactLabel(member) !== member.email && (
                         <span className="truncate text-[12px] font-normal text-[var(--muted)]">{member.email}</span>
                       )}
                     </span>

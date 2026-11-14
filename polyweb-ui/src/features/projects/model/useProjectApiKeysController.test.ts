@@ -46,7 +46,7 @@ describe("useProjectApiKeysController", () => {
     await waitFor(() => expect(result.current.keys.status).toBe("ready"))
     await waitFor(() =>
       expect(result.current.identitiesByUserId?.get(CREATOR)).toEqual({
-        email: "lead@example.com",
+        // Name-only projection: the member's email never reaches the key views.
         username: "ada",
         first_name: "Ada",
         last_name: "Lovelace",

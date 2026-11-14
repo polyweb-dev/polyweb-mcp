@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -193,6 +194,7 @@ async def test_forward_failure_logs_and_keeps_generic_error(
     state = cast(
         Any, {"forwarder": forwarder, "execution": None, "observability": NO_OP_OBSERVABILITY}
     )
+    project_id = uuid4()
     with (
         caplog.at_level("WARNING"),
         pytest.raises(RuntimeError, match=r"^execution is temporarily unavailable$"),
@@ -203,10 +205,11 @@ async def test_forward_failure_logs_and_keeps_generic_error(
             root_name="test",
             attribution=cast(Any, None),
             trace_policy=cast(Any, None),
-            context=cast(Any, None),
+            context=cast(Any, MagicMock(project_id=project_id)),
             operation="search",
             credential=SecretStr("pw_secret_value"),
         )
+    assert forwarder.search.await_args.kwargs["project_id"] == project_id
     assert "category=authority_unavailable" in caplog.text
     assert "cause=ConnectError" in caplog.text
     assert "pw_secret_value" not in caplog.text

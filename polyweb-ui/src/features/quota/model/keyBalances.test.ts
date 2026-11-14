@@ -7,7 +7,6 @@ vi.mock("@/shared/api/client", () => ({ requestJson: vi.fn() }))
 const wire = {
   key_id: "key/1",
   label: "Work key",
-  owner_email: "owner@example.com",
   auth_mode: "api_key",
   oauth_connected: null,
   balance: { remaining: "12.50", native_unit: "usd", observed_at: "2026-01-01T12:00:00Z" },
@@ -22,6 +21,13 @@ describe("key balances", () => {
       { keyId: "2", label: "Work key", authMode: "api_key", oauthConnected: null, balance: null },
     ])
     expect(JSON.stringify(result)).not.toContain("must-not-survive")
+  })
+
+  it("decodes rows without any owner email and never carries one from an older payload", () => {
+    const [clean] = decodeKeyBalances([wire])
+    const [legacy] = decodeKeyBalances([{ ...wire, owner_email: "owner@example.com" }])
+    expect(clean).toEqual(legacy)
+    expect(JSON.stringify(legacy)).not.toContain("owner@example.com")
   })
 
   it("keeps native balances from the USD vault response", () => {

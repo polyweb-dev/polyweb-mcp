@@ -51,28 +51,30 @@ function outcomeNote(stage: TraceStage): ReactNode {
 /**
  * The row label: a provider attempt shows its identity badge followed by
  * `request`, every other user-level stage keeps the label the backend recorded.
- * The explicit spaces keep the row's accessible name readable, because the
- * logo, the name, and the stage word are separate elements.
+ * Logo, provider name, and `request` are one flex row (the suffix lives inside
+ * the badge), centered on one line height shared with the other row labels.
  */
 function rowLabel(stage: TraceStage): ReactNode {
   const providerId = stage.name === PROVIDER_SPAN_NAME ? stage.providerId : null
   const identity = providerId === null || providerId === "" ? null : providerIdentity(providerId)
   if (identity !== null && identity.id !== "" && identity.id !== AGGREGATED_PROVIDER) {
     return (
-      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap" title={`${identity.name} request`}>
+      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap leading-4" title={`${identity.name} request`}>
         {/* The recorded stage stays announced even when the badge replaces it. */}
-        <span className="sr-only">{stage.label}</span>
-        {" "}
-        <span className="min-w-0 truncate">
-          <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
-          {" request"}
-        </span>
+        <span className="sr-only">{stage.label} </span>
+        <ProviderBadge
+          providerId={identity.id}
+          name={identity.name}
+          suffix=" request"
+          logoClassName="size-3.5"
+          className="min-w-0 leading-4"
+        />
         {outcomeNote(stage)}
       </span>
     )
   }
   return (
-    <span className="block min-w-0">
+    <span className="block min-w-0 leading-4">
       <span className="[overflow-wrap:anywhere]">{traceSpanLabel(stage)}</span>
       {outcomeNote(stage)}
     </span>

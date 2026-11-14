@@ -217,10 +217,69 @@ describe("TraceInspectionWorkspace", () => {
     const providerRow = screen.getByRole("button", { name: /Keenable request/ })
     expect(providerRow).toHaveAttribute("aria-pressed", "true")
     const payloadRegion = screen.getByRole("region", { name: /details/i })
-    expect(within(payloadRegion).getByText("Keenable")).toBeInTheDocument()
+    // The panel heading keeps logo, name, and `request` in one centered flex row.
+    const heading = within(payloadRegion).getByText("Keenable request")
+    expect(within(payloadRegion).getByTestId("provider-logo-keenable").parentElement).toBe(heading.parentElement)
+    expect(heading.parentElement?.parentElement).toHaveClass("flex", "items-center")
     expect(within(payloadRegion).getByLabelText("Recorded facts")).toHaveTextContent("Results3")
     await user.click(within(payloadRegion).getByText("Show raw data"))
     expect(screen.getByLabelText(/Provider response attributes/i)).toBeInTheDocument()
+  })
+
+  it("renders nested provider JSON structurally, not as an escaped string", async () => {
+    const user = userEvent.setup()
+    const preview = "Stored page preview for the fetch document."
+    const base = aggregatedTraceDetailFixture()
+    const detail = mapTraceDetail(
+      aggregatedTraceDetailFixture({
+        spans: (base.spans as Record<string, unknown>[]).map((span) => {
+          if (span.span_id !== "a100000000000003") return span
+          return {
+            ...span,
+            events: (span.events as Record<string, unknown>[]).map((event) =>
+              event.name === "polyweb.provider.response"
+                ? {
+                    ...event,
+                    attributes: {
+                      ...(event.attributes as Record<string, unknown>),
+                      documents: [
+                        { url: "https://example.com/doc", content_preview: preview },
+                      ],
+                    },
+                  }
+                : event
+            ),
+          }
+        }),
+      })
+    )
+    renderWorkspace(detail)
+
+    await user.click(screen.getByRole("button", { name: "Timeline" }))
+    const payloadRegion = screen.getByRole("region", { name: /details/i })
+    await user.click(within(payloadRegion).getByText("Show raw data"))
+
+    const response = within(payloadRegion).getByRole("group", {
+      name: "Provider response attributes",
+    })
+    // Arrays and objects are collapsible nodes with a count hint of their own.
+    await user.click(within(response).getByText("3 items"))
+    await user.click(within(response).getAllByText("5 keys")[0]!)
+    expect(within(response).getByText('"url"')).toBeInTheDocument()
+    expect(within(response).getByText('"score"')).toBeInTheDocument()
+    // Scalars keep their JSON type: the score is a number token, not quoted text.
+    expect(within(response).getByText("0.92")).toBeInTheDocument()
+    expect(
+      within(response).getByText('"https://www.reuters.com/business/finance/"')
+    ).toBeInTheDocument()
+
+    await user.click(within(response).getByText("1 item"))
+    await user.click(within(response).getByText("2 keys"))
+    expect(within(response).getAllByText('"content_preview"')).toHaveLength(1)
+    expect(within(response).getByText(JSON.stringify(preview))).toBeInTheDocument()
+
+    // An escaped-string rendering would embed backslash-escaped quotes instead.
+    expect(response.textContent).not.toContain('\\"')
   })
 
   it("scopes results to the inspected provider attempt", () => {

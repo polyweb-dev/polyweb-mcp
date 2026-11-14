@@ -100,6 +100,8 @@ class TraceAttribute:
     """
 
     SCHEMA_VERSION: Final[str] = "polyweb.trace.schema_version"
+    # Monotonic span duration, immune to wall-clock steps (e.g. WSL2/VM clock sync).
+    MONOTONIC_DURATION_NS: Final[str] = "polyweb.trace.monotonic_duration_ns"
     OPERATION: Final[str] = "polyweb.operation.name"
     USER_ID: Final[str] = "polyweb.user.id"
     PROJECT_ID: Final[str] = "polyweb.project.id"
@@ -141,6 +143,7 @@ INTERNAL_ATTRIBUTES: Final[frozenset[str]] = OWNERSHIP_ATTRIBUTES | frozenset(
     {
         TraceAttribute.CAPTURE_PAYLOAD,
         TraceAttribute.SAMPLED,
+        TraceAttribute.MONOTONIC_DURATION_NS,
     }
 )
 """Keys owned by the trusted binders: callers cannot set them and they are never stored."""
@@ -334,7 +337,7 @@ class TraceSummary(ContractModel):
     and the saved human profile below; ``project_api_key`` carries the API key
     UUID and never carries a human profile. Profile fields are the saved
     ``user`` row values at read time (nullable for legacy/incomplete
-    profiles); callers fall back to ``username``, then ``email``, then the
+    profiles); callers fall back to ``username``, then the
     stable IDs. They are additive and optional so older payloads still decode.
     """
 
@@ -345,7 +348,8 @@ class TraceSummary(ContractModel):
     username: str | None = None
     first_name: str | None = None
     last_name: str | None = None
-    email: str | None = None
+    api_key_name: str | None = None
+    api_key_prefix: str | None = None
     operation: TraceOperation | None = None
     started_at: AwareDatetime
     duration_ms: int = Field(ge=0)

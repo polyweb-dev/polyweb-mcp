@@ -147,7 +147,12 @@ async def test_owner_transfer_and_guards(tmp_path: Path, auth_secret: str) -> No
             headers = login(client, owner.email)
             peer_headers = login(client, peer.email)
             url = f"/api/v1/projects/{project.id}/provider-owner"
-            assert client.get(url, headers=headers).json()["user_id"] == str(owner.id)
+            owner_response = client.get(url, headers=headers).json()
+            assert owner_response["user_id"] == str(owner.id)
+            assert "email" not in owner_response
+            noop = client.post(url, headers=headers, json={"user_id": str(owner.id)})
+            assert noop.status_code == 200
+            assert "email" not in noop.json()
             assert (
                 client.post(url, headers=peer_headers, json={"user_id": str(peer.id)}).status_code
                 == 403
@@ -162,9 +167,9 @@ async def test_owner_transfer_and_guards(tmp_path: Path, auth_secret: str) -> No
             )
             result = client.post(url, headers=headers, json={"user_id": str(peer.id)})
             assert result.status_code == 200, result.text
+            assert "email" not in result.json()
             assert result.json() == {
                 "user_id": str(peer.id),
-                "email": peer.email,
                 "username": None,
                 "first_name": None,
                 "last_name": None,

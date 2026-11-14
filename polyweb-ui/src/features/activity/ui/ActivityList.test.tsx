@@ -386,29 +386,35 @@ describe("ActivityList actor identity", () => {
   const HUMAN_TRACE_ID = "1".repeat(32)
   const KEY_TRACE_ID = "2".repeat(32)
   const LEGACY_TRACE_ID = "3".repeat(32)
+  const UNNAMED_TRACE_ID = "4".repeat(32)
+  const DELETED_KEY_TRACE_ID = "5".repeat(32)
+
+  function summariesOf(items: Record<string, unknown>[]): TraceSummary[] {
+    return mapTraceList({ items, generated_at: "2026-09-29T09:25:00.000000Z" })
+  }
 
   function actorSummaries(): TraceSummary[] {
-    return mapTraceList({
-      items: [
-        traceSummaryFixture({
-          trace_id: HUMAN_TRACE_ID,
-          first_name: "Ada",
-          last_name: "Lovelace",
-          username: "ada",
-          email: "ada@example.com",
-        }),
-        traceSummaryFixture({
-          trace_id: KEY_TRACE_ID,
-          actor_type: "project_api_key",
-          username: "ada",
-          first_name: "Ada",
-          last_name: "Lovelace",
-          email: "ada@example.com",
-        }),
-        traceSummaryFixture({ trace_id: LEGACY_TRACE_ID }),
-      ],
-      generated_at: "2026-09-29T09:25:00.000000Z",
-    })
+    return summariesOf([
+      traceSummaryFixture({
+        trace_id: HUMAN_TRACE_ID,
+        first_name: "Ada",
+        last_name: "Lovelace",
+        username: "ada",
+        // An older backend may still send an email; it must never be rendered.
+        email: "ada@example.com",
+      }),
+      traceSummaryFixture({
+        trace_id: KEY_TRACE_ID,
+        actor_type: "project_api_key",
+        api_key_name: "test-key",
+        api_key_prefix: "pw_live_ab12",
+        username: "ada",
+        first_name: "Ada",
+        last_name: "Lovelace",
+        email: "ada@example.com",
+      }),
+      traceSummaryFixture({ trace_id: LEGACY_TRACE_ID }),
+    ])
   }
 
   function actorCells() {
@@ -422,18 +428,61 @@ describe("ActivityList actor identity", () => {
     expect(screen.getAllByRole("columnheader")[3]).toHaveTextContent("Initiated by")
     const [humanCell, keyCell, legacyCell] = actorCells()
     expect(humanCell).toHaveTextContent("Ada Lovelace")
-    expect(keyCell).toHaveTextContent("API key")
+    expect(keyCell).toHaveTextContent("test-key")
     // The legacy row has no name to show, so its actor context stays an em dash.
     expect(legacyCell).toHaveTextContent("—")
-    expect(screen.getByText("Ada Lovelace")).not.toBe(screen.getByText("API key"))
+    expect(screen.getByText("Ada Lovelace")).not.toBe(screen.getByText("test-key"))
+  })
+
+  it("shows the API key name with a muted `API key · prefix` line, prefix in monospace", () => {
+    render(<ActivityList {...listProps({ summaries: actorSummaries() })} />)
+
+    const [, keyCell] = actorCells()
+    expect(within(keyCell!).getByText("test-key")).toBeInTheDocument()
+    expect(keyCell).toHaveTextContent("test-key")
+    expect(keyCell).toHaveTextContent("API key · pw_live_ab12")
+    const prefix = within(keyCell!).getByText("pw_live_ab12")
+    expect(prefix).toHaveClass("font-mono")
+    expect(prefix.parentElement).toHaveClass("text-[var(--muted)]")
+  })
+
+  it("falls back to the plain API key label when the key no longer exists", () => {
+    const summaries = summariesOf([
+      traceSummaryFixture({
+        trace_id: DELETED_KEY_TRACE_ID,
+        actor_type: "project_api_key",
+        api_key_name: null,
+        api_key_prefix: null,
+      }),
+    ])
+    render(<ActivityList {...listProps({ summaries })} />)
+
+    const [cell] = actorCells()
+    expect(cell).toHaveTextContent(/^API key$/)
+  })
+
+  it("decodes older API-key payloads without the new fields as the plain API key label", () => {
+    const summaries = summariesOf([
+      traceSummaryFixture({ trace_id: DELETED_KEY_TRACE_ID, actor_type: "project_api_key" }),
+    ])
+    render(<ActivityList {...listProps({ summaries })} />)
+
+    expect(actorCells()[0]).toHaveTextContent(/^API key$/)
   })
 
   it("keeps API-key rows key-identified when stray human profile values arrive", () => {
     render(<ActivityList {...listProps({ summaries: actorSummaries() })} />)
 
-    const keyRow = screen.getByText("API key").closest("tr")!
+    const keyRow = screen.getByText("test-key").closest("tr")!
     expect(keyRow?.textContent).not.toContain("Ada Lovelace")
     expect(keyRow?.textContent).not.toContain("ada@example.com")
+  })
+
+  it("never renders an email, even when the payload still carries one", () => {
+    const { container } = render(<ActivityList {...listProps({ summaries: actorSummaries() })} />)
+
+    expect(container.textContent).not.toContain("ada@example.com")
+    expect(container.innerHTML).not.toContain("ada@example.com")
   })
 
   it("never renders an actor name as the provider name", () => {
@@ -441,7 +490,7 @@ describe("ActivityList actor identity", () => {
 
     // Keenable is the provider of each fixture row, so every named actor cell
     // must sit beside - not inside - its row's provider cell.
-    for (const name of ["Ada Lovelace", "API key"]) {
+    for (const name of ["Ada Lovelace", "test-key"]) {
       const row = screen.getByText(name).closest("tr")!
       const cells = within(row).getAllByRole("cell")
       expect(cells[2]).toHaveTextContent("Keenable")
@@ -462,55 +511,60 @@ describe("ActivityList actor identity", () => {
   })
 
   it("labels username-only humans with the username in the actor cell", () => {
-    const summaries = mapTraceList({
-      items: [
-        traceSummaryFixture({
-          trace_id: HUMAN_TRACE_ID,
-          actor_type: "human",
-          username: "ada",
-          email: "ada@example.com",
-        }),
-      ],
-      generated_at: "2026-09-29T09:25:00.000000Z",
-    })
+    const summaries = summariesOf([
+      traceSummaryFixture({
+        trace_id: HUMAN_TRACE_ID,
+        actor_type: "human",
+        username: "ada",
+        email: "ada@example.com",
+      }),
+    ])
     render(<ActivityList {...listProps({ summaries })} />)
 
     expect(screen.getByText("ada")).toBeInTheDocument()
+    expect(actorCells()[0]?.textContent).not.toContain("@")
   })
 
-  it("disambiguates two same-name humans by their visible emails", () => {
-    const summaries = mapTraceList({
-      items: [
-        traceSummaryFixture({
-          trace_id: "7".repeat(32),
-          first_name: "Ada",
-          last_name: "Lovelace",
-          email: "ada-one@example.com",
-        }),
-        traceSummaryFixture({
-          trace_id: "8".repeat(32),
-          first_name: "Ada",
-          last_name: "Lovelace",
-          email: "ada-two@example.com",
-        }),
-      ],
-      generated_at: "2026-09-29T09:25:00.000000Z",
-    })
+  it("shows Unknown user, never the email, for a human without a name or username", () => {
+    const summaries = summariesOf([
+      traceSummaryFixture({
+        trace_id: UNNAMED_TRACE_ID,
+        actor_type: "human",
+        email: "ghost@example.com",
+      }),
+      traceSummaryFixture({ trace_id: HUMAN_TRACE_ID, actor_type: "human" }),
+    ])
     render(<ActivityList {...listProps({ summaries })} />)
 
+    const [first, second] = actorCells()
+    expect(first).toHaveTextContent(/^Unknown user$/)
+    expect(second).toHaveTextContent(/^Unknown user$/)
+    expect(screen.queryByText(/ghost@example\.com/)).not.toBeInTheDocument()
+  })
+
+  it("shows two same-name humans by name only, with no email to tell them apart", () => {
+    const summaries = summariesOf([
+      traceSummaryFixture({
+        trace_id: "7".repeat(32),
+        first_name: "Ada",
+        last_name: "Lovelace",
+        email: "ada-one@example.com",
+      }),
+      traceSummaryFixture({
+        trace_id: "8".repeat(32),
+        first_name: "Ada",
+        last_name: "Lovelace",
+        email: "ada-two@example.com",
+      }),
+    ])
+    const { container } = render(<ActivityList {...listProps({ summaries })} />)
+
     expect(screen.getAllByText("Ada Lovelace")).toHaveLength(2)
-    // Two rows, so each scoped row shows its own email only.
-    const rows = screen.getAllByRole("row").slice(1)
-    const firstCell = within(rows[0]!).getAllByRole("cell")[3]!
-    const secondCell = within(rows[1]!).getAllByRole("cell")[3]!
-    expect(within(firstCell).getByText("Ada Lovelace")).toHaveAttribute(
-      "title",
-      "Ada Lovelace (ada-one@example.com)"
-    )
-    expect(firstCell).toHaveTextContent("ada-one@example.com")
-    expect(firstCell.textContent).not.toContain("ada-two@example.com")
-    expect(secondCell).toHaveTextContent("ada-two@example.com")
-    expect(secondCell.textContent).not.toContain("ada-one@example.com")
+    for (const cell of actorCells()) {
+      expect(cell).toHaveTextContent(/^Ada Lovelace$/)
+      expect(within(cell).getByText("Ada Lovelace")).toHaveAttribute("title", "Ada Lovelace")
+    }
+    expect(container.innerHTML).not.toContain("@example.com")
   })
 })
 

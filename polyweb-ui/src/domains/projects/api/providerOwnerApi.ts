@@ -3,7 +3,6 @@ import { ApiError } from "@/shared/api/http"
 
 export interface ProviderOwner {
   user_id: string
-  email: string
   username?: string | null
   first_name?: string | null
   last_name?: string | null
@@ -35,12 +34,12 @@ function optionalProfile(
 }
 
 function owner(value: unknown): ProviderOwner {
-  if (typeof value !== "object" || value === null || !("user_id" in value) || !("email" in value) ||
-      typeof value.user_id !== "string" || typeof value.email !== "string") {
+  // The payload carries no email (and any email an older server sends is ignored).
+  if (typeof value !== "object" || value === null || !("user_id" in value) || typeof value.user_id !== "string") {
     throw new ApiError(0, "The server returned an unexpected provider owner.", value)
   }
   const record = value as Record<string, unknown>
-  return { user_id: value.user_id, email: value.email, ...optionalProfile(record, value) }
+  return { user_id: value.user_id, ...optionalProfile(record, value) }
 }
 
 export async function getProviderOwner(projectId: string, signal?: AbortSignal): Promise<ProviderOwner | null> {
