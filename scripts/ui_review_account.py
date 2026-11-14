@@ -17,14 +17,18 @@ credentials, and removes it afterwards:
     #    Playwright with the email/password in the credentials file.
     uv run python scripts/ui_review_account.py status --credentials-file /tmp/ui-review.json
 
-    # 4. Remove: leave every project, deactivate, delete the credentials file.
+    # 4. Remove: leave every shared project, archive the reviewer's own
+    #    personal project, deactivate, delete the credentials file.
     uv run python scripts/ui_review_account.py cleanup --credentials-file /tmp/ui-review.json
 
 The password is generated randomly, written only to the credentials file (keep
 it outside the repository), and never printed. Deactivation goes through the
 operator CLI (``polyweb-users``) inside the API container, so the Compose stack
 must be running. Accounts cannot be hard-deleted: ``cleanup`` leaves the
-reviewer deactivated, which blocks every sign-in.
+reviewer deactivated, which blocks every sign-in. If the operator guard refuses
+deactivation because the reviewer is the last admin of its archived personal
+project, ``cleanup`` still deletes the only copy of the random password, so the
+account can never sign in again.
 """
 
 from __future__ import annotations
@@ -137,9 +141,22 @@ def cleanup(args: argparse.Namespace) -> None:
     with httpx.Client(base_url=record.get("api", args.api), timeout=20) as client:
         headers = _login(client, record["email"], record["password"])
         for project in _projects(client, headers):
+            if project.get("status") == "archived":
+                continue
             response = client.delete(
                 f"/api/v1/projects/{project['id']}/members/{user_id}", headers=headers
             )
+            if response.status_code == 409 and "PROVIDER_OWNER_REQUIRED" in response.text:
+                # Registration gives every account a personal project it owns;
+                # the owner cannot leave it, so archive it instead.
+                archived = client.post(f"/api/v1/projects/{project['id']}/archive", headers=headers)
+                if archived.status_code != 200:
+                    _fail(
+                        f"archiving {project.get('name')!r} failed with HTTP "
+                        f"{archived.status_code}: {archived.text[:200]}"
+                    )
+                print(f"archived own project {project.get('name')!r} ({project['id']})")
+                continue
             if response.status_code not in (200, 204, 404):
                 _fail(
                     f"leaving {project.get('name')!r} failed with HTTP {response.status_code}: "
@@ -147,9 +164,20 @@ def cleanup(args: argparse.Namespace) -> None:
                 )
             print(f"left {project.get('name')!r} ({project['id']})")
     result = _operator(args, "deactivate", "--user-id", user_id)
-    if result.returncode != 0:
-        _fail(f"deactivate failed: {result.stderr.strip() or result.stdout.strip()}")
+    detail = result.stderr.strip() or result.stdout.strip()
+    if result.returncode != 0 and "last active administrator" not in detail:
+        _fail(f"deactivate failed: {detail}")
     path.unlink()
+    if result.returncode != 0:
+        # The deactivation guard counts the reviewer's own archived personal
+        # project. Discarding the only copy of the random password still makes
+        # the account unusable: it can no longer sign in and holds no project.
+        print(
+            f"reviewer {record['email']} left every project and its credentials were deleted; "
+            f"deactivation was refused ({detail}). The account cannot sign in again. "
+            "Pass a different --email to the next create."
+        )
+        return
     print(f"removed reviewer {record['email']}: left its projects and deactivated the account")
 
 
