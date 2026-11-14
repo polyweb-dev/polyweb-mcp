@@ -58,6 +58,10 @@ services:
     environment:
       # dev-only: make the bind-mounted src layout importable without installing it.
       PYTHONPATH: /app/src
+      POLYWEB_EXECUTION_AUTHORITY_URL: http://api:8001
+    depends_on:
+      api:
+        condition: service_healthy
     volumes:
       - polyweb-data:/data
       # dev-only: live backend edits; no source is baked into the image.

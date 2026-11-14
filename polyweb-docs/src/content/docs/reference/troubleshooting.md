@@ -43,6 +43,8 @@ docker compose exec api uv run polyweb-users create-admin --email admin@example.
 | `404` or `project is unavailable` | `project_id` names a different project than the key's | Drop `project_id` or use the key's own project |
 | `409` or `project is archived` | The project is archived | Ask a project admin to unarchive it |
 | MCP client cannot connect | Wrong URL or header | Use `http://localhost:8000/mcp` with `Authorization: Bearer fs_live_...`. Replace `localhost` for a remote server |
+| The MCP server exits with `MCP execution is not configured` | Neither `POLYWEB_EXECUTION_AUTHORITY_URL` nor `POLYWEB_EXECUTION_MCP_STANDALONE` is set | Set `POLYWEB_EXECUTION_AUTHORITY_URL` to the API server (`http://api:8001` in Docker, `http://127.0.0.1:8001` in a manual setup) |
+| MCP tool calls fail with `execution is temporarily unavailable` | The MCP server cannot reach the API server, or the API server cannot read its database | Check that the API server is running and healthy, then read `docker compose logs mcp` for `MCP execution forward failed` |
 | MCP works but REST fails (or the reverse) | Different host or port | The API server is on 8001, the MCP server on 8000, and the dashboard on 3000 |
 | Lost the key value | Keys are shown once | Rotate the key and use the new value |
 

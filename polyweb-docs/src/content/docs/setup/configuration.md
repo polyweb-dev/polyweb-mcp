@@ -47,6 +47,15 @@ To serve Polyweb on a network, put an HTTPS reverse proxy in front of it. Then s
 
 The Docker settings above change only the host side. Inside the containers the ports stay `80` (dashboard), `8001`, and `8000`.
 
+## MCP execution
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `POLYWEB_EXECUTION_AUTHORITY_URL` | none | API execution authority URL. Compose sets `http://api:8001` for MCP. Use HTTP only on a trusted network. See [MCP-to-API execution forwarding](/reference/security/#mcp-to-api-execution-forwarding). |
+| `POLYWEB_EXECUTION_MCP_STANDALONE` | `false` | Set to `true` for an exclusive standalone MCP execution authority. |
+
+For a manual setup, set the authority URL to the API address. The API and MCP then share one execution authority. Without a URL or standalone mode, the MCP server refuses to start.
+
 ## Storage
 
 | Variable | Default | Meaning |

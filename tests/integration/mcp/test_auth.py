@@ -537,6 +537,8 @@ def test_main_stdio_dispatch_reads_process_token(
 
     monkeypatch.setenv("POLYWEB_MCP_BEARER_TOKEN", "process-token-value")
     monkeypatch.setenv("POLYWEB_DB", str(tmp_path / "main-stdio.db"))
+    settings = server_module.get_settings().model_copy(update={"execution_mcp_standalone": True})
+    monkeypatch.setattr(server_module, "get_settings", lambda: settings)
     calls: list[tuple[str, bool]] = []
 
     async def fake_stdio(server: object, *, auth_service: object, settings: object) -> None:
