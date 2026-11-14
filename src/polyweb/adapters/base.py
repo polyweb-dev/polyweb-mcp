@@ -97,3 +97,17 @@ class ProviderAdapter(ABC):
         """Release any underlying client or network resources owned by this adapter."""
 
         return None
+
+
+def parse_error_record(index: int) -> dict[str, object]:
+    """Return the safe record for one rejected search result item.
+
+    The record holds no raw payload, URL, key, query, or validation text, so a
+    rejected item can never leak response content into usage metadata.
+    """
+
+    return {
+        "index": index,
+        "code": "invalid_response",
+        "message": "malformed search result item",
+    }

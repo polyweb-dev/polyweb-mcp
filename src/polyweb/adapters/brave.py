@@ -8,7 +8,13 @@ from typing import Any, cast
 import httpx
 from pydantic import SecretStr, ValidationError
 
-from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.base import ProviderAdapter, parse_error_record
+from polyweb.infrastructure.dates import (
+    month_start as _month_start,
+)
+from polyweb.infrastructure.dates import (
+    next_month_start as _next_month_start,
+)
 from polyweb.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
     ProviderOperationError,
@@ -93,20 +99,6 @@ def _malformed_item_error() -> ProviderOperationError:
     )
 
 
-def _parse_error_record(index: int) -> dict[str, object]:
-    """Return the safe record for one rejected search result item.
-
-    The record holds no raw payload, URL, key, query, or validation text, so a
-    rejected item can never leak response content into usage metadata.
-    """
-
-    return {
-        "index": index,
-        "code": "invalid_response",
-        "message": "malformed search result item",
-    }
-
-
 def brave_spend_usd(success_count: int | Decimal) -> Decimal:
     """Return derived USD spend for a count of Brave REQUEST successes."""
     if isinstance(success_count, bool):
@@ -139,16 +131,6 @@ def brave_cost_metadata(
     if success_count is not None:
         metadata["spend_usd"] = brave_spend_usd(success_count)
     return metadata
-
-
-def _month_start(value: datetime) -> datetime:
-    return datetime(value.year, value.month, 1, tzinfo=UTC)
-
-
-def _next_month_start(value: datetime) -> datetime:
-    if value.month == 12:
-        return datetime(value.year + 1, 1, 1, tzinfo=UTC)
-    return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
 
 
 def monthly_header_value(value: str | None) -> int | None:
@@ -386,11 +368,11 @@ class BraveAdapter(ProviderAdapter):
             try:
                 normalized.append(self._normalize_result(result))
             except ValidationError:
-                parse_errors.append(_parse_error_record(index))
+                parse_errors.append(parse_error_record(index))
             except ProviderOperationError as exc:
                 if exc.error.code != "invalid_response":
                     raise
-                parse_errors.append(_parse_error_record(index))
+                parse_errors.append(parse_error_record(index))
         normalized = normalized[: request.limit]
         # Count the just-completed request before projecting the snapshot so
         # the monthly ledger includes it (matches Keenable's usage-first order).
@@ -436,7 +418,7 @@ class BraveAdapter(ProviderAdapter):
                 try:
                     normalized.append(self._normalize_context_result(item, kind, sources))
                 except (ValidationError, ProviderOperationError):
-                    parse_errors.append(_parse_error_record(index))
+                    parse_errors.append(parse_error_record(index))
                 index += 1
         normalized = normalized[: request.limit]
         usage = self._usage_event(response)

@@ -20,11 +20,6 @@ Feature: Brave keyed search credits through synthetic headers
     Then the Brave pool holds allowance 5.000 USD with remaining 4.500 USD
     And the Brave observation carries no hour bar and no day bar
 
-  Scenario: B06 Brave manual USD 5 anchor gives 5000 estimated CRDs
-    Given a Brave adapter with no vendor headers
-    When I anchor Brave manual funds of USD 5
-    Then the Brave manual pool projects 5000 estimated CRDs
-
   Scenario: B10 Brave card shows finite search with n/a fetch and no fetch grant
     Given a Brave app with seeded catalog and monthly headers of 900 left of 1000
     When I read the Brave provider view

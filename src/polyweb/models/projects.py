@@ -1046,37 +1046,6 @@ class SettingsProvenance(StrEnum):
     SYSTEM_CONSTRAINED = "system_constrained"
 
 
-def normalize_preferred_providers(value: Any) -> tuple[str, ...]:
-    """Return an ordered, unique tuple of lower-case provider identifiers.
-
-    An explicit empty tuple/list is a real project preference that clears the
-    preference order. It must never collapse into inheritance. Duplicates are
-    rejected rather than silently reordered so a caller cannot hide a routing
-    mistake.
-    """
-
-    if isinstance(value, str) or not isinstance(value, (list, tuple)):
-        raise ValueError("preferred_providers must be a list of provider names")
-    if len(value) > 8:
-        raise ValueError("preferred_providers accepts at most 8 entries")
-    normalized: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            raise ValueError("preferred_providers entries must be strings")
-        name = item.strip()
-        if (
-            not name
-            or name != name.lower()
-            or len(name) > 32
-            or not all(character.isalnum() or character in "_-" for character in name)
-        ):
-            raise ValueError(f"invalid provider name {item!r}")
-        if name in normalized:
-            raise ValueError(f"duplicate provider name {name!r}")
-        normalized.append(name)
-    return tuple(normalized)
-
-
 class RoutingSettings(ContractModel):
     """Typed project routing preferences; ``None`` inherits the default."""
 

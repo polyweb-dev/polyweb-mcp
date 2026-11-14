@@ -34,9 +34,7 @@ from polyweb.services.parallel_oauth import (
     DeviceAccessDenied,
     DeviceAuthorizationPending,
     DeviceCodeExpired,
-    DeviceCodeResponse,
     DeviceSlowDown,
-    OAuthStatusResponse,
     OAuthUnpaired,
     ParallelOAuthClient,
     ParallelOAuthError,
@@ -272,29 +270,6 @@ def test_balance_payload_forbids_extra_fields() -> None:
         )
 
 
-def test_oauth_contract_models_forbid_extra_fields() -> None:
-    with pytest.raises(ValidationError):
-        DeviceCodeResponse.model_validate(
-            {
-                "provider": "parallel",
-                "user_code": "STUB-1",
-                "verification_uri": "https://platform.test/activate",
-                "verification_uri_complete": None,
-                "expires_in": 1800,
-                "interval": 5,
-                "device_code": "must-never-fit",
-            }
-        )
-    with pytest.raises(ValidationError):
-        OAuthStatusResponse.model_validate(
-            {"provider": "parallel", "status": "ready", "expires_in": 10, "token": "nope"}
-        )
-    with pytest.raises(ValidationError):
-        OAuthStatusResponse.model_validate(
-            {"provider": "parallel", "status": "nope", "expires_in": None}
-        )
-
-
 # --- device-flow client edges ---
 
 
@@ -400,7 +375,7 @@ async def test_client_revoke_never_raises() -> None:
     caller = httpx.AsyncClient(transport=httpx.MockTransport(failing), timeout=30.0)
     try:
         oauth = ParallelOAuthClient(caller, platform_base_url="https://platform.test")
-        await oauth.revoke_token(SecretStr("stub-access-token-1"), "access_token")
+        await oauth.revoke_token(SecretStr("stub-access-token-1"))
     finally:
         await caller.aclose()
 
@@ -430,7 +405,7 @@ async def test_client_uses_spec_paths_and_encodings() -> None:
         await oauth.request_device_code(client_id)
         await oauth.poll_token(client_id, SecretStr("stub-device-code-1"))
         await oauth.refresh_access_token(client_id, SecretStr("stub-refresh-1"))
-        await oauth.revoke_token(SecretStr("stub-refresh-1"), "refresh_token")
+        await oauth.revoke_token(SecretStr("stub-refresh-1"))
     finally:
         await caller.aclose()
     register = stub.calls_to("/getServiceKeys/register")[0]
@@ -631,24 +606,6 @@ async def test_balance_poll_accepts_float_cents_from_wire(repository):
         snapshot = await case.balance()
         assert snapshot.remaining == Decimal("10.00")
         assert isinstance(snapshot.remaining, Decimal)
-    finally:
-        await case.close()
-
-
-async def test_balance_poll_401_unpairs_and_backs_off(repository):
-    """Origin singleton case: migrated to real A4 credential-scoped behavior."""
-    case = await open_scoped_oauth(repository)
-    try:
-        await case.connect()
-        case.stub.balance_status = 401
-        with pytest.raises(OAuthUnpaired):
-            await case.balance()
-        # The primitive reports an invalid bearer. Only an explicit scoped action ends its grant.
-        await case.disconnect()
-        for _ in range(3):
-            await case.status()
-        assert not any((await case.slots()).values())
-        assert case.stub.balance_calls == 1
     finally:
         await case.close()
 

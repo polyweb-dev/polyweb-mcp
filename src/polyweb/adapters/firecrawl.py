@@ -117,11 +117,6 @@ def _credit_snapshot(payload: dict[str, Any], provider: str) -> QuotaSnapshot:
     )
 
 
-def _parse_published_at(value: Any) -> datetime | None:
-    """Parse Firecrawl's ISO-8601 ``date``; unparseable values are None."""
-    return parse_iso_datetime(value)
-
-
 def _item_value(item: Any, key: str, default: Any = None) -> Any:
     """Read a field from either a raw dict or a pydantic SDK model."""
     if isinstance(item, dict):
@@ -436,7 +431,7 @@ class FirecrawlAdapter(ProviderAdapter):
             title=title,
             url=cast(Any, url),
             snippet=snippet,
-            published_at=_parse_published_at(
+            published_at=parse_iso_datetime(
                 _item_value(item, "date")
                 or _item_value(item, "published_date")
                 or _item_value(item, "published_at")

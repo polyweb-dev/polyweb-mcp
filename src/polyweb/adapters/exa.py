@@ -25,7 +25,15 @@ from exa_py.api import SearchResponse as ExaSearchResponse
 from pydantic import AnyHttpUrl, SecretStr
 
 from polyweb.adapters.base import ProviderAdapter
-from polyweb.infrastructure.dates import parse_iso_datetime
+from polyweb.infrastructure.dates import (
+    month_start as _month_start,
+)
+from polyweb.infrastructure.dates import (
+    next_month_start as _next_month_start,
+)
+from polyweb.infrastructure.dates import (
+    parse_iso_datetime,
+)
 from polyweb.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
     ProviderOperationError,
@@ -87,11 +95,6 @@ def _detect_402_vendor_code(exc: Exception) -> str | None:
 _SDK_STATUS_RE = re.compile(r"Request failed with status code (\d+)")
 
 
-def _parse_published_at(value: str | None) -> datetime | None:
-    """Parse Exa's ISO-8601 ``published_date``; unparseable values are None."""
-    return parse_iso_datetime(value)
-
-
 def _same_url(left: str, right: str) -> bool:
     """Compare URLs case-insensitively for scheme/host, path/query case preserved.
 
@@ -115,16 +118,6 @@ def _same_url(left: str, right: str) -> bool:
 def _path_without_root_slash(path: str) -> str:
     """The path with a root-only ``/`` normalized to the empty string."""
     return "" if path == "/" else path
-
-
-def _month_start(value: datetime) -> datetime:
-    return datetime(value.year, value.month, 1, tzinfo=UTC)
-
-
-def _next_month_start(value: datetime) -> datetime:
-    if value.month == 12:
-        return datetime(value.year + 1, 1, 1, tzinfo=UTC)
-    return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
 
 
 def _search_fallback_cost(result_count: int, summary_count: int) -> Decimal:
@@ -527,7 +520,7 @@ class ExaAdapter(ProviderAdapter):
             title=item.title or "",
             url=cast(AnyHttpUrl, item.url),
             snippet=highlights[0] if highlights else (item.text or item.summary or ""),
-            published_at=_parse_published_at(item.published_date),
+            published_at=parse_iso_datetime(item.published_date),
             score=score,
             metadata=metadata,
         )

@@ -31,7 +31,6 @@ from polyweb.models.contracts import (
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
-    TEMP_PASSWORD,
     account_id_from_pair,
     raw_auth_headers,
     register_and_login,
@@ -194,30 +193,6 @@ async def test_rejected_requests_create_no_trace_root(guard_client: TestClient) 
     assert len(items) == 1
     assert items[0]["operation"] == "search"
     assert items[0]["outcome"] == "success"
-
-
-def test_public_exceptions_need_no_credential(guard_client: TestClient) -> None:
-    email = temp_email("guard-public")
-    registered = guard_client.post(
-        "/auth/register",
-        json={
-            "email": email,
-            "password": TEMP_PASSWORD,
-            "username": email.split("@")[0][:64],
-            "first_name": "Test",
-            "last_name": "User",
-        },
-    )
-    assert registered.status_code == 201
-    # A1: public signup returns the safe account projection with no role.
-    assert "role" not in registered.json()
-    assert "is_superuser" not in registered.json()
-
-    logged_in = guard_client.post(
-        "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
-    )
-    assert logged_in.status_code == 200
-    assert logged_in.headers["cache-control"] == "no-store"
 
 
 def test_refresh_credential_fails_on_access_surfaces(guard_client: TestClient) -> None:

@@ -789,7 +789,7 @@ async def test_denial_paths_do_not_wait_on_a_stalled_writer(
     import polyweb.services.api_keys as api_keys_module
     from polyweb.models.projects import PermissionAction
     from polyweb.services.api_keys import DEFAULT_USE_RECORDER
-    from polyweb.services.execution_scope import ExecutionForbidden, resolve_execution_scope
+    from polyweb.services.execution_scope import ExecutionForbidden, resolve_execution_boundary
 
     key = await issue_project_key(repository, prefix="r3-stall", scopes={"search.execute"})
     release = asyncio.Event()
@@ -805,7 +805,7 @@ async def test_denial_paths_do_not_wait_on_a_stalled_writer(
     started = time.perf_counter()
     assert await ApiKeyVerifier(repository).verify(tampered) is None
     with pytest.raises(ExecutionForbidden):
-        await resolve_execution_scope(
+        await resolve_execution_boundary(
             repository, principal, project_id=None, action=PermissionAction.FETCH_EXECUTE
         )
     assert time.perf_counter() - started < 1.0

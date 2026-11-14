@@ -6,8 +6,6 @@ turns a transport-verified principal plus the request's ``project_id`` into a
 live :class:`ProjectContext` and the project's immutable trace policy, or into
 one typed failure before any routing, admission, or provider I/O happens. There
 is no anonymous execution: a missing principal always fails.
-``resolve_execution_scope`` is the context-only seam for callers that do not
-need the trace decision.
 
 * A human principal must name its project; live membership and project roles
   decide the action.
@@ -55,10 +53,7 @@ from polyweb.services.api_keys import (
     principal_for,
 )
 from polyweb.services.authorization import ScopedAuthorizationService
-from polyweb.services.settings import (
-    project_trace_policy,
-    project_trace_policy_in_session,
-)
+from polyweb.services.settings import project_trace_policy_in_session
 
 logger = logging.getLogger(__name__)
 
@@ -106,27 +101,6 @@ class ExecutionBoundary:
 
     context: ProjectContext
     trace_policy: ProjectTracePolicy
-
-
-async def resolve_execution_scope(
-    repository: SQLiteRepository | None,
-    principal: HumanPrincipal | ProjectApiKeyPrincipal | None,
-    *,
-    project_id: UUID | None,
-    action: PermissionAction,
-    clock: Callable[[], datetime] | None = None,
-) -> ProjectContext:
-    """Resolve the live execution context or raise one typed scope failure."""
-
-    context, _policy = await _resolve_execution(
-        repository,
-        principal,
-        project_id=project_id,
-        action=action,
-        clock=clock,
-        with_policy=False,
-    )
-    return context
 
 
 async def resolve_execution_boundary(
@@ -301,25 +275,6 @@ def execution_attribution(context: ProjectContext) -> ExecutionAttribution:
     )
 
 
-async def resolve_trace_capture(
-    repository: SQLiteRepository,
-    context: ProjectContext,
-) -> ProjectTracePolicy:
-    """Resolve the project's immutable trace policy at the execution boundary.
-
-    Called once per provider-executing request, next to the ownership bind, so
-    detail is decided before any span exists and propagated to every child.
-    On read failure, metadata-only capture applies while execution and
-    mandatory audit events continue.
-    """
-
-    try:
-        return await project_trace_policy(repository, context)
-    except Exception:
-        logger.warning("trace policy could not be read; optional trace capture is suppressed")
-        return UNRESOLVED_TRACE_POLICY
-
-
 __all__ = [
     "UNRESOLVED_TRACE_POLICY",
     "ExecutionBoundary",
@@ -332,6 +287,4 @@ __all__ = [
     "ExecutionUnauthenticated",
     "execution_attribution",
     "resolve_execution_boundary",
-    "resolve_execution_scope",
-    "resolve_trace_capture",
 ]

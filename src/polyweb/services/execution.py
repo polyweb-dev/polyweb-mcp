@@ -1328,7 +1328,6 @@ class ExecutionService:
             task = schedule_quota_refresh(
                 self._repository,
                 [leg.adapter for leg in legs],
-                self._secret_store,
                 scopes=scopes,
                 limits=self._limits,
             )

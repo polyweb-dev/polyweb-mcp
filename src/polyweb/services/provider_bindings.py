@@ -1,16 +1,8 @@
 """Project provider bindings and the available-versus-enabled provider view (A4).
 
 A *binding* is a project's explicit choice to route to one credential: its own
-private credential or a system credential granted to it. A binding always
-starts with no enabled operations; enabling is a separate update, and the
-enabled set must stay inside
-
-    adapter capability ∩ operations the credential supports
-                       ∩ the grant's permitted operations (system credentials)
-
-Writes need live ``providers.configure`` in the project and an active
-project; reads need ``providers.read``. Every write appends a project audit
-event in the same transaction.
+private credential or a system credential granted to it. This service lists
+bindings and builds the provider view; both reads need ``providers.read``.
 
 The provider view (doc-000001 §4.6) keeps *available* (a credential the
 project owns or holds a grant for) separate from *enabled* (a binding with
@@ -50,8 +42,6 @@ from polyweb.models.provider_access import ALL_BITS, is_operation_enabled
 from polyweb.models.providers import (
     AllocationRead,
     AvailableCredentialRead,
-    BindingCreate,
-    BindingUpdate,
     ProjectProvidersRead,
     ProviderBindingView,
     ProviderPoolRead,
@@ -71,33 +61,12 @@ from polyweb.persistence.pools import (
     UpstreamPoolRepository,
 )
 from polyweb.persistence.storage import SQLiteRepository
-from polyweb.persistence.transactions import DEFAULT_WRITE_ATTEMPTS
-from polyweb.services.audit_events import record_project_event
 from polyweb.services.authorization import ScopedAuthorizationService
 from polyweb.services.control_access import (
-    require_active_project,
     require_project_permission,
     run_control_read,
-    run_control_write,
 )
-from polyweb.services.control_errors import ResourceConflict, ResourceInvalid, ResourceNotFound
 from polyweb.services.routing_order import catalog_call_costs
-
-#: Audit actions of binding lifecycle events (project scope).
-BINDING_CREATED: Final[str] = "binding.created"
-BINDING_UPDATED: Final[str] = "binding.updated"
-BINDING_DELETED: Final[str] = "binding.deleted"
-
-#: 422 code: the body names a credential the project neither owns nor holds a grant for.
-CREDENTIAL_NOT_AVAILABLE: Final[str] = "CREDENTIAL_NOT_AVAILABLE"
-#: 422 code: an enabled operation falls outside capability, support or grant.
-OPERATION_NOT_PERMITTED: Final[str] = "OPERATION_NOT_PERMITTED"
-#: 409 code: the project already routes this credential under this label.
-BINDING_ROUTE_CONFLICT: Final[str] = "BINDING_ROUTE_CONFLICT"
-#: 409 code: an unclassified binding integrity failure.
-BINDING_CONFLICT: Final[str] = "BINDING_CONFLICT"
-
-_TARGET_TYPE: Final[str] = "binding"
 
 #: Operations an OAuth credential supports for execution. The Parallel OAuth
 #: grant is scoped to account balance reads, so it serves no search or fetch.
@@ -202,13 +171,11 @@ class ProviderBindingService:
         *,
         account_id: UUID = DEFAULT_INSTALLATION_ACCOUNT_ID,
         provider_config: ProviderConfigLookup = _default_provider_config,
-        max_write_attempts: int = DEFAULT_WRITE_ATTEMPTS,
     ) -> None:
         self._repository = repository
         self._account_id = account_id
         self._provider_config = provider_config
         self._authorization = ScopedAuthorizationService(repository, account_id=account_id)
-        self._max_write_attempts = max(1, max_write_attempts)
 
     # ------------------------------------------------------------------
     # Bindings
@@ -233,92 +200,6 @@ class ProviderBindingService:
             ]
 
         return await run_control_read(self._repository, operation)
-
-    async def create_binding(
-        self, actor: UserPrincipal, project_id: UUID, body: BindingCreate
-    ) -> ProjectBindingRead:
-        """Bind one available credential; the binding starts disabled."""
-
-        async def operation(session: AsyncSession) -> ProjectBindingRead:
-            await self._require_configure(session, actor, project_id)
-            available = await self._available(session, project_id, body.credential_id)
-            if available is None:
-                raise ResourceInvalid(
-                    CREDENTIAL_NOT_AVAILABLE,
-                    "the credential is not available to this project",
-                )
-            bindings = ProjectBindingRepository(session)
-            await self._reject_route_conflict(
-                bindings, project_id, body.credential_id, body.route_label, exclude=None
-            )
-            created = await bindings.create(
-                project_id=project_id,
-                credential_id=body.credential_id,
-                credential_scope=available.credential.owner_scope,
-                route_label=body.route_label,
-                priority=body.priority,
-                created_by=actor.id,
-            )
-            await self._audit(session, actor, created, BINDING_CREATED)
-            return _binding_read(created)
-
-        return await self._write(operation)
-
-    async def update_binding(
-        self,
-        actor: UserPrincipal,
-        project_id: UUID,
-        binding_id: UUID,
-        body: BindingUpdate,
-    ) -> ProjectBindingRead:
-        """Change enabled operations, priority or route label of one binding."""
-
-        async def operation(session: AsyncSession) -> ProjectBindingRead:
-            await self._require_configure(session, actor, project_id)
-            bindings = ProjectBindingRepository(session)
-            current = await bindings.get(project_id=project_id, binding_id=binding_id)
-            if current is None:
-                raise ResourceNotFound("binding is not available")
-            enabled = (
-                current.enabled_operations
-                if body.enabled_operations is None
-                else body.enabled_operations
-            )
-            await self._require_permitted(session, current, enabled)
-            route_label = current.route_label if body.route_label is None else body.route_label
-            if route_label != current.route_label:
-                await self._reject_route_conflict(
-                    bindings, project_id, current.credential_id, route_label, exclude=current.id
-                )
-            updated = await bindings.update(
-                project_id=project_id,
-                binding_id=binding_id,
-                enabled_operations=enabled,
-                priority=current.priority if body.priority is None else body.priority,
-                route_label=route_label,
-            )
-            if updated is None:
-                raise ResourceNotFound("binding is not available")
-            await self._audit(session, actor, updated, BINDING_UPDATED)
-            return _binding_read(updated)
-
-        return await self._write(operation)
-
-    async def delete_binding(
-        self, actor: UserPrincipal, project_id: UUID, binding_id: UUID
-    ) -> None:
-        """Remove one binding of this project."""
-
-        async def operation(session: AsyncSession) -> None:
-            await self._require_configure(session, actor, project_id)
-            bindings = ProjectBindingRepository(session)
-            current = await bindings.get(project_id=project_id, binding_id=binding_id)
-            if current is None:
-                raise ResourceNotFound("binding is not available")
-            await bindings.delete(project_id=project_id, binding_id=binding_id)
-            await self._audit(session, actor, current, BINDING_DELETED)
-
-        await self._write(operation)
 
     # ------------------------------------------------------------------
     # Provider view
@@ -499,103 +380,6 @@ class ProviderBindingService:
             pools=pools,
         )
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    async def _require_configure(
-        self, session: AsyncSession, actor: UserPrincipal, project_id: UUID
-    ) -> None:
-        await require_project_permission(
-            session, self._authorization, actor, project_id, PermissionAction.PROVIDERS_CONFIGURE
-        )
-        await require_active_project(session, account_id=self._account_id, project_id=project_id)
-
-    async def _available(
-        self, session: AsyncSession, project_id: UUID, credential_id: UUID
-    ) -> _Available | None:
-        """Return the credential if this project owns it or holds a grant for it."""
-
-        credentials = CredentialRepository(session)
-        private = await credentials.get_private_credential(
-            account_id=self._account_id, project_id=project_id, credential_id=credential_id
-        )
-        if private is not None:
-            return _Available(private, ALL_CREDENTIAL_OPERATIONS)
-        system = await credentials.get_system_credential(
-            account_id=self._account_id, credential_id=credential_id
-        )
-        if system is None:
-            return None
-        grant = await credentials.get_grant(credential_id=credential_id, project_id=project_id)
-        if grant is None:
-            return None
-        return _Available(
-            system, frozenset(CredentialOperation(value) for value in grant.permitted_operations)
-        )
-
-    async def _require_permitted(
-        self,
-        session: AsyncSession,
-        binding: StoredBinding,
-        enabled: frozenset[CredentialOperation],
-    ) -> None:
-        if not enabled:
-            return
-        available = await self._available(session, binding.project_id, binding.credential_id)
-        allowed = frozenset() if available is None else available.permitted
-        if not enabled <= allowed:
-            raise ResourceInvalid(
-                OPERATION_NOT_PERMITTED,
-                "enabled operations must be within the credential's capability and grant",
-            )
-
-    @staticmethod
-    async def _reject_route_conflict(
-        bindings: ProjectBindingRepository,
-        project_id: UUID,
-        credential_id: UUID,
-        route_label: str,
-        *,
-        exclude: UUID | None,
-    ) -> None:
-        for existing in await bindings.list_for_credential(
-            project_id=project_id, credential_id=credential_id
-        ):
-            if existing.route_label == route_label and existing.id != exclude:
-                raise ResourceConflict(
-                    BINDING_ROUTE_CONFLICT,
-                    "this credential is already bound under this route label",
-                )
-
-    async def _audit(
-        self, session: AsyncSession, actor: UserPrincipal, binding: StoredBinding, action: str
-    ) -> None:
-        await record_project_event(
-            session,
-            project_id=binding.project_id,
-            actor=actor,
-            action=action,
-            target_type=_TARGET_TYPE,
-            target_id=str(binding.id),
-            detail={
-                "credential_scope": binding.credential_scope.value,
-                "route_label": binding.route_label,
-                "priority": binding.priority,
-                "enabled_operations": sorted(
-                    operation.value for operation in binding.enabled_operations
-                ),
-            },
-        )
-
-    async def _write[T](self, operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
-        return await run_control_write(
-            self._repository,
-            operation,
-            conflict_code=BINDING_CONFLICT,
-            max_attempts=self._max_write_attempts,
-        )
-
 
 @dataclass(frozen=True)
 class _ViewState:
@@ -610,13 +394,6 @@ class _ViewState:
 
 
 __all__ = [
-    "BINDING_CONFLICT",
-    "BINDING_CREATED",
-    "BINDING_DELETED",
-    "BINDING_ROUTE_CONFLICT",
-    "BINDING_UPDATED",
-    "CREDENTIAL_NOT_AVAILABLE",
-    "OPERATION_NOT_PERMITTED",
     "ProviderBindingService",
     "ProviderConfigLookup",
     "allocation_read",

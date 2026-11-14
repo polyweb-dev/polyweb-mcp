@@ -538,7 +538,6 @@ async def test_restart_never_refills_the_bucket_or_settles_twice(
 
         restarted = ExecutionAuthority(
             repository=world.repository,
-            secret_store=world.store,
             authority_key=AUTHORITY_KEY,
             monotonic_fn=world.monotonic.monotonic_fn,
             limits=limits_service,
@@ -728,7 +727,6 @@ async def test_takeover_with_unresolved_work_stays_in_recovery_before_dispatch(
         await limits_service.initialize()
         new_authority = ExecutionAuthority(
             repository=reopened_repository,
-            secret_store=store,
             authority_key=AUTHORITY_KEY,
             monotonic_fn=world.monotonic.monotonic_fn,
             lease_seconds=30.0,
@@ -1045,7 +1043,6 @@ async def test_project_loan_ceiling_survives_authority_replacement(
         replacement_limits = await build_limits(world.repository)
         replacement = ExecutionAuthority(
             repository=world.repository,
-            secret_store=world.store,
             authority_key=AUTHORITY_KEY,
             monotonic_fn=world.monotonic.monotonic_fn,
             limits=replacement_limits,

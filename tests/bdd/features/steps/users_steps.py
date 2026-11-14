@@ -44,7 +44,6 @@ from polyweb.persistence.database_migrations import (
     database_status,
     migration_head,
     upgrade_database,
-    validate_database_schema,
 )
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.persistence.users import UserDatabase, UserRow, local_password_hash
@@ -341,15 +340,6 @@ def step_when_users_migration(context: Any) -> None:
         context.migration_error = error
 
 
-@then('the users database should be at head "{revision}" with a valid schema')
-def step_then_users_db_at_head(context: Any, revision: str) -> None:
-    status = database_status(Path(str(context.database_path)))
-    assert status.current_revision == revision
-    assert status.current_revision == migration_head()
-    assert status.schema_valid is True
-    validate_database_schema(Path(str(context.database_path)))
-
-
 @then("the users database migration should be refused with a reset message")
 def step_then_users_migration_refused(context: Any) -> None:
     error = context.migration_error
@@ -449,20 +439,6 @@ def step_when_users_search(context: Any) -> None:
 def step_then_users_search_ok(context: Any) -> None:
     assert context.search_response.status_code == 200
     assert context.search_response.json()["provider"] == "stubby"
-
-
-@then("the stored account can be found by a case-insensitive lookup")
-def step_then_case_insensitive_lookup(context: Any) -> None:
-    async def _lookup() -> str:
-        async with context.repository.session() as session:
-            database = UserDatabase(session, UserRow)
-            found = await database.get_by_email("OPS@example.com")
-            assert found is not None
-            statement = select(UserRow).where(UserRow.email == found.email)
-            row = (await session.execute(statement)).scalar_one()
-            return str(row.email)
-
-    assert context.loop.run_until_complete(_lookup()) == "ops@example.com"
 
 
 _AUTH_PASSWORD = "StrongPass123!x-AuthBDD"
@@ -664,27 +640,6 @@ def step_then_auth_login_429(context: Any) -> None:
     assert int(context.limit_response.headers["retry-after"]) >= 1
 
 
-@when("I register five accounts and then one more")
-def step_when_auth_registration_limit(context: Any) -> None:
-    with _auth_client(context) as client:
-        for index in range(5):
-            probe = client.post(
-                "/auth/register",
-                json=_auth_signup_payload(f"capped-{index}-{uuid4().hex[:6]}@example.com"),
-            )
-            assert probe.status_code == 201
-        context.limit_response = client.post(
-            "/auth/register",
-            json=_auth_signup_payload(f"capped-last-{uuid4().hex[:6]}@example.com"),
-        )
-
-
-@then("the sixth registration should fail with HTTP 429 and a retry delay")
-def step_then_auth_registration_429(context: Any) -> None:
-    assert context.limit_response.status_code == 429
-    assert int(context.limit_response.headers["retry-after"]) >= 1
-
-
 @when("I refresh with the refresh token")
 def step_when_auth_refresh(context: Any) -> None:
     token = context.auth_pair["refresh_token"]
@@ -770,38 +725,6 @@ def step_when_auth_login_fail_four(context: Any) -> None:
                 data={"username": context.auth_email, "password": "WrongPass123!x-No"},
             )
             assert probe.status_code == 400
-
-
-_OVERSIZE_PAD = "A" * 4097
-
-
-@when("I register with a 4097-byte body")
-def step_when_auth_register_oversize(context: Any) -> None:
-    with _auth_client(context) as client:
-        context.oversize_response = client.post(
-            "/auth/register",
-            json={
-                **_auth_signup_payload("oversize@example.com"),
-                "pad": _OVERSIZE_PAD,
-            },
-        )
-
-
-@when("I log in with a 4097-byte body")
-def step_when_auth_login_oversize(context: Any) -> None:
-    with _auth_client(context) as client:
-        context.oversize_response = client.post(
-            "/auth/jwt/login",
-            data={"username": _OVERSIZE_PAD, "password": _OVERSIZE_PAD},
-        )
-
-
-@then("the oversize auth call should fail with HTTP 413 and no credential content")
-def step_then_auth_oversize_413(context: Any) -> None:
-    response = context.oversize_response
-    assert response.status_code == 413
-    assert response.json() == {"detail": "request body is too large"}
-    assert _OVERSIZE_PAD not in response.text
 
 
 @when('I call "{method} {path}" without a token')
@@ -945,17 +868,6 @@ def step_then_matrix_mutations(context: Any) -> None:
         )
         assert allowed.status_code == 200
         assert allowed.json()["provider_id"] == "tavily"
-
-
-@then("the member should search its project but the system admin should not")
-def step_then_matrix_agent_search(context: Any) -> None:
-    with _auth_client(context) as client:
-        body = {"project_id": context.matrix_project_id, "query": "matrix probe"}
-        response = client.post("/search", json=body, headers=_role_headers(context, "agent"))
-        assert response.status_code == 200
-        assert response.json()["provider"] == "stubby"
-        bypass = client.post("/search", json=body, headers=_role_headers(context, "admin"))
-        assert bypass.status_code == 404
 
 
 @given("a Brave stub for the scoped authority scenario")

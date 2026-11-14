@@ -11,7 +11,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    SecretStr,
     computed_field,
     field_validator,
     model_serializer,
@@ -429,34 +428,11 @@ class ProviderTestResponse(ContractModel):
     checked_at: datetime
 
 
-class SetSecretRequest(ContractModel):
-    """Write-only key payload; the raw value is never echoed or logged."""
-
-    key: SecretStr = Field(min_length=1)
-
-
-class SecretStatusResponse(ContractModel):
-    """Masked secret status: presence plus a stable fingerprint, never the key."""
-
-    provider: str
-    presence: SecretPresence
-    fingerprint: str | None = None
-    updated_at: datetime | None = None
-    source: Literal["encrypted_db", "none"]
-
-
 class FallbackPolicy(StrEnum):
     """Global routing fallback policy."""
 
     CHAINED = "chained"
     FIRST_ONLY = "first_only"
-
-
-class CostPreset(StrEnum):
-    """Global cost-optimization preset applied to candidate ordering."""
-
-    BALANCED = "balanced"
-    FREE_FIRST = "free_first"
 
 
 class RoutingConfigResponse(ContractModel):

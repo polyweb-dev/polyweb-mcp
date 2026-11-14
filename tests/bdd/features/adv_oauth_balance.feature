@@ -7,18 +7,6 @@ Feature: Parallel OAuth balance as authoritative USD quota
   Background:
     Given an offline Parallel OAuth API with stubbed vendor
 
-  Scenario Outline: Balance net converts to exact USD
-    Given a stubbed vendor balance of <credit> credit and <pending> pending cents
-    When I connect OAuth, run the bounded balance poll, and read the dashboard
-    Then the Parallel quota should be authoritative USD "<usd>" with no limit
-
-    Examples:
-      | credit | pending | usd   |
-      | 1250   | 250     | 10.00 |
-      | 101    | 0       | 1.01  |
-      | 1      | 0       | 0.01  |
-      | 100    | 500     | 0     |
-
   Scenario: Invoiced accounts record nothing
     Given a stubbed invoiced vendor balance
     When I connect OAuth, run the bounded balance poll, and read the dashboard

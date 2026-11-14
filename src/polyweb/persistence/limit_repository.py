@@ -76,6 +76,7 @@ from polyweb.persistence.limit_rows import (
     RateWindowObservationRow,
 )
 from polyweb.persistence.pools import CredentialPoolLinkRow
+from polyweb.persistence.storage import _timestamp
 
 _WINDOW_SECONDS: dict[RateWindowName, int] = {
     RateWindowName.SECOND: 1,
@@ -332,14 +333,6 @@ _TAVILY_KEYED_CREDITS_POOL_ID = "tavily:keyed:credit"
 _TAVILY_SYNC_CADENCE_SECONDS = 60
 _TAVILY_VENDOR_402_SOURCE = "vendor_402"
 _TAVILY_VENDOR_API_SOURCE = "vendor_api"
-
-
-def _timestamp(value: datetime) -> str:
-    """Return a timezone-aware UTC instant that SQLite sorts lexicographically."""
-
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("timestamps must be timezone-aware")
-    return value.astimezone(UTC).isoformat()
 
 
 def _instant(text: str | None) -> datetime | None:
@@ -712,25 +705,6 @@ class LimitRepository:
                         "old_allowance": _text(old_allowance),
                     },
                 ),
-            )
-            await session.commit()
-        return True
-
-    async def apply_tier_snapshot(self, snapshot: NativeUsageSnapshot) -> bool:
-        """Store an observed free/paid split without duplicating aggregate funds."""
-
-        async with self._session_factory() as session:
-            row = await session.get(NativePoolRow, snapshot.pool_id)
-            if row is None:
-                return False
-            await session.execute(
-                update(NativePoolRow)
-                .where(NativePoolRow.pool_id == snapshot.pool_id)
-                .values(
-                    tier_json=_dump(snapshot.tiers) if snapshot.tiers else None,
-                    tier_split_known=1 if snapshot.tier_split_known else 0,
-                    last_tier_observed_at=_timestamp(snapshot.observed_at),
-                )
             )
             await session.commit()
         return True
@@ -1650,22 +1624,6 @@ class LimitRepository:
             rows = (await session.execute(statement)).all()
         return _usage_totals(rows)
 
-    async def count_events(self, provider: str, reason: str, *, since: datetime) -> int:
-        """Count audit events with one reason since an instant."""
-
-        statement = (
-            select(func.count())
-            .select_from(LimitEventRow)
-            .where(
-                LimitEventRow.provider == provider,
-                LimitEventRow.reason == reason,
-                LimitEventRow.observed_at >= _timestamp(since),
-            )
-        )
-        async with self._session_factory() as session:
-            total = (await session.execute(statement)).scalar_one()
-        return int(total)
-
     # ------------------------------------------------------------------- sync
 
     async def claim_sync(self, claim: SyncClaim) -> bool:
@@ -1909,20 +1867,6 @@ class LimitRepository:
             ).scalar_one()
         return Decimal(str(total))
 
-    async def oldest_attempt(
-        self, bucket_id: str, *, window: RateWindowName, now: datetime
-    ) -> datetime | None:
-        """Return the oldest attempt still inside one age-based window."""
-
-        start = now - timedelta(seconds=_WINDOW_SECONDS[window])
-        statement = select(func.min(RateAttemptRow.attempted_at)).where(
-            RateAttemptRow.bucket_id == bucket_id,
-            RateAttemptRow.attempted_at >= _timestamp(start),
-        )
-        async with self._session_factory() as session:
-            oldest = (await session.execute(statement)).scalar_one_or_none()
-        return _instant(str(oldest)) if oldest else None
-
     async def record_rate_attempt(
         self,
         *,
@@ -2072,20 +2016,6 @@ def _validate_strict_spec(spec: StrictAttemptSpec) -> None:
         raise ValueError("the project concurrency cap must be positive")
 
 
-def _strict_spec_json(spec: StrictAttemptSpec) -> str:
-    """Return the strict summary persisted on the admission row."""
-
-    return _strict_payload_json(_strict_spec_payload(spec))
-
-
-def _is_strict_payload(stored_json: str | None) -> bool:
-    try:
-        payload = json.loads(stored_json) if stored_json else None
-    except ValueError:
-        return False
-    return isinstance(payload, dict) and payload.get("kind") == "strict"
-
-
 def _strict_spec_payload_of(stored_json: str | None) -> dict[str, Any] | None:
     """Return the stored strict payload when it decodes, else ``None``."""
 
@@ -2108,7 +2038,7 @@ def _rails_replay_matches(stored: LimitAdmissionRow, admission: LimitAdmission) 
     else is an unrelated duplicate that must never skip its own checks.
     """
 
-    if _is_strict_payload(stored.rate_reservations_json):
+    if _strict_spec_payload_of(stored.rate_reservations_json) is not None:
         return False
     if (
         stored.pool_id != admission.pool_id

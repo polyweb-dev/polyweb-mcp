@@ -1,7 +1,6 @@
 """OAuth BDD scenarios on account-vault lifecycle and primitives."""
 
 from datetime import timedelta
-from decimal import Decimal
 from typing import Any
 
 from behave import given, then, when
@@ -169,59 +168,6 @@ def step_then_status_expired(context: Any) -> None:
     assert context.oauth_status.status is OAuthGrantStatus.DISCONNECTED
     assert context.oauth_status.last_error_code == "expired_token"
     assert _run(context, context.oauth_case.token("device")) is None
-
-
-@when("the bounded quota poll runs with credit {credit:d} cents and pending {pending:d} cents")
-def step_when_bounded_poll(context: Any, credit: int, pending: int) -> None:
-    context.oauth_case.stub.credit_cents = credit
-    context.oauth_case.stub.pending_cents = pending
-    _balance(context)
-
-
-@then("the Parallel latest quota should be AUTHORITATIVE USD {expected} with unknown limit")
-def step_then_authoritative_snapshot(context: Any, expected: str) -> None:
-    snapshot = context.quota_snapshot
-    assert snapshot.provider == "parallel" and snapshot.source == "authoritative"
-    assert snapshot.unit_kind == "USD" and snapshot.display_unit == "USD"
-    assert snapshot.limit is None and isinstance(snapshot.remaining, Decimal)
-    assert snapshot.remaining == Decimal(expected)
-    stored = _run(
-        context,
-        context.repository.latest_quota("parallel", credential_id=context.oauth_case.credential.id),
-    )
-    assert stored == snapshot
-    assert _run(context, context.repository.latest_quota("parallel")) is None
-
-
-@when(
-    "the bounded quota poll runs with credit {credit:d} cents and pending {pending:d} "
-    "cents invoiced {invoiced:w}"
-)
-def step_when_bounded_poll_outline(context: Any, credit: int, pending: int, invoiced: str) -> None:
-    context.oauth_case.stub.credit_cents = credit
-    context.oauth_case.stub.pending_cents = pending
-    context.oauth_case.stub.balance_will_invoice = invoiced == "true"
-    _balance(context)
-
-
-@then('the Parallel balance outcome should be "{outcome}"')
-def step_then_balance_outcome(context: Any, outcome: str) -> None:
-    snapshot = context.quota_snapshot
-    if outcome == "neutralized UNKNOWN":
-        assert snapshot is None
-        assert _run(context, context.repository.latest_quota("parallel")) is None
-        assert (
-            _run(
-                context,
-                context.repository.latest_quota(
-                    "parallel", credential_id=context.oauth_case.credential.id
-                ),
-            )
-            is None
-        )
-    else:
-        assert snapshot.source == "authoritative" and snapshot.limit is None
-        assert snapshot.remaining == Decimal(outcome.removeprefix("USD "))
 
 
 @when("the bounded quota poll runs with a rejected bearer")

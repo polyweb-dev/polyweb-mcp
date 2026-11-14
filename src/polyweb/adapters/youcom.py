@@ -19,7 +19,7 @@ from polyweb.adapters._youcom_support import (
     _search_request,
 )
 from polyweb.adapters._youcom_support import _same_url as _same_url
-from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.base import ProviderAdapter, parse_error_record
 from polyweb.infrastructure.borrowed_transport import BorrowedTransport
 from polyweb.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
@@ -51,20 +51,6 @@ from polyweb.models.provider_limits import (
 __all__ = ["YoucomAdapter"]
 
 _NAME = "you"
-
-
-def _parse_error_record(index: int) -> dict[str, object]:
-    """Return the safe record for one rejected search result item.
-
-    The index is the position in the flattened web-then-news item list. The
-    record holds no raw payload, URL, key, query, or validation text.
-    """
-
-    return {
-        "index": index,
-        "code": "invalid_response",
-        "message": "malformed search result item",
-    }
 
 
 class YoucomAdapter(ProviderAdapter):
@@ -154,11 +140,11 @@ class YoucomAdapter(ProviderAdapter):
                 try:
                     results.append(self._normalize_result(item))
                 except ValidationError:
-                    parse_errors.append(_parse_error_record(index))
+                    parse_errors.append(parse_error_record(index))
                 except ProviderOperationError as exc:
                     if exc.error.code != "invalid_response":
                         raise
-                    parse_errors.append(_parse_error_record(index))
+                    parse_errors.append(parse_error_record(index))
             results = results[: request.limit]
         except ProviderOperationError as exc:
             raise self._remap_error(exc) from None

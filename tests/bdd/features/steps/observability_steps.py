@@ -470,7 +470,6 @@ def step_then_trace_header(context: Any) -> None:
 
 
 @then("the trace list should contain exactly {count:d} trace matching the trace header")
-@then("the trace list should contain exactly {count:d} traces matching the trace header")
 def step_then_trace_list_matches_header(context: Any, count: int) -> None:
     """Verify the list holds one summary row for the traced request, header-matched."""
     body = _trace_list(context)
@@ -479,7 +478,6 @@ def step_then_trace_list_matches_header(context: Any, count: int) -> None:
 
 
 @then('the trace list should contain exactly {count:d} trace with outcome "{outcome}"')
-@then('the trace list should contain exactly {count:d} traces with outcome "{outcome}"')
 def step_then_trace_list_outcome(context: Any, count: int, outcome: str) -> None:
     """Verify the list holds one summary row with the expected outcome."""
     body = _trace_list(context, outcome=outcome)
@@ -489,7 +487,6 @@ def step_then_trace_list_outcome(context: Any, count: int, outcome: str) -> None
 
 
 @then("the trace list should still contain exactly {count:d} trace")
-@then("the trace list should still contain exactly {count:d} traces")
 def step_then_trace_list_still(context: Any, count: int) -> None:
     """Verify untraced reads did not add traces."""
     body = _trace_list(context)

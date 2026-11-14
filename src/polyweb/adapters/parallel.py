@@ -16,8 +16,9 @@ from typing import Any, cast
 import httpx
 from pydantic import SecretStr, ValidationError
 
-from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.base import ProviderAdapter, parse_error_record
 from polyweb.infrastructure.borrowed_transport import BorrowedTransport
+from polyweb.infrastructure.dates import month_start as _month_start
 from polyweb.infrastructure.dates import parse_iso_datetime
 from polyweb.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
@@ -73,10 +74,6 @@ SEARCH_USD_BY_MODE: dict[str, Decimal] = {
 }
 
 
-def _month_start(value: datetime) -> datetime:
-    return datetime(value.year, value.month, 1, tzinfo=UTC)
-
-
 def _month_end(value: datetime) -> datetime:
     if value.month == 12:
         return datetime(value.year + 1, 1, 1, tzinfo=UTC)
@@ -108,24 +105,6 @@ def parse_seed(value: Decimal | None) -> Decimal | None:
     """Validate an optional exact, non-negative local seed."""
 
     return None if value is None else parse_decimal(value)
-
-
-def _parse_published_at(value: Any) -> datetime | None:
-    return parse_iso_datetime(value)
-
-
-def _parse_error_record(index: int) -> dict[str, object]:
-    """Return the safe record for one rejected search result item.
-
-    The record holds no raw payload, URL, key, query, or validation text, so a
-    rejected item can never leak response content into usage metadata.
-    """
-
-    return {
-        "index": index,
-        "code": "invalid_response",
-        "message": "malformed search result item",
-    }
 
 
 class ParallelAdapter(ProviderAdapter):
@@ -272,11 +251,11 @@ class ParallelAdapter(ProviderAdapter):
             try:
                 results.append(self._normalize_search_result(item))
             except ValidationError:
-                parse_errors.append(_parse_error_record(index))
+                parse_errors.append(parse_error_record(index))
             except ProviderOperationError as exc:
                 if exc.error.code != "invalid_response":
                     raise
-                parse_errors.append(_parse_error_record(index))
+                parse_errors.append(parse_error_record(index))
         results = results[: self._search_limit(request)]
         # Usage validation stays outside item recovery: malformed vendor usage
         # is still fatal for the whole response.
@@ -318,7 +297,7 @@ class ParallelAdapter(ProviderAdapter):
             title=item.get("title") or "",
             url=cast(Any, url),
             snippet="\n\n".join(excerpts),
-            published_at=_parse_published_at(item.get("publish_date")),
+            published_at=parse_iso_datetime(item.get("publish_date")),
             metadata={"excerpts": excerpts},
         )
 

@@ -35,9 +35,9 @@ async def test_oracle_cents_to_usd_exact(oauth_case):
     "credit,pending,expected",
     [(1250, 250, "10.00"), (101, 0, "1.01"), (1, 0, "0.01"), (100, 500, "0.00")],
 )
-async def test_balance_net_maps_to_exact_usd(oauth_case, credit, pending, expected):
+async def test_balance_net_maps_to_exact_usd(vault_oauth_case, credit, pending, expected):
     """Origin test_adv_oauth_balance.py::test_balance_net_maps_to_exact_usd."""
-    case = oauth_case
+    case = vault_oauth_case
     case.stub.credit_cents, case.stub.pending_cents = credit, pending
     await case.connect()
     snapshot = await case.balance()
@@ -93,9 +93,9 @@ async def test_malformed_balance_bodies_rejected_without_record(oauth_case, body
     assert await case.repository.latest_quota("parallel") is None
 
 
-async def test_will_invoice_records_nothing(oauth_case):
+async def test_will_invoice_records_nothing(vault_oauth_case):
     """Origin test_adv_oauth_balance.py::test_will_invoice_records_nothing."""
-    case = oauth_case
+    case = vault_oauth_case
     case.stub.balance_will_invoice = True
     await case.connect()
     assert await case.balance() is None

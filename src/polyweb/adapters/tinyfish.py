@@ -14,7 +14,7 @@ from typing import Any, NoReturn, cast
 import httpx
 from pydantic import SecretStr, ValidationError
 
-from polyweb.adapters.base import ProviderAdapter
+from polyweb.adapters.base import ProviderAdapter, parse_error_record
 from polyweb.infrastructure.dates import parse_iso_datetime
 from polyweb.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
@@ -45,20 +45,6 @@ _NAME = "tinyfish"
 _SEARCH_URL = "https://api.search.tinyfish.ai"
 _FETCH_URL = "https://api.fetch.tinyfish.ai"
 _API_KEY_HEADER = "X-API-Key"
-
-
-def _parse_error_record(index: int) -> dict[str, object]:
-    """Return the safe record for one rejected search result item.
-
-    The record holds no raw payload, URL, key, query, or validation text, so a
-    rejected item can never leak response content into usage metadata.
-    """
-
-    return {
-        "index": index,
-        "code": "invalid_response",
-        "message": "malformed search result item",
-    }
 
 
 class TinyfishAdapter(ProviderAdapter):
@@ -137,11 +123,11 @@ class TinyfishAdapter(ProviderAdapter):
                 try:
                     results.append(self._normalize_result(item))
                 except ValidationError:
-                    parse_errors.append(_parse_error_record(index))
+                    parse_errors.append(parse_error_record(index))
                 except ProviderOperationError as exc:
                     if exc.error.code != "invalid_response":
                         raise
-                    parse_errors.append(_parse_error_record(index))
+                    parse_errors.append(parse_error_record(index))
             results = results[: request.limit]
             total_results = payload.get("total_results")
             if not isinstance(total_results, int) or total_results < 0:

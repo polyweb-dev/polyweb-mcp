@@ -36,7 +36,7 @@ from polyweb.infrastructure.resilience import (
     install_dispatch_observer,
     reset_dispatch_observer,
 )
-from polyweb.infrastructure.secrets import AsyncSecretStore, ProviderName
+from polyweb.infrastructure.secrets import ProviderName
 from polyweb.models.contracts import (
     ContractModel,
     FetchRequest,
@@ -480,20 +480,16 @@ class ProviderTiming:
     wait, admission, retry backoff, and settlement are never included.
     """
 
-    __slots__ = ("_open_started", "first_send_at", "seconds")
+    __slots__ = ("_open_started", "seconds")
 
     def __init__(self) -> None:
         self.seconds = 0.0
-        self.first_send_at: float | None = None
         self._open_started: float | None = None
 
     def begin_send(self) -> None:
         """Mark one actual send as started."""
 
-        now = time.perf_counter()
-        if self.first_send_at is None:
-            self.first_send_at = now
-        self._open_started = now
+        self._open_started = time.perf_counter()
 
     def end_send(self) -> None:
         """Finish the currently open send and accumulate its duration."""
@@ -502,11 +498,6 @@ class ProviderTiming:
             return
         self.seconds += max(0.0, time.perf_counter() - self._open_started)
         self._open_started = None
-
-    def finish_open_send(self) -> None:
-        """Close an unresolved send at its current elapsed time."""
-
-        self.end_send()
 
     @property
     def latency_ms(self) -> int:
@@ -574,15 +565,6 @@ class _CapacityCharger:
         self._resolve_dispatch = resolve_dispatch
         self._timing = timing or ProviderTiming()
         self._sends: list[_DispatchSend] = []
-        #: ``perf_counter`` instant of the first actual provider send (after
-        #: admission/queue wait), so measured latency excludes queue time.
-        self.provider_started_at: float | None = None
-
-    @property
-    def timing(self) -> ProviderTiming:
-        """The shared actual-send accumulator of this attempt."""
-
-        return self._timing
 
     def mark_started(self, token: object) -> None:
         """Mark a non-runner send as actually starting now."""
@@ -590,8 +572,6 @@ class _CapacityCharger:
         if isinstance(token, _DispatchSend):
             token.started = True
             self._timing.begin_send()
-            if self.provider_started_at is None:
-                self.provider_started_at = time.perf_counter()
 
     async def begin(self, *, mark_started: bool = True) -> object:
         reservation = await _reserve_attempt(self._reserve)
@@ -609,8 +589,6 @@ class _CapacityCharger:
             charge_next = getattr(reservation, "charge_next_dispatch", None)
             if callable(charge_next):
                 reservation = await charge_next()
-        if self.provider_started_at is None:
-            self.provider_started_at = time.perf_counter()
         send = _DispatchSend(reservation)
         # The runner observer calls begin immediately before the actual HTTP
         # operation, so this send has started. The non-runner path marks the
@@ -699,7 +677,7 @@ class _CapacityCharger:
                 if not send.started:
                     await self._release_unsent(send)
                     continue
-                self._timing.finish_open_send()
+                self._timing.end_send()
                 await self._uncertain(send, error=error)
                 await self._resolve(send, "uncertain")
             elif send.outcome == "success":
@@ -1271,10 +1249,6 @@ def _terminal_quota_402(exc: BaseException) -> bool:
     )
 
 
-# Retain alias for Tavily-specific callers and backwards compatibility
-_terminal_tavily_402 = _terminal_quota_402
-
-
 def _charged_native(details: dict[str, Any]) -> Decimal | None:
     """Return a confirmed native charge reported by an adapter failure."""
 
@@ -1352,7 +1326,6 @@ async def refresh_quotas(
     *,
     force: bool = False,
     now: datetime | None = None,
-    secret_store: AsyncSecretStore | None = None,
     scopes: Mapping[int, ProviderObservationScope] | None = None,
     limits: "ProviderLimitsService | None" = None,
 ) -> list[QuotaSnapshot]:
@@ -1521,9 +1494,9 @@ async def _expire_soft_zero(
 ) -> QuotaSnapshot:
     """Persist and return the snapshot that clears a proven-soft zero.
 
-    The shared clear path behind :func:`effective_quota` and
-    :func:`effective_quotas_batch`: a later successful usage event proves the
-    balance, so the zero is marked non-soft and the unknown state is stored.
+    The clear path behind :func:`effective_quota`: a later successful usage
+    event proves the balance, so the zero is marked non-soft and the unknown
+    state is stored.
     Persistence failures raise; callers keep their stored snapshot.
     """
 
@@ -1576,31 +1549,6 @@ async def effective_quota(
         return await _expire_soft_zero(repository, provider, snapshot)
     except Exception:
         return snapshot
-
-
-async def effective_quotas_batch(
-    repository: SQLiteRepository | None,
-    providers: Sequence[str],
-    *,
-    now: datetime | None = None,
-) -> dict[str, QuotaSnapshot]:
-    """Return the routable quota view for each requested provider in one batch."""
-
-    if repository is None or not providers:
-        return {}
-    observed_at = now or datetime.now(UTC)
-    raw_snapshots = await repository.latest_quota_batch(providers)
-    quotas: dict[str, QuotaSnapshot] = {}
-    for provider, snapshot in raw_snapshots.items():
-        snapshot = normalize_degenerate_quota(snapshot)
-        if snapshot.remaining == Decimal("0"):
-            if _free_zero_due(provider, snapshot, observed_at):
-                snapshot = await _expire_free_zero(repository, snapshot, observed_at)
-            elif is_soft_quota_zero(provider, snapshot):
-                with contextlib.suppress(Exception):
-                    snapshot = await _expire_soft_zero(repository, provider, snapshot)
-        quotas[provider] = snapshot
-    return quotas
 
 
 async def _record_adapter_quota(
@@ -1698,7 +1646,7 @@ async def collect_stats(
     )
 
 
-def _clamped_recent_limit(limit: int) -> int:
+def clamp_recent_limit(limit: int) -> int:
     return min(max(limit, 1), MAX_RECENT_LIMIT)
 
 
@@ -1728,7 +1676,7 @@ async def _project_usage_rows(
     try:
         totals = await repository.project_usage_totals(project_id=project_id)
         recent = await repository.recent_project_usage(
-            project_id=project_id, limit=_clamped_recent_limit(recent_limit)
+            project_id=project_id, limit=clamp_recent_limit(recent_limit)
         )
     except Exception as error:
         logger.warning("project usage reads could not be collected")
@@ -1803,14 +1751,9 @@ async def _latest_quotas(
     repository: SQLiteRepository,
     providers: Sequence[str],
     *,
-    totals: Sequence[UsageTotal | LegacyUsageTotal] | None = None,
+    totals: Sequence[UsageTotal | LegacyUsageTotal],
 ) -> list[QuotaSnapshot]:
     """Return each provider's newest quota snapshot, keeping its provenance."""
-    if totals is None:
-        try:
-            totals = await repository.installation_usage_totals()
-        except Exception:
-            totals = []
     brave_total = _brave_request_success_total(totals)
     snapshots: list[QuotaSnapshot] = []
     for provider in providers:

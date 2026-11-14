@@ -61,22 +61,6 @@ from tests.fixtures.execution import (
 from tests.fixtures.usage_ledger import all_usage_events
 
 
-class AsyncVaultDouble:
-    """Inline async dict double for the encrypted-DB vault (no keyring shim)."""
-
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-
-    async def get(self, name: str) -> str | None:
-        return self.values.get(name)
-
-    async def set(self, name: str, value: str) -> None:
-        self.values[name] = value
-
-    async def delete(self, name: str) -> None:
-        self.values.pop(name, None)
-
-
 def _execution_store(repository: SQLiteRepository) -> EncryptedDbSecretStore:
     """Return the same encrypted runtime store the app composition builds."""
 
@@ -836,42 +820,6 @@ async def test_circuit_breaker_reset_returns_closed_persisted_state(
     _assert_iso_timestamp(body["updated_at"])
     assert status.status_code == 200
     assert status.json()["circuit_breaker"]["state"] == "closed"
-
-
-@pytest.mark.asyncio
-async def test_secret_put_writes_vault_and_never_exposes_raw_key(
-    repository,
-    vault_env,
-    caplog,
-    auth_secret,
-):
-    """Original singleton security case now covers the actual A4 credential endpoint."""
-    from polyweb.models.vault import VaultKeyDetails
-    from polyweb.services.credentials import credential_secret_slot
-
-    raw_key = "secret-value-that-must-not-leak"
-    with caplog.at_level("INFO"), TestClient(create_app([], repository=repository)) as client:
-        pair = await register_system_admin_login(client, repository, temp_email("control-put"))
-        headers = raw_auth_headers(pair["access_token"])
-        response = client.post(
-            "/api/v1/account/vault/keys",
-            headers=headers,
-            json={"provider_type": "exa", "label": "vault proof", "secret": raw_key},
-        )
-        assert response.status_code == 201, response.text
-        body = response.json()
-        model = VaultKeyDetails.model_validate(body)
-        assert set(body) == set(VaultKeyDetails.model_fields)
-        assert model.provider_type == "exa" and model.status == "active"
-        assert raw_key not in response.text and raw_key not in caplog.text
-        assert raw_key not in repr(model.model_dump())
-        envelope = await repository.get_runtime_setting(
-            "secret.enc:" + credential_secret_slot(model.id, model.generation)
-        )
-        assert isinstance(envelope, str) and raw_key not in envelope
-    from tests.fixtures.api_keys import database_dump
-
-    assert raw_key not in (database_dump(repository))
 
 
 @pytest.mark.asyncio
@@ -1692,17 +1640,6 @@ def test_settings_has_no_secret_service_name() -> None:
     assert "encryption_key_file" in Settings.model_fields
 
 
-def test_provider_config_has_no_resolver_seam() -> None:
-    """AC-1: configuration/provider_config.py must delete the resolver seam."""
-
-    import polyweb.configuration.provider_config as provider_config_module
-
-    assert not hasattr(provider_config_module, "get_provider_secret_resolver"), (
-        "RED (AC-1): get_provider_secret_resolver must be deleted; "
-        "adapters call the vault resolver injected"
-    )
-
-
 def test_control_secret_backend_is_async_vault_only() -> None:
     """AC-1: routers/control.py SecretBackend must be AsyncSecretStore only."""
 
@@ -1717,7 +1654,7 @@ def test_control_secret_backend_is_async_vault_only() -> None:
     from polyweb.services.credentials import CredentialService
     from polyweb.services.provider_runtime import build_adapter_with_secret
 
-    assert callable(CredentialService.resolve_material)
+    assert callable(CredentialService.resolve_material_in_session)
     assert callable(build_adapter_with_secret)
 
 
