@@ -70,7 +70,8 @@ _LIST_ITEM_KEYS = {
     "username",
     "first_name",
     "last_name",
-    "email",
+    "api_key_name",
+    "api_key_prefix",
     "operation",
     "started_at",
     "duration_ms",
@@ -521,9 +522,13 @@ def step_then_trace_detail_query(context: Any, query: str, count: int) -> None:
     assert item["user_id"] == owner
     assert item["first_name"] == "Test"
     assert item["last_name"] == "User"
-    assert item["email"] is not None and item["email"].endswith("@example.com")
-    assert item["username"] == item["email"].split("@")[0][:64]
+    # A signed-in person ran this search, so no API key is attributed, and the
+    # list never exposes the email (privacy: names and usernames only).
+    assert item["api_key_name"] is None
+    assert item["api_key_prefix"] is None
+    assert isinstance(item["username"], str) and item["username"]
     list_text = json.dumps(listing)
+    assert "@example.com" not in list_text, "email leaked into the trace list"
     assert query not in list_text, "full query leaked into the trace list"
     for expected in _SEARCH_RESULTS:
         assert expected["url"] not in list_text, "result URL leaked into the trace list"
