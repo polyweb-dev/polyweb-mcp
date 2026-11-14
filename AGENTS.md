@@ -10,9 +10,31 @@ If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is 
 <!-- CODEGRAPH_END -->
 
 ## Testing Strategy
-- **BDD Tests**: Do not always default or revert to BDD tests. Reserve BDD tests (`behave` on backend, `playwright-bdd` on frontend) strictly for end-to-end flows and scenarios critical to core functionality and user value. Do not write BDD tests for every obscure detail, minor permutation, or edge case.
+- **Pick the narrowest level that catches the behavior**: unit, then integration, then BDD. Use the closest existing test file for that code path before you create a new one.
 - **Unit Tests**: Use unit tests to lock down code behavior. They should be fast, isolated, and exercise domain models, calculations, components, and functions directly with proper mocking of external dependencies.
 - **Integration Tests**: Use integration tests to verify functionality through the layers, validating critical paths, cross-module communication, real database interactions, migrations, APIs, and edge cases.
+- **BDD Tests**: Do not always default or revert to BDD tests. Reserve BDD tests (`behave` on backend, `playwright-bdd` on frontend) strictly for end-to-end flows and scenarios critical to core functionality and user value. Do not write BDD tests for every obscure detail, minor permutation, or edge case. See `.agents/skills/backend-bdd-test-skill` and `.agents/skills/frontend-bdd-test-skill`.
+
+### Bug fixes: regression test first, when it is cheap
+When a bug has a clear, cheap test path, make the broken behavior executable before you change production code:
+1. **Understand the bug**: intended behavior, current behavior, affected path, smallest reproduction.
+2. **Write the smallest focused test** that would have caught it. It encodes intended behavior, not the current implementation.
+3. **Run it before the fix** and confirm it fails *for the intended reason* (the assertion about the bug, not an import error, an undefined step, or a missing key). If it passes or fails for another reason, fix the test first.
+4. **Make the smallest production fix** that keeps nearby contracts, then rerun the test and confirm it passes.
+
+Skip the new test when it would need broad harness setup, brittle mocks, production-only state, vague reproduction steps, or large unrelated fixture churn. Use the closest useful check instead (a targeted script, a reproduction command, browser automation, a log assertion) and say so. **Prefer no new test over a bad test**: one that mostly tests mocks, encodes implementation details, depends on timing or global state, or needs expensive infrastructure for a small fix.
+
+### Test guardrails
+- Never change a test only to match a wrong implementation. Do not weaken an assertion unless the intended behavior really changed, and state why.
+- **Contract changes are deliberate test changes.** When a response model or field changes (added, renamed, removed), search unit, integration, and BDD tests and steps for the field name and update exact-shape assertions on purpose. Assert that a removed field is absent, not only that new fields exist.
+- Make flaky behavior deterministic (fixed clocks, stub adapters, seeded data) and say what signal the test locks down.
+- Land the focused regression test first; add sibling coverage only after that, if the bug shows a wider class of failures.
+
+### Reporting test evidence
+Report evidence, not only the outcome:
+- The failing-before test (or check) and the failure it produced.
+- The passing-after run and nearby validation, with CI pipeline numbers for suites that ran on Woodpecker.
+- If a failing-before run was not possible, why, and which check you used instead.
 
 ## Multi-agent workflow efficiency
 These rules for the orchestrator that are distilled from prior agent runs. Following them can save hours: most of the lost time came from strictly sequential agent runs and repeated full-suite runs.
@@ -22,7 +44,7 @@ These rules for the orchestrator that are distilled from prior agent runs. Follo
 
 ## Cloud test runs (Woodpecker CI)
 
-- **Local vs cloud**: run **unit tests locally**. All other suites (integration, BDD, latency, live, mutation) must run on Woodpecker CI — they execute on autoscaled GCP Spot workers so the VPS stays free.
+- **Local vs cloud**: run **unit tests locally**. All other suites (integration, BDD, latency, live, mutation) must run on Woodpecker CI — they execute on autoscaled GCP Spot workers so the VPS stays free. One exception for the inner loop: you may run a single offline file locally (one integration test file, or one Behave feature with `--tags="not @live and not @latency"`) to see a regression test fail and then pass. Full suites still run on CI.
 - **Triggering**: the `executor` MCP server exposes a `woodpecker` integration. Discover tools inside `execute` with `tools.search({ namespace: "woodpecker", query: "..." })` and inspect shapes via `tools.describe.tool({ path })` before calling.
 - **Single workflow**: `tools.woodpecker.org.agent.trigger_pipeline({ repo_id: 1, branch: "<branch>", workflow: "<name>" })` where `<name>` is a `.woodpecker/*.yaml` basename (e.g. `api-latency`). Omitting `workflow` runs ALL manual workflows — expensive (live provider calls, long mutation runs).
 - **UI workflows**: `ui-quality` runs dependency checks, lint, type checks, unit tests, and the production build. `ui-bdd` runs the critical desktop smoke Playwright-BDD scenarios; it does not run `@live` or `@mobile`.
