@@ -1,11 +1,11 @@
 ---
 id: TASK-000002
 title: Replace Playground Raw JSON inspection with Activity details popup
-status: In Progress
+status: Done
 assignee:
   - '@devin'
 created_date: 2026-10-15 22:19
-updated_date: '2026-11-15T18:21:00Z'
+updated_date: '2026-11-15T20:52:00Z'
 labels: []
 dependencies:
   - TASK-000047
@@ -53,4 +53,18 @@ UI review (Devin Claude Opus 5.5, screenshots in /tmp/task2-ui-review): PASS, no
 CI ui-bdd @stub on main (#126) and on this branch (#125) fail identically (106/260); root cause includes the unstubbed GET /routing/order. Tracked separately as TASK-000083.
 
 Owner decisions (2026-11-15): seed Alpha pools for the parity scenario; parallel = fullyParallel + CI workers + @serial one-worker project + 10 s actionTimeout, no retries, no sharding; measure worker count on CI (6 vs 12); keep @smoke as the default gate (full @stub gate moves to TASK-000083). Implemented in c653983; CI at that head: ui-bdd @stub w6 #141, @stub w12 #142, @smoke #143, ui-quality #144. Investigator reports: Sol (root causes, doc-000009), Opus (parallel safety: 10 timing-sensitive scenarios tagged @serial; zero real-API traffic from @stub scenarios).
+
+Worker measurement (261 stubbed scenarios, 16-vCPU spot worker): 1 worker 29.4 min (#126 main), 6 workers 5.6 min (#148), 12 workers 3.7 min (#142); all three fail the same 106 pre-existing scenarios (TASK-000083), no parallel-only failure. Default set to 12 in run-ui-bdd.sh (c690de0). Parity scenario fixed: seeded Brave pool + steps aligned with current result UI (fbe1e2d); both activity-trace-detail scenarios pass on #149. Final head-SHA runs queued: ui-quality #150, ui-bdd @smoke #151, feature #152, @stub at default workers #153.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced the Playground's Inspect raw JSON toggle with View details. It reads the X-Trace-Id of the search and opens the Activity TraceDetailDialog through the project trace route only, composed by the app shell so Playground never imports the Activity feature. Untraced calls, foreign traces (404), metadata-only traces and callers without traces.read each get an explanation, never a list or global lookup.
+
+Owner-added scope: the UI BDD suite now runs fully parallel on CI (PLAYWRIGHT_WORKERS default 12, local 1). Ten timing-sensitive scenarios run in a one-worker @serial project, and the action timeout is 10 s. The full stubbed run took 29.4 min on 1 worker (#126), 5.6 min on 6 (#148) and 3.6 min on 12 (#153), with no new failures. This feature's BDD scenarios pass: the new View details scenario, and the parity scenario after seeding its pool and updating outdated steps.
+
+Verification at c690de0: ui-quality #150 (all vitest, lint, types, build), ui-bdd @smoke #151, this feature's scenarios #152, and the @stub diagnostic #153 (105 failures, all pre-existing). Visual review with screenshots by a separate agent: PASS.
+
+Follow-ups: TASK-000083 repairs the 105 pre-existing stubbed BDD failures on main (doc-000009). The reviewer's minor pre-existing UI notes are listed in PR #77 and are untracked until the owner decides.
+<!-- SECTION:FINAL_SUMMARY:END -->
