@@ -20,8 +20,12 @@ export interface PlaygroundHarnessProps {
 }
 
 /** The workspace composition: View details opens the Activity trace inspector. */
-const renderTraceDetails: RenderTraceDetails = ({ traceId, onClose }) => (
-  <ProjectTraceDetails traceId={traceId} onClose={onClose} />
+const renderTraceDetails: RenderTraceDetails = (request) => (
+  <ProjectTraceDetails
+    traceId={request.traceId}
+    {...(request.traceId === null ? { reason: request.reason } : {})}
+    onClose={request.onClose}
+  />
 )
 
 /**

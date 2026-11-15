@@ -24,17 +24,22 @@ const testDir = defineBddConfig({
  * is its own process, and the Before hook and the Given steps reset the stub
  * state per scenario), so they run fully parallel. CI sets
  * PLAYWRIGHT_WORKERS to fill the spot worker; local runs default to one
- * worker because the shared dev host is slow. Scenarios tagged `@serial`
- * hold or delay responses on fixed timers, so they run one at a time in
- * their own project.
+ * worker because the shared dev host is slow. A value that is not a whole
+ * number of at least 1 falls back to one worker.
+ *
+ * Scenarios tagged `@serial` hold or delay responses on fixed timers. The
+ * `chromium-serial` project runs them one at a time, but within a single
+ * invocation that one worker still runs beside the `chromium` workers. CI
+ * (scripts/ci/run-ui-bdd.sh) therefore runs the two projects in separate,
+ * consecutive invocations, so `@serial` scenarios run with no other worker.
  */
-const configuredWorkers = process.env.PLAYWRIGHT_WORKERS ?? 1
+const requestedWorkers = Number(process.env.PLAYWRIGHT_WORKERS ?? 1)
 const SERIAL_TAG = /@serial/
 
 export default defineConfig({
   testDir,
   fullyParallel: true,
-  workers: Number.isNaN(Number(configuredWorkers)) ? configuredWorkers : Number(configuredWorkers),
+  workers: Number.isInteger(requestedWorkers) && requestedWorkers >= 1 ? requestedWorkers : 1,
   expect: {
     timeout: 10_000,
   },

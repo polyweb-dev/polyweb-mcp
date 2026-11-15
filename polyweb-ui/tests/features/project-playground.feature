@@ -23,6 +23,7 @@ Feature: Project playground
     And the playground state should be persisted only under the project key of Alpha
     And browser storage should hold no API key
 
+  @serial
   Scenario: Switching project during a slow search drops the old project's result
     Given I am a member of project Beta with role project_member
     And searches for "alpha isolation probe" respond slowly

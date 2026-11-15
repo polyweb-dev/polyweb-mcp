@@ -357,11 +357,12 @@ describe("ProjectPlaygroundPage View details", () => {
   })
 
   it("explains a metadata-only trace instead of showing empty results", async () => {
-    traceStub(SUCCESS_TRACE_ID, () => ok(traceDetailFixture({ input: null, output: null })))
+    const fetchStub = traceStub(SUCCESS_TRACE_ID, () => ok(traceDetailFixture({ input: null, output: null })))
     render(<PlaygroundHarness />)
 
     const dialog = await openDetails()
     expect(await within(dialog).findByText("Metadata only")).toBeInTheDocument()
+    expect(traceReads(fetchStub).map((req) => req.url)).toEqual([traceUrl])
     expect(within(dialog).getByText("Query not stored")).toBeInTheDocument()
     expect(within(dialog).getAllByText("Results were not stored (metadata-only trace policy)").length).toBeGreaterThan(0)
   })

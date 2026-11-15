@@ -20,6 +20,7 @@ import type {
   ProviderLimitPatch,
 } from "@/domains/dashboard"
 import { requestJson, requestJsonWithHeaders } from "@/shared/api/client"
+import { isTraceId } from "@/domains/execution"
 
 /** One execution response body with the trace id the backend sent for it. */
 interface TracedResponse<T> {
@@ -28,12 +29,10 @@ interface TracedResponse<T> {
   traceId: string | null
 }
 
-const TRACE_ID_PATTERN = /^[0-9a-f]{32}$/
-
 /** The well-formed `X-Trace-Id` response header, else null. */
 function traceIdOf(headers: Headers | undefined): string | null {
-  const value = headers?.get("x-trace-id")?.trim() ?? null
-  return value !== null && TRACE_ID_PATTERN.test(value) ? value : null
+  const value = headers?.get("x-trace-id")
+  return isTraceId(value) ? value : null
 }
 
 type RoutingConfigPatch = Partial<BackendRoutingConfig>

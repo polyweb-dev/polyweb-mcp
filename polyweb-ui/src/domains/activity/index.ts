@@ -5,6 +5,7 @@ export type { TraceListQuery } from "./api/activityApi"
 export {
   TRACE_NOT_IN_PROJECT_MESSAGE,
   TRACE_NOT_RECORDED_MESSAGE,
+  TRACE_NOT_SAVED_MESSAGE,
   tracePayloadNotice,
 } from "./model/tracePayload"
 // The stage tree has no production caller since the trajectory moved to the

@@ -17,8 +17,12 @@ import { ProjectSectionGate } from "./ProjectSectionGate"
 import { PROJECT_SECTIONS, projectPath, type ProjectSectionId } from "./routes"
 
 /** The Playground's View details opens the Activity trace inspector. */
-const renderTraceDetails: RenderTraceDetails = ({ traceId, onClose }) => (
-  <ProjectTraceDetails traceId={traceId} onClose={onClose} />
+const renderTraceDetails: RenderTraceDetails = (request) => (
+  <ProjectTraceDetails
+    traceId={request.traceId}
+    {...(request.traceId === null ? { reason: request.reason } : {})}
+    onClose={request.onClose}
+  />
 )
 
 /** Page of each registered project section. A new section adds its page here. */

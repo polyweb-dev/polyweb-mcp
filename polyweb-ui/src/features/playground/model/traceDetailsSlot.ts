@@ -1,11 +1,11 @@
 import type { ReactNode } from "react"
+import type { SearchTraceRef } from "@/domains/execution"
 
-/** What the Playground hands the trace inspector for the call it just made. */
-export interface TraceDetailsRequest {
-  /** Trace of the call; null when the backend sent no `X-Trace-Id`. */
-  traceId: string | null
-  onClose: () => void
-}
+/**
+ * What the Playground hands the trace inspector: the trace of the search the
+ * user opened (fixed at click time), or why it has none.
+ */
+export type TraceDetailsRequest = SearchTraceRef & { onClose: () => void }
 
 /**
  * Composition slot for the project trace inspector. The Activity feature owns

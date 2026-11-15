@@ -1,6 +1,7 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
-import type { SearchResponse } from "@/domains/execution"
+import { searchTraceRef } from "@/domains/execution"
+import type { SearchResponse, SearchTraceRef } from "@/domains/execution"
 import { getProviderPrices, providerIdentity } from "@/domains/providers"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
 import { formatLatency } from "@/shared/lib/formatTime"
@@ -18,11 +19,6 @@ export interface SearchResultsProps {
   controller: PlaygroundController
   result: SearchResponse
   renderTraceDetails: RenderTraceDetails
-}
-
-/** The trace id of a result; a persisted value that is not a string counts as none. */
-function traceIdOf(search: SearchResponse): string | null {
-  return typeof search.traceId === "string" ? search.traceId : null
 }
 
 /** One label/value pair of the telemetry bar. */
@@ -46,7 +42,9 @@ function resolvedBy(search: SearchResponse): ReactNode {
 
 /** Widescreen search results: telemetry bar with View details, list + inspector. */
 export function SearchResults({ controller, result: activeSearch, renderTraceDetails }: SearchResultsProps) {
-  const [detailsOpen, setDetailsOpen] = useState(false)
+  // The open popup keeps the trace of the result the user clicked, even when
+  // a search that was still running replaces the results underneath it.
+  const [openTrace, setOpenTrace] = useState<SearchTraceRef | null>(null)
   const {
     selectedResultForPreview,
     setSelectedResultForPreview,
@@ -82,17 +80,13 @@ export function SearchResults({ controller, result: activeSearch, renderTraceDet
           variant="ghost"
           size="form"
           aria-haspopup="dialog"
-          onClick={() => setDetailsOpen(true)}
+          onClick={() => setOpenTrace(searchTraceRef(activeSearch))}
         >
           View details
         </Button>
       </div>
 
-      {detailsOpen &&
-        renderTraceDetails({
-          traceId: traceIdOf(activeSearch),
-          onClose: () => setDetailsOpen(false),
-        })}
+      {openTrace !== null && renderTraceDetails({ ...openTrace, onClose: () => setOpenTrace(null) })}
 
       {/* Master/detail: results list beside the inspector and live telemetry.
           The split geometry is shared with the Activity dialog. */}

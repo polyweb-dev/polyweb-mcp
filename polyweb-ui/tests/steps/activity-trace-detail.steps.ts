@@ -53,7 +53,9 @@ Then(
     // One provider answered, so the cards carry no per-result badge; the
     // telemetry bar names the provider once.
     await expect(results.getByText("Brave Search", { exact: true })).toHaveCount(0)
-    await expect(playgroundMain(page)).toContainText(/Resolved by\s*Brave Search/)
+    // Scope to the telemetry item: the "Resolved by" label and its value.
+    const resolvedBy = playgroundMain(page).getByText("Resolved by", { exact: true }).locator("..")
+    await expect(resolvedBy).toContainText("Brave Search")
     await expect(results.getByText("92% match")).toBeVisible()
     // The second hit recorded no score (null): the shared ResultScore shows
     // nothing rather than inventing "0% match".
@@ -157,13 +159,18 @@ Then("the playground trace detail popup should show the project trace", async ({
   await expect(dialog).toBeVisible()
   await expect(dialog.getByText("distributed consensus algorithms").first()).toBeVisible()
   await expect(dialog.getByText("Consensus algorithms explained").first()).toBeVisible()
-  expect(traceDetailRequests()).toContain(SUCCESS_TRACE_ID)
+  // Only the call's trace, through the project route (StrictMode in the dev
+  // server may repeat the same read), and never a list read.
+  await expect.poll(() => [...new Set(traceDetailRequests())]).toEqual([SUCCESS_TRACE_ID])
   expect(traceListRequests()).toEqual([])
 })
 
 When("I close the playground trace detail popup", async ({ page }) => {
   await page.getByRole("dialog", { name: "Trace detail" }).getByRole("button", { name: "Close" }).click()
   await expect(page.getByRole("dialog", { name: "Trace detail" })).toHaveCount(0)
+  // Closing triggers no late lookup of another trace or of the list.
+  expect([...new Set(traceDetailRequests())]).toEqual([SUCCESS_TRACE_ID])
+  expect(traceListRequests()).toEqual([])
 })
 
 Then("the playground results should still show {string}", async ({ page }, title: string) => {

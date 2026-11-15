@@ -15,10 +15,10 @@ beforeEach(() => {
   renderTraceDetails.mockClear()
 })
 
-const renderTraceDetails = vi.fn(({ traceId, onClose }: TraceDetailsRequest) => (
+const renderTraceDetails = vi.fn((request: TraceDetailsRequest) => (
   <div role="dialog" aria-label="Trace detail">
-    <span>trace {traceId ?? "none"}</span>
-    <button type="button" onClick={onClose}>Close</button>
+    <span>trace {request.traceId ?? `none (${request.reason})`}</span>
+    <button type="button" onClick={request.onClose}>Close</button>
   </div>
 ))
 
@@ -153,13 +153,36 @@ describe("SearchResults View details", () => {
   })
 
   it.each([
-    ["absent", undefined],
-    ["null", null],
-    ["not a string", 42 as unknown as string],
-  ])("hands the inspector no trace id when the stored id is %s", async (_label, traceId) => {
+    ["absent (saved before trace links)", undefined, "not_saved"],
+    ["null (no X-Trace-Id)", null, "not_recorded"],
+    ["empty", "", "not_recorded"],
+    ["not a string", 42 as unknown as string, "not_recorded"],
+  ])("hands the inspector no trace id when the stored id is %s", async (_label, traceId, reason) => {
     const user = userEvent.setup()
     render(<SearchResults controller={controller() as never} renderTraceDetails={renderTraceDetails} result={{ ...result("brave"), traceId }} />)
     await user.click(screen.getByRole("button", { name: "View details" }))
-    expect(screen.getByText("trace none")).toBeInTheDocument()
+    expect(screen.getByText(`trace none (${reason})`)).toBeInTheDocument()
+  })
+
+  // Review B1: a search that was still running lands while the popup is open.
+  it("keeps the opened trace when newer results replace the list underneath", async () => {
+    const user = userEvent.setup()
+    const NEWER_TRACE_ID = "b".repeat(32)
+    const { rerender } = render(
+      <SearchResults controller={controller() as never} renderTraceDetails={renderTraceDetails} result={{ ...result("brave"), traceId: TRACE_ID }} />
+    )
+    await user.click(screen.getByRole("button", { name: "View details" }))
+
+    rerender(
+      <SearchResults controller={controller() as never} renderTraceDetails={renderTraceDetails} result={{ ...result("exa"), traceId: NEWER_TRACE_ID }} />
+    )
+
+    const dialog = screen.getByRole("dialog", { name: "Trace detail" })
+    expect(within(dialog).getByText(`trace ${TRACE_ID}`)).toBeInTheDocument()
+    expect(within(dialog).queryByText(`trace ${NEWER_TRACE_ID}`)).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Close" }))
+    await user.click(screen.getByRole("button", { name: "View details" }))
+    expect(screen.getByText(`trace ${NEWER_TRACE_ID}`)).toBeInTheDocument()
   })
 })

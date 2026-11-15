@@ -13,6 +13,8 @@ export const TRACE_RESULTS_NOT_STORED_MESSAGE = "The results of this trace were 
 export const TRACE_NOT_IN_PROJECT_MESSAGE = "This trace is not available in this project."
 export const TRACE_NOT_RECORDED_MESSAGE =
   "No trace was recorded for this request, so its details are not available."
+export const TRACE_NOT_SAVED_MESSAGE =
+  "This result was saved before trace links were kept. Run the search again to see its details."
 
 /** Return the notice for an absent payload, or `null` when nothing is missing. */
 export function tracePayloadNotice(
