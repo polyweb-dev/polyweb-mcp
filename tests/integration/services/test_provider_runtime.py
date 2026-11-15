@@ -294,6 +294,47 @@ async def test_brave_usage_survives_restart_and_settings_change(
         await restarted.aclose()
 
 
+async def test_brave_rebuild_starts_from_the_newest_vendor_header_fact(
+    brave_world: ExecutionWorld,
+) -> None:
+    """Review finding 2 / AC #1: a rebuilt Brave adapter keeps the vendor's remaining.
+
+    The newest scoped fact says 500 of 1000 requests remain. A rebuilt adapter
+    must start from that fact minus the usage recorded after it, and it must
+    not label its own counter as a vendor header report.
+    """
+
+    world = brave_world
+    credential = _resolved(world, "a1")
+    await world.repository.record_quota(
+        QuotaSnapshot(
+            provider="brave",
+            source=QuotaSource.OBSERVED,
+            remaining=Decimal("500"),
+            limit=Decimal("1000"),
+            observed_at=datetime.now(UTC),
+            unit_kind=UnitKind.REQUEST,
+            display_unit="requests",
+            metadata={"window": "monthly"},
+        ),
+        credential_id=credential.credential_id,
+    )
+    await _record_usage(world, provider="brave", units="1", unit_kind=UnitKind.REQUEST, label="a1")
+    config = await effective_config_for_name(world.repository, "brave", strict=True)
+
+    lease = await world.service._lease_adapter(credential, config)
+    try:
+        snapshot = await lease.adapter.usage_snapshot(_sync_request("brave"))
+    finally:
+        lease.release()
+
+    from polyweb.adapters.brave import COST_USD_PER_REQUEST
+
+    assert snapshot is not None and snapshot.remaining is not None
+    assert snapshot.remaining / COST_USD_PER_REQUEST == Decimal("499")
+    assert snapshot.source == "local_ledger"
+
+
 async def test_brave_keys_count_only_their_own_usage(brave_world: ExecutionWorld) -> None:
     """AC #9: two keys of one provider never share counts; legacy rows still count."""
 
