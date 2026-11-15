@@ -544,6 +544,10 @@ class TavilyAdapter(ProviderAdapter):
         self._terminal_402 = False
         self._terminal_reset_at: datetime | None = None
         self._terminal_baseline: tuple[Decimal | None, Decimal | None] | None = None
+        # The balance and allowance of the last usage report, before local
+        # debits, so a 402 baseline is what the vendor said, not a projection.
+        self._reported_facts: tuple[Decimal | None, Decimal | None] | None = None
+        self._reported_at: datetime | None = None
         self._pending_quota: QuotaSnapshot | None = None
         # The usage read gets its own runner instance so one scheduled poll
         # spends exactly one attempt and its cooldowns stay isolated from the
@@ -1035,6 +1039,8 @@ class TavilyAdapter(ProviderAdapter):
         try:
             facts = self._plan_facts(payload)
             snapshot = self._usage_snapshot_from_payload(payload, facts, request)
+            self._reported_facts = (facts.remaining, facts.allowance)
+            self._reported_at = datetime.now(UTC)
             self._pending_quota = None
             if self._terminal_402 and snapshot.source == "vendor_api":
                 self._pending_quota = self._quota_cache_from_facts(facts, snapshot.remaining)
@@ -1115,15 +1121,17 @@ class TavilyAdapter(ProviderAdapter):
     def _mark_terminal(self, now: datetime) -> None:
         """Enter the terminal out-of-Credits state for the rest of this month.
 
-        Entering the state saves the cached balance and allowance as the
-        baseline a later usage report must exceed to prove new funds.
+        Entering the state saves the balance and allowance of the last usage
+        report as the baseline a later report must exceed to prove new funds.
+        The cache is not used: local debits lower it, so a lagging report that
+        repeats the last reported balance would look like new funds. A report
+        from an earlier month gives no baseline, so no report proves funds.
         """
         if not self._terminal_402:
             self._terminal_402 = True
-            cached = self._quota_cache
-            self._terminal_baseline = (
-                (cached.remaining, cached.limit) if cached is not None else None
-            )
+            reported_at = self._reported_at
+            same_month = reported_at is not None and _next_month_start(reported_at) > now
+            self._terminal_baseline = self._reported_facts if same_month else None
         self._terminal_reset_at = _next_month_start(now)
 
     def _proves_new_funds(self, facts: _UsageFacts) -> bool:

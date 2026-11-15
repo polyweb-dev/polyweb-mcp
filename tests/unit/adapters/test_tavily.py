@@ -2512,22 +2512,16 @@ async def test_usage_snapshot_after_terminal_clamps_positive_to_zero() -> None:
     assert adapter._owned_http.gets == ["https://api.tavily.com/usage"]
 
 
-def _terminal_adapter_after_cached_balance(key: str) -> TavilyAdapter:
-    """A keyed adapter whose cached 40 of 1000 Credits a vendor 402 replaced."""
-    from datetime import UTC, datetime
+async def _terminal_adapter_after_vendor_report(key: str) -> TavilyAdapter:
+    """A keyed adapter whose vendor-reported 40 of 1000 Credits a vendor 402 will replace.
 
-    from polyweb.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
-
+    The 402 baseline is the last usage report, so the balance comes from a
+    report, not from a seeded cache.
+    """
     adapter = TavilyAdapter(_FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr(key))
-    adapter._quota_cache = QuotaSnapshot(
-        provider="tavily",
-        source=QuotaSource.AUTHORITATIVE,
-        remaining=Decimal("40"),
-        limit=Decimal("1000"),
-        observed_at=datetime.now(UTC),
-        unit_kind=UnitKind.CREDIT,
-        display_unit="Credits",
-    )
+    reported = await _poll_report(adapter, 960, 1000)
+    assert reported is not None and reported.remaining == Decimal("40")
+    adapter._usage_attempt_at = None
     return adapter
 
 
@@ -2541,7 +2535,7 @@ async def test_usage_snapshot_after_terminal_reports_proven_credit_unclamped() -
 
     from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
-    adapter = _terminal_adapter_after_cached_balance("tvly-proven-credit")
+    adapter = await _terminal_adapter_after_vendor_report("tvly-proven-credit")
     await adapter.quota_after_error(402)
     adapter._owned_http = _FakeOwnedHTTP(
         httpx.Response(
@@ -2574,7 +2568,7 @@ async def test_usage_snapshot_after_terminal_without_new_funds_stays_clamped() -
 
     from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
-    adapter = _terminal_adapter_after_cached_balance("tvly-stale-credit")
+    adapter = await _terminal_adapter_after_vendor_report("tvly-stale-credit")
     await adapter.quota_after_error(402)
     adapter._owned_http = _FakeOwnedHTTP(
         httpx.Response(
@@ -2594,3 +2588,86 @@ async def test_usage_snapshot_after_terminal_without_new_funds_stays_clamped() -
     assert (snapshot.source, snapshot.remaining) == ("vendor_402", Decimal("0"))
     adapter.usage_snapshot_stored(snapshot)
     assert adapter._terminal_402 is True
+
+
+async def _poll_report(adapter: TavilyAdapter, plan_usage: int, plan_limit: int):  # type: ignore[no-untyped-def]
+    """Answer one fresh usage poll with the given account figures."""
+    from datetime import UTC, datetime
+
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
+
+    adapter._owned_http = _FakeOwnedHTTP(
+        httpx.Response(
+            200,
+            json=_usage_payload(
+                account={"plan_usage": plan_usage, "plan_limit": plan_limit},
+                key={"usage": plan_usage, "limit": 5000},
+            ),
+        )
+    )
+    adapter._usage_attempt_at = None
+    return await adapter.usage_snapshot(
+        UsageSyncRequest(provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC))
+    )
+
+
+async def _terminal_after_report_and_debit(key: str) -> TavilyAdapter:
+    """A vendor report of 40 of 1000 Credits, one local debit (39), then a 402."""
+    adapter = TavilyAdapter(_FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr(key))
+    reported = await _poll_report(adapter, 960, 1000)
+    assert reported is not None and reported.remaining == Decimal("40")
+    adapter._sdk.search_response = _search_payload(usage={"credits": 1})  # type: ignore[union-attr]
+    response = await adapter.search(
+        SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="spend")
+    )
+    projected = adapter.quota_after_success(response)
+    assert projected is not None and projected.remaining == Decimal("39")
+    await adapter.quota_after_error(402)
+    return adapter
+
+
+async def test_report_repeating_the_last_vendor_report_after_a_debit_stays_clamped() -> None:
+    """AC #5: the adapter baseline is the last vendor report, not the debited cache.
+
+    A lagging report that repeats the reported 40 Credits is above the debited
+    39, but it proves no new funds.
+    """
+    adapter = await _terminal_after_report_and_debit("tvly-debit-stale")
+
+    snapshot = await _poll_report(adapter, 960, 1000)
+
+    assert snapshot is not None
+    assert (snapshot.source, snapshot.remaining) == ("vendor_402", Decimal("0"))
+    adapter.usage_snapshot_stored(snapshot)
+    assert adapter._terminal_402 is True
+
+
+@pytest.mark.parametrize(
+    ("plan_usage", "plan_limit", "expected"),
+    [(500, 1000, Decimal("500")), (960, 2000, Decimal("1040"))],
+    ids=["credit-increase", "allowance-increase"],
+)
+async def test_report_above_the_last_vendor_report_after_a_debit_is_unclamped(
+    plan_usage: int, plan_limit: int, expected: Decimal
+) -> None:
+    """AC #5: more Credits or a larger allowance than the last vendor report proves funds."""
+    adapter = await _terminal_after_report_and_debit("tvly-debit-proven")
+
+    snapshot = await _poll_report(adapter, plan_usage, plan_limit)
+
+    assert snapshot is not None
+    assert (snapshot.source, snapshot.remaining) == ("vendor_api", expected)
+
+
+async def test_report_from_an_earlier_month_gives_no_402_baseline() -> None:
+    """A 402 baseline comes only from a report of the current month."""
+    from datetime import UTC, datetime
+
+    adapter = await _terminal_adapter_after_vendor_report("tvly-old-report")
+    adapter._reported_at = datetime.now(UTC) - timedelta(days=40)
+    await adapter.quota_after_error(402)
+
+    snapshot = await _poll_report(adapter, 960, 2000)
+
+    assert snapshot is not None
+    assert (snapshot.source, snapshot.remaining) == ("vendor_402", Decimal("0"))

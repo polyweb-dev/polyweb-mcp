@@ -341,6 +341,13 @@ _TAVILY_VENDOR_API_SOURCE = "vendor_api"
 _LOCAL_ESTIMATE_SOURCES = frozenset({"local_ledger"})
 _TRUSTED_SOURCES = frozenset({"vendor_api", "vendor_402", "vendor_headers", "manual_anchor"})
 _TERMINAL_BASELINE = "terminal_baseline"
+# The source of the incoming observation. A bounded local estimate is stored
+# under the trusted source of the row it lowers, so the event source alone
+# cannot tell it from a vendor fact.
+_OBSERVED_SOURCE = "observed_source"
+# The balance and allowance exactly as a vendor report stated them, before
+# the store subtracted later local debits.
+_VENDOR_REPORT = "vendor_report"
 
 
 def _instant(text: str | None) -> datetime | None:
@@ -621,10 +628,7 @@ class LimitRepository:
                 and snapshot.credential_generation < row.credential_generation
             ):
                 return False
-            if (
-                row is not None
-                and (_instant(row.observed_at) or snapshot.observed_at) > snapshot.observed_at
-            ):
+            if await _older_than_row(session, row, snapshot):
                 return False
             if _tavily_terminal_row(row, snapshot):
                 baseline = await _terminal_baseline(session, snapshot.pool_id)
@@ -647,12 +651,18 @@ class LimitRepository:
                     effective = effective.model_copy(update={"remaining": adjusted})
             changed = row is None or old_native != effective.remaining
             detail: dict[str, Any] = {}
+            if snapshot.source == _TAVILY_VENDOR_API_SOURCE:
+                detail[_VENDOR_REPORT] = {
+                    "remaining": _text(snapshot.remaining),
+                    "allowance": _text(snapshot.allowance),
+                }
             if effective.source == _TAVILY_VENDOR_402_SOURCE and (
                 row is None or row.source != _TAVILY_VENDOR_402_SOURCE
             ):
+                report = await _last_vendor_report(session, snapshot.pool_id, snapshot.observed_at)
                 detail[_TERMINAL_BASELINE] = {
-                    "remaining": _text(old_native),
-                    "allowance": _text(_decimal(row.allowance_text) if row is not None else None),
+                    "remaining": _text(report.remaining if report is not None else None),
+                    "allowance": _text(report.allowance if report is not None else None),
                 }
             await _write_pool(session, row, effective, manual_anchor=manual_anchor)
             await _insert_event(
@@ -672,6 +682,7 @@ class LimitRepository:
                         "error_code": effective.error_code,
                         "stale": effective.stale,
                         "manual_anchor": manual_anchor,
+                        _OBSERVED_SOURCE: snapshot.source,
                         "preserved": effective.remaining != snapshot.remaining
                         or effective.allowance != snapshot.allowance,
                         **detail,
@@ -3114,10 +3125,47 @@ def _tavily_terminal_row(row: NativePoolRow | None, snapshot: NativeUsageSnapsho
 
 @dataclass(frozen=True)
 class _TerminalBaseline:
-    """The balance a pool held when a vendor 402 replaced it."""
+    """The last vendor-reported balance and allowance before a vendor 402.
+
+    These are the reported values, not the row after local debits.
+    """
 
     remaining: Decimal | None
     allowance: Decimal | None
+
+
+async def _last_vendor_report(
+    session: AsyncSession, pool_id: str, before: datetime
+) -> _TerminalBaseline | None:
+    """Return the newest accepted vendor report of a pool in the period before an instant.
+
+    The values are the ones the vendor stated, not the row after local
+    debits: a lagging report repeats them, so only more than these proves
+    new funds. A report from an earlier calendar month gives no baseline.
+    """
+
+    utc = before.astimezone(UTC)
+    period_start = utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    rows = await session.scalars(
+        select(LimitEventRow.detail_json)
+        .where(
+            LimitEventRow.pool_id == pool_id,
+            LimitEventRow.reason == "vendor_sync",
+            LimitEventRow.observed_at >= _timestamp(period_start),
+            LimitEventRow.observed_at <= _timestamp(before),
+            func.json_extract(LimitEventRow.detail_json, f"$.{_VENDOR_REPORT}").is_not(None),
+        )
+        .order_by(LimitEventRow.observed_at.desc(), LimitEventRow.event_id.desc())
+        .limit(1)
+    )
+    raw = rows.first()
+    report = json.loads(raw).get(_VENDOR_REPORT) if raw else None
+    if not isinstance(report, dict):
+        return None
+    return _TerminalBaseline(
+        remaining=_decimal(report.get("remaining")),
+        allowance=_decimal(report.get("allowance")),
+    )
 
 
 async def _terminal_baseline(session: AsyncSession, pool_id: str) -> _TerminalBaseline | None:
@@ -3261,6 +3309,42 @@ def _bounded_estimate(
     return estimate.model_copy(
         update={"source": row.source, "reset_at": _instant(row.reset_at) or estimate.reset_at}
     )
+
+
+async def _older_than_row(
+    session: AsyncSession, row: NativePoolRow | None, snapshot: NativeUsageSnapshot
+) -> bool:
+    """Return whether an observation is older than the stored row and must not write.
+
+    A local debit re-stamps the row with the wall clock. A vendor 402 that was
+    observed before a concurrent call's debit committed is still the newest
+    vendor fact, so only a newer trusted observation (vendor report, vendor
+    402, manual record or manual delete) keeps the 402 out. A local estimate
+    never does, even when it was stored under a trusted source.
+    """
+
+    if row is None:
+        return False
+    row_observed = _instant(row.observed_at)
+    if row_observed is None or row_observed <= snapshot.observed_at:
+        return False
+    if snapshot.source != _TAVILY_VENDOR_402_SOURCE:
+        return True
+    observed_source = func.coalesce(
+        func.json_extract(LimitEventRow.detail_json, f"$.{_OBSERVED_SOURCE}"),
+        LimitEventRow.source,
+    )
+    newer_fact = await session.scalar(
+        select(LimitEventRow.event_id)
+        .where(
+            LimitEventRow.pool_id == snapshot.pool_id,
+            LimitEventRow.observed_at > _timestamp(snapshot.observed_at),
+            LimitEventRow.reason.in_(("vendor_sync", "reconcile")),
+            observed_source.in_(_TRUSTED_SOURCES),
+        )
+        .limit(1)
+    )
+    return newer_fact is not None
 
 
 async def _native_debits_after(
