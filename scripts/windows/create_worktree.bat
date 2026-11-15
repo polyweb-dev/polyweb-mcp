@@ -118,8 +118,8 @@ if defined SLOT (
 
 REM Detect the slot implied by a 'polyweb_wt_N' folder name (N = digit 1-9)
 set "FOLDER_SLOT="
-if /i "%FOLDER:~0,14%"=="polyweb_wt_" (
-    set "SLOT_REST=%FOLDER:~14%"
+if /i "%FOLDER:~0,11%"=="polyweb_wt_" (
+    set "SLOT_REST=%FOLDER:~11%"
     for %%D in (1 2 3 4 5 6 7 8 9) do if "!SLOT_REST!"=="%%D" set "FOLDER_SLOT=%%D"
 )
 
