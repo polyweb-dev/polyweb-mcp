@@ -541,6 +541,129 @@ async def test_tavily_snapshot_rejects_older_terminal_overwrite(limits_repo) -> 
     assert pool is not None and pool.remaining == Decimal("0")
 
 
+def _synth_snapshot(
+    *,
+    at: datetime,
+    remaining: str,
+    source: str = "local_ledger",
+    confidence: Confidence = Confidence.ESTIMATED,
+    generation: int = 1,
+) -> NativeUsageSnapshot:
+    return NativeUsageSnapshot(
+        pool_id="synth:keyed:USD",
+        provider="synth",
+        auth_mode=AuthMode.KEYED,
+        native_unit=UnitKind.USD,
+        observed_at=at,
+        source=source,
+        confidence=confidence,
+        remaining=Decimal(remaining),
+        allowance=Decimal("10"),
+        credential_generation=generation,
+    )
+
+
+async def test_estimate_cannot_raise_remaining_above_vendor_fact(limits_repo) -> None:
+    """AC #2: a local estimate may lower a vendor balance, never raise it."""
+    await limits_repo.ensure_pool(_pool())
+    vendor = _synth_snapshot(
+        at=FIXED_AT, remaining="4", source="vendor_api", confidence=Confidence.OBSERVED
+    )
+    assert await limits_repo.apply_snapshot(vendor) is True
+
+    fresh = _synth_snapshot(at=FIXED_AT + timedelta(minutes=1), remaining="10")
+    assert await limits_repo.apply_snapshot(fresh) is False
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None and pool.remaining == Decimal("4")
+
+    lower = _synth_snapshot(at=FIXED_AT + timedelta(minutes=2), remaining="3")
+    assert await limits_repo.apply_snapshot(lower) is True
+    again = _synth_snapshot(at=FIXED_AT + timedelta(minutes=3), remaining="10")
+    assert await limits_repo.apply_snapshot(again) is False
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None and pool.remaining == Decimal("3")
+    assert pool.confidence is Confidence.ESTIMATED
+
+
+async def test_estimate_cannot_revive_a_vendor_402(limits_repo) -> None:
+    """AC #2: a local estimate never unblocks a key a vendor 402 exhausted."""
+    await limits_repo.ensure_pool(_pool())
+    terminal = _synth_snapshot(
+        at=FIXED_AT, remaining="0", source="vendor_402", confidence=Confidence.OBSERVED
+    )
+    assert await limits_repo.apply_snapshot(terminal) is True
+    latched = _synth_snapshot(
+        at=FIXED_AT + timedelta(minutes=1), remaining="0", confidence=Confidence.OBSERVED
+    )
+    await limits_repo.apply_snapshot(latched)
+
+    revived = _synth_snapshot(at=FIXED_AT + timedelta(minutes=2), remaining="10")
+    assert await limits_repo.apply_snapshot(revived) is False
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None and pool.remaining == Decimal("0")
+    assert pool.source == "vendor_402"
+
+
+async def test_estimate_cannot_raise_remaining_above_manual_anchor(limits_repo) -> None:
+    """AC #2: a manual anchor ranks by its source, although it is stored as estimated."""
+    await limits_repo.record_manual_anchor(
+        _pool(),
+        remaining=Decimal("2"),
+        allowance=Decimal("10"),
+        reset_at=None,
+        observed_at=FIXED_AT,
+    )
+    estimate = _synth_snapshot(at=FIXED_AT + timedelta(minutes=1), remaining="9")
+    assert await limits_repo.apply_snapshot(estimate) is False
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None and pool.remaining == Decimal("2")
+
+
+async def test_estimate_replaces_a_vendor_fact_after_reset_or_rotation(limits_repo) -> None:
+    """A new period or a newer credential generation lifts the estimate bound."""
+    await limits_repo.ensure_pool(_pool())
+    terminal = _synth_snapshot(
+        at=FIXED_AT, remaining="0", source="vendor_402", confidence=Confidence.OBSERVED
+    )
+    assert await limits_repo.apply_snapshot(terminal) is True
+    rotated = _synth_snapshot(at=FIXED_AT + timedelta(minutes=1), remaining="10", generation=2)
+    assert await limits_repo.apply_snapshot(rotated) is True
+
+    assert await limits_repo.apply_snapshot(
+        _synth_snapshot(
+            at=FIXED_AT + timedelta(minutes=2),
+            remaining="0",
+            source="vendor_402",
+            confidence=Confidence.OBSERVED,
+            generation=2,
+        )
+    )
+    next_month = _synth_snapshot(
+        at=datetime(2026, 4, 1, 0, 5, tzinfo=UTC), remaining="10", generation=2
+    )
+    assert await limits_repo.apply_snapshot(next_month) is True
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None and pool.remaining == Decimal("10")
+
+
+async def test_newer_vendor_observation_still_replaces_a_402(limits_repo) -> None:
+    """A genuine vendor report still replaces the stored row as before."""
+    await limits_repo.ensure_pool(_pool())
+    terminal = _synth_snapshot(
+        at=FIXED_AT, remaining="0", source="vendor_402", confidence=Confidence.OBSERVED
+    )
+    assert await limits_repo.apply_snapshot(terminal) is True
+    vendor = _synth_snapshot(
+        at=FIXED_AT + timedelta(minutes=1),
+        remaining="8",
+        source="vendor_api",
+        confidence=Confidence.AUTHORITATIVE,
+    )
+    assert await limits_repo.apply_snapshot(vendor) is True
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None and pool.remaining == Decimal("8")
+
+
 async def test_manual_anchor_delete_restores_unknown(limits_repo) -> None:
     """D3 pin: delete of an anchor with 10 and 5 restores unknown, not zero."""
     await limits_repo.ensure_pool(_pool())

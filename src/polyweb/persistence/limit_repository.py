@@ -334,6 +334,13 @@ _TAVILY_SYNC_CADENCE_SECONDS = 60
 _TAVILY_VENDOR_402_SOURCE = "vendor_402"
 _TAVILY_VENDOR_API_SOURCE = "vendor_api"
 
+# Trust order of a stored balance (TASK-000070). A local ledger estimate ranks
+# below every vendor report, vendor 402 and operator record. Manual anchors are
+# stored with an estimated confidence, so the rank reads the source, not the
+# confidence.
+_LOCAL_ESTIMATE_SOURCES = frozenset({"local_ledger"})
+_TRUSTED_SOURCES = frozenset({"vendor_api", "vendor_402", "vendor_headers", "manual_anchor"})
+
 
 def _instant(text: str | None) -> datetime | None:
     """Parse a stored instant, tolerating a row a newer reader wrote."""
@@ -586,6 +593,11 @@ class LimitRepository:
         travel backwards from the terminal out-of-Credits record, and it
         subtracts the local debits that finished after the observation
         instant, so debits made while a usage poll ran never resurrect.
+
+        A local ledger estimate never raises a balance that descends from a
+        trusted fact (vendor report, vendor 402 or manual anchor) in the same
+        period and credential generation. It may lower that balance; the row
+        then keeps the trusted source, so the bound holds for later estimates.
         """
 
         async with self._session_factory() as session:
@@ -617,6 +629,12 @@ class LimitRepository:
                 return False
             old_native = _decimal(row.remaining_text) if row is not None else None
             effective = _preserve_known_values(row, snapshot)
+            ceiling = _trusted_ceiling(row, snapshot, manual_anchor) if row is not None else None
+            if row is not None and ceiling is not None:
+                bounded = _bounded_estimate(row, effective, ceiling)
+                if bounded is None:
+                    return False
+                effective = bounded
             if snapshot.source == _TAVILY_VENDOR_API_SOURCE and (
                 _is_tavily_credits_pool(snapshot) or "#" in snapshot.pool_id
             ):
@@ -3086,16 +3104,75 @@ def _tavily_observation_rejected(row: NativePoolRow | None, snapshot: NativeUsag
         return False
     if snapshot.observed_at <= row_observed:
         return True
-    reset_at = _instant(row.reset_at)
-    if reset_at is not None and reset_at <= snapshot.observed_at:
-        return False
     if snapshot.credential_generation > row.credential_generation:
         return False
-    row_month = row_observed.astimezone(UTC)
-    incoming_month = snapshot.observed_at.astimezone(UTC)
-    if (row_month.year, row_month.month) != (incoming_month.year, incoming_month.month):
+    if not _same_period(row, snapshot.observed_at):
         return False
     return snapshot.remaining is not None and snapshot.remaining > 0
+
+
+def _same_period(row: NativePoolRow, instant: datetime) -> bool:
+    """Return whether ``instant`` falls in the stored row's quota period.
+
+    The period ends at the stored reset instant, or at the end of the UTC
+    calendar month of the stored observation, whichever comes first.
+    """
+
+    row_observed = _instant(row.observed_at)
+    if row_observed is None:
+        return False
+    reset_at = _instant(row.reset_at)
+    if reset_at is not None and reset_at <= instant:
+        return False
+    stored = row_observed.astimezone(UTC)
+    incoming = instant.astimezone(UTC)
+    return (stored.year, stored.month) == (incoming.year, incoming.month)
+
+
+def _trusted_ceiling(
+    row: NativePoolRow, snapshot: NativeUsageSnapshot, manual_anchor: bool
+) -> Decimal | None:
+    """Return the trusted balance a local estimate may not exceed, if any.
+
+    The bound applies when the incoming value is a local ledger estimate (not
+    an operator anchor), the stored row holds a known balance from a trusted
+    source, and both share the quota period and credential generation. A
+    shared-pool observation keeps the bound, because the keys of one pool carry
+    different generations. A stored generation of zero names a row written
+    before the credential was known (a first terminal 402), so it keeps the
+    bound too.
+    """
+
+    if manual_anchor or snapshot.source not in _LOCAL_ESTIMATE_SOURCES:
+        return None
+    if row.source not in _TRUSTED_SOURCES:
+        return None
+    ceiling = _decimal(row.remaining_text)
+    if ceiling is None or not _same_period(row, snapshot.observed_at):
+        return None
+    rotated = (
+        snapshot.upstream_pool_id is None
+        and row.credential_generation > 0
+        and snapshot.credential_generation > row.credential_generation
+    )
+    return None if rotated else ceiling
+
+
+def _bounded_estimate(
+    row: NativePoolRow, estimate: NativeUsageSnapshot, ceiling: Decimal
+) -> NativeUsageSnapshot | None:
+    """Return the estimate to store under a trusted row, or ``None`` to reject it.
+
+    An estimate above the stored trusted balance is rejected. A lower or equal
+    one is stored with the trusted source and reset instant, so the stored
+    row stays the bound for the rest of the period.
+    """
+
+    if estimate.remaining is None or estimate.remaining > ceiling:
+        return None
+    return estimate.model_copy(
+        update={"source": row.source, "reset_at": _instant(row.reset_at) or estimate.reset_at}
+    )
 
 
 async def _native_debits_after(
