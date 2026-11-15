@@ -309,8 +309,10 @@ class ProviderLimitsService:
 
         A ``scope`` names one key or shared pool: the anchor then fills that
         balance owner's scoped pool (``#cred:`` or ``#pool:``), where it
-        replaces a stored vendor 402 or zero. Returns the stored pool, or
-        ``None`` when nothing was written.
+        replaces a stored vendor 402 or zero. A delete clears only a pool that
+        still holds a manual record, so it never removes a vendor 402 or a
+        vendor report. Returns the stored pool, or ``None`` when nothing was
+        written.
         """
 
         if self._repository is None:
@@ -326,6 +328,8 @@ class ProviderLimitsService:
             # an operator estimate, and it is never cleared by an operator delete.
             return None
         if anchor is None:
+            if stored is None or not _holds_manual_record(stored):
+                return None
             # The explicit clear path bypasses the preserve rule, so a deleted
             # anchor restores the unknown state rather than the old estimate.
             await self._repository.clear_pool_values(
@@ -1535,6 +1539,16 @@ def _is_fresh_vendor_value(pool: NativePool) -> bool:
     """Return whether a pool holds a fresh, vendor-confirmed value."""
 
     return pool.confidence is Confidence.AUTHORITATIVE and not pool.stale and not pool.manual_anchor
+
+
+def _holds_manual_record(pool: NativePool) -> bool:
+    """Return whether a pool's value still comes from an operator manual record.
+
+    The flag alone is not enough: a later vendor report or 402 replaces the
+    value and the source but keeps the flag.
+    """
+
+    return pool.manual_anchor and pool.source == "manual_anchor"
 
 
 def _minute_window(block: RateBlock | ProviderLimitRecord) -> RateWindow | None:

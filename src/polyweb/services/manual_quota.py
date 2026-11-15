@@ -247,6 +247,9 @@ async def project_manual_record(
     is also stored as the owner's newest routing observation, so routing and
     rebuilt adapters read it instead of the older denial, and the owner's
     cached adapters are retired so their in-memory blocks are dropped.
+
+    A deletion that finds no manual record at the owner's pool changes
+    nothing: a vendor 402 and the adapters that hold it stay as they are.
     """
 
     if limits is None:
@@ -254,7 +257,7 @@ async def project_manual_record(
     pool = await limits.apply_manual_anchor(
         provider.value, anchor, scope.observation if scope is not None else None
     )
-    if scope is None:
+    if scope is None or (anchor is None and pool is None):
         return
     if repository is not None and pool is not None:
         await repository.record_quota(

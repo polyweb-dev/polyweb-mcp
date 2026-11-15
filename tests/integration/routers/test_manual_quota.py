@@ -732,3 +732,48 @@ async def test_set_balance_with_several_keys_stays_provider_level_unless_scoped(
         await repository.close()
         await http.aclose()
         get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_delete_without_a_manual_record_keeps_the_vendor_402(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
+) -> None:
+    """A DELETE clears only a manual record, never a vendor denial or its adapter block.
+
+    Without a scope, a single-key provider resolves to that key. The key holds
+    a vendor 402, not a manual record, so the DELETE changes nothing.
+    """
+
+    from uuid import UUID
+
+    from polyweb.configuration.config import get_settings
+
+    http = _offline_client()
+    repository, app = await _open_key_world(tmp_path, monkeypatch, "tavily", http)
+    try:
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(client, repository, temp_email("delete"))
+            await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            world = _KeyWorld(client, app, raw_auth_headers(pair["access_token"]))
+            key_id = world.add_key("tavily", "only")
+            blocked = await _block_like_a_vendor_402(world, "tavily", key_id)
+
+            cleared = client.delete("/api/v1/providers/tavily/manual-quota", headers=world.headers)
+            assert cleared.status_code == 204
+
+            pool = await repository.limits.get_pool(world.scoped_pool_id("tavily", key_id))
+            assert pool is not None and (pool.source, pool.remaining) == (
+                "vendor_402",
+                Decimal("0"),
+            )
+            routing = await repository.latest_quota("tavily", credential_id=UUID(key_id))
+            assert routing is not None and routing.remaining == Decimal("0")
+            lease = await world.lease("tavily", key_id)
+            try:
+                assert lease.adapter is blocked, "the DELETE retired the blocked adapter"
+            finally:
+                lease.release()
+    finally:
+        await repository.close()
+        await http.aclose()
+        get_settings.cache_clear()
