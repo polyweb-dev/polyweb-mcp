@@ -3,7 +3,7 @@ Feature: Activity trace detail presentation parity with Playground
   The Activity trace Results tab converges toward the Playground presentation:
   one shared card and one shared inspector behind thin adapters. This parity
   scenario pins the Playground side of that contract through the stubbed
-  backend: titles, URLs, two-line snippets, provider badges, scores, fetch
+  backend: titles, URLs, two-line snippets, scores, the provider named once, fetch
   and external-link actions, a non-selectable execution waterfall, and the
   fetch metadata presentation. A second scenario opens View details, the
   popup with the project trace inspector.
@@ -17,7 +17,7 @@ Feature: Activity trace detail presentation parity with Playground
     When I open the "playground" section of project Alpha
     And I pin the playground provider to "Brave Search"
     And I submit the playground search query "parity probe"
-    Then the playground cards should show titles, urls, two-line snippets, badges, and scores
+    Then the playground cards should show titles, urls, two-line snippets, and scores
     And each playground card should keep fetch and external-link actions outside selection
     When I select the playground result "Live backend result one"
     Then the playground inspector should show the shared result presentation

@@ -39,18 +39,21 @@ Given("project {word} has a {string} pool for search", async ({}, name: string, 
 })
 
 Then(
-  "the playground cards should show titles, urls, two-line snippets, badges, and scores",
+  "the playground cards should show titles, urls, two-line snippets, and scores",
   async ({ page }) => {
     const results = returnedResultsRegion(page)
     // The stub serves two fixed Brave hits; the mapped cards keep their
-    // titles, full URLs, snippets, catalog badge, and percentage scores.
+    // titles, full URLs, snippets, and percentage scores.
     await expect(results.getByText("Live backend result one")).toBeVisible()
     await expect(results.getByText("https://example.com/one")).toBeVisible()
     await expect(results.getByText("First live snippet.")).toBeVisible()
     await expect(results.getByText("Live backend result two")).toBeVisible()
     await expect(results.getByText("https://example.com/two")).toBeVisible()
     await expect(results.getByText("Second live snippet.")).toBeVisible()
-    await expect(results.getByText("Brave Search", { exact: true }).first()).toBeVisible()
+    // One provider answered, so the cards carry no per-result badge; the
+    // telemetry bar names the provider once.
+    await expect(results.getByText("Brave Search", { exact: true })).toHaveCount(0)
+    await expect(playgroundMain(page)).toContainText(/Resolved by\s*Brave Search/)
     await expect(results.getByText("92% match")).toBeVisible()
     // The second hit recorded no score (null): the shared ResultScore shows
     // nothing rather than inventing "0% match".
@@ -58,7 +61,7 @@ Then(
     await expect(second).toBeVisible()
     await expect(second).not.toContainText("% match")
     await expect(results.getByText("0% match")).toHaveCount(0)
-    await expect(results.getByText("2026-09-05")).toBeVisible()
+    await expect(results.getByText("Sep 5, 2026")).toBeVisible()
     // Two-line preview: one clamped snippet paragraph per card.
     await expect(results.locator("p.line-clamp-2")).toHaveCount(2)
   }
@@ -94,7 +97,7 @@ Then(
   "the playground inspector should show the shared result presentation",
   async ({ page }) => {
     const inspector = playgroundInspectorRegion(page)
-    await expect(inspector.getByText("Attributed", { exact: true })).toBeVisible()
+    await expect(inspector.getByText("Provider", { exact: true })).toBeVisible()
     await expect(inspector.getByText("Brave Search", { exact: true }).first()).toBeVisible()
     await expect(
       inspector.locator('img[data-testid="provider-logo-brave"]').first()

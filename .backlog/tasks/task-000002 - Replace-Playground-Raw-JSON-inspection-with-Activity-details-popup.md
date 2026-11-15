@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@devin'
 created_date: 2026-10-15 22:19
-updated_date: '2026-11-15T17:14:00Z'
+updated_date: '2026-11-15T18:21:00Z'
 labels: []
 dependencies:
   - TASK-000047
@@ -51,4 +51,6 @@ Evidence: vitest ProjectPlaygroundPage.test.tsx 'ProjectPlaygroundPage View deta
 UI review (Devin Claude Opus 5.5, screenshots in /tmp/task2-ui-review): PASS, no blocker/major. Minor/nits are all in the shared inspector or existing styles (dialog height changes between tabs, bar vs trace latency differ, plain ghost button like the old raw JSON toggle).
 
 CI ui-bdd @stub on main (#126) and on this branch (#125) fail identically (106/260); root cause includes the unstubbed GET /routing/order. Tracked separately as TASK-000083.
+
+Owner decisions (2026-11-15): seed Alpha pools for the parity scenario; parallel = fullyParallel + CI workers + @serial one-worker project + 10 s actionTimeout, no retries, no sharding; measure worker count on CI (6 vs 12); keep @smoke as the default gate (full @stub gate moves to TASK-000083). Implemented in c653983; CI at that head: ui-bdd @stub w6 #141, @stub w12 #142, @smoke #143, ui-quality #144. Investigator reports: Sol (root causes, doc-000009), Opus (parallel safety: 10 timing-sensitive scenarios tagged @serial; zero real-API traffic from @stub scenarios).
 <!-- SECTION:NOTES:END -->
