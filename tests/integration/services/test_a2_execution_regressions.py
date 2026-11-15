@@ -387,10 +387,11 @@ def _pinned(world: ExecutionWorld, label: str) -> SearchRequest:
     )
 
 
-async def _charged_search(
-    world: ExecutionWorld, adapter: Any, label: str, *, attempt_id: str
-) -> Any:
-    """Run one attempt through ``tracked_call`` with the hooks execution passes it."""
+async def _charged_search(world: ExecutionWorld, adapter: Any, label: str) -> Any:
+    """Run one attempt through ``tracked_call`` with the hooks execution passes it.
+
+    The hooks reserve every send under a fresh attempt id, as production does.
+    """
 
     assert world.limits is not None
     credential = world.credentials[label]
@@ -400,7 +401,7 @@ async def _charged_search(
         provider=adapter.name,
         operation=LimitOperation.SEARCH,
         auth_mode=AuthMode.KEYED,
-        attempt_id=attempt_id,
+        attempt_id=uuid4().hex,
         request=request,
         requested_at=datetime.now(UTC),
         project_id=world.project.project_id,
@@ -488,12 +489,15 @@ async def test_vendor_429_cooldown_on_one_credential_does_not_block_its_sibling(
         )
 
     first.search_handler = rate_limited
+    # Not through world.service.search like the 402 sibling: the service retries
+    # the retryable 429 on a1, and the cooldown it just recorded denies that retry
+    # locally, so the first call would raise LimitDeniedError instead.
     with pytest.raises(ProviderOperationError):
-        await _charged_search(world, first, "a1", attempt_id=f"429-{uuid4().hex}")
+        await _charged_search(world, first, "a1")
 
     failure: Exception | None = None
     try:
-        await _charged_search(world, second, "a2", attempt_id=f"429b-{uuid4().hex}")
+        await _charged_search(world, second, "a2")
     except Exception as error:
         failure = error
     second_calls = second.search_calls

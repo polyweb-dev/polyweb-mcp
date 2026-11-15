@@ -11,7 +11,7 @@ The reviewer blocks on missing or wrong *evidence and description*, not only on 
 
 1. Push the final commit. Get the SHAs: `git rev-parse HEAD` and `git merge-base HEAD origin/main`.
 2. Scope numbers: `git diff --stat origin/main...HEAD`. Group the files by area.
-3. Pipeline numbers: trigger the Woodpecker workflows for this branch (AGENTS.md, "Cloud test runs"). Runs must be on the head SHA. If you push again, run the suites again.
+3. Pipeline numbers: trigger each suite that applies (`api-unit`, `api-integration`, `api-bdd`, `api-latency`, `ui-quality`) for this branch (AGENTS.md, "Cloud test runs"). Always pass `workflow`: a trigger without it runs every manual workflow, including `api-live` (spends API credits) and `api-mutation`. Runs must be on the head SHA. If you push again, run the suites again.
 4. Acceptance criteria: `backlog task view TASK-<id> --plain`. Copy the ACs. Do not add or change criteria.
 5. Write the body to a file. Set it with `gh pr create --body-file <file>` or `gh pr edit <n> --body-file <file>`.
 

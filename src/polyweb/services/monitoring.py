@@ -1204,7 +1204,7 @@ async def _finalize_failure(
     *,
     request: SearchRequest | FetchRequest | None,
 ) -> None:
-    """Finalize or release one failed admission with its confirmed charge."""
+    """Settle one failed legacy-path admission through the native failure rule."""
 
     if limits is None or admission is None:
         return
