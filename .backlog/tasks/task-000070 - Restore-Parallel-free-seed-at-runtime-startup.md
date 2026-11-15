@@ -1,11 +1,11 @@
 ---
 id: TASK-000070
 title: Restore provider quota state at runtime startup
-status: In Progress
+status: Testing
 assignee:
   - '@devin'
 created_date: '2026-11-14T11:37:00Z'
-updated_date: '2026-11-15T18:27:00Z'
+updated_date: '2026-11-15T18:49:00Z'
 labels: []
 dependencies: []
 priority: high
@@ -35,20 +35,20 @@ Related: TASK-000077 owns Parallel OAuth pools, real Parallel per-call cost and 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 When an adapter is built (startup, restart, settings change or credential change), each key's remaining quota is computed from the database: the newest trusted fact for the key's balance owner (vendor report, vendor 402, manual record or configured cap) minus the usage recorded after that fact
-- [ ] #2 A local estimate never raises a key's remaining quota above the newest trusted fact in the same period, and never unblocks a key that a vendor 402 exhausted
-- [ ] #3 For Brave, Exa, Parallel, Keenable, Tavily and Firecrawl, a blocked key becomes usable again when a newer vendor report proves new credits, when an admin records new credits for that key, or at the provider reset. A manual record clears both the stored denial and the in-memory adapter block at the blocked key's scope (credential row, or pool row for a pooled key)
-- [ ] #4 PUT /api/v1/providers/{provider_id}/manual-quota accepts an optional key or pool scope. Without a scope it applies to the provider's only eligible key, so the existing Set balance dialog unblocks single-key providers with no UI change. With several keys and no scope it keeps today's provider-level behaviour and does not guess
-- [ ] #5 Tavily: after a 402, a same-month /usage report unblocks the key only when it proves new funds (a credit or allowance increase against the balance saved at the 402, or a provider-issued timestamp after the 402). Reports without that proof stay rejected, so the existing stale-poll and cached-positive 402 protections keep passing
-- [ ] #6 The saved Exa monthly budget and manual credits apply to Exa keys. When the period's recorded spend reaches the limit, Polyweb denies the next Exa call. Recording manual credits also clears Exa's soft-zero block
-- [ ] #7 The saved Parallel free seed applies to Parallel API-key credentials. Parallel OAuth balance and real per-call cost stay in TASK-000077
-- [ ] #8 Brave and Keenable usage counted before a restart or a settings change still counts after it
-- [ ] #9 Usage and balances are tracked per key. Keys in one shared pool share one balance
-- [ ] #10 Keenable without a key stays unmetered: only the per-IP rate limits apply
-- [ ] #11 Keenable with a key: the auth mode comes from the credential. The adapter stores usage.credits_remaining and usage.paid from each billed response as a vendor fact. Use past the free allowance with credits left counts as paid use and does not block the key. A 402 insufficient_credits blocks the key until AC #3 applies. When credits_remaining is absent, the local count is the estimate
-- [ ] #12 Integration tests against a real database prove AC #2, #3, #4, #5, #6 and #8, and each test fails before the fix
-- [ ] #13 The routers/api.py compose docstring and the mcp/server.py startup comment describe the real behaviour
-- [ ] #14 No UI changes. The per-key Set balance action and the user guide with screenshots are in TASK-000076. The quota API marks each number as vendor-confirmed or estimated
+- [x] #1 When an adapter is built (startup, restart, settings change or credential change), each key's remaining quota is computed from the database: the newest trusted fact for the key's balance owner (vendor report, vendor 402, manual record or configured cap) minus the usage recorded after that fact
+- [x] #2 A local estimate never raises a key's remaining quota above the newest trusted fact in the same period, and never unblocks a key that a vendor 402 exhausted
+- [x] #3 For Brave, Exa, Parallel, Keenable, Tavily and Firecrawl, a blocked key becomes usable again when a newer vendor report proves new credits, when an admin records new credits for that key, or at the provider reset. A manual record clears both the stored denial and the in-memory adapter block at the blocked key's scope (credential row, or pool row for a pooled key)
+- [x] #4 PUT /api/v1/providers/{provider_id}/manual-quota accepts an optional key or pool scope. Without a scope it applies to the provider's only eligible key, so the existing Set balance dialog unblocks single-key providers with no UI change. With several keys and no scope it keeps today's provider-level behaviour and does not guess
+- [x] #5 Tavily: after a 402, a same-month /usage report unblocks the key only when it proves new funds (a credit or allowance increase against the balance saved at the 402, or a provider-issued timestamp after the 402). Reports without that proof stay rejected, so the existing stale-poll and cached-positive 402 protections keep passing
+- [x] #6 The saved Exa monthly budget and manual credits apply to Exa keys. When the period's recorded spend reaches the limit, Polyweb denies the next Exa call. Recording manual credits also clears Exa's soft-zero block
+- [x] #7 The saved Parallel free seed applies to Parallel API-key credentials. Parallel OAuth balance and real per-call cost stay in TASK-000077
+- [x] #8 Brave and Keenable usage counted before a restart or a settings change still counts after it
+- [x] #9 Usage and balances are tracked per key. Keys in one shared pool share one balance
+- [x] #10 Keenable without a key stays unmetered: only the per-IP rate limits apply
+- [x] #11 Keenable with a key: the auth mode comes from the credential. The adapter stores usage.credits_remaining and usage.paid from each billed response as a vendor fact. Use past the free allowance with credits left counts as paid use and does not block the key. A 402 insufficient_credits blocks the key until AC #3 applies. When credits_remaining is absent, the local count is the estimate
+- [x] #12 Integration tests against a real database prove AC #2, #3, #4, #5, #6 and #8, and each test fails before the fix
+- [x] #13 The routers/api.py compose docstring and the mcp/server.py startup comment describe the real behaviour
+- [x] #14 No UI changes. The per-key Set balance action and the user guide with screenshots are in TASK-000076. The quota API marks each number as vendor-confirmed or estimated
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -73,4 +73,16 @@ Slice A (46d5cef, d0dd41b, 2c5dd1d): build-time adapter preparation (prepare_ada
 Round 2 (5ca2c63..c043751): all 8 review findings fixed; manual-quota optional credential_id/pool_id query scope with single-owner inference (OAuth/keyless excluded); scoped record replaces the 402 row, becomes the routing snapshot and retires cached adapters; Tavily same-month recovery only with proof of new funds vs the stored pre-402 baseline; Keenable keyed credits_remaining stored as a vendor_api fact, keyed 402 writes a terminal row, auth mode from the credential; vendor_confirmed flag on USD balance models. Deliberate contract change: Exa 429 no longer means exhausted funds (test_exa_quota.py, test_quota_units.py, quota.feature). CI #127 unit green; #128/#129 failed on adv_oauth_balance (no-scope record hit an OAuth key), fixed in c043751; #133 api-integration, #134 api-bdd, #136 api-latency (added p95 89.9-104.6 ms) green. CI runs used: 9 of 20.
 
 Final review (2f56883..c043751) found F1 blocker: the Tavily 402 baseline was the locally debited balance, so a stale /usage report repeating the last vendor balance unblocked the key. Round 3 (edd16a2..7334ca3): baseline = newest vendor report of the month (store) / last month /usage figures (adapter), proof strictly greater; also fixed a real production bug where a terminal 402 was dropped as older than a concurrent call's debit; DELETE manual-quota clears only manual records; stale hydration skips record_quota for a retired adapter; scoped Exa records keep provider-wide credits; Keenable credits_remaining survives a scoped sync and rebuild. CI #138 api-integration (1754), #139 api-bdd (276), #140 api-unit (2293) green. CI runs used: 12 of 20. Orchestrator re-ran the F1 probe on 7334ca3: passes. F6 filed as TASK-000084.
+
+Orchestrator round 4 (58ffad1): 402 event lookups filter on provider and auth_mode so the (provider, auth_mode, observed_at) index serves them; added test_terminal_402_older_than_an_operator_action_stays_out[manual_record, manual_delete] (mutation-checked: both fail when manual sources are not trusted); documented scoped Exa record semantics in put_manual_quota. Final CI at c10c02d: api-unit #145, api-integration #146, api-bdd #147 all success. CI runs used: 15 of 20.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Restores provider quota state for lazily built per-credential adapters (regressed in aae1b63 / TASK-000042). Each newly built adapter applies the saved Exa budget and manual credits and the Parallel free seed (API-key credentials), restores its counts from its own key or pool rows for the current month, and records the result. A trust order (vendor report > human record > configured cap > local count) is enforced in the limit store: local estimates can only lower a trusted balance and never clear a vendor 402, and a late 402 is no longer dropped behind a concurrent debit. Manual-quota accepts an optional key or pool scope (single-owner inference, so the existing Set balance unblocks single-key providers); a scoped record replaces the key's 402 and rebuilds its adapter; DELETE clears only manual records. Tavily lifts a same-month 402 only on proof of new funds against the last vendor report. Keyed Keenable stores usage.credits_remaining as a vendor fact; Exa 429 no longer means exhausted funds. Balances carry vendor_confirmed (from confidence). No UI changes.
+
+Verification: regression tests failing before and passing after for every criterion (see notes); three review rounds; CI #145 api-unit, #146 api-integration, #147 api-bdd at c10c02d; api-latency #136 (added p95 89.9-104.6 ms) at c043751.
+
+Follow-ups: TASK-000076 (per-key Set balance UI, vendor_confirmed display, user guide), TASK-000077, TASK-000079 to TASK-000082, TASK-000084, TASK-000085. Risks: legacy rows without a credential count for every key until month end; a Tavily key blocked before deploy has no report baseline (manual record or reset unblocks); a standalone MCP executor does not retire its cached adapter on a REST manual record.
+<!-- SECTION:FINAL_SUMMARY:END -->
