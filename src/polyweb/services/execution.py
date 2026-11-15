@@ -712,6 +712,12 @@ class CredentialAdapterCache:
                 raise
         return lease
 
+    def serves(self, key: _AdapterKey, adapter: ProviderAdapter) -> bool:
+        """Return whether ``adapter`` is the live, not retired adapter of ``key``."""
+
+        entry = self._entries.get(key)
+        return entry is not None and entry.adapter is adapter and not entry.retired
+
     def release(self, key: _AdapterKey, entry: _CacheEntry) -> None:
         entry.active = max(0, entry.active - 1)
         if entry.retired and entry.active == 0:
@@ -1634,6 +1640,7 @@ class ExecutionService:
                     config,
                     auth_mode=credential.auth_mode,
                     scope=scope,
+                    still_current=lambda: self._adapter_cache.serves(key, adapter),
                 )
             except Exception:
                 logger.warning("adapter quota state could not be restored", exc_info=True)

@@ -1006,3 +1006,81 @@ async def test_failed_preparation_is_retried_on_the_next_lease(
 
     assert calls == 2
     assert snapshot is not None and snapshot.remaining == Decimal("4.5")
+
+
+async def test_retired_preparation_does_not_record_its_stale_hydration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding F3: a manual record retires an entry whose preparation still runs.
+
+    The preparation read the 402 before the record was written. Its snapshot
+    must not become the key's newest routing observation, or the next rebuild
+    restores Exa's soft-zero block from it again.
+    """
+
+    from polyweb.adapters.exa import ExaAdapter
+
+    world = await build_execution_world(tmp_path, monkeypatch, provider="exa")
+    http = httpx.AsyncClient()
+    _install_factory(
+        monkeypatch,
+        "exa",
+        lambda client, api_key=None: ExaAdapter(http, api_key=api_key, sdk_client=_FakeExaSdk()),
+    )
+    restarted: ExecutionService | None = None
+    try:
+        credential = _resolved(world, "a1")
+        config = (await effective_config_for_name(world.repository, "exa", strict=True)).model_copy(
+            update={"exa_monthly_budget_usd": Decimal("10")}
+        )
+        lease = await world.service._lease_adapter(credential, config)
+        try:
+            zero = lease.adapter.quota_after_error(402)
+        finally:
+            lease.release()
+        assert zero is not None
+        await world.repository.record_quota(zero, credential_id=credential.credential_id)
+
+        read_done = asyncio.Event()
+        gate = asyncio.Event()
+        original = ExaAdapter.hydrate_quota
+
+        async def held(self: ExaAdapter, repository: Any) -> Any:
+            snapshot = await original(self, repository)
+            read_done.set()
+            await gate.wait()
+            return snapshot
+
+        monkeypatch.setattr(ExaAdapter, "hydrate_quota", held)
+        # The Set balance request stamps its record when it starts, before the
+        # preparation reads the store, and writes it after that read.
+        recorded_at = datetime.now(UTC)
+        restarted = _restarted(world)
+        waiting = asyncio.create_task(restarted._lease_adapter(credential, config))
+        await asyncio.wait_for(read_done.wait(), timeout=5)
+
+        await world.repository.record_quota(
+            QuotaSnapshot(
+                provider="exa",
+                source=QuotaSource.ESTIMATED,
+                remaining=Decimal("10"),
+                limit=Decimal("10"),
+                unit_kind=UnitKind.USD,
+                observed_at=recorded_at,
+                metadata={"manual_anchor": True, "window": "monthly"},
+            ),
+            credential_id=credential.credential_id,
+        )
+        restarted.retire_credential_adapters({credential.credential_id})
+        gate.set()
+        (await asyncio.wait_for(waiting, timeout=5)).release()
+
+        latest = await world.repository.latest_quota("exa", credential_id=credential.credential_id)
+    finally:
+        if restarted is not None:
+            await restarted.aclose()
+        await world.aclose()
+        await http.aclose()
+
+    assert latest is not None
+    assert (latest.remaining, latest.metadata.get("manual_anchor")) == (Decimal("10"), True)

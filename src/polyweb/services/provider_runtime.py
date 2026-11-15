@@ -181,6 +181,7 @@ async def prepare_adapter_quota(
     *,
     auth_mode: str,
     scope: ProviderObservationScope,
+    still_current: Callable[[], bool] | None = None,
 ) -> None:
     """Restore one newly built adapter's quota state from settings and the database.
 
@@ -190,6 +191,11 @@ async def prepare_adapter_quota(
     and manual starting credits, then hydrates the adapter's local ledger from
     the key's balance owner, and records the hydrated observation for that key
     when it differs from the stored one.
+
+    ``still_current`` tells whether the adapter is still the one the cache
+    serves. A manual record retires the adapter while its hydration may still
+    run on reads from before the record, so a retired adapter's hydration is
+    never recorded: it would replace the record as the newest observation.
     """
 
     if config is not None:
@@ -206,6 +212,8 @@ async def prepare_adapter_quota(
     if latest is not None and all(
         getattr(latest, name) == getattr(snapshot, name) for name in _QUOTA_STATE_FIELDS
     ):
+        return
+    if still_current is not None and not still_current():
         return
     await repository.record_quota(
         snapshot,
