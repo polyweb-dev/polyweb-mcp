@@ -167,9 +167,10 @@ async def _start_injected_limits(state: _ServerState, routes: Sequence[ProviderA
     Without a repository there is no limit store, so nothing starts.
     """
 
-    # Same order and error handling as the REST lifespan and the owned MCP
-    # generation: restore local quota settings, then start the limit service,
-    # then project the Tavily rail best effort.
+    # Same order as the REST lifespan and the owned MCP generation: start the
+    # limit service, then hand it to the execution service. No quota state is
+    # restored here; the execution service restores saved quota settings and
+    # recorded usage once per adapter it builds (ExecutionService._lease_adapter).
     await _start_limits_generation(state, routes)
     # Every execution attempt takes the rails, so an eager (injected) or a
     # freshly built (owned) execution service adopts the started rails.

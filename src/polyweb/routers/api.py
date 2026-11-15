@@ -598,11 +598,14 @@ async def _compose_runtime_generation(
     database: str | Path | None,
     stop_limits: asyncio.Event,
 ) -> None:
-    """Build one runtime generation: adapters, limit rails, execution, tracing.
+    """Build one runtime generation: provider configs, limit rails, execution, tracing.
 
-    The compose step belongs to the lifespan: the quota state hydrates, the
-    limit schedule starts, and the shared execution service (repository,
-    encrypted credential slots, and limit rails) comes up before requests.
+    The compose step belongs to the lifespan: the provider configuration
+    records materialize, the limit service seeds its catalog (no polling
+    schedule starts), and the shared execution service (repository, encrypted
+    credential slots, and limit rails) comes up before requests. Adapters are
+    not built here: the execution service builds one per credential on first
+    use and then restores its saved quota settings and recorded usage.
     """
 
     del adapter_source
