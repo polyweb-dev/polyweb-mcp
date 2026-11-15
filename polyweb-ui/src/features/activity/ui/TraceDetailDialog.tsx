@@ -8,6 +8,7 @@ import { formatDateTime } from "@/shared/lib/formatTime"
 import { Button } from "@/shared/ui/button"
 import { Modal } from "@/shared/ui/Modal"
 import { Tag } from "@/shared/ui/Tag"
+import { TraceCopyJsonButton } from "./TraceCopyJsonButton"
 import { TraceDetailError } from "./TraceDetailError"
 import { TraceDetailSection } from "./TraceDetailSection"
 import { TraceDetailSummary } from "./TraceDetailSummary"
@@ -107,6 +108,7 @@ function readyView({ trace, attempt, providerSpanId }: ReadyViewOptions) {
         output={scopedOutput(trace, providerSpanId)}
         attempt={attempt}
         mode={mode}
+        actions={<TraceCopyJsonButton trace={trace} />}
       />
     </div>
   )

@@ -165,6 +165,33 @@ Then("the playground trace detail popup should show the project trace", async ({
   expect(traceListRequests()).toEqual([])
 })
 
+Then("the playground trace detail popup should offer Copy JSON", async ({ page }) => {
+  const dialog = page.getByRole("dialog", { name: "Trace detail" })
+  await expect(dialog.getByRole("button", { name: "Copy JSON", exact: true })).toBeVisible()
+})
+
+When("I copy the playground trace detail JSON", async ({ page }) => {
+  // The dialog says Copied only after a real write, so headless Chromium
+  // needs clipboard access for the page.
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
+  await page
+    .getByRole("dialog", { name: "Trace detail" })
+    .getByRole("button", { name: "Copy JSON", exact: true })
+    .click()
+})
+
+Then(
+  "the playground trace detail popup should confirm the copied trace JSON",
+  async ({ page }) => {
+    const dialog = page.getByRole("dialog", { name: "Trace detail" })
+    await expect(dialog.getByRole("button", { name: "Copied", exact: true })).toBeVisible()
+    const copied: unknown = JSON.parse(
+      await page.evaluate(() => navigator.clipboard.readText())
+    )
+    expect(copied).toMatchObject({ traceId: SUCCESS_TRACE_ID })
+  }
+)
+
 When("I close the playground trace detail popup", async ({ page }) => {
   await page.getByRole("dialog", { name: "Trace detail" }).getByRole("button", { name: "Close" }).click()
   await expect(page.getByRole("dialog", { name: "Trace detail" })).toHaveCount(0)

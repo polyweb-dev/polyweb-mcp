@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@devin'
 created_date: 2026-10-15 22:19
-updated_date: '2026-11-15T20:52:00Z'
+updated_date: '2026-11-15T22:27:00Z'
 labels: []
 dependencies:
   - TASK-000047
@@ -55,6 +55,8 @@ CI ui-bdd @stub on main (#126) and on this branch (#125) fail identically (106/2
 Owner decisions (2026-11-15): seed Alpha pools for the parity scenario; parallel = fullyParallel + CI workers + @serial one-worker project + 10 s actionTimeout, no retries, no sharding; measure worker count on CI (6 vs 12); keep @smoke as the default gate (full @stub gate moves to TASK-000083). Implemented in c653983; CI at that head: ui-bdd @stub w6 #141, @stub w12 #142, @smoke #143, ui-quality #144. Investigator reports: Sol (root causes, doc-000009), Opus (parallel safety: 10 timing-sensitive scenarios tagged @serial; zero real-API traffic from @stub scenarios).
 
 Worker measurement (261 stubbed scenarios, 16-vCPU spot worker): 1 worker 29.4 min (#126 main), 6 workers 5.6 min (#148), 12 workers 3.7 min (#142); all three fail the same 106 pre-existing scenarios (TASK-000083), no parallel-only failure. Default set to 12 in run-ui-bdd.sh (c690de0). Parity scenario fixed: seeded Brave pool + steps aligned with current result UI (fbe1e2d); both activity-trace-detail scenarios pass on #149. Final head-SHA runs queued: ui-quality #150, ui-bdd @smoke #151, feature #152, @stub at default workers #153.
+
+Owner request (2026-11-15): restore copying as Copy JSON in the shared trace popup ("if a trace can be inspected, why can't it be copied?"). TraceCopyJsonButton (ghost sm, shared useClipboard with resetAfterMs 2000 and no optimistic flag, so Copied shows only after a successful write) sits at the end of the Results/Timeline switch row through a new TraceInspectionWorkspace actions slot. It copies JSON.stringify(trace, null, 2) of the decoded TraceDetail; metadata-only traces copy their null input/output. Only in the ready state, so Activity and the Playground both get it. Tests: TraceDetailDialog.test.tsx 'TraceDetailDialog Copy JSON'; BDD steps added to 'Playground View details opens the project trace inspector'. Docs: dashboard/activity.md and dashboard/playground.md.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

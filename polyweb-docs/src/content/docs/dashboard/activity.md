@@ -34,6 +34,8 @@ Two views sit below it.
 
 A trace with a **Metadata only** tag stored timing only, so there's no query or results to show and the first view is called **Summary**.
 
+**Copy JSON**, at the right of the view switch, copies the whole trace detail to the clipboard as formatted JSON. The button shows **Copied** when the copy succeeds. The JSON contains only what was stored: for a metadata-only trace, the query and results are `null`.
+
 ## What gets stored
 
 Each project's trace policy decides how much is kept. **Metadata only** stores timing, provider, outcome, counts and span metadata. **Full requests** also stores the query or URL and the normalized results. The policy is fixed when a request starts, so changing it later doesn't affect a call already running. Secrets, API keys and cookies are never stored.

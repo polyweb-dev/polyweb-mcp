@@ -6,7 +6,7 @@ Feature: Activity trace detail presentation parity with Playground
   backend: titles, URLs, two-line snippets, scores, the provider named once, fetch
   and external-link actions, a non-selectable execution waterfall, and the
   fetch metadata presentation. A second scenario opens View details, the
-  popup with the project trace inspector.
+  popup with the project trace inspector, and copies the trace as JSON.
 
   Background:
     Given the stubbed session works in project Alpha
@@ -39,5 +39,8 @@ Feature: Activity trace detail presentation parity with Playground
     Then the playground should offer View details instead of raw JSON
     When I open the playground View details
     Then the playground trace detail popup should show the project trace
+    And the playground trace detail popup should offer Copy JSON
+    When I copy the playground trace detail JSON
+    Then the playground trace detail popup should confirm the copied trace JSON
     When I close the playground trace detail popup
     Then the playground results should still show "Live backend result one"
