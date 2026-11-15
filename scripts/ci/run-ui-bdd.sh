@@ -50,7 +50,7 @@ cd polyweb-ui
 pnpm bddgen
 # Stubbed scenarios run fully parallel across Playwright workers (see
 # playwright.config.ts); `@serial` scenarios keep a one-worker project.
-export PLAYWRIGHT_WORKERS="${PLAYWRIGHT_WORKERS:-6}"
+export PLAYWRIGHT_WORKERS="${PLAYWRIGHT_WORKERS:-12}"
 echo "Playwright workers: ${PLAYWRIGHT_WORKERS} (nproc $(nproc))"
 grep_args=(--grep "${PLAYWRIGHT_GREP:-@smoke}")
 if [[ -n "${PLAYWRIGHT_GREP_INVERT:-}" ]]; then
