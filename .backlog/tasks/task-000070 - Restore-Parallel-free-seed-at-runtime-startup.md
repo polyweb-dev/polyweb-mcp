@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@devin'
 created_date: '2026-11-14T11:37:00Z'
-updated_date: '2026-11-15T15:06:00Z'
+updated_date: '2026-11-15T18:27:00Z'
 labels: []
 dependencies: []
 priority: high
@@ -65,3 +65,12 @@ Related: TASK-000077 owns Parallel OAuth pools, real Parallel per-call cost and 
 8. Tavily recovery: keep the 402 baseline (balance, credential generation); accept a same-month vendor_api snapshot only with proof of new funds; clear the adapter clamp only after the repository accepts it. Keep test_402_preserved_despite_positive_cached_balance and the stale-poll tests; deliberately update test_usage_snapshot_after_terminal_clamps_positive_to_zero for the proven-credit case only; add repository, integration and BDD recovery cases.
 9. Manual-quota scope: optional credential/pool scope on PUT/DELETE manual-quota; infer the single eligible key when omitted; route the record through ProviderLimitsService to the scoped NativePoolRow and clear the cached adapter's latch (_hard_exhausted, _soft_zero, Tavily clamp).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Slice A (46d5cef, d0dd41b, 2c5dd1d): build-time adapter preparation (prepare_adapter_quota via CredentialAdapterCache.lease prepare hook), scoped hydration reads, local-estimate guard in apply_snapshot. CI #118 api-unit, #119 api-integration, #120 api-bdd green. Review found Exa 429 latch (blocker) and Brave vendor_headers bypass (major), plus 6 minor items.
+Round 2 (5ca2c63..c043751): all 8 review findings fixed; manual-quota optional credential_id/pool_id query scope with single-owner inference (OAuth/keyless excluded); scoped record replaces the 402 row, becomes the routing snapshot and retires cached adapters; Tavily same-month recovery only with proof of new funds vs the stored pre-402 baseline; Keenable keyed credits_remaining stored as a vendor_api fact, keyed 402 writes a terminal row, auth mode from the credential; vendor_confirmed flag on USD balance models. Deliberate contract change: Exa 429 no longer means exhausted funds (test_exa_quota.py, test_quota_units.py, quota.feature). CI #127 unit green; #128/#129 failed on adv_oauth_balance (no-scope record hit an OAuth key), fixed in c043751; #133 api-integration, #134 api-bdd, #136 api-latency (added p95 89.9-104.6 ms) green. CI runs used: 9 of 20.
+
+Final review (2f56883..c043751) found F1 blocker: the Tavily 402 baseline was the locally debited balance, so a stale /usage report repeating the last vendor balance unblocked the key. Round 3 (edd16a2..7334ca3): baseline = newest vendor report of the month (store) / last month /usage figures (adapter), proof strictly greater; also fixed a real production bug where a terminal 402 was dropped as older than a concurrent call's debit; DELETE manual-quota clears only manual records; stale hydration skips record_quota for a retired adapter; scoped Exa records keep provider-wide credits; Keenable credits_remaining survives a scoped sync and rebuild. CI #138 api-integration (1754), #139 api-bdd (276), #140 api-unit (2293) green. CI runs used: 12 of 20. Orchestrator re-ran the F1 probe on 7334ca3: passes. F6 filed as TASK-000084.
+<!-- SECTION:NOTES:END -->
