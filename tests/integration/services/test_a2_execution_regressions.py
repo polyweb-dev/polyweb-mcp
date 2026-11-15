@@ -24,6 +24,7 @@ from polyweb.infrastructure.secrets import ProviderName
 from polyweb.models.contracts import (
     RoutingMode,
     RoutingPreference,
+    SearchRequest,
     UsageOperation,
 )
 from polyweb.models.credentials import CredentialOperation
@@ -58,7 +59,11 @@ from tests.fixtures.a2_execution import (
     provider_error,
     search_request,
 )
-from tests.fixtures.execution import FIXTURE_ACTOR, seed_execution_project
+from tests.fixtures.execution import (
+    FIXTURE_ACTOR,
+    production_capacity_hooks,
+    seed_execution_project,
+)
 
 
 def _binding(world: ExecutionWorld, label: str = "a1") -> AttemptBinding:
@@ -371,21 +376,48 @@ async def test_malformed_or_unsupported_pool_constraints_fail_closed(
     assert calls == 0
 
 
-def _context(
-    world: ExecutionWorld, label: str, *, attempt_id: str, provider: str
-) -> LimitCallContext:
+def _pinned(world: ExecutionWorld, label: str) -> SearchRequest:
+    """Pin one execution to one binding, with no fallback to its sibling."""
+
+    return search_request(
+        world,
+        routing=RoutingPreference(
+            binding_id=world.credentials[label].binding_id, allow_fallback=False
+        ),
+    )
+
+
+async def _charged_search(
+    world: ExecutionWorld, adapter: Any, label: str, *, attempt_id: str
+) -> Any:
+    """Run one attempt through ``tracked_call`` with the hooks execution passes it."""
+
+    assert world.limits is not None
     credential = world.credentials[label]
-    return LimitCallContext(
+    request = search_request(world)
+    context = LimitCallContext(
         **FIXTURE_ACTOR,
-        provider=provider,
+        provider=adapter.name,
         operation=LimitOperation.SEARCH,
         auth_mode=AuthMode.KEYED,
         attempt_id=attempt_id,
-        request=search_request(world),
+        request=request,
         requested_at=datetime.now(UTC),
         project_id=world.project.project_id,
         credential_id=credential.credential_id,
         binding_id=credential.binding_id,
+    )
+    return await tracked_call(
+        world.repository,
+        adapter,
+        lambda target: target.search(request),
+        operation=UsageOperation.SEARCH,
+        attribution=world.project,
+        request=request,
+        limits=world.limits,
+        binding=_binding(world, label),
+        context=context,
+        **production_capacity_hooks(world.repository, world.limits, context),
     )
 
 
@@ -408,33 +440,16 @@ async def test_terminal_402_on_one_credential_does_not_disable_its_sibling(
         )
 
     first.search_handler = out_of_credits
-    request = search_request(world)
     with pytest.raises(ProviderOperationError):
-        await tracked_call(
-            world.repository,
-            first,
-            lambda target: target.search(request),
-            operation=UsageOperation.SEARCH,
-            attribution=world.project,
-            request=request,
-            limits=world.limits,
-            binding=_binding(world, "a1"),
-            context=_context(world, "a1", attempt_id=f"402-{uuid4().hex}", provider="exa"),
+        await world.service.search(
+            _pinned(world, "a1"), attribution=world.project, context=world.context
         )
     assert first.search_calls == 1
 
     failure: Exception | None = None
     try:
-        await tracked_call(
-            world.repository,
-            second,
-            lambda target: target.search(request),
-            operation=UsageOperation.SEARCH,
-            attribution=world.project,
-            request=request,
-            limits=world.limits,
-            binding=_binding(world, "a2"),
-            context=_context(world, "a2", attempt_id=f"402b-{uuid4().hex}", provider="exa"),
+        await world.service.search(
+            _pinned(world, "a2"), attribution=world.project, context=world.context
         )
     except Exception as error:
         failure = error
@@ -473,33 +488,12 @@ async def test_vendor_429_cooldown_on_one_credential_does_not_block_its_sibling(
         )
 
     first.search_handler = rate_limited
-    request = search_request(world)
     with pytest.raises(ProviderOperationError):
-        await tracked_call(
-            world.repository,
-            first,
-            lambda target: target.search(request),
-            operation=UsageOperation.SEARCH,
-            attribution=world.project,
-            request=request,
-            limits=world.limits,
-            binding=_binding(world, "a1"),
-            context=_context(world, "a1", attempt_id=f"429-{uuid4().hex}", provider="firecrawl"),
-        )
+        await _charged_search(world, first, "a1", attempt_id=f"429-{uuid4().hex}")
 
     failure: Exception | None = None
     try:
-        await tracked_call(
-            world.repository,
-            second,
-            lambda target: target.search(request),
-            operation=UsageOperation.SEARCH,
-            attribution=world.project,
-            request=request,
-            limits=world.limits,
-            binding=_binding(world, "a2"),
-            context=_context(world, "a2", attempt_id=f"429b-{uuid4().hex}", provider="firecrawl"),
-        )
+        await _charged_search(world, second, "a2", attempt_id=f"429b-{uuid4().hex}")
     except Exception as error:
         failure = error
     second_calls = second.search_calls
