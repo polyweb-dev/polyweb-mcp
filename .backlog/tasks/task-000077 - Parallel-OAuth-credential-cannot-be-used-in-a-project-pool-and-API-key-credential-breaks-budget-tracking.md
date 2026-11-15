@@ -3,11 +3,12 @@ id: TASK-000077
 title: >-
   Parallel: OAuth credential cannot be used in a project pool, and API-key
   credential breaks budget tracking
-status: To Do
+status: Planning
 assignee: []
 created_date: '2026-11-15T01:51:00Z'
-updated_date: '2026-11-15T01:58:00Z'
-labels: []
+updated_date: '2026-11-15T18:03:00Z'
+labels:
+  - Abhishek
 dependencies: []
 references:
   - src/polyweb/services/parallel_oauth.py
@@ -15,7 +16,7 @@ references:
   - src/polyweb/services/credentials.py
 priority: high
 type: bug
-ordinal: 66000
+ordinal: 2000
 ---
 
 ## Description
