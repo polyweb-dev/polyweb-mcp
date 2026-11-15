@@ -1,11 +1,11 @@
 ---
 id: TASK-000070
 title: Restore provider quota state at runtime startup
-status: Testing
+status: In Progress
 assignee:
   - '@devin'
 created_date: '2026-11-14T11:37:00Z'
-updated_date: '2026-11-15T18:49:00Z'
+updated_date: '2026-11-15T23:46:00Z'
 labels: []
 dependencies: []
 priority: high
@@ -36,19 +36,20 @@ Related: TASK-000077 owns Parallel OAuth pools, real Parallel per-call cost and 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 When an adapter is built (startup, restart, settings change or credential change), each key's remaining quota is computed from the database: the newest trusted fact for the key's balance owner (vendor report, vendor 402, manual record or configured cap) minus the usage recorded after that fact
-- [x] #2 A local estimate never raises a key's remaining quota above the newest trusted fact in the same period, and never unblocks a key that a vendor 402 exhausted
-- [x] #3 For Brave, Exa, Parallel, Keenable, Tavily and Firecrawl, a blocked key becomes usable again when a newer vendor report proves new credits, when an admin records new credits for that key, or at the provider reset. A manual record clears both the stored denial and the in-memory adapter block at the blocked key's scope (credential row, or pool row for a pooled key)
+- [ ] #2 A local estimate never raises a key's remaining quota above the newest trusted fact in the same period, and never unblocks a key that a vendor 402 exhausted
+- [ ] #3 For Brave, Exa, Parallel, Keenable, Tavily and Firecrawl, a blocked key becomes usable again when a newer vendor report proves new credits, when an admin records new credits for that key, or at the provider reset. A manual record clears both the stored denial and the in-memory adapter block at the blocked key's scope (credential row, or pool row for a pooled key)
 - [x] #4 PUT /api/v1/providers/{provider_id}/manual-quota accepts an optional key or pool scope. Without a scope it applies to the provider's only eligible key, so the existing Set balance dialog unblocks single-key providers with no UI change. With several keys and no scope it keeps today's provider-level behaviour and does not guess
-- [x] #5 Tavily: after a 402, a same-month /usage report unblocks the key only when it proves new funds (a credit or allowance increase against the balance saved at the 402, or a provider-issued timestamp after the 402). Reports without that proof stay rejected, so the existing stale-poll and cached-positive 402 protections keep passing
+- [ ] #5 Tavily: after a 402, a same-month /usage report unblocks the key only when it proves new funds (a credit or allowance increase against the balance saved at the 402, or a provider-issued timestamp after the 402). Reports without that proof stay rejected, so the existing stale-poll and cached-positive 402 protections keep passing
 - [x] #6 The saved Exa monthly budget and manual credits apply to Exa keys. When the period's recorded spend reaches the limit, Polyweb denies the next Exa call. Recording manual credits also clears Exa's soft-zero block
 - [x] #7 The saved Parallel free seed applies to Parallel API-key credentials. Parallel OAuth balance and real per-call cost stay in TASK-000077
 - [x] #8 Brave and Keenable usage counted before a restart or a settings change still counts after it
 - [x] #9 Usage and balances are tracked per key. Keys in one shared pool share one balance
 - [x] #10 Keenable without a key stays unmetered: only the per-IP rate limits apply
 - [x] #11 Keenable with a key: the auth mode comes from the credential. The adapter stores usage.credits_remaining and usage.paid from each billed response as a vendor fact. Use past the free allowance with credits left counts as paid use and does not block the key. A 402 insufficient_credits blocks the key until AC #3 applies. When credits_remaining is absent, the local count is the estimate
-- [x] #12 Integration tests against a real database prove AC #2, #3, #4, #5, #6 and #8, and each test fails before the fix
-- [x] #13 The routers/api.py compose docstring and the mcp/server.py startup comment describe the real behaviour
+- [ ] #12 Integration tests against a real database prove AC #2, #3, #4, #5, #6 and #8, and each test fails before the fix
+- [ ] #13 The routers/api.py compose docstring and the mcp/server.py startup comment describe the real behaviour
 - [x] #14 No UI changes. The per-key Set balance action and the user guide with screenshots are in TASK-000076. The quota API marks each number as vendor-confirmed or estimated
+- [ ] #15 Tavily (folded in from TASK-000085): a same-month report unblocks a 402 only when its remaining exceeds the highest remaining among this month's vendor reports with the same allowance, or its allowance exceeds the last reported allowance. Reports without figures are never a baseline and never proof. Repository tests cover an out-of-order higher report that stays rejected
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -75,6 +76,8 @@ Round 2 (5ca2c63..c043751): all 8 review findings fixed; manual-quota optional c
 Final review (2f56883..c043751) found F1 blocker: the Tavily 402 baseline was the locally debited balance, so a stale /usage report repeating the last vendor balance unblocked the key. Round 3 (edd16a2..7334ca3): baseline = newest vendor report of the month (store) / last month /usage figures (adapter), proof strictly greater; also fixed a real production bug where a terminal 402 was dropped as older than a concurrent call's debit; DELETE manual-quota clears only manual records; stale hydration skips record_quota for a retired adapter; scoped Exa records keep provider-wide credits; Keenable credits_remaining survives a scoped sync and rebuild. CI #138 api-integration (1754), #139 api-bdd (276), #140 api-unit (2293) green. CI runs used: 12 of 20. Orchestrator re-ran the F1 probe on 7334ca3: passes. F6 filed as TASK-000084.
 
 Orchestrator round 4 (58ffad1): 402 event lookups filter on provider and auth_mode so the (provider, auth_mode, observed_at) index serves them; added test_terminal_402_older_than_an_operator_action_stays_out[manual_record, manual_delete] (mutation-checked: both fail when manual sources are not trusted); documented scoped Exa record semantics in put_manual_quota. Final CI at c10c02d: api-unit #145, api-integration #146, api-bdd #147 all success. CI runs used: 15 of 20.
+
+PR #78 review (owner review agent, 2026-11-15) blocked the PR: B1 rejected manual anchor reported as success, B2 Tavily report with no balance lifts the 402, B3 stale hydration write race, B4 three untested guards, B5 stale schedule-task comments; plus A1-A13 and advisories. AC #2, #3, #5, #12, #13 unchecked until fixed. TASK-000085 folded in as AC #15 (same predicate, and it contradicts the PR's 'only on proof of new funds'). A9 (baseline lookup scan) is fixed here because AC #15 rewrites the same lookups. A5 and A8 filed as separate follow-ups. Merged origin/main (fa62559) so the pull-request-message skill matches main and leaves this PR's diff. CI budget raised to 30 (15 used).
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

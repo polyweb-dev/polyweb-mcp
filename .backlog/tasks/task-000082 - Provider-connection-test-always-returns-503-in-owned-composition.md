@@ -4,6 +4,7 @@ title: Provider connection test always returns 503 in owned composition
 status: To Do
 assignee: []
 created_date: '2026-11-15T15:06:00Z'
+updated_date: '2026-11-15T23:47:00Z'
 labels: []
 dependencies: []
 priority: medium
@@ -14,7 +15,7 @@ ordinal: 70000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-_ensure_provider_adapter (src/polyweb/routers/control.py ~544-553) looks up the adapter in app.state._routes. Since TASK-000042 adapters are built lazily per credential in ExecutionService._lease_adapter, so that list is empty in owned composition and the provider connection test endpoint always answers 503. Found during TASK-000070 planning.
+_ensure_provider_adapter (src/polyweb/routers/control.py ~638) looks up the adapter in app.state._routes. Since TASK-000042 adapters are built lazily per credential in ExecutionService._lease_adapter, so that list is empty in owned composition and the provider connection test endpoint always answers 503. Found during TASK-000070 planning.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
