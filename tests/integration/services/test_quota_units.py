@@ -2463,9 +2463,10 @@ class TestExaMonthlyLedger:
                 await adapter.aclose()
             await client.aclose()
 
-    async def test_429_records_observed_zero_and_stays_retryable(
+    async def test_429_stays_retryable_and_records_no_zero(
         self, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A 429 is a rate limit, not exhausted funds (TASK-000070 review finding 1)."""
         sdk = _FakeExaSDK(
             search_error=ValueError("Request failed with status code 429: Too Many Requests")
         )
@@ -2493,10 +2494,8 @@ class TestExaMonthlyLedger:
             assert exc_info.value.error.code == "rate_limited"
             assert exc_info.value.error.retryable is True
             latest = await repo.latest_quota("exa")
-            assert latest is not None
-            assert latest.source is QuotaSource.OBSERVED
-            assert latest.remaining == Decimal("0")
-            assert latest.metadata.get("exhaustion_status") == 429
+            assert latest is None or latest.remaining != Decimal("0")
+            assert adapter._soft_zero is False
         finally:
             if adapter is not None:
                 await adapter.aclose()
@@ -2612,9 +2611,10 @@ class TestExaMonthlyLedger:
         assert latest.unit_kind == _opt(_unit_kind(), "USD")
         assert latest.metadata.get("limit_source") == "manual_starting_credits"
 
-    async def test_429_zero_cleared_by_later_success_via_tracked_call(
+    async def test_429_then_success_keeps_the_budget_via_tracked_call(
         self, repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A 429 stores no zero, so a later success simply spends from the budget."""
         from exa_py.api import CostDollars, Result
         from exa_py.api import SearchResponse as ExaSDKResponse
 
@@ -2642,9 +2642,7 @@ class TestExaMonthlyLedger:
                     attribution=await seed_execution_project(repo),
                 )
             latest = await repo.latest_quota("exa")
-            assert latest is not None
-            assert latest.source is QuotaSource.OBSERVED
-            assert latest.remaining == Decimal("0")
+            assert latest is None or latest.remaining != Decimal("0")
 
             sdk.search_error = None
             sdk.search_response = ExaSDKResponse(
