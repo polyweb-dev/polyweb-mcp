@@ -259,10 +259,15 @@ class ExaAdapter(ProviderAdapter):
         self._hydrated_month = None
 
     def set_manual_starting_credits(self, credits: Decimal | None) -> None:
-        """Apply the operator-entered prepaid balance without resetting spend."""
+        """Apply the operator-entered prepaid balance without resetting spend.
+
+        Recording credits is an operator statement that funds exist, so it also
+        clears the soft-zero block of an earlier 402.
+        """
         self._manual_starting_credits = (
             self._validate_budget(credits) if credits is not None else None
         )
+        self._soft_zero = False
 
     def _effective_limit(self) -> tuple[Decimal | None, str | None]:
         if self._manual_starting_credits is not None:

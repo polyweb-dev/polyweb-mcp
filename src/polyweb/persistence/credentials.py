@@ -571,6 +571,26 @@ class CredentialRepository:
         )
         return None if row is None else _credential_read(row)
 
+    async def list_active_for_provider(
+        self, *, account_id: UUID, provider_type: str
+    ) -> list[CredentialInstanceRead]:
+        """List every active credential of one provider under any owner, oldest first.
+
+        An installation-wide read for provider administration (manual quota
+        scope); project-facing code uses the owner-specific listings instead.
+        """
+
+        result = await self._session.execute(
+            select(ProviderCredentialRow)
+            .where(
+                ProviderCredentialRow.account_id == str(account_id),
+                ProviderCredentialRow.provider_type == provider_type,
+                ProviderCredentialRow.status == CredentialStatus.ACTIVE.value,
+            )
+            .order_by(ProviderCredentialRow.created_at, ProviderCredentialRow.id)
+        )
+        return [_credential_read(row) for row in result.scalars()]
+
     async def list_system_credentials(self, *, account_id: UUID) -> list[CredentialInstanceRead]:
         """List legacy system credentials, excluding user-owned vault keys."""
 

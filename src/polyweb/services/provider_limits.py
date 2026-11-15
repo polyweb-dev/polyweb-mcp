@@ -67,6 +67,7 @@ from polyweb.models.provider_limits import (
     ProviderLimitDetail,
     ProviderLimitRecord,
     ProviderLimitsResponse,
+    ProviderObservationScope,
     RateAdmission,
     RateBlock,
     RateProgressView,
@@ -293,25 +294,37 @@ class ProviderLimitsService:
             if record.provider == "tavily" and record.auth_mode is AuthMode.KEYED
         ]
 
-    async def apply_manual_anchor(self, provider: str, anchor: object | None) -> None:
+    async def apply_manual_anchor(
+        self,
+        provider: str,
+        anchor: object | None,
+        scope: ProviderObservationScope | None = None,
+    ) -> NativePool | None:
         """Project an operator manual native anchor into the matching pool.
 
         The anchor supplies an estimated native allowance for a provider whose
         usage API is unavailable. A fresh authoritative observation is never
         replaced silently, and a rate-only free provider stays unmetered. A
         deleted anchor restores an unknown state rather than a zero balance.
+
+        A ``scope`` names one key or shared pool: the anchor then fills that
+        balance owner's scoped pool (``#cred:`` or ``#pool:``), where it
+        replaces a stored vendor 402 or zero. Returns the stored pool, or
+        ``None`` when nothing was written.
         """
 
         if self._repository is None:
-            return
+            return None
         pool = self._manual_anchor_pool(provider)
         if pool is None:
-            return
+            return None
+        if scope is not None:
+            pool = await self._scoped_anchor_pool(pool, scope)
         stored = await self._repository.get_pool(pool.pool_id)
         if stored is not None and _is_fresh_vendor_value(stored):
             # A fresh vendor observation stands. It is never replaced silently by
             # an operator estimate, and it is never cleared by an operator delete.
-            return
+            return None
         if anchor is None:
             # The explicit clear path bypasses the preserve rule, so a deleted
             # anchor restores the unknown state rather than the old estimate.
@@ -320,14 +333,28 @@ class ProviderLimitsService:
                 observed_at=self._clock(),
                 source="manual_anchor",
             )
-            return
-        await self._repository.record_manual_anchor(
+            return await self._repository.get_pool(pool.pool_id)
+        return await self._repository.record_manual_anchor(
             pool,
             remaining=_anchor_decimal(anchor, "remaining"),
             allowance=_anchor_decimal(anchor, "allowance"),
             reset_at=_anchor_instant(anchor, "billing_end"),
             observed_at=_anchor_instant(anchor, "updated_at") or self._clock(),
         )
+
+    async def _scoped_anchor_pool(
+        self, pool: NativePool, scope: ProviderObservationScope
+    ) -> NativePool:
+        """Return the scoped pool of one key or shared pool, keeping its stored generation."""
+
+        assert self._repository is not None
+        pool_id = scope.native_pool_id(pool.pool_id)
+        stored = await self._repository.get_pool(pool_id)
+        if stored is not None:
+            generation = stored.credential_generation
+        else:
+            generation = 0 if scope.upstream_pool_id is not None else scope.credential_generation
+        return pool.model_copy(update={"pool_id": pool_id, "credential_generation": generation})
 
     def _manual_anchor_pool(self, provider: str) -> NativePool | None:
         """Return the finite paid pool a manual anchor may fill, if any."""

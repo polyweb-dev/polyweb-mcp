@@ -973,6 +973,11 @@ class ExecutionService:
 
         self._limits = limits
 
+    def retire_credential_adapters(self, credential_ids: set[UUID]) -> None:
+        """Drop the cached adapters of these keys; the next lease rebuilds and restores them."""
+
+        self._adapter_cache.retire_credentials(credential_ids)
+
     async def sync_system_limits(self, provider: str, now: datetime) -> SyncResult:
         """Refresh one provider's native usage through active vault credentials.
 
