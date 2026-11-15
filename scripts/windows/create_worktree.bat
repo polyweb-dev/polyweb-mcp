@@ -202,8 +202,8 @@ if exist ".env" (
     echo [2/6] Copying root .env file to '%TARGET_PATH%\.env'...
     copy /Y ".env" "%TARGET_PATH%\.env" >nul
     if defined SLOT (
-        set /a "MCP_PORT=8000+SLOT*10"
-        set /a "API_PORT=8000+SLOT*10+1"
+        set /a "MCP_PORT=8200+SLOT*10"
+        set /a "API_PORT=8200+SLOT*10+1"
         set /a "VITE_PORT=5174+SLOT"
         echo [2/6] Assigning slot !SLOT! ports: POLYWEB_MCP_PORT=!MCP_PORT!, POLYWEB_API_PORT=!API_PORT!, VITE_PORT=!VITE_PORT!
         powershell -NoProfile -Command ^
@@ -354,7 +354,7 @@ echo   full (or fullstack)       - Setup both backend and UI [default]
 echo.
 echo Options:
 echo   --base ^<ref^>   Base ref for a NEW branch (default: main; ignored if the branch exists)
-echo   --slot ^<N^>     Worktree slot 1-9; sets .env ports MCP 80N0 / API 80N1 / VITE 5174+N
+echo   --slot ^<N^>     Worktree slot 1-9; sets .env ports MCP 82N0 / API 82N1 / VITE 5174+N
 echo   --copy-db      Copy the main checkout's polyweb.db (contains credentials/history).
 echo                  A copy works only if the main database is already at the alpha
 echo                  baseline; otherwise the new worktree refuses it with reset steps.

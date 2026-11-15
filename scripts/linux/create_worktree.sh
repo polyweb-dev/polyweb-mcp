@@ -24,7 +24,7 @@ Modes:
 
 Options:
   --base <ref>   Base ref for a NEW branch (default: main; ignored if the branch exists)
-  --slot <N>     Worktree slot 1-9; sets .env ports MCP 80N0 / API 80N1 / VITE 5174+N
+  --slot <N>     Worktree slot 1-9; sets .env ports MCP 82N0 / API 82N1 / VITE 5174+N
   --copy-db      Copy the main checkout's polyweb.db (contains credentials/history).
                  A copy works only if the main database is already at the alpha
                  baseline; otherwise the new worktree refuses it with reset steps.
@@ -207,8 +207,8 @@ if [[ -f ".env" ]]; then
     echo "[2/6] Copying root .env file to '$TARGET_PATH/.env'..."
     cp -f ".env" "$TARGET_PATH/.env"
     if [[ -n "$SLOT" ]]; then
-        MCP_PORT=$((8000 + SLOT * 10))
-        API_PORT=$((8000 + SLOT * 10 + 1))
+        MCP_PORT=$((8200 + SLOT * 10))
+        API_PORT=$((8200 + SLOT * 10 + 1))
         VITE_PORT=$((5174 + SLOT))
         echo "[2/6] Assigning slot $SLOT ports: POLYWEB_MCP_PORT=$MCP_PORT, POLYWEB_API_PORT=$API_PORT, VITE_PORT=$VITE_PORT"
         if ! { set_env_var "$TARGET_PATH/.env" POLYWEB_MCP_PORT "$MCP_PORT" &&

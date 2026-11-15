@@ -66,22 +66,25 @@ Each workspace/worktree has fixed, isolated ports defined in its root `.env` to 
 
 | Workspace | Worktree Directory | MCP Server (`POLYWEB_MCP_PORT`) | Backend API (`POLYWEB_API_PORT`) | UI Dev (`VITE_PORT`) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Main** | `polyweb-mcp` | `8000` | `8001` | `5174` |
-| **WT 1** | `polyweb_wt_1` | `8010` | `8011` | `5175` |
-| **WT 2** | `polyweb_wt_2` | `8020` | `8021` | `5176` |
-| **WT 3** | `polyweb_wt_3` | `8030` | `8031` | `5177` |
-| **WT 4** | `polyweb_wt_4` | `8040` | `8041` | `5178` |
+| **Main** | `polyweb-mcp` | `8200` | `8201` | `5174` |
+| **WT 1** | `polyweb_wt_1` | `8210` | `8211` | `5175` |
+| **WT 2** | `polyweb_wt_2` | `8220` | `8221` | `5176` |
+| **WT 3** | `polyweb_wt_3` | `8230` | `8231` | `5177` |
+| **WT 4** | `polyweb_wt_4` | `8240` | `8241` | `5178` |
+| **WT N** (1-9) | `polyweb_wt_N` | `82N0` | `82N1` | `5174+N` |
 
+- **Why 82xx**: the dev host already uses 8000/8001 (other services), 8080, 8090, 8100/8101 (the production Polyweb stack), 9000 and 9090, so local development keeps to 8200-8291. The application defaults (8000/8001 in code, Compose and docs) are for end users and are unchanged.
 - **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run polyweb-api`, `uv run polyweb-mcp`, `pnpm dev`). They automatically read from the local `.env`.
 - **Landing app** (`polyweb-landing/`): the marketing site's Vite dev server reads `POLYWEB_LANDING_PORT` from the root `.env` and defaults to `5274` when unset.
 - **Zero merge conflicts**: Port configurations live in the local `.env` (gitignored), keeping committed files identical across all branches.
 
 ### Creating worktrees
 
-- `scripts\windows\create_worktree.bat projects/p04-usage-trace-writers polyweb_wt_1 backend --base main`
+- Windows: `scripts\windows\create_worktree.bat projects/p04-usage-trace-writers polyweb_wt_1 backend --base main`
+- Linux/macOS: `scripts/linux/create_worktree.sh projects/p04-usage-trace-writers polyweb_wt_1 backend --base main` (same arguments and options)
 - Ports are set from `--slot N` or the `polyweb_wt_N` folder name; new branches start from `--base` (default `main`).
 - The live `polyweb.db` is not copied unless `--copy-db` (it holds provider credentials; tests must use fresh databases).
-- Remove worktrees with `scripts\windows\delete_worktree.bat <branch>`.
+- Remove worktrees with `scripts\windows\delete_worktree.bat <branch>` or `scripts/linux/delete_worktree.sh <branch>`.
 
 
 <!-- BACKLOG.MD GUIDELINES START -->
