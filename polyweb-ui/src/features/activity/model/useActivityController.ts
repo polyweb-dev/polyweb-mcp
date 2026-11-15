@@ -78,7 +78,8 @@ function detailsOfProject(
   return details
 }
 
-function failedDetail(error: unknown): TraceLoadState {
+/** A failed detail read: the project's 404 is `missing`, anything else offers Retry. */
+export function failedDetail(error: unknown): TraceLoadState {
   if (isTraceNotFound(error)) {
     return { status: "missing", detail: null, error: TRACE_NOT_IN_PROJECT_MESSAGE }
   }

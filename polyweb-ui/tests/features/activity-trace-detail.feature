@@ -4,8 +4,9 @@ Feature: Activity trace detail presentation parity with Playground
   one shared card and one shared inspector behind thin adapters. This parity
   scenario pins the Playground side of that contract through the stubbed
   backend: titles, URLs, two-line snippets, provider badges, scores, fetch
-  and external-link actions, raw JSON inspection with copy feedback, a
-  non-selectable execution waterfall, and the fetch metadata presentation.
+  and external-link actions, a View details popup with the project trace
+  inspector, a non-selectable execution waterfall, and the fetch metadata
+  presentation.
 
   Background:
     Given the stubbed session works in project Alpha
@@ -21,11 +22,11 @@ Feature: Activity trace detail presentation parity with Playground
     Then the playground inspector should show the shared result presentation
     And the playground inspector link should carry the Open target URL tooltip
     And the playground waterfall should be non-selectable with latency and result counts
-    And the playground raw JSON inspector should start collapsed
-    When I expand the playground raw JSON inspector
-    Then the playground raw JSON inspector should offer a copy action
-    When I copy the playground raw JSON
-    Then the playground raw JSON copy should confirm
+    And the playground should offer View details instead of raw JSON
+    When I open the playground View details
+    Then the playground trace detail popup should show the project trace
+    When I close the playground trace detail popup
+    Then the playground results should still show "Live backend result one"
     When I open the playground tab "Fetch"
     And I pin the playground fetch provider to "Keenable"
     And I submit the playground fetch URL "https://example.com/parity-doc"

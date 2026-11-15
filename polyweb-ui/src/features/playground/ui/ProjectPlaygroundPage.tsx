@@ -5,11 +5,18 @@ import type { ProjectProvider } from "@/domains/providers"
 import { getProjectOrder } from "@/domains/routing"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
 import { PlaygroundPersistGate } from "@/store/PlaygroundPersistGate"
+import type { RenderTraceDetails } from "../model/traceDetailsSlot"
 import type { PlaygroundScope } from "../model/usePlaygroundController"
 import { projectOrderProviders } from "../model/projectOrderProviders"
 import { PlaygroundPage } from "./PlaygroundPage"
 
 const NO_PROVIDERS: readonly ProjectProvider[] = []
+
+interface ProjectPlaygroundPageProps {
+  accountId: string
+  /** The project trace inspector that View details opens. */
+  renderTraceDetails: RenderTraceDetails
+}
 
 /**
  * Playground page of the URL project.
@@ -20,7 +27,7 @@ const NO_PROVIDERS: readonly ProjectProvider[] = []
  * with the scoped-resource pattern under `accountId:projectId`; without
  * `providers.read` the picker offers Auto (and All for search) only.
  */
-export function ProjectPlaygroundPage({ accountId }: { accountId: string }) {
+export function ProjectPlaygroundPage({ accountId, renderTraceDetails }: ProjectPlaygroundPageProps) {
   const { projectId, accessState } = useProjectScope()
   const access = accessState.status === "ready" ? accessState.data : null
   const canReadProviders = hasPermission(access, PROJECT_PERMISSIONS.providersRead)
@@ -53,7 +60,7 @@ export function ProjectPlaygroundPage({ accountId }: { accountId: string }) {
 
   return (
     <PlaygroundPersistGate>
-      <PlaygroundPage scope={scope} />
+      <PlaygroundPage scope={scope} renderTraceDetails={renderTraceDetails} />
     </PlaygroundPersistGate>
   )
 }

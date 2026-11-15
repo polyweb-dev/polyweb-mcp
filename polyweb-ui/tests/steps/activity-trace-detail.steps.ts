@@ -1,12 +1,14 @@
 import { expect } from "@playwright/test"
 import type { Page } from "@playwright/test"
 import { When, Then } from "./fixtures"
+import { traceDetailRequests, traceListRequests } from "./backendStub"
+import { SUCCESS_TRACE_ID } from "../../src/test/fixtures/activity"
 
 /**
  * Playground parity for the shared result presentation (Tester Turn 1,
  * PLAN §7): the Activity trace detail converges toward this presentation, so
  * the stubbed Playground pins it — shared card, shared inspector,
- * non-selectable waterfall, raw JSON with copy feedback, and fetch metadata.
+ * non-selectable waterfall, View details trace popup, and fetch metadata.
  *
  * Step-text uniqueness: every pattern here is new. Navigation, provider
  * pinning, search/fetch submission, and playground tab phrasings reuse
@@ -126,34 +128,35 @@ Then(
   }
 )
 
-Then("the playground raw JSON inspector should start collapsed", async ({ page }) => {
+Then("the playground should offer View details instead of raw JSON", async ({ page }) => {
   const main = playgroundMain(page)
-  await expect(main.getByRole("button", { name: "Inspect raw JSON", exact: true })).toHaveAttribute("aria-expanded", "false")
+  await expect(main.getByRole("button", { name: "View details", exact: true })).toBeVisible()
+  await expect(main.getByRole("button", { name: /raw JSON/i })).toHaveCount(0)
   await expect(main.getByRole("group", { name: "Raw search response" })).toHaveCount(0)
 })
 
-When("I expand the playground raw JSON inspector", async ({ page }) => {
-  await playgroundMain(page)
-    .getByRole("button", { name: "Inspect raw JSON", exact: true })
-    .click()
+When("I open the playground View details", async ({ page }) => {
+  await playgroundMain(page).getByRole("button", { name: "View details", exact: true }).click()
 })
 
-Then("the playground raw JSON inspector should offer a copy action", async ({ page }) => {
-  const main = playgroundMain(page)
-  await expect(main.getByText("Raw response", { exact: true })).toBeVisible()
-  await expect(main.getByRole("button", { name: "Copy JSON", exact: true })).toBeVisible()
+Then("the playground trace detail popup should show the project trace", async ({ page }) => {
+  // The stubbed search names Alpha's success trace in X-Trace-Id; the popup
+  // reads it through the project trace route and shows the Activity inspector.
+  const dialog = page.getByRole("dialog", { name: "Trace detail" })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText("distributed consensus algorithms").first()).toBeVisible()
+  await expect(dialog.getByText("Consensus algorithms explained").first()).toBeVisible()
+  expect(traceDetailRequests()).toContain(SUCCESS_TRACE_ID)
+  expect(traceListRequests()).toEqual([])
 })
 
-When("I copy the playground raw JSON", async ({ page }) => {
-  await playgroundMain(page)
-    .getByRole("button", { name: "Copy JSON", exact: true })
-    .click()
+When("I close the playground trace detail popup", async ({ page }) => {
+  await page.getByRole("dialog", { name: "Trace detail" }).getByRole("button", { name: "Close" }).click()
+  await expect(page.getByRole("dialog", { name: "Trace detail" })).toHaveCount(0)
 })
 
-Then("the playground raw JSON copy should confirm", async ({ page }) => {
-  await expect(
-    playgroundMain(page).getByRole("button", { name: "Copied", exact: true })
-  ).toBeVisible()
+Then("the playground results should still show {string}", async ({ page }, title: string) => {
+  await expect(returnedResultsRegion(page).getByText(title)).toBeVisible()
 })
 
 Then(

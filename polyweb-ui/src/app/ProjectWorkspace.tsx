@@ -2,6 +2,8 @@ import type { ReactNode } from "react"
 import { Navigate, Route, Routes } from "react-router"
 import { useProjectScope } from "@/domains/projects"
 import { ActivityPage } from "@/features/activity/ui/ActivityPage"
+import { ProjectTraceDetails } from "@/features/activity/ui/ProjectTraceDetails"
+import type { RenderTraceDetails } from "@/features/playground/model/traceDetailsSlot"
 import { ProjectPlaygroundPage } from "@/features/playground/ui/ProjectPlaygroundPage"
 import { ProjectPlaygroundScope } from "@/features/playground/ui/ProjectPlaygroundScope"
 import { ProjectUsagePage } from "@/features/usage/ui/ProjectUsagePage"
@@ -14,10 +16,17 @@ import { ProjectSettingsPage } from "@/features/settings/ui/ProjectSettingsPage"
 import { ProjectSectionGate } from "./ProjectSectionGate"
 import { PROJECT_SECTIONS, projectPath, type ProjectSectionId } from "./routes"
 
+/** The Playground's View details opens the Activity trace inspector. */
+const renderTraceDetails: RenderTraceDetails = ({ traceId, onClose }) => (
+  <ProjectTraceDetails traceId={traceId} onClose={onClose} />
+)
+
 /** Page of each registered project section. A new section adds its page here. */
 const SECTION_PAGES: Record<ProjectSectionId, (accountId: string) => ReactNode> = {
   overview: () => <ProjectOverviewPage />,
-  playground: (accountId) => <ProjectPlaygroundPage accountId={accountId} />,
+  playground: (accountId) => (
+    <ProjectPlaygroundPage accountId={accountId} renderTraceDetails={renderTraceDetails} />
+  ),
   activity: () => <ActivityPage />,
   usage: () => <ProjectUsagePage />,
   providers: (accountId) => <ProjectProvidersPage accountId={accountId} />,

@@ -1,6 +1,8 @@
 import type { ReactNode } from "react"
 import { MemoryRouter } from "react-router"
 import { ProjectScopeContext } from "@/domains/projects/state/context"
+import { ProjectTraceDetails } from "@/features/activity/ui/ProjectTraceDetails"
+import type { RenderTraceDetails } from "@/features/playground/model/traceDetailsSlot"
 import { ProjectPlaygroundPage } from "@/features/playground/ui/ProjectPlaygroundPage"
 import { ProjectPlaygroundScope } from "@/features/playground/ui/ProjectPlaygroundScope"
 import { NotificationsProvider } from "@/shared/notifications/NotificationsContext"
@@ -16,6 +18,11 @@ export interface PlaygroundHarnessProps {
   showPage?: boolean
   children?: ReactNode
 }
+
+/** The workspace composition: View details opens the Activity trace inspector. */
+const renderTraceDetails: RenderTraceDetails = ({ traceId, onClose }) => (
+  <ProjectTraceDetails traceId={traceId} onClose={onClose} />
+)
 
 /**
  * The project playground as the workspace mounts it: notifications, a ready
@@ -40,7 +47,7 @@ export function PlaygroundHarness({
           projectId={projectId}
         >
           {showPage ? (
-            <ProjectPlaygroundPage accountId={accountId} />
+            <ProjectPlaygroundPage accountId={accountId} renderTraceDetails={renderTraceDetails} />
           ) : (
             <h2>Members</h2>
           )}

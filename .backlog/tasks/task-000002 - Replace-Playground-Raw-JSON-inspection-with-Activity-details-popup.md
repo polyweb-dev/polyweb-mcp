@@ -1,10 +1,11 @@
 ---
 id: TASK-000002
 title: Replace Playground Raw JSON inspection with Activity details popup
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@devin'
 created_date: 2026-10-15 22:19
-updated_date: '2026-10-30T19:47:00Z'
+updated_date: '2026-11-15T15:43:00Z'
 labels: []
 dependencies:
   - TASK-000047
@@ -22,7 +23,26 @@ In Playground, users should open the associated Activity details in a popup inst
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The Inspect Raw JSON action is replaced by a View Details button.
-- [ ] #2 The button opens the matching Activity details in a popup.
-- [ ] #3 The popup uses the same project-scoped trace inspector as Activity. Missing or metadata-only traces explain unavailable details without a global lookup.
+- [x] #1 The Inspect Raw JSON action is replaced by a View Details button.
+- [x] #2 The button opens the matching Activity details in a popup.
+- [x] #3 The popup uses the same project-scoped trace inspector as Activity. Missing or metadata-only traces explain unavailable details without a global lookup.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Transport: add requestJsonWithHeaders to shared/api/client.ts; apiService.search returns the body plus the X-Trace-Id header (32 lowercase hex, else null).
+2. Execution domain: SearchResponse gains optional traceId; mapSearchResponse and useSearchRunner carry it into the persisted playground result.
+3. Activity feature: add useProjectTraceDetail + ProjectTraceDetails, which load one trace through the project route and render the existing TraceDetailDialog. No trace id shows 'No trace was recorded for this request' with no list or global read; 404 and metadata-only keep the existing inspector copy.
+4. Playground: replace Inspect raw JSON (viewer + Copy JSON) with a View details button that opens a TraceDetails slot. app/ProjectWorkspace composes the activity component into the playground (no feature-to-feature import). Remove the raw JSON/copy state from the controller.
+5. Tests: client header unit test, mapper/runner tests, SearchResults and PlaygroundPage integration tests (traced, untraced, missing), update the Playground parity BDD scenario and stub, update docs/dashboard/playground.md.
+6. Verify: targeted vitest, then pnpm depcruise, knip, lint, typecheck, test, build; ui-bdd on CI.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented per plan. Playground reads X-Trace-Id from POST /search (requestJsonWithHeaders), stores traceId on the result, and View details opens ProjectTraceDetails (Activity TraceDetailDialog) composed in app/ProjectWorkspace via a render slot (no feature-to-feature import). No trace id, 404, metadata-only and missing traces.read each explain the absence without a list/global read. Added beyond AC: traces.read permission message instead of a 403 error.
+Evidence: vitest ProjectPlaygroundPage.test.tsx 'ProjectPlaygroundPage View details' (5 cases), SearchResults.test.tsx 'SearchResults View details', polywebApi/client/useSearchRunner tests; touched + sampled files 315/315 pass. Gate: typecheck, typecheck:e2e, lint (2 pre-existing warnings in untouched files), depcruise, knip clean.
+UI review (Devin Claude Opus 5.5, screenshots in /tmp/task2-ui-review): PASS, no blocker/major. Minor/nits are all in the shared inspector or existing styles (dialog height changes between tabs, bar vs trace latency differ, plain ghost button like the old raw JSON toggle).
+<!-- SECTION:NOTES:END -->

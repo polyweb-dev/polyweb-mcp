@@ -40,6 +40,11 @@ function freshStore(): AppStore {
 
 const searchMock = vi.mocked(apiService.search)
 
+/** The traced shape `apiService.search` resolves with. */
+function traced(body: unknown, traceId: string | null = null) {
+  return { body, traceId } as never
+}
+
 describe("useSearchRunner Tavily 402", () => {
   beforeEach(() => {
     searchMock.mockReset()
@@ -74,7 +79,7 @@ describe("useSearchRunner Tavily 402", () => {
 
   it("never retries another provider on the client after a failure", async () => {
     searchMock.mockRejectedValueOnce(new ApiError(500, "brave failed", { provider: "brave" }))
-    searchMock.mockResolvedValueOnce(searchResponseFixture({ provider: "exa" }) as never)
+    searchMock.mockResolvedValueOnce(traced(searchResponseFixture({ provider: "exa" })))
     const store = freshStore()
     const { result } = renderHook(() => useSearchRunner(deps()), { wrapper: wrapper(store) })
 
@@ -124,7 +129,7 @@ describe("useSearchRunner project request", () => {
   })
 
   it("stores the mapped response of a successful search", async () => {
-    searchMock.mockResolvedValueOnce(searchResponseFixture({ provider: "exa" }) as never)
+    searchMock.mockResolvedValueOnce(traced(searchResponseFixture({ provider: "exa" })))
     const store = freshStore()
     const { result } = renderHook(() => useSearchRunner(deps()), { wrapper: wrapper(store) })
 
@@ -135,6 +140,20 @@ describe("useSearchRunner project request", () => {
     expect(searchMock.mock.calls[0]?.[0]).toMatchObject({ project_id: PROJECT_ALPHA_ID })
     expect(store.getState().playground.searchStatus).toBe("succeeded")
     expect(store.getState().playground.activeSearch?.selectedProviderId).toBe("exa")
+    expect(store.getState().playground.activeSearch?.traceId).toBeNull()
+  })
+
+  it("stores the trace id of the call with the result", async () => {
+    const traceId = "4bf92f3577b34da6a3ce929d0e0e4736"
+    searchMock.mockResolvedValueOnce(traced(searchResponseFixture({ provider: "exa" }), traceId))
+    const store = freshStore()
+    const { result } = renderHook(() => useSearchRunner(deps()), { wrapper: wrapper(store) })
+
+    await act(async () => {
+      await result.current({ query: "hello", maxResults: 5, timeoutMs: 1000 })
+    })
+
+    expect(store.getState().playground.activeSearch?.traceId).toBe(traceId)
   })
 
   it("aborts the in-flight search on unmount and never dispatches its late result", async () => {
@@ -163,7 +182,7 @@ describe("useSearchRunner project request", () => {
 
     const before = store.getState().playground
     await act(async () => {
-      resolveSearch(searchResponseFixture({ provider: "exa" }))
+      resolveSearch(traced(searchResponseFixture({ provider: "exa" })))
       await pending
     })
 
@@ -173,7 +192,7 @@ describe("useSearchRunner project request", () => {
   })
 
   it("keeps the UI id of a pinned provider and the last-good result after a failure", async () => {
-    searchMock.mockResolvedValueOnce(searchResponseFixture({ provider: "you" }) as never)
+    searchMock.mockResolvedValueOnce(traced(searchResponseFixture({ provider: "you" })))
     searchMock.mockRejectedValueOnce(new ApiError(503, "no provider is configured", null))
     const store = freshStore()
     const { result } = renderHook(() => useSearchRunner(deps()), { wrapper: wrapper(store) })
