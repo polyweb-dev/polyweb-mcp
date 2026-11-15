@@ -1,6 +1,8 @@
+import { Check, Copy } from "lucide-react"
 import type { TraceDetail } from "@/domains/activity"
 import { useClipboard } from "@/shared/clipboard/useClipboard"
 import { Button } from "@/shared/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip"
 
 export interface TraceCopyJsonButtonProps {
   trace: TraceDetail
@@ -13,14 +15,25 @@ export interface TraceCopyJsonButtonProps {
  */
 export function TraceCopyJsonButton({ trace }: TraceCopyJsonButtonProps) {
   const { copied, copy } = useClipboard({ resetAfterMs: 2000 })
+  const label = copied ? "Copied" : "Copy JSON"
+  const Icon = copied ? Check : Copy
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      onClick={() => void copy(JSON.stringify(trace, null, 2))}
-    >
-      {copied ? "Copied" : "Copy JSON"}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger
+        closeOnClick={false}
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label={label}
+            onClick={() => void copy(JSON.stringify(trace, null, 2))}
+          />
+        }
+      >
+        <Icon aria-hidden="true" />
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }

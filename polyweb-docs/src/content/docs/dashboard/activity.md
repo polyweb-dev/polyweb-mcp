@@ -34,7 +34,7 @@ Two views sit below it.
 
 A trace with a **Metadata only** tag stored timing only, so there's no query or results to show and the first view is called **Summary**.
 
-**Copy JSON**, at the right of the view switch, copies the whole trace detail to the clipboard as formatted JSON. The button shows **Copied** when the copy succeeds. The JSON contains only what was stored: for a metadata-only trace, the query and results are `null`.
+The copy icon (**Copy JSON**), at the right of the view switch, copies the whole trace detail to the clipboard as formatted JSON. When the copy succeeds, the icon changes to a check mark and its tooltip shows **Copied**. The JSON contains only what was stored: for a metadata-only trace, the query and results are `null`.
 
 ## What gets stored
 

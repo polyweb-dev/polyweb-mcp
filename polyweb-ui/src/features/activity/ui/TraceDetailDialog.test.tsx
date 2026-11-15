@@ -460,6 +460,17 @@ describe("TraceDetailDialog Copy JSON", () => {
     }
   })
 
+  it("shows Copy JSON as an icon button with a Copy JSON tooltip", async () => {
+    const user = userEvent.setup()
+    renderDialog(searchDetail())
+
+    const button = screen.getByRole("button", { name: "Copy JSON" })
+    expect(button.textContent).toBe("")
+    await user.hover(button)
+
+    expect(await screen.findByText("Copy JSON")).toBeInTheDocument()
+  })
+
   it("copies the shown trace as pretty-printed JSON and confirms with Copied", async () => {
     const user = userEvent.setup()
     const writeText = vi.fn(async (_text: string) => {})
@@ -472,6 +483,7 @@ describe("TraceDetailDialog Copy JSON", () => {
     expect(writeText).toHaveBeenCalledWith(JSON.stringify(detail, null, 2))
     expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Copy JSON" })).not.toBeInTheDocument()
+    expect(await screen.findByText("Copied")).toBeInTheDocument()
   })
 
   it("copies a metadata-only trace exactly as stored, with null input and output", async () => {
@@ -498,6 +510,7 @@ describe("TraceDetailDialog Copy JSON", () => {
 
     expect(screen.getByRole("button", { name: "Copy JSON" })).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument()
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument()
   })
 
   it.each([

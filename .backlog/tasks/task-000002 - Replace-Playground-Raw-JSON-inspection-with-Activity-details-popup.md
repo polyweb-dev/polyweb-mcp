@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@devin'
 created_date: 2026-10-15 22:19
-updated_date: '2026-11-15T22:27:00Z'
+updated_date: '2026-11-15T23:34:00Z'
 labels: []
 dependencies:
   - TASK-000047
@@ -57,6 +57,8 @@ Owner decisions (2026-11-15): seed Alpha pools for the parity scenario; parallel
 Worker measurement (261 stubbed scenarios, 16-vCPU spot worker): 1 worker 29.4 min (#126 main), 6 workers 5.6 min (#148), 12 workers 3.7 min (#142); all three fail the same 106 pre-existing scenarios (TASK-000083), no parallel-only failure. Default set to 12 in run-ui-bdd.sh (c690de0). Parity scenario fixed: seeded Brave pool + steps aligned with current result UI (fbe1e2d); both activity-trace-detail scenarios pass on #149. Final head-SHA runs queued: ui-quality #150, ui-bdd @smoke #151, feature #152, @stub at default workers #153.
 
 Owner request (2026-11-15): restore copying as Copy JSON in the shared trace popup ("if a trace can be inspected, why can't it be copied?"). TraceCopyJsonButton (ghost sm, shared useClipboard with resetAfterMs 2000 and no optimistic flag, so Copied shows only after a successful write) sits at the end of the Results/Timeline switch row through a new TraceInspectionWorkspace actions slot. It copies JSON.stringify(trace, null, 2) of the decoded TraceDetail; metadata-only traces copy their null input/output. Only in the ready state, so Activity and the Playground both get it. Tests: TraceDetailDialog.test.tsx 'TraceDetailDialog Copy JSON'; BDD steps added to 'Playground View details opens the project trace inspector'. Docs: dashboard/activity.md and dashboard/playground.md.
+
+Owner request (2026-11-15): Copy JSON is now an icon button. TraceCopyJsonButton uses Button variant outline + size icon (28 px square, same footprint as the inspector's Open target URL link) with the lucide Copy icon, switching to Check while copied, so the neighbouring scope text no longer shifts. The shared Base UI tooltip (shared/ui/tooltip, closeOnClick false) shows Copy JSON / Copied on hover and keyboard focus; aria-label follows the same text. Copy behaviour unchanged. Tests: TraceDetailDialog.test.tsx 'TraceDetailDialog Copy JSON' (icon button + tooltip, name/tooltip change on success, none on failure); BDD steps check the empty-text square button, hover tooltip and clipboard read-back. Docs: activity.md and playground.md say 'the copy icon (Copy JSON)'.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

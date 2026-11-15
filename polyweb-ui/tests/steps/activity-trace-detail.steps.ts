@@ -167,7 +167,14 @@ Then("the playground trace detail popup should show the project trace", async ({
 
 Then("the playground trace detail popup should offer Copy JSON", async ({ page }) => {
   const dialog = page.getByRole("dialog", { name: "Trace detail" })
-  await expect(dialog.getByRole("button", { name: "Copy JSON", exact: true })).toBeVisible()
+  const copy = dialog.getByRole("button", { name: "Copy JSON", exact: true })
+  await expect(copy).toBeVisible()
+  // An icon button: no text, a fixed square, and a tooltip that names it.
+  await expect(copy).toHaveText("")
+  const box = await copy.boundingBox()
+  expect(box && Math.round(box.width) === Math.round(box.height)).toBe(true)
+  await copy.hover()
+  await expect(page.getByText("Copy JSON", { exact: true })).toBeVisible()
 })
 
 When("I copy the playground trace detail JSON", async ({ page }) => {
@@ -185,6 +192,7 @@ Then(
   async ({ page }) => {
     const dialog = page.getByRole("dialog", { name: "Trace detail" })
     await expect(dialog.getByRole("button", { name: "Copied", exact: true })).toBeVisible()
+    await expect(page.getByText("Copied", { exact: true })).toBeVisible()
     const copied: unknown = JSON.parse(
       await page.evaluate(() => navigator.clipboard.readText())
     )
