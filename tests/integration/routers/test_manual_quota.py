@@ -777,3 +777,59 @@ async def test_delete_without_a_manual_record_keeps_the_vendor_402(
         await repository.close()
         await http.aclose()
         get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_key_scoped_exa_record_keeps_the_provider_wide_credits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
+) -> None:
+    """Review finding F4: a key-scoped Exa record is that key's anchor only.
+
+    The saved Exa manual credits apply to every Exa key, so only an unscoped
+    record changes them.
+    """
+
+    from polyweb.configuration.config import get_settings
+    from polyweb.services.provider_runtime import effective_config_for_name
+
+    async def provider_credits() -> Decimal | None:
+        config = await effective_config_for_name(repository, "exa", strict=True)
+        return config.exa_manual_starting_credits_usd
+
+    http = _offline_client()
+    repository, app = await _open_key_world(tmp_path, monkeypatch, "exa", http)
+    try:
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(client, repository, temp_email("exa-scope"))
+            await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            world = _KeyWorld(client, app, raw_auth_headers(pair["access_token"]))
+            first = world.add_key("exa", "first")
+            world.add_key("exa", "second")
+            url = "/api/v1/providers/exa/manual-quota"
+
+            assert (
+                client.put(url, json=_payload("7", "0"), headers=world.headers).status_code == 200
+            )
+            assert await provider_credits() == Decimal("7")
+
+            scoped = client.put(
+                url,
+                params={"credential_id": first},
+                json=_payload("20", "0"),
+                headers=world.headers,
+            )
+            assert scoped.status_code == 200, scoped.text
+            pool = await repository.limits.get_pool(world.scoped_pool_id("exa", first))
+            assert pool is not None and pool.remaining == Decimal("20")
+            assert await provider_credits() == Decimal("7"), "a key record changed every Exa key"
+
+            cleared = client.delete(url, params={"credential_id": first}, headers=world.headers)
+            assert cleared.status_code == 204
+            assert await provider_credits() == Decimal("7"), "a key delete changed every Exa key"
+
+            assert client.delete(url, headers=world.headers).status_code == 204
+            assert await provider_credits() is None
+    finally:
+        await repository.close()
+        await http.aclose()
+        get_settings.cache_clear()

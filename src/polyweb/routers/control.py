@@ -275,12 +275,16 @@ _ScopePool = Annotated[
 
 
 def _register_manual_quota_routes(app: FastAPI) -> None:
-    """Register billing anchors; Exa allowance also seeds its local quota.
+    """Register billing anchors; an unscoped Exa allowance also seeds its local quota.
 
     The optional ``credential_id`` or ``pool_id`` query parameter names the
     key or shared pool a record describes. Without one, a provider with one
     balance owner gets the record at that key or pool, and a provider with
     several keeps the provider-level record. The request body is unchanged.
+
+    The saved Exa manual starting credits apply to every Exa key, so only a
+    request without a scope parameter changes them. A key- or pool-scoped Exa
+    record (and its delete) changes only that balance owner's anchor.
     """
 
     @app.get(
@@ -322,7 +326,8 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         response = await persist_manual_quota(
             repository, name, update, datetime.now(UTC), scope, explicit=explicit is not None
         )
-        await _apply_exa_manual_credits(request, name, update.allowance)
+        if explicit is None:
+            await _apply_exa_manual_credits(request, name, update.allowance)
         await _notify_manual_anchor(request, name, response, scope)
         return response
 
@@ -341,7 +346,8 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         explicit = await _explicit_scope(repository, name, credential_id, pool_id)
         scope = explicit or await resolve_manual_quota_scope(repository, name)
         await clear_manual_quota(repository, name, explicit)
-        await _apply_exa_manual_credits(request, name, None)
+        if explicit is None:
+            await _apply_exa_manual_credits(request, name, None)
         await _notify_manual_anchor(request, name, None, scope)
 
 
@@ -397,7 +403,9 @@ async def _apply_exa_manual_credits(
     """Persist Exa prepaid credits through the atomic partial seam.
 
     The saved setting changes the effective Exa configuration, so the next
-    lease of every Exa key builds a new adapter that applies the credits.
+    lease of every Exa key builds a new adapter that applies the credits. The
+    routes call this only for an unscoped record, because the setting is
+    provider-wide.
     """
     if provider is not ProviderName.EXA:
         return
