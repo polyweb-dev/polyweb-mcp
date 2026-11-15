@@ -82,6 +82,24 @@ _SERVER_ADDRESS = _SERVER.hostname or "api.keenable.ai"
 _SERVER_PORT = _SERVER.port or 443
 
 
+def _reported_balance(latest: QuotaSnapshot | None) -> object:
+    """Return the vendor-reported credits a stored snapshot carries, if any.
+
+    A billed response stores ``credits_remaining`` in its metadata. A scoped
+    sync projection stores the pool value instead, and names the pool source:
+    only a ``vendor_api`` pool holds the reported balance.
+    """
+
+    if latest is None:
+        return None
+    reported = latest.metadata.get("credits_remaining")
+    if reported is not None:
+        return reported
+    if latest.metadata.get("native_source") == "vendor_api":
+        return latest.remaining
+    return None
+
+
 def _credits_remaining(value: object) -> Decimal | None:
     """Parse a reported ``credits_remaining``; an absent or malformed value stays unknown."""
 
@@ -460,7 +478,9 @@ class KeenableAdapter(ProviderAdapter):
         """Restore keyed allowance or keyless rolling-window counters.
 
         A keyed key also restores its newest vendor-reported balance of this
-        month, minus the credits recorded after that report.
+        month, minus the credits recorded after that report. The balance comes
+        from a billed response's snapshot, or from a scoped sync projection of
+        a stored ``vendor_api`` pool, which is the newest snapshot after a sync.
         """
 
         mode, _headers = self._auth()
@@ -513,7 +533,7 @@ class KeenableAdapter(ProviderAdapter):
             and not later_success
             and latest.observed_at >= month_start
         )
-        reported = latest.metadata.get("credits_remaining") if latest is not None else None
+        reported = _reported_balance(latest)
         self._credits_remaining = None
         if reported is not None and latest is not None and latest.observed_at >= month_start:
             later = sum(

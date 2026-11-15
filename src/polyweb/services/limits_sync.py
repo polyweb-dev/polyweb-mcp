@@ -396,7 +396,12 @@ class LimitSyncService:
             stored_hook(snapshot)
 
     async def _record_scoped_quota(self, pool_id: str) -> None:
-        """Project accepted native truth onto the same scoped routing snapshot."""
+        """Project accepted native truth onto the same scoped routing snapshot.
+
+        The projection names the stored pool's source, so a rebuilt adapter
+        can tell a vendor-reported balance from a local estimate when this
+        projection is the key's newest snapshot.
+        """
         if self._scope is None or self._quota_repository is None or self._repository is None:
             return
         pool = await self._repository.get_pool(pool_id)
@@ -411,7 +416,7 @@ class LimitSyncService:
                 reset_at=pool.reset_at,
                 observed_at=pool.observed_at,
                 unit_kind=pool.native_unit,
-                metadata={"native_sync": True},
+                metadata={"native_sync": True, "native_source": pool.source},
             ),
             credential_id=self._scope.credential_id,
             pool_id=self._scope.upstream_pool_id,

@@ -1084,3 +1084,54 @@ async def test_retired_preparation_does_not_record_its_stale_hydration(
 
     assert latest is not None
     assert (latest.remaining, latest.metadata.get("manual_anchor")) == (Decimal("10"), True)
+
+
+async def test_keyed_keenable_credits_remaining_survives_a_native_sync_and_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding F5: the vendor's credits_remaining outlives the scoped sync projection.
+
+    The scoped sync writes the newest routing snapshot of the key. A rebuilt
+    adapter must still restore the reported balance from it, not fall back
+    to the free-allowance estimate.
+    """
+
+    from polyweb.adapters.keenable import KeenableAdapter
+    from tests.fixtures.a2_execution import search_request
+
+    world = await build_execution_world(tmp_path, monkeypatch, provider="keenable")
+    http = _keenable_http(credits_remaining=4000)
+    _install_factory(
+        monkeypatch, "keenable", lambda client, api_key=None: KeenableAdapter(http, api_key=api_key)
+    )
+    restarted: ExecutionService | None = None
+    try:
+        await _record_usage(
+            world,
+            provider="keenable",
+            units="100000",
+            unit_kind=UnitKind.CREDIT,
+            label="a1",
+            metadata={"mode": "keyed"},
+        )
+        await world.service.search(
+            search_request(world), attribution=world.project, context=world.context
+        )
+        credential = _resolved(world, "a1")
+        await world.service._sync_credential_limits(credential, datetime.now(UTC))
+        latest = await world.repository.latest_quota(
+            "keenable", credential_id=credential.credential_id
+        )
+        assert latest is not None and latest.metadata.get("native_sync") is True
+
+        config = await effective_config_for_name(world.repository, "keenable", strict=True)
+        restarted = _restarted(world)
+        snapshot = await _keenable_snapshot(restarted, credential, config)
+    finally:
+        if restarted is not None:
+            await restarted.aclose()
+        await world.aclose()
+        await http.aclose()
+
+    assert snapshot is not None
+    assert (snapshot.source, snapshot.remaining) == ("vendor_api", Decimal("4000"))
