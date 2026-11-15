@@ -689,6 +689,45 @@ async def test_terminal_402_older_than_a_vendor_report_stays_out(
     assert pool is not None and pool.source == "vendor_api"
 
 
+@pytest.mark.parametrize("operator_action", ["manual_record", "manual_delete"])
+async def test_terminal_402_older_than_an_operator_action_stays_out(
+    limits_repo: LimitRepository, operator_action: str
+) -> None:
+    """A manual record or delete newer than the 402 instant keeps the old 402 out."""
+
+    pool = NativePool(
+        pool_id="tavily:keyed:credit",
+        provider="tavily",
+        auth_mode=AuthMode.KEYED,
+        native_unit=UnitKind.CREDIT,
+        source="vendor_api",
+    )
+    await limits_repo.ensure_pool(pool)
+    assert await limits_repo.apply_snapshot(_tavily_report(at=FIXED_AT, remaining="960"))
+    operator_at = FIXED_AT + timedelta(minutes=2)
+    if operator_action == "manual_record":
+        await limits_repo.record_manual_anchor(
+            pool,
+            remaining=Decimal("500"),
+            allowance=Decimal("1000"),
+            reset_at=None,
+            observed_at=operator_at,
+        )
+    else:
+        assert await limits_repo.clear_pool_values(pool.pool_id, observed_at=operator_at)
+    before = await limits_repo.get_pool(pool.pool_id)
+
+    accepted = await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=1), remaining="0", source="vendor_402")
+    )
+
+    after = await limits_repo.get_pool(pool.pool_id)
+    assert accepted is False
+    assert before is not None and after is not None
+    assert (after.source, after.remaining) == (before.source, before.remaining)
+    assert after.source != "vendor_402"
+
+
 async def test_terminal_402_is_not_dropped_behind_a_newer_local_estimate(limits_repo) -> None:
     """A local estimate stored under a vendor fact keeps that source, yet ranks below a 402."""
 

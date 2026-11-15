@@ -659,7 +659,7 @@ class LimitRepository:
             if effective.source == _TAVILY_VENDOR_402_SOURCE and (
                 row is None or row.source != _TAVILY_VENDOR_402_SOURCE
             ):
-                report = await _last_vendor_report(session, snapshot.pool_id, snapshot.observed_at)
+                report = await _last_vendor_report(session, snapshot)
                 detail[_TERMINAL_BASELINE] = {
                     "remaining": _text(report.remaining if report is not None else None),
                     "allowance": _text(report.allowance if report is not None else None),
@@ -3135,7 +3135,7 @@ class _TerminalBaseline:
 
 
 async def _last_vendor_report(
-    session: AsyncSession, pool_id: str, before: datetime
+    session: AsyncSession, snapshot: NativeUsageSnapshot
 ) -> _TerminalBaseline | None:
     """Return the newest accepted vendor report of a pool in the period before an instant.
 
@@ -3144,12 +3144,15 @@ async def _last_vendor_report(
     new funds. A report from an earlier calendar month gives no baseline.
     """
 
+    before = snapshot.observed_at
     utc = before.astimezone(UTC)
     period_start = utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     rows = await session.scalars(
         select(LimitEventRow.detail_json)
         .where(
-            LimitEventRow.pool_id == pool_id,
+            LimitEventRow.provider == snapshot.provider,
+            LimitEventRow.auth_mode == snapshot.auth_mode.value,
+            LimitEventRow.pool_id == snapshot.pool_id,
             LimitEventRow.reason == "vendor_sync",
             LimitEventRow.observed_at >= _timestamp(period_start),
             LimitEventRow.observed_at <= _timestamp(before),
@@ -3337,6 +3340,8 @@ async def _older_than_row(
     newer_fact = await session.scalar(
         select(LimitEventRow.event_id)
         .where(
+            LimitEventRow.provider == snapshot.provider,
+            LimitEventRow.auth_mode == snapshot.auth_mode.value,
             LimitEventRow.pool_id == snapshot.pool_id,
             LimitEventRow.observed_at > _timestamp(snapshot.observed_at),
             LimitEventRow.reason.in_(("vendor_sync", "reconcile")),

@@ -317,7 +317,13 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         credential_id: _ScopeKey = None,
         pool_id: _ScopePool = None,
     ) -> ManualQuotaResponse:
-        """Store the billing anchor and return the ESTIMATED capacity view."""
+        """Store the billing anchor and return the ESTIMATED capacity view.
+
+        An unscoped Exa record also sets the provider-wide manual credits. A
+        key- or pool-scoped Exa record writes only that key's balance: the
+        rebuild clears the key's vendor 402 block, but a key that the
+        provider-wide spend budget denies stays denied.
+        """
 
         name = _require_provider(provider_id)
         repository = request.app.state.repository
