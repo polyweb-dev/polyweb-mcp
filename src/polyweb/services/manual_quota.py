@@ -183,8 +183,10 @@ async def resolve_manual_quota_scope(
 ) -> ManualQuotaScope | None:
     """Return the balance owner a manual record applies to, or ``None`` for the provider.
 
-    The eligible keys are the provider's active credentials that carry a key
-    (keyless credentials have no balance). Keys linked to one shared pool share
+    The eligible keys are the provider's active API-key credentials. Keyless
+    credentials have no balance, and an OAuth credential (Parallel) reports its
+    own vendor balance outside the keyed pool (TASK-000077), so a manual record
+    never targets either. Keys linked to one shared pool share
     one balance owner. A named key resolves to its balance owner, a named pool
     must hold an eligible key, and without a name the provider's only balance
     owner applies. With several owners and no name the record stays
@@ -203,7 +205,7 @@ async def resolve_manual_quota_scope(
             for credential in await CredentialRepository(session).list_active_for_provider(
                 account_id=DEFAULT_INSTALLATION_ACCOUNT_ID, provider_type=provider.value
             )
-            if credential.auth_mode != "keyless"
+            if credential.auth_mode == "api_key"
         ]
         links = await UpstreamPoolRepository(session).links_for_credentials(
             credential_ids={credential.id for credential in credentials}
