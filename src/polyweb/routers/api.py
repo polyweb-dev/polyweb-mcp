@@ -655,7 +655,6 @@ async def _start_limits(
 
     limits = ProviderLimitsService(repo.limits)
     await limits.initialize()
-    apply_keenable_auth_mode(routes, limits)
     app.state.limits = limits
 
     async def sync_system_credentials(provider: str, now: datetime) -> SyncResult | None:
@@ -673,16 +672,6 @@ async def _start_limits(
     # Credential-scoped observations are scheduled only by admitted execution
     # and by the admin's manual refresh, which polls the provider's active
     # vault credentials. There is no global vendor polling schedule.
-
-
-def apply_keenable_auth_mode(routes: Sequence[ProviderAdapter], limits: Any) -> None:
-    """Project Keenable's keyless-or-keyed rail choice into the limit service."""
-
-    from polyweb.infrastructure.secrets import ProviderName as _ProviderName
-
-    adapter = next((route for route in routes if route.name == _ProviderName.KEENABLE.value), None)
-    if adapter is not None:
-        limits.apply_keenable_auth_mode(adapter.limit_auth_mode)
 
 
 async def _stop_limits(app: FastAPI, stop: asyncio.Event) -> None:

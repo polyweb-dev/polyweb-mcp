@@ -560,6 +560,134 @@ async def test_brave_estimate_after_rebuild_cannot_raise_a_vendor_fact(
     assert pool.remaining <= Decimal("2.50")
 
 
+def _keenable_http(status: int = 200, credits_remaining: int | None = 4000) -> httpx.AsyncClient:
+    """A Keenable transport answering every search with one billed result."""
+
+    usage: dict[str, Any] = {"sku": "search.pro", "amount": 1, "credits": 1, "paid": True}
+    if credits_remaining is not None:
+        usage["credits_remaining"] = credits_remaining
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        del request
+        if status != 200:
+            return httpx.Response(status, json={"code": "insufficient_credits"})
+        return httpx.Response(
+            200,
+            json={"results": [{"title": "k", "url": "https://example.com/k"}], "usage": usage},
+        )
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(answer))
+
+
+async def test_keenable_auth_mode_comes_from_the_leased_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #11: the Keenable rail follows the credential each lease builds."""
+
+    from polyweb.adapters.keenable import KeenableAdapter
+
+    world = await build_execution_world(
+        tmp_path, monkeypatch, provider="keenable", labels=("public", "keyed")
+    )
+    http = httpx.AsyncClient()
+    _install_factory(
+        monkeypatch, "keenable", lambda client, api_key=None: KeenableAdapter(http, api_key=api_key)
+    )
+    rails = []
+    try:
+        assert world.limits is not None
+        config = await effective_config_for_name(world.repository, "keenable", strict=True)
+        for label, auth_mode in (("public", "keyless"), ("keyed", "api_key")):
+            lease = await world.service._lease_adapter(
+                _resolved(world, label, auth_mode=auth_mode), config
+            )
+            lease.release()
+            rails.append((await world.limits.provider_view("keenable")).active_auth_mode)
+    finally:
+        await world.aclose()
+        await http.aclose()
+
+    assert rails == [AuthMode.KEYLESS, AuthMode.KEYED]
+
+
+async def test_keyed_keenable_credits_remaining_becomes_the_keys_vendor_fact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #11: a billed response's credits_remaining is stored as the key's trusted balance.
+
+    The free allowance is spent, so the call is paid use; with credits left it
+    must not block, and a later local estimate cannot raise the stored fact.
+    """
+
+    from polyweb.adapters.keenable import KeenableAdapter
+    from tests.fixtures.a2_execution import search_request
+
+    world = await build_execution_world(tmp_path, monkeypatch, provider="keenable")
+    http = _keenable_http(credits_remaining=4000)
+    _install_factory(
+        monkeypatch, "keenable", lambda client, api_key=None: KeenableAdapter(http, api_key=api_key)
+    )
+    try:
+        await _record_usage(
+            world,
+            provider="keenable",
+            units="100000",
+            unit_kind=UnitKind.CREDIT,
+            label="a1",
+            metadata={"mode": "keyed"},
+        )
+        response = await world.service.search(
+            search_request(world), attribution=world.project, context=world.context
+        )
+        credential = _resolved(world, "a1")
+        await world.service._sync_credential_limits(credential, datetime.now(UTC))
+        assert world.limits is not None
+        base = world.limits.observation_pool_id("keenable", AuthMode.KEYED)
+        pool = await world.repository.limits.get_pool(f"{base}#cred:{credential.credential_id}")
+    finally:
+        await world.aclose()
+        await http.aclose()
+
+    assert response.provider == "keenable"
+    assert pool is not None
+    assert (pool.source, pool.remaining) == ("vendor_api", Decimal("4000"))
+
+
+async def test_keyed_keenable_402_writes_a_terminal_denial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC #11: a keyed 402 insufficient_credits stores a vendor 402 for the key."""
+
+    from polyweb.adapters.keenable import KeenableAdapter
+    from polyweb.infrastructure.resilience import ResilientRunner
+    from tests.fixtures.a2_execution import search_request
+
+    world = await build_execution_world(tmp_path, monkeypatch, provider="keenable")
+    http = _keenable_http(status=402)
+    _install_factory(
+        monkeypatch,
+        "keenable",
+        lambda client, api_key=None: KeenableAdapter(
+            http, api_key=api_key, runner=ResilientRunner(http, max_attempts=1)
+        ),
+    )
+    try:
+        with pytest.raises(ProviderOperationError, match="quota_exhausted"):
+            await world.service.search(
+                search_request(world), attribution=world.project, context=world.context
+            )
+        assert world.limits is not None
+        base = world.limits.observation_pool_id("keenable", AuthMode.KEYED)
+        credential_id = world.credentials["a1"].credential_id
+        pool = await world.repository.limits.get_pool(f"{base}#cred:{credential_id}")
+    finally:
+        await world.aclose()
+        await http.aclose()
+
+    assert pool is not None
+    assert (pool.source, pool.remaining) == ("vendor_402", Decimal("0"))
+
+
 async def test_keyless_keenable_stays_unmetered_after_build(
     keenable_world: ExecutionWorld,
 ) -> None:

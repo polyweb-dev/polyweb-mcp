@@ -52,7 +52,7 @@ from polyweb.infrastructure.observability import (
     use_observability,
 )
 from polyweb.infrastructure.observability_asgi import flush_traces
-from polyweb.infrastructure.secrets import AsyncSecretStore, ProviderName
+from polyweb.infrastructure.secrets import AsyncSecretStore
 from polyweb.infrastructure.trace_payloads import (
     _annotate_root,
     _annotate_root_error,
@@ -148,9 +148,6 @@ async def _start_limits_generation(state: _ServerState, routes: Sequence[Provide
         return
     limits = ProviderLimitsService(repository.limits)
     await limits.initialize()
-    keenable = next((route for route in routes if route.name == ProviderName.KEENABLE.value), None)
-    if keenable is not None:
-        limits.apply_keenable_auth_mode(keenable.limit_auth_mode)
     stop = asyncio.Event()
     sync = LimitSyncService(repository.limits, limits, lambda: state["routes"] or [])
     state["limits"] = limits

@@ -1616,6 +1616,8 @@ class ExecutionService:
             )
 
         async def prepare(adapter: ProviderAdapter) -> None:
+            if self._limits is not None and credential.provider_type == ProviderName.KEENABLE.value:
+                self._limits.apply_keenable_auth_mode(_adapter_auth_mode(adapter))
             # Best effort, as a failed read must not fail the request: the
             # adapter then starts from its constructor state.
             try:
