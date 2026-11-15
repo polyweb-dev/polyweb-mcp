@@ -42,6 +42,18 @@ These rules for the orchestrator that are distilled from prior agent runs. Follo
 - **Run Behave only when it matters.** Run it when BDD features or steps change, or at the final gate. Leave out the `@latency` scenarios in routine runs: `uv run --no-sync behave --tags="not @live and not @latency"`. Passing `--tags` replaces the default `not @live`, so keep it in the expression. Run them only when the request path changes and at the card's latency gate.
 - **Batch feedback.** Review a whole agent round, then send all defects and rulings in one handoff. Ask agents for exact failing test IDs so the next round can run only those tests first.
 
+### Subagent model choice
+The orchestrator picks the model and reasoning effort for each subagent by the kind of work. Always set the effort explicitly: the Codex models below default to a lower effort.
+
+| Model (effort) | Model ID | Use it for |
+| :--- | :--- | :--- |
+| **Codex GPT 6 Luna** (high) | `gpt-6-luna` | Exploring the codebase and simple research: tracing code paths, looking things up on the web, and small tasks that mean reading a lot and summarizing. |
+| **Claude Haiku 5.5** (medium) | `claude-haiku-5-5` | Fallback for GPT 6 Luna only, when Luna is unavailable because of quota limits. |
+| **Claude Opus 5.5** (medium) | `claude-opus-5-5` | **The workhorse.** Well-planned, scoped implementation; code change review; UI review; most medium-difficulty bugs. |
+| **Claude Opus 5.5** (high) | `claude-opus-5-5` | Planning and orchestration; identifying and fixing hard bugs. |
+| **Codex GPT 6.1 Sol** (high) | `gpt-6.1-sol` | The nitpicker for hard bugs Opus cannot find. Not needed for most bugs. It identifies and explains the bug; Opus fixes it. It can flag minor issues that do not affect the actual feature, so weigh its findings before acting on them. |
+| **Codex GPT 6.1 Terra** (high) | `gpt-6.1-terra` | Triggering many CI runs and gathering their results. Use it only when there are many CI runs to coordinate; otherwise the agent that is developing or testing runs its own CI. |
+
 ## Cloud test runs (Woodpecker CI)
 
 - **Local vs cloud**: run **unit tests locally**. All other suites (integration, BDD, latency, live, mutation) must run on Woodpecker CI — they execute on autoscaled GCP Spot workers so the VPS stays free. One exception for the inner loop: you may run a single offline file locally (one integration test file, or one Behave feature with `--tags="not @live and not @latency"`) to see a regression test fail and then pass. Full suites still run on CI.
@@ -66,22 +78,25 @@ Each workspace/worktree has fixed, isolated ports defined in its root `.env` to 
 
 | Workspace | Worktree Directory | MCP Server (`POLYWEB_MCP_PORT`) | Backend API (`POLYWEB_API_PORT`) | UI Dev (`VITE_PORT`) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Main** | `polyweb-mcp` | `8000` | `8001` | `5174` |
-| **WT 1** | `polyweb_wt_1` | `8010` | `8011` | `5175` |
-| **WT 2** | `polyweb_wt_2` | `8020` | `8021` | `5176` |
-| **WT 3** | `polyweb_wt_3` | `8030` | `8031` | `5177` |
-| **WT 4** | `polyweb_wt_4` | `8040` | `8041` | `5178` |
+| **Main** | `polyweb-mcp` | `8200` | `8201` | `5174` |
+| **WT 1** | `polyweb_wt_1` | `8210` | `8211` | `5175` |
+| **WT 2** | `polyweb_wt_2` | `8220` | `8221` | `5176` |
+| **WT 3** | `polyweb_wt_3` | `8230` | `8231` | `5177` |
+| **WT 4** | `polyweb_wt_4` | `8240` | `8241` | `5178` |
+| **WT N** (1-9) | `polyweb_wt_N` | `82N0` | `82N1` | `5174+N` |
 
+- **Why 82xx**: the dev host already uses 8000/8001 (other services), 8080, 8090, 8100/8101 (the production Polyweb stack), 9000 and 9090, so local development keeps to 8200-8291. The application defaults (8000/8001 in code, Compose and docs) are for end users and are unchanged.
 - **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run polyweb-api`, `uv run polyweb-mcp`, `pnpm dev`). They automatically read from the local `.env`.
 - **Landing app** (`polyweb-landing/`): the marketing site's Vite dev server reads `POLYWEB_LANDING_PORT` from the root `.env` and defaults to `5274` when unset.
 - **Zero merge conflicts**: Port configurations live in the local `.env` (gitignored), keeping committed files identical across all branches.
 
 ### Creating worktrees
 
-- `scripts\windows\create_worktree.bat projects/p04-usage-trace-writers polyweb_wt_1 backend --base main`
+- Windows: `scripts\windows\create_worktree.bat projects/p04-usage-trace-writers polyweb_wt_1 backend --base main`
+- Linux/macOS: `scripts/linux/create_worktree.sh projects/p04-usage-trace-writers polyweb_wt_1 backend --base main` (same arguments and options)
 - Ports are set from `--slot N` or the `polyweb_wt_N` folder name; new branches start from `--base` (default `main`).
 - The live `polyweb.db` is not copied unless `--copy-db` (it holds provider credentials; tests must use fresh databases).
-- Remove worktrees with `scripts\windows\delete_worktree.bat <branch>`.
+- Remove worktrees with `scripts\windows\delete_worktree.bat <branch>` or `scripts/linux/delete_worktree.sh <branch>`.
 
 
 <!-- BACKLOG.MD GUIDELINES START -->
