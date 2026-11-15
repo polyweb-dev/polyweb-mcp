@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@devin'
 created_date: 2026-10-15 22:19
-updated_date: '2026-11-15T15:43:00Z'
+updated_date: '2026-11-15T17:14:00Z'
 labels: []
 dependencies:
   - TASK-000047
@@ -37,6 +37,10 @@ In Playground, users should open the associated Activity details in a popup inst
 4. Playground: replace Inspect raw JSON (viewer + Copy JSON) with a View details button that opens a TraceDetails slot. app/ProjectWorkspace composes the activity component into the playground (no feature-to-feature import). Remove the raw JSON/copy state from the controller.
 5. Tests: client header unit test, mapper/runner tests, SearchResults and PlaygroundPage integration tests (traced, untraced, missing), update the Playground parity BDD scenario and stub, update docs/dashboard/playground.md.
 6. Verify: targeted vitest, then pnpm depcruise, knip, lint, typecheck, test, build; ui-bdd on CI.
+
+7. Scope added by the owner: run the UI BDD suite with multiple Playwright workers (and sharding if useful) so CI saturates the spot workers; scenarios that need live calls or depend on earlier scenarios stay serial. Informed by two investigator agents (Devin GPT-6 Sol, Claude Opus 5.5).
+
+8. Keep this feature's BDD coverage green: View details moved to its own Auto-routed scenario that does not depend on the provider-pin step broken on main. Pre-existing suite failures go to TASK-000083.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -45,4 +49,6 @@ In Playground, users should open the associated Activity details in a popup inst
 Implemented per plan. Playground reads X-Trace-Id from POST /search (requestJsonWithHeaders), stores traceId on the result, and View details opens ProjectTraceDetails (Activity TraceDetailDialog) composed in app/ProjectWorkspace via a render slot (no feature-to-feature import). No trace id, 404, metadata-only and missing traces.read each explain the absence without a list/global read. Added beyond AC: traces.read permission message instead of a 403 error.
 Evidence: vitest ProjectPlaygroundPage.test.tsx 'ProjectPlaygroundPage View details' (5 cases), SearchResults.test.tsx 'SearchResults View details', polywebApi/client/useSearchRunner tests; touched + sampled files 315/315 pass. Gate: typecheck, typecheck:e2e, lint (2 pre-existing warnings in untouched files), depcruise, knip clean.
 UI review (Devin Claude Opus 5.5, screenshots in /tmp/task2-ui-review): PASS, no blocker/major. Minor/nits are all in the shared inspector or existing styles (dialog height changes between tabs, bar vs trace latency differ, plain ghost button like the old raw JSON toggle).
+
+CI ui-bdd @stub on main (#126) and on this branch (#125) fail identically (106/260); root cause includes the unstubbed GET /routing/order. Tracked separately as TASK-000083.
 <!-- SECTION:NOTES:END -->
