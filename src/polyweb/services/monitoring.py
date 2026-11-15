@@ -1204,29 +1204,11 @@ async def _finalize_failure(
     *,
     request: SearchRequest | FetchRequest | None,
 ) -> None:
-    """Finalize or release one failed admission with its confirmed charge."""
+    """Settle one failed legacy-path admission through the native failure rule."""
 
     if limits is None or admission is None:
         return
-    provider_error = getattr(error, "error", None)
-    if provider_error is None:
-        await limits.record_failure(
-            admission,
-            ProviderError(
-                provider=admission.provider,
-                code=type(error).__name__,
-                message="local call failure",
-                retryable=False,
-            ),
-        )
-        return
-    details = provider_error.details if isinstance(provider_error.details, dict) else {}
-    await limits.record_failure(
-        admission,
-        provider_error,
-        charged_native=_charged_native(details),
-        charged_document=bool(details.get("charged_document")),
-    )
+    await _finalize_native_failure(limits, admission, error, request=request)
 
 
 def _terminal_quota_402(exc: BaseException) -> bool:
