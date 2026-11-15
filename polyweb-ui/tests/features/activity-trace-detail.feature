@@ -13,6 +13,7 @@ Feature: Activity trace detail presentation parity with Playground
 
   @stub
   Scenario: Playground cards, inspector, and waterfall share one presentation
+    Given project Alpha has a "brave" pool for search
     When I open the "playground" section of project Alpha
     And I pin the playground provider to "Brave Search"
     And I submit the playground search query "parity probe"

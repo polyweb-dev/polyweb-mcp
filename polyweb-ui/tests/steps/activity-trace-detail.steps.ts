@@ -1,7 +1,9 @@
 import { expect } from "@playwright/test"
 import type { Page } from "@playwright/test"
-import { When, Then } from "./fixtures"
+import { Given, When, Then } from "./fixtures"
 import { traceDetailRequests, traceListRequests } from "./backendStub"
+import { projectStubId } from "./projectStub"
+import { seedVaultPool } from "./vaultStub"
 import { SUCCESS_TRACE_ID } from "../../src/test/fixtures/activity"
 
 /**
@@ -29,6 +31,12 @@ function playgroundInspectorRegion(page: Page) {
     name: "Result inspector and execution waterfall",
   })
 }
+
+Given("project {word} has a {string} pool for search", async ({}, name: string, provider: string) => {
+  // The routing-order stub lists pooled providers plus keyless Keenable, so
+  // pinning a keyed provider in the Playground needs a project pool first.
+  seedVaultPool(provider, projectStubId(name), ["search"])
+})
 
 Then(
   "the playground cards should show titles, urls, two-line snippets, badges, and scores",

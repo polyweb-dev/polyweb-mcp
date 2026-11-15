@@ -39,7 +39,7 @@ Feature: Provider access flags against the stubbed backend
     Then the "Exa" "search" access flag should be on
     And the "Exa" "fetch" access flag should be off
 
-  @stub @access
+  @stub @access @serial
   Scenario: Request-active row locks its access flags
     Given the provider PATCH for "Keenable" is delayed by 800 milliseconds
     When I start to set the "Keenable" "search" access flag off without waiting

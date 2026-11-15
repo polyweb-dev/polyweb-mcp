@@ -3,7 +3,7 @@ id: doc-000009
 title: UI BDD stub suite failure inventory (pipeline 126, main)
 type: other
 created_date: '2026-11-15T17:24:00Z'
-updated_date: '2026-11-15T17:24:00Z'
+updated_date: '2026-11-15T18:14:00Z'
 ---
 # UI BDD stub suite failure inventory
 
@@ -170,3 +170,14 @@ TOTAL 106
   settings | Provider operation state survives a page reload | 2a9566a7
 
 ```
+
+
+## Second opinion (Devin Claude Opus 5.5, 2026-11-15)
+
+It agrees with the inventory above and adds the following.
+
+- Zero API traffic: the API logs of #125 and #126 contain only the readiness probe `GET /openapi.json`, so no `@stub` scenario reaches the real API. Its grouping by UI area is G1 Quotas page redesign (59), G2 Playground order from pools (8), G3 sidebar account row (7), G4 Activity/trace views from d8c6041 (17), G5 vault key UI (4), G6 project API keys table (4) and G7 single copy, label or redirect changes (7).
+- Underlying cause: CI has gated only `@smoke` since 84a6128. Most step files date from 5660d26 (2026-11-09), and the UI changed after that in 2ac797c, the vault/pool commits of 2026-11-10, and d8c6041/038f59f (2026-11-14).
+- Open question: is the duplicate `Credit details for <provider>` button (one in the card, one in its Key balances row, `ProviderLimitsCards.tsx:131-171`) intended UI or an app bug? Sol judged it an intentional two-surface rendering with a stale page-wide locator.
+- Possible nondeterminism: "Tavily card tier with missing PATCH readback" failed on `toBeVisible` in #125 and on `toBeDisabled` in #126.
+- Suggested repair hygiene: add a lowest-priority catch-all route on app API prefixes that records unstubbed calls, with an After-hook assertion; then `run-ui-bdd.sh` only needs the real API for `@live`.
