@@ -60,6 +60,27 @@ class USDContract(ContractModel):
         return project_usd(value)
 
 
+_VENDOR_CONFIDENCE = frozenset({ledger.Confidence.AUTHORITATIVE, ledger.Confidence.OBSERVED})
+
+
+class _VendorConfirmed(USDContract):
+    """Mark a balance as vendor-confirmed or estimated (TASK-000070).
+
+    The mark reads the confidence, not the source: a local estimate that
+    lowered a vendor balance keeps the vendor source but an estimated
+    confidence, and an operator record is always an estimate. Any input value
+    is ignored and recomputed.
+    """
+
+    @model_validator(mode="after")
+    def _derive_vendor_confirmed(self) -> "_VendorConfirmed":
+        confirmed = getattr(self, "confidence", None) in _VENDOR_CONFIDENCE and not getattr(
+            self, "manual_anchor", False
+        )
+        object.__setattr__(self, "vendor_confirmed", confirmed)
+        return self
+
+
 class USDPriceProfile(USDContract):
     native_usd_per_unit: ledger.OptionalExactDecimal = Field(default=None, ge=0)
     cost_basis: Literal["priced_native_use"] = "priced_native_use"
@@ -68,7 +89,7 @@ class USDPriceProfile(USDContract):
     estimated: bool = False
 
 
-class USDTierBalance(USDContract):
+class USDTierBalance(_VendorConfirmed):
     pool_id: str
     tier: Literal["free", "paid", "unknown"]
     native_unit: UnitKind
@@ -83,9 +104,10 @@ class USDTierBalance(USDContract):
     confidence: ledger.Confidence = ledger.Confidence.UNKNOWN
     transport_available: bool = True
     label: str | None = None
+    vendor_confirmed: bool = False
 
 
-class USDNativePool(USDContract):
+class USDNativePool(_VendorConfirmed):
     pool_id: str
     provider: str
     auth_mode: ledger.AuthMode
@@ -104,6 +126,7 @@ class USDNativePool(USDContract):
     manual_anchor: bool = False
     tiers: list[USDTierBalance] = Field(default_factory=list)
     tier_split_known: bool = True
+    vendor_confirmed: bool = False
 
 
 class USDVaultKeyUsage(USDContract):
@@ -189,7 +212,7 @@ class USDGrantsSummary(USDContract):
     fetch_reserved_usd: ledger.ExactDecimal = Decimal("0")
 
 
-class USDLimitDetail(USDContract):
+class USDLimitDetail(_VendorConfirmed):
     plan_name: str | None = None
     native_unit: UnitKind | None = None
     native_balance: ledger.OptionalExactDecimal = None
@@ -209,6 +232,7 @@ class USDLimitDetail(USDContract):
     retry_after_seconds: int | None = Field(default=None, ge=0)
     tier_split_known: bool = True
     aggregate_pool_id: str | None = None
+    vendor_confirmed: bool = False
 
 
 class USDAuthLimits(USDContract):
