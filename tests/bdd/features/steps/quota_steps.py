@@ -2400,24 +2400,20 @@ def step_then_exa_exhaustion_cleared(context: Any) -> None:
     assert contracts_module.is_soft_quota_zero("exa", view) is False
 
 
-@when("an Exa 429 exhaustion signal arrives")
+@when("an Exa 429 rate limit arrives")
 def step_when_exa_429(context: Any) -> None:
     adapter = context.exa_adapter
-    snapshot = adapter.quota_after_error(429)
-    assert snapshot is not None
-    assert snapshot.source is QuotaSource.OBSERVED
-    _run(context, context.repository.record_quota(snapshot))
-    context.exa_429_snapshot = snapshot
+    context.exa_429_snapshot = adapter.quota_after_error(429)
 
 
-@then("the Exa 429 should surface observed zero")
-def step_then_exa_429_observed(context: Any) -> None:
-    assert context.exa_429_snapshot is not None
-    assert context.exa_429_snapshot.remaining == Decimal("0")
+@then("the Exa 429 should leave the budget usable")
+def step_then_exa_429_usable(context: Any) -> None:
+    assert context.exa_429_snapshot is None
+    assert context.exa_adapter._soft_zero is False
     effective = _opt(monitoring_module, "effective_quota", None)
     view = _run(context, effective(context.repository, "exa"))
     assert view is not None
-    assert view.remaining == Decimal("0")
+    assert view.remaining > Decimal("0")
 
 
 @when("I inspect Exa quota capabilities")

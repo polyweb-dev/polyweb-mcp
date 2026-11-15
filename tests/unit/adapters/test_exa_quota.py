@@ -256,17 +256,7 @@ def test_quota_after_error_402_without_limit_invents_no_limit() -> None:
     assert snapshot.metadata["limit_source"] is None
 
 
-def test_quota_after_error_429_produces_observed_zero() -> None:
-    adapter = _make_adapter(budget=Decimal("10.00"))
-    snapshot = adapter.quota_after_error(429)
-    assert snapshot is not None
-    assert snapshot.source is QuotaSource.OBSERVED
-    assert snapshot.remaining == Decimal("0")
-    assert snapshot.metadata["exhaustion"] is True
-    assert snapshot.metadata["exhaustion_status"] == 429
-
-
-@pytest.mark.parametrize("status", [400, 401, 403, 500, None])
+@pytest.mark.parametrize("status", [400, 401, 403, 429, 500, None])
 def test_quota_after_error_other_statuses_pass_through(status: int | None) -> None:
     adapter = _make_adapter(budget=Decimal("10.00"))
     assert adapter.quota_after_error(status) is None
@@ -642,7 +632,7 @@ def test_exa_adapter_source_never_authoritative() -> None:
 async def test_snapshot_sources_stay_estimated_or_observed() -> None:
     adapter = _make_adapter(budget=Decimal("10.00"))
     normal = await adapter.quota()
-    exhausted = adapter.quota_after_error(429)
+    exhausted = adapter.quota_after_error(402)
     assert exhausted is not None
     assert {normal.source, exhausted.source} <= {
         QuotaSource.ESTIMATED,

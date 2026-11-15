@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 
 from polyweb.adapters.base import ProviderAdapter
 from polyweb.configuration.provider_config import ProviderConfig, ProviderConfigError
+from polyweb.infrastructure.resilience import ProviderOperationError
 from polyweb.models.contracts import (
     QuotaSnapshot,
     QuotaSource,
@@ -469,6 +470,7 @@ class _FakeExaSdk:
     def __init__(self) -> None:
         self.searches = 0
         self.client = self
+        self.fail_status: int | None = None
 
     async def aclose(self) -> None:
         return None
@@ -479,6 +481,8 @@ class _FakeExaSdk:
 
         del kwargs
         self.searches += 1
+        if self.fail_status is not None:
+            raise ValueError(f"Request failed with status code {self.fail_status}")
         return ExaSDKResponse(
             results=[Result(id="1", url="https://example.com/1", title="Exa 1")],
             resolved_search_type=None,
@@ -523,6 +527,67 @@ async def test_exa_budget_denies_the_next_call_after_compose(
 
         assert sdk.searches == 0, "the exhausted Exa budget must deny before the vendor call"
     finally:
+        await world.aclose()
+        await http.aclose()
+
+
+async def test_exa_429_does_not_latch_the_key_across_a_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding 1: an Exa 429 is a rate limit, not exhausted funds.
+
+    The 429 must not store a zero for the key, and a rebuilt adapter must not
+    restore a soft-zero block from it, so the next call reaches the vendor.
+    """
+
+    from polyweb.adapters.exa import ExaAdapter
+    from polyweb.configuration.provider_config import ProviderConfigUpdate
+    from polyweb.infrastructure.resilience import ResilientRunner
+    from polyweb.infrastructure.secrets import ProviderName
+    from polyweb.services.provider_runtime import patch_provider_config
+    from tests.fixtures.a2_execution import search_request
+
+    world = await build_execution_world(tmp_path, monkeypatch, provider="exa")
+    sdk = _FakeExaSdk()
+    http = httpx.AsyncClient()
+    _install_factory(
+        monkeypatch,
+        "exa",
+        lambda client, api_key=None: ExaAdapter(
+            http,
+            api_key=api_key,
+            sdk_client=sdk,
+            runner=ResilientRunner(http, max_attempts=1),
+        ),
+    )
+    restarted: ExecutionService | None = None
+    try:
+        await patch_provider_config(
+            world.repository,
+            ProviderName.EXA,
+            ProviderConfigUpdate(exa_monthly_budget_usd=Decimal("10")),
+        )
+        sdk.fail_status = 429
+        with pytest.raises(ProviderOperationError, match="rate_limited"):
+            await world.service.search(
+                search_request(world), attribution=world.project, context=world.context
+            )
+        credential_id = world.credentials["a1"].credential_id
+        stored = await world.repository.latest_quota("exa", credential_id=credential_id)
+        assert stored is None or stored.remaining != Decimal("0")
+
+        sdk.fail_status = None
+        before = sdk.searches
+        restarted = _restarted(world)
+        response = await restarted.search(
+            search_request(world), attribution=world.project, context=world.context
+        )
+
+        assert response.provider == "exa"
+        assert sdk.searches == before + 1
+    finally:
+        if restarted is not None:
+            await restarted.aclose()
         await world.aclose()
         await http.aclose()
 

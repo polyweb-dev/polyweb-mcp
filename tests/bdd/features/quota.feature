@@ -257,8 +257,8 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
     Then the Exa remaining should read observed zero
     When a later Exa billed operation succeeds
     Then the Exa exhaustion should be cleared
-    When an Exa 429 exhaustion signal arrives
-    Then the Exa 429 should surface observed zero
+    When an Exa 429 rate limit arrives
+    Then the Exa 429 should leave the budget usable
 
   @exa @ac-exa
   Scenario: Exa capabilities report quota with local snapshots and no balance poll
