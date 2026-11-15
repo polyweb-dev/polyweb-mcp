@@ -19,7 +19,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +34,7 @@ from polyweb.configuration.provider_config import (
     get_provider_configs,
     system_support_mask,
 )
+from polyweb.infrastructure.dates import month_start
 from polyweb.infrastructure.secrets import AsyncSecretStore, ProviderName
 from polyweb.models.contracts import (
     QuotaSnapshot,
@@ -115,8 +116,15 @@ class _ScopedQuotaReads:
 
     An adapter's ``hydrate_quota`` reads the newest quota observation and the
     usage ledger through this view, so a pooled key reads its pool and an
-    unpooled key reads only its own credential. Legacy unattributed usage rows
-    stay counted (see :meth:`SQLiteRepository.list_provider_usage`).
+    unpooled key reads only its own credential. Usage reads start at the
+    current UTC month when the adapter passes no ``since``, because every
+    monthly hydrator drops older rows anyway.
+
+    Legacy usage rows without a credential or pool predate per-key tracking.
+    When the provider has one key they belong to it. With several keys their
+    owner is unknown, so each key counts them: a restored key over-counts
+    rather than forgets usage, which can block it early until the month ends
+    (see :meth:`SQLiteRepository.list_provider_usage`).
     """
 
     def __init__(self, repository: SQLiteRepository, scope: ProviderObservationScope) -> None:
@@ -139,12 +147,12 @@ class _ScopedQuotaReads:
         operation: UsageOperation | None = None,
         since: datetime | None = None,
     ) -> list[UsageEvent]:
-        """Return the usage ledger of the key's balance owner."""
+        """Return the key's usage ledger from ``since``, or from the UTC month start."""
 
         return await self._repository.list_provider_usage(
             provider=provider,
             operation=operation,
-            since=since,
+            since=since if since is not None else month_start(datetime.now(UTC)),
             credential_id=self._scope.credential_id,
             pool_id=self._scope.upstream_pool_id,
         )

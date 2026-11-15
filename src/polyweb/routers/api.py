@@ -641,10 +641,12 @@ async def _start_limits(
     routes: Sequence[ProviderAdapter],
     stop: asyncio.Event,
 ) -> None:
-    """Seed the catalog and start one schedule task for this runtime generation.
+    """Seed the limit catalog and build this generation's limit and sync services.
 
-    A composition without a repository (injected adapters) has no limit store,
-    so the schedule task does not start.
+    No polling task starts: usage syncs run on demand, after admitted
+    executions and through the admin refresh, which polls the active vault
+    credentials. A composition without a repository (injected adapters) has
+    no limit store, so neither service is built.
     """
 
     if not isinstance(repo, SQLiteRepository):

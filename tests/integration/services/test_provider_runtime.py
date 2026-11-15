@@ -335,6 +335,39 @@ async def test_brave_rebuild_starts_from_the_newest_vendor_header_fact(
     assert snapshot.source == "local_ledger"
 
 
+async def test_scoped_hydration_reads_start_at_the_month(brave_world: ExecutionWorld) -> None:
+    """Review finding 4: a hydration read without ``since`` reads only this month."""
+
+    from datetime import timedelta
+
+    from polyweb.infrastructure.dates import month_start
+    from polyweb.models.provider_limits import ProviderObservationScope
+    from polyweb.services.provider_runtime import _ScopedQuotaReads
+
+    world = brave_world
+    credential_id = world.credentials["a1"].credential_id
+    for observed_at in (month_start(datetime.now(UTC)) - timedelta(days=1), datetime.now(UTC)):
+        await world.repository.record_usage(
+            UsageEvent(
+                provider="brave",
+                operation=UsageOperation.SEARCH,
+                units=Decimal("1"),
+                unit_kind=UnitKind.REQUEST,
+                observed_at=observed_at,
+            ),
+            attribution=world.project,
+            credential_id=credential_id,
+        )
+    reads = _ScopedQuotaReads(
+        world.repository,
+        ProviderObservationScope(credential_id=credential_id, credential_generation=1),
+    )
+
+    events = await reads.list_provider_usage(provider="brave")
+
+    assert [event.observed_at >= month_start(datetime.now(UTC)) for event in events] == [True]
+
+
 async def test_brave_keys_count_only_their_own_usage(brave_world: ExecutionWorld) -> None:
     """AC #9: two keys of one provider never share counts; legacy rows still count."""
 
@@ -457,26 +490,74 @@ async def test_keyed_keenable_usage_survives_restart_and_settings_change(
 
 
 async def test_keyed_keenable_402_survives_rebuild(keenable_world: ExecutionWorld) -> None:
-    """AC #1: a stored vendor 402 zero for the key blocks a rebuilt adapter."""
+    """AC #1: a vendor 402 on one adapter still blocks the key after a restart rebuilds it."""
 
     world = keenable_world
     credential = _resolved(world, "a1")
-    await world.repository.record_quota(
-        QuotaSnapshot(
-            provider="keenable",
-            source=QuotaSource.OBSERVED,
-            remaining=Decimal("0"),
-            limit=Decimal("100000"),
-            observed_at=datetime.now(UTC),
-            unit_kind=UnitKind.CREDIT,
-        ),
-        credential_id=credential.credential_id,
-    )
     config = await effective_config_for_name(world.repository, "keenable", strict=True)
+    lease = await world.service._lease_adapter(credential, config)
+    try:
+        zero = await lease.adapter.quota_after_error(402)
+    finally:
+        lease.release()
+    assert zero is not None
+    await world.repository.record_quota(zero, credential_id=credential.credential_id)
 
-    snapshot = await _keenable_snapshot(world.service, credential, config)
+    restarted = _restarted(world)
+    try:
+        snapshot = await _keenable_snapshot(restarted, credential, config)
+    finally:
+        await restarted.aclose()
 
     assert snapshot is not None and snapshot.remaining == Decimal("0")
+
+
+async def test_brave_estimate_after_rebuild_cannot_raise_a_vendor_fact(
+    brave_world: ExecutionWorld,
+) -> None:
+    """AC #2 through the real build and scoped sync path, not a synthetic pool only."""
+
+    from polyweb.models.provider_limits import Confidence, NativeUsageSnapshot
+
+    world = brave_world
+    credential = _resolved(world, "a1")
+    assert world.limits is not None
+    base = world.limits.observation_pool_id("brave", AuthMode.KEYED)
+    assert base is not None
+    pool_id = f"{base}#cred:{credential.credential_id}"
+    from polyweb.models.provider_limits import NativePool
+
+    await world.repository.limits.ensure_pool(
+        NativePool(
+            pool_id=pool_id,
+            provider="brave",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            credential_generation=credential.generation,
+        )
+    )
+    await world.repository.limits.apply_snapshot(
+        NativeUsageSnapshot(
+            pool_id=pool_id,
+            provider="brave",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.USD,
+            observed_at=datetime.now(UTC),
+            source="vendor_headers",
+            confidence=Confidence.OBSERVED,
+            remaining=Decimal("2.50"),
+            allowance=Decimal("5.00"),
+            credential_generation=credential.generation,
+            credential_id=credential.credential_id,
+        )
+    )
+
+    result = await world.service._sync_credential_limits(credential, datetime.now(UTC))
+    pool = await world.repository.limits.get_pool(pool_id)
+
+    assert result.status == "synced"
+    assert pool is not None and pool.remaining is not None
+    assert pool.remaining <= Decimal("2.50")
 
 
 async def test_keyless_keenable_stays_unmetered_after_build(
@@ -761,3 +842,39 @@ async def test_cached_adapter_is_prepared_once(
         lease.release()
 
     assert calls == 1
+
+
+async def test_failed_preparation_is_retried_on_the_next_lease(
+    parallel_world: ExecutionWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding 3: a failed restore does not leave the adapter unhydrated."""
+
+    from polyweb.adapters.parallel import ParallelAdapter
+
+    world = parallel_world
+    await _record_usage(world, provider="parallel", units="0.5", unit_kind=UnitKind.USD, label="a1")
+    config = (
+        await effective_config_for_name(world.repository, "parallel", strict=True)
+    ).model_copy(update={"parallel_free_seed_usd": Decimal("5")})
+    calls = 0
+    original = ParallelAdapter.hydrate_quota
+
+    async def failing_once(self: ParallelAdapter, repository: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("database read failed")
+        return await original(self, repository)
+
+    monkeypatch.setattr(ParallelAdapter, "hydrate_quota", failing_once)
+    credential = _resolved(world, "a1")
+    first = await world.service._lease_adapter(credential, config)
+    first.release()
+    second = await world.service._lease_adapter(credential, config)
+    try:
+        snapshot = await second.adapter.quota()
+    finally:
+        second.release()
+
+    assert calls == 2
+    assert snapshot is not None and snapshot.remaining == Decimal("4.5")

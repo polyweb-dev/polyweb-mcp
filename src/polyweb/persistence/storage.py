@@ -1145,7 +1145,10 @@ class SQLiteRepository:
         otherwise a ``credential_id`` narrows it to that credential's unpooled
         usage, the same balance owner :meth:`latest_quota` reads. Legacy rows
         without a credential or pool stay in every narrowed ledger, so a
-        rebuilt adapter over-counts rather than forgets old usage.
+        rebuilt adapter over-counts rather than forgets old usage. With one key
+        per provider those rows are that key's own usage. With several keys the
+        owner is unknown and each key counts them, which fails safe but can
+        block a key early until the period ends.
         """
 
         scope: ColumnElement[bool] = UsageEventRow.provider == provider

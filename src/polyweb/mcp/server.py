@@ -136,10 +136,11 @@ class _ServerState(TypedDict):
 
 
 async def _start_limits_generation(state: _ServerState, routes: Sequence[ProviderAdapter]) -> None:
-    """Seed the limit catalog and start ONE schedule task for this generation.
+    """Seed the limit catalog and build this generation's limit and sync services.
 
-    A server without a repository has no limit store, so no task starts. The
-    task is per generation, never per MCP session.
+    No polling task starts; the services are per generation, never per MCP
+    session. A server without a repository has no limit store, so nothing is
+    built.
     """
 
     repository = state["repository"]
@@ -161,10 +162,11 @@ async def _start_limits_generation(state: _ServerState, routes: Sequence[Provide
 async def _start_injected_limits(state: _ServerState, routes: Sequence[ProviderAdapter]) -> None:
     """Start the limit service of an injected composition, mirroring REST.
 
-    ``create_app`` with injected adapters and a repository seeds the catalog,
-    projects the Tavily and Keenable rails, and starts one schedule task in its
-    lifespan; an injected MCP server does the same on its first session enter.
-    Without a repository there is no limit store, so nothing starts.
+    ``create_app`` with injected adapters and a repository seeds the catalog
+    and builds the limit and on-demand sync services in its lifespan, with no
+    polling task; an injected MCP server does the same on its first session
+    enter and hands the limit service to its execution service. Without a
+    repository there is no limit store, so nothing starts.
     """
 
     # Same order as the REST lifespan and the owned MCP generation: start the
