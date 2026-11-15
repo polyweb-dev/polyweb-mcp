@@ -203,6 +203,38 @@ def install_adapter_map(
     monkeypatch.setattr(execution_module, "adapter_factory", adapter_factory)
 
 
+def production_capacity_hooks(repository: Any, limits: Any, context: Any) -> dict[str, Any]:
+    """Return the ``reserve``/``settle``/``release`` hooks execution passes ``tracked_call``.
+
+    ``ExecutionService._tracked_attempt`` always hands ``tracked_call`` the
+    hooks of its attempt seam, so failures settle through the capacity charger.
+    For a leg without a shared pool or key-pool budget, the seam reserves each
+    send with ``ProviderLimitsService.admit_attempt`` (no strict spec) under a
+    fresh attempt id, settles nothing itself, and releases an unsent send with
+    the service's ``_release_capacity``.
+
+    This mirrors only the no-pool branch of ``ExecutionService._strict_spec``,
+    ``_AttemptSeam._admit`` and ``_AttemptSeam.release``; update it when those
+    change. It omits the fair-queue grant, the live leg recheck and budget
+    handling, which no caller of this fixture observes.
+    """
+
+    from polyweb.services.execution import _noop_settle, _release_capacity
+
+    async def reserve() -> Any:
+        attempt_id = uuid4().hex
+        if not limits.supports(context.provider, context.operation, context.auth_mode):
+            return None
+        return await limits.admit_attempt(
+            context.model_copy(update={"attempt_id": attempt_id}), None
+        )
+
+    async def release(reservation: Any) -> None:
+        await _release_capacity(reservation, repository.limits, limits)
+
+    return {"reserve": reserve, "settle": _noop_settle, "release": release}
+
+
 async def attributed_tracked_call(
     repository: Any,
     adapter: Any,
@@ -221,6 +253,9 @@ async def attributed_tracked_call(
     ``LimitCallContext``. Direct rail tests that drive ``tracked_call`` with a
     limit service use this wrapper so the admission carries the same
     project and actor as the usage row; every other argument passes through.
+    A call with a limit service and no ``reserve`` also gets the
+    :func:`production_capacity_hooks`, so capacity settles on the charger
+    path production uses, never on the test-only legacy branch.
     """
 
     from datetime import UTC, datetime
@@ -230,23 +265,22 @@ async def attributed_tracked_call(
     from polyweb.services.monitoring import tracked_call
 
     owner = attribution or test_attribution()
-    if (
-        limits is not None
-        and kwargs.get("context") is None
-        and operation is not UsageOperation.COST_ESTIMATE
-    ):
-        mode = getattr(adapter, "limit_auth_mode", None)
-        kwargs["context"] = LimitCallContext(
-            provider=adapter.name,
-            operation=LimitOperation(operation.value),
-            auth_mode=mode if isinstance(mode, AuthMode) else AuthMode.KEYED,
-            attempt_id=uuid4().hex,
-            request=request,
-            requested_at=datetime.now(UTC),
-            project_id=owner.project_id,
-            actor_type=owner.actor_type,
-            actor_id=owner.actor_id,
-        )
+    if limits is not None and operation is not UsageOperation.COST_ESTIMATE:
+        if kwargs.get("context") is None:
+            mode = getattr(adapter, "limit_auth_mode", None)
+            kwargs["context"] = LimitCallContext(
+                provider=adapter.name,
+                operation=LimitOperation(operation.value),
+                auth_mode=mode if isinstance(mode, AuthMode) else AuthMode.KEYED,
+                attempt_id=uuid4().hex,
+                request=request,
+                requested_at=datetime.now(UTC),
+                project_id=owner.project_id,
+                actor_type=owner.actor_type,
+                actor_id=owner.actor_id,
+            )
+        if kwargs.get("reserve") is None:
+            kwargs.update(production_capacity_hooks(repository, limits, kwargs["context"]))
     return await tracked_call(
         repository,
         adapter,
