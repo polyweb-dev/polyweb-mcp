@@ -278,16 +278,24 @@ export function LatencyWaterfall({
     expandedTrack ? "py-0.5" : ROW_INSET_CLASS
   )
 
+  // Without rows nothing was timed, so an axis would only show invented ticks
+  // (a 1 ms placeholder total reads "0 · 1 · 1"); the empty state stands alone.
+  const hasRows = rows.length > 0
+
   return (
     <div className="min-w-0">
-      {/* the ruler is decorative; this states the scale for screen readers */}
-      <p className="sr-only">Timeline scale 0 to {totalMs} milliseconds</p>
-      {renderRulerRow(totalMs, hasScale, stickyRuler, { compact: compactRuler, rowGridClass })}
+      {hasRows && (
+        <>
+          {/* the ruler is decorative; this states the scale for screen readers */}
+          <p className="sr-only">Timeline scale 0 to {totalMs} milliseconds</p>
+          {renderRulerRow(totalMs, hasScale, stickyRuler, { compact: compactRuler, rowGridClass })}
+        </>
+      )}
       <ol role="list" aria-label={ariaLabel} className="m-0 list-none space-y-1 p-0">
-        {rows.length === 0 ? (
-          <li className="text-[12px] text-[var(--muted)]">No timing was recorded.</li>
-        ) : (
+        {hasRows ? (
           rows.map((row) => renderRow(row, totalMs, rowGridClass))
+        ) : (
+          <li className="text-[12px] text-[var(--muted)]">No timing was recorded.</li>
         )}
       </ol>
     </div>

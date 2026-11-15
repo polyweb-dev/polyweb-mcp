@@ -118,9 +118,9 @@ from polyweb.services.execution_scope import (
 )
 from polyweb.services.limits_sync import LimitSyncService
 from polyweb.services.monitoring import (
-    MAX_RECENT_LIMIT,
     DashboardResponse,
     StatsResponse,
+    clamp_recent_limit,
     clear_quota_poll_cache,
     collect_stats,
     resolve_database_path,
@@ -484,7 +484,7 @@ def create_app(
         return await collect_stats(
             app.state.repository,
             adapter_names=[adapter.name for adapter in routes],
-            recent_limit=_clamped_limit(limit),
+            recent_limit=clamp_recent_limit(limit),
             limits=app.state.limits,
         )
 
@@ -497,7 +497,7 @@ def create_app(
         snapshot = await collect_stats(
             app.state.repository,
             adapter_names=[adapter.name for adapter in routes],
-            recent_limit=_clamped_limit(limit),
+            recent_limit=clamp_recent_limit(limit),
             limits=app.state.limits,
         )
         return DashboardResponse(
@@ -704,12 +704,6 @@ async def _provider_limits(limits: Any) -> list[Any]:
     except Exception:
         return []
     return list(cards)
-
-
-def _clamped_limit(limit: int) -> int:
-    """Clamp a requested recent-usage limit into ``[1, MAX_RECENT_LIMIT]``."""
-
-    return min(max(limit, 1), MAX_RECENT_LIMIT)
 
 
 async def _prepare_trace_database(trace_database: Path) -> None:

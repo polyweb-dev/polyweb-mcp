@@ -20,11 +20,7 @@ from polyweb.models.projects import (
     ProjectRead,
 )
 from polyweb.persistence.projects import ProjectRepository
-from polyweb.persistence.settings import (
-    ProjectSettingsRepository,
-    StoredSettings,
-    SystemSettingsRepository,
-)
+from polyweb.persistence.settings import ProjectSettingsRepository, StoredSettings
 
 
 class ScopedProjectSettings:
@@ -38,7 +34,6 @@ class ScopedProjectSettings:
         namespace: str,
     ) -> None:
         self._project = ProjectSettingsRepository(session)
-        self._system = SystemSettingsRepository(session)
         self._project_id = project_id
         self._namespace = namespace
 
@@ -46,15 +41,6 @@ class ScopedProjectSettings:
         """Return this project's stored overrides, never another project's."""
 
         return await self._project.get(project_id=self._project_id, namespace=self._namespace)
-
-    async def revisions(self) -> tuple[int, int]:
-        """Return ``(system_revision, project_revision)`` for this scope."""
-
-        system_revision = await self._system.revision(self._namespace)
-        project_revision = await self._project.revision(
-            project_id=self._project_id, namespace=self._namespace
-        )
-        return system_revision, project_revision
 
     async def compare_and_set(
         self,
@@ -89,12 +75,6 @@ class ProjectScopedRepository:
         self._session = session
         self._context = context
         self._account_id = account_id
-
-    @property
-    def context(self) -> ProjectContext:
-        """Return the immutable context this facade is bound to."""
-
-        return self._context
 
     async def require_project(self) -> ProjectRead:
         """Re-read the context project inside the account boundary."""

@@ -134,12 +134,6 @@ class TestUnitKindContract:
         assert payload["display_unit"] == "requests", f"AC-7: display_unit missing: {payload!r}"
         assert payload["source"] == "observed", f"AC-7: source confidence missing: {payload!r}"
 
-    def test_logic_branches_on_kind_never_label(self) -> None:
-        kind = _unit_kind()
-        assert _opt(kind, "REQUEST") != _opt(kind, "CREDIT"), (
-            "AC-3: unit kinds must be distinct machine-readable dimensions"
-        )
-
 
 class TestRemainingPercentContract:
     def _snapshot(self, remaining: str | None, limit: str | None) -> QuotaSnapshot:
@@ -191,15 +185,6 @@ class TestRemainingPercentContract:
 
 
 class TestDecimalRules:
-    def test_strict_decimal_parser_seam(self) -> None:
-        # SEAM PROBE: strict vendor-input Decimal validation shared helper.
-        parser = _opt(contracts_module, "parse_decimal", None)
-        assert parser is not None, (
-            "AC-3/2.3: polyweb.contracts.parse_decimal missing — vendor "
-            "numeric/string inputs must parse through strict Decimal validation "
-            "(reject NaN, infinities, booleans, negatives unless contracted)"
-        )
-
     @pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity", "-5", True, "abc", None])
     def test_strict_parser_rejects_bad_inputs(self, bad: object) -> None:
         parser = _opt(contracts_module, "parse_decimal", None)

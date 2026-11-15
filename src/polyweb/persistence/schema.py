@@ -4,30 +4,10 @@ Alembic owns table creation; this metadata is the typed mirror that tests
 compare against a database migrated to the current head.
 """
 
-from types import ModuleType
-
 from sqlalchemy import MetaData
 
-from polyweb.persistence import (
-    api_keys,
-    audit,
-    auth_sessions,
-    bindings,
-    credentials,
-    execution_authority,
-    key_pools,
-    limit_rows,
-    oauth_grants,
-    pools,
-    projects,
-    retention,
-    settings,
-    storage,
-    users,
-)
-
-#: Every module that declares rows on :class:`polyweb.persistence.storage.Base`.
-ROW_MODULES: tuple[ModuleType, ...] = (
+# Imported for their side effect: each module registers its rows on ``Base.metadata``.
+from polyweb.persistence import (  # noqa: F401
     api_keys,
     audit,
     auth_sessions,
@@ -52,4 +32,4 @@ def load_all_rows() -> MetaData:
     return storage.Base.metadata
 
 
-__all__ = ["ROW_MODULES", "load_all_rows"]
+__all__ = ["load_all_rows"]

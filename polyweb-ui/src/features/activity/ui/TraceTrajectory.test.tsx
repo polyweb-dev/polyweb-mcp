@@ -122,9 +122,43 @@ describe("TraceTrajectory", () => {
     )
 
     expect(screen.getByRole("button", { name: /keenable request/i })).toBeInTheDocument()
-    expect(screen.getByTitle("Keenable request")).toHaveClass("whitespace-nowrap", "overflow-hidden")
+    // The full label stays reachable (tooltip) even when the row truncates it.
+    expect(screen.getByTitle("Keenable request")).toHaveTextContent("Keenable request")
     expect(screen.getByRole("button", { name: /parallel request/i })).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: /^provider request$/i })).not.toBeInTheDocument()
+  })
+
+  it("reads a provider attempt as logo, provider name, then request in one row label", () => {
+    const detail = mapTraceDetail(aggregatedTraceDetailFixture())
+    render(
+      <TraceTrajectory
+        stages={detail.stages}
+        totalMs={detail.totalMs}
+        selectedSpanId={null}
+        onSelect={() => {}}
+      />
+    )
+
+    // User-visible contract: the row is one button whose label reads
+    // "<stage> <Provider> request" with the provider logo inside it, and the
+    // provider name is not split from "request" into a separate label.
+    const row = screen.getByRole("button", { name: /keenable request/i })
+    const label = within(row).getByTitle("Keenable request")
+    expect(label).toHaveTextContent(/^Provider request\s+Keenable request$/)
+    const logo = within(label).getByTestId("provider-logo-keenable")
+    expect(within(row).getAllByTestId(/provider-logo-/)).toEqual([logo])
+
+    // Misalignment regression ("Keenable request" label sitting on a different
+    // baseline than its logo) came from the suffix being loose text outside the
+    // badge. jsdom has no layout, so the minimum structural check is: the logo
+    // and the complete "Keenable request" text share one parent, and the label
+    // has no loose text nodes of its own.
+    const text = within(label).getByText("Keenable request")
+    expect(text.parentElement).toContainElement(logo)
+    const looseText = Array.from(label.childNodes).filter(
+      (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()
+    )
+    expect(looseText).toHaveLength(0)
   })
 
   it("keeps the failed attempt outcome visible in its row", () => {

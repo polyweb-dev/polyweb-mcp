@@ -53,8 +53,10 @@ uv run polyweb-api
 ```
 
 ```bash
-uv run polyweb-mcp
+POLYWEB_EXECUTION_AUTHORITY_URL=http://127.0.0.1:8001 uv run polyweb-mcp
 ```
+
+The MCP server forwards each search and fetch to the API server, so start the API first. Without `POLYWEB_EXECUTION_AUTHORITY_URL` (or `POLYWEB_EXECUTION_MCP_STANDALONE=true`), the MCP server refuses to start. You can also put the variable in `.env`.
 
 ```bash
 cd polyweb-ui && pnpm install && pnpm dev

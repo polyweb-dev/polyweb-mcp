@@ -25,7 +25,7 @@ from polyweb.models.contracts import (
 )
 from polyweb.persistence.database_migrations import DatabaseMigrationError
 from polyweb.persistence.storage import SQLiteRepository, UsageEventRow
-from polyweb.services.monitoring import clear_quota_poll_cache, effective_quotas_batch
+from polyweb.services.monitoring import clear_quota_poll_cache, effective_quota
 from polyweb.services.provider_runtime import clear_config_cache
 from tests.fixtures.execution import seed_execution_project
 from tests.fixtures.usage_ledger import all_usage_events
@@ -768,7 +768,19 @@ async def test_latest_health_batch_matches_single(repository: SQLiteRepository) 
         clear_quota_poll_cache()
 
 
-async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> None:
+async def _effective_quotas(
+    database: SQLiteRepository, providers: list[str]
+) -> dict[str, QuotaSnapshot]:
+    """Collect the routable quota view per provider, omitting providers without one."""
+    quotas: dict[str, QuotaSnapshot] = {}
+    for provider in providers:
+        snapshot = await effective_quota(database, provider)
+        if snapshot is not None:
+            quotas[provider] = snapshot
+    return quotas
+
+
+async def test_effective_quota_soft_zero_persistence(tmp_path: Path) -> None:
     """Parallel soft zero clears only after a strictly later success, one write each."""
     t0 = datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
 
@@ -812,7 +824,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
             _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
         )
         calls = len(recorded)
-        result = await effective_quotas_batch(database, ["parallel"])
+        result = await _effective_quotas(database, ["parallel"])
         assert len(recorded) - calls == 1
         view = result["parallel"]
         assert view.remaining is None
@@ -832,7 +844,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
         zero = _quota_zero(t0)
         await database.record_quota(zero)
         calls = len(recorded)
-        result = await effective_quotas_batch(database, ["parallel"])
+        result = await _effective_quotas(database, ["parallel"])
         assert len(recorded) - calls == 0
         assert result["parallel"] == zero
         assert result["parallel"].remaining == Decimal("0")
@@ -843,7 +855,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
             _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
         )
         calls = len(recorded)
-        result = await effective_quotas_batch(database, ["parallel"])
+        result = await _effective_quotas(database, ["parallel"])
         assert len(recorded) - calls == 0
         assert result["parallel"].remaining == Decimal("0")
         assert result["parallel"].observed_at == t0 + timedelta(hours=2)
@@ -854,7 +866,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
             _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
         )
         calls = len(recorded)
-        result = await effective_quotas_batch(database, ["parallel"])
+        result = await _effective_quotas(database, ["parallel"])
         assert len(recorded) - calls == 0
         assert result["parallel"].remaining == Decimal("0")
         assert result["parallel"].observed_at == t0 + timedelta(hours=1)
@@ -866,7 +878,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
             attribution=await seed_execution_project(database),
         )
         calls = len(recorded)
-        result = await effective_quotas_batch(database, ["parallel"])
+        result = await _effective_quotas(database, ["parallel"])
         assert len(recorded) - calls == 0
         assert result["parallel"].remaining == Decimal("0")
         assert result["parallel"].observed_at == t0
@@ -883,7 +895,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
             _usage(t0 + timedelta(hours=3)), attribution=await seed_execution_project(database)
         )
         calls = len(recorded)
-        result = await effective_quotas_batch(database, ["parallel"])
+        result = await _effective_quotas(database, ["parallel"])
         assert len(recorded) - calls == 1
         assert result["parallel"].remaining is None
         assert result["parallel"].observed_at == t0 + timedelta(hours=3)
@@ -902,7 +914,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
             _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
         )
         calls = len(recorded)
-        result = await effective_quotas_batch(database, ["parallel"])
+        result = await _effective_quotas(database, ["parallel"])
         assert len(recorded) - calls == 0
         assert result["parallel"] == hard
         assert result["parallel"].remaining == Decimal("0")
@@ -913,7 +925,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
             _usage(t0 + timedelta(hours=1)), attribution=await seed_execution_project(database)
         )
         calls = len(recorded)
-        result = await effective_quotas_batch(database, ["parallel"])
+        result = await _effective_quotas(database, ["parallel"])
         assert len(recorded) - calls == 0
         view = result["parallel"]
         assert view.remaining is None
@@ -951,7 +963,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
             attribution=await seed_execution_project(database),
         )
         calls = len(recorded)
-        combined = await effective_quotas_batch(database, ["parallel", "exa", "tavily"])
+        combined = await _effective_quotas(database, ["parallel", "exa", "tavily"])
         assert len(recorded) - calls == 2
         assert {snapshot.provider for snapshot in recorded[calls:]} == {"parallel", "exa"}
         for snapshot in recorded[calls:]:
@@ -966,7 +978,7 @@ async def test_effective_quotas_batch_soft_zero_persistence(tmp_path: Path) -> N
         assert combined["exa"].metadata == {"batch": "h2", "soft_zero": False}
         assert combined["tavily"].remaining == Decimal("0")
         repeat_calls = len(recorded)
-        repeated = await effective_quotas_batch(database, ["parallel", "exa", "tavily"])
+        repeated = await _effective_quotas(database, ["parallel", "exa", "tavily"])
         assert len(recorded) - repeat_calls == 0
         assert repeated == combined
 

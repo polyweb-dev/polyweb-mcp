@@ -64,7 +64,6 @@ export const QuotaAnalytics: FC<{
           providerName={providerName}
           accountId={accountId}
           isAdmin
-          email={null}
           refreshDashboard={refreshDashboard}
         />
       ) : undefined}

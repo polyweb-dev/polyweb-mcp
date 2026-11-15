@@ -17,7 +17,7 @@ beforeEach(() => { transfer.mockReset() })
 
 describe("ProviderOwnerLine", () => {
   it("lets an admin claim an unowned project after confirmation", async () => {
-    transfer.mockResolvedValue({ user_id: "me", email: "me@example.com", unassigned_pools: [] })
+    transfer.mockResolvedValue({ user_id: "me", unassigned_pools: [] })
     const onClaimed = vi.fn()
     render(<ProviderOwnerLine owner={owner(null)} projectId="p1" accountId="me" isAdmin canConfigure onClaimed={onClaimed} />)
     const user = userEvent.setup()
@@ -36,15 +36,16 @@ describe("ProviderOwnerLine", () => {
   })
 
   it("offers project admins a transfer action", () => {
-    render(<MemoryRouter><ProviderOwnerLine owner={owner({ user_id: "me", email: "me@example.com" })} projectId="p1" accountId="me" isAdmin canConfigure onClaimed={vi.fn()} /></MemoryRouter>)
+    render(<MemoryRouter><ProviderOwnerLine owner={owner({ user_id: "me" })} projectId="p1" accountId="me" isAdmin canConfigure onClaimed={vi.fn()} /></MemoryRouter>)
     expect(screen.getByRole("link", { name: "Transfer ownership" })).toHaveAttribute("href", "/p/p1/members")
   })
 
-  it("shows the owner full name primary with the email kept for contact", () => {
-    render(
+  it("shows the owner full name only, with no email in the line or its title", () => {
+    const { container } = render(
       <MemoryRouter>
         <ProviderOwnerLine
-          owner={owner({ user_id: "u1", email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" })}
+          // An older backend may still send an email; it must never be rendered.
+          owner={owner({ user_id: "u1", email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" } as ProviderOwner)}
           projectId="p1"
           accountId="me"
           isAdmin
@@ -56,18 +57,19 @@ describe("ProviderOwnerLine", () => {
 
     const note = screen.getByRole("note")
     expect(note).toHaveTextContent("Provider owner: Ada Lovelace")
-    expect(note).toHaveAttribute("title", "Ada Lovelace (ada@example.com)")
+    expect(note).not.toHaveAttribute("title")
     expect(note).not.toHaveTextContent("(you)")
     expect(screen.getByText(/Only the provider owner can add or remove capacity/)).toHaveTextContent(
-      "Ask Ada Lovelace (ada@example.com)"
+      "Ask Ada Lovelace"
     )
+    expect(container.innerHTML).not.toContain("ada@example.com")
   })
 
-  it("marks the caller with the username fallback and keeps the email secondary", () => {
+  it("marks the caller with the username fallback", () => {
     render(
       <MemoryRouter>
         <ProviderOwnerLine
-          owner={owner({ user_id: "me", email: "ops@example.com", username: "ops-lead" })}
+          owner={owner({ user_id: "me", username: "ops-lead" })}
           projectId="p1"
           accountId="me"
           isAdmin
@@ -77,16 +79,14 @@ describe("ProviderOwnerLine", () => {
       </MemoryRouter>
     )
 
-    const note = screen.getByRole("note")
-    expect(note).toHaveTextContent("Provider owner: ops-lead (you)")
-    expect(note).toHaveAttribute("title", "ops-lead (ops@example.com)")
+    expect(screen.getByRole("note")).toHaveTextContent("Provider owner: ops-lead (you)")
   })
 
-  it("shows the email alone without a title for a legacy owner payload", () => {
-    render(
+  it("shows Unknown user, never an email, for an owner without a name or username", () => {
+    const { container } = render(
       <MemoryRouter>
         <ProviderOwnerLine
-          owner={owner({ user_id: "u1", email: "lead@example.com" })}
+          owner={owner({ user_id: "u1", email: "lead@example.com" } as ProviderOwner)}
           projectId="p1"
           accountId="me"
           isAdmin={false}
@@ -96,8 +96,7 @@ describe("ProviderOwnerLine", () => {
       </MemoryRouter>
     )
 
-    const note = screen.getByRole("note")
-    expect(note).toHaveTextContent("Provider owner: lead@example.com")
-    expect(note).not.toHaveAttribute("title")
+    expect(screen.getByRole("note")).toHaveTextContent("Provider owner: Unknown user")
+    expect(container.innerHTML).not.toContain("lead@example.com")
   })
 })

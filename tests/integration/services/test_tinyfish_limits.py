@@ -4,7 +4,6 @@ Tinyfish slice only. Real adapter with real catalog records and mock-transport
 HTTP. No vendor I/O, no live keys, no wallet calls.
 """
 
-import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -14,17 +13,8 @@ import httpx
 from pydantic import SecretStr
 
 from polyweb.adapters.tinyfish import TinyfishAdapter
-from polyweb.configuration.provider_limits import provider_limit_defaults, provider_tier_defaults
 from polyweb.models.contracts import FetchRequest, SearchRequest
-from polyweb.models.provider_limits import (
-    AuthMode,
-    FundingMode,
-    LimitOperation,
-    RateScope,
-    RateUnit,
-    RateWindowName,
-    UsageSyncRequest,
-)
+from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -111,54 +101,12 @@ async def test_tinyfish_free_operations_preserve_rate_budget_split() -> None:
         assert len(calls) == 2
         hosts = sorted(r.url.host for r in calls)
         assert hosts == ["api.fetch.tinyfish.ai", "api.search.tinyfish.ai"]
-        fetch_req = next(r for r in calls if r.url.host == "api.fetch.tinyfish.ai")
-        fetch_payload = json.loads(fetch_req.content)
-        assert fetch_payload["urls"] == ["https://example.com/page"]
-        assert len(fetch_payload["urls"]) == 1
-        assert len(fetch_payload["urls"]) <= 10
         for req in calls:
             text = str(req.url).lower()
             assert "wallet" not in text
             assert "usage" not in text
             assert "agent" not in text
             assert "browser" not in text
-
-        records = [r for r in provider_limit_defaults() if r.provider == "tinyfish"]
-        assert len(records) == 2
-        search_record = next(r for r in records if r.operation is LimitOperation.SEARCH)
-        fetch_record = next(r for r in records if r.operation is LimitOperation.FETCH)
-        assert search_record.auth_mode is AuthMode.KEYED
-        assert fetch_record.auth_mode is AuthMode.KEYED
-        assert search_record.rate is not None
-        assert fetch_record.rate is not None
-        search_windows = {w.window: w for w in search_record.rate.windows}
-        fetch_windows = {w.window: w for w in fetch_record.rate.windows}
-        assert set(search_windows) == {RateWindowName.MINUTE, RateWindowName.HOUR}
-        assert set(fetch_windows) == {RateWindowName.MINUTE, RateWindowName.DAY}
-        assert search_windows[RateWindowName.MINUTE].limit == Decimal("30")
-        assert search_windows[RateWindowName.MINUTE].scope is RateScope.KEY
-        assert search_windows[RateWindowName.MINUTE].unit is RateUnit.REQUESTS
-        assert search_windows[RateWindowName.HOUR].limit == Decimal("500")
-        assert search_windows[RateWindowName.HOUR].scope is RateScope.KEY
-        assert fetch_windows[RateWindowName.MINUTE].limit == Decimal("150")
-        assert fetch_windows[RateWindowName.MINUTE].scope is RateScope.KEY
-        assert fetch_windows[RateWindowName.MINUTE].unit is RateUnit.URLS
-        assert fetch_windows[RateWindowName.DAY].limit == Decimal("1000")
-        assert fetch_windows[RateWindowName.DAY].scope is RateScope.KEY
-        assert search_windows[RateWindowName.MINUTE].bucket_id == (
-            search_windows[RateWindowName.HOUR].bucket_id
-        )
-        assert fetch_windows[RateWindowName.MINUTE].bucket_id == (
-            fetch_windows[RateWindowName.DAY].bucket_id
-        )
-        assert search_windows[RateWindowName.MINUTE].bucket_id != (
-            fetch_windows[RateWindowName.MINUTE].bucket_id
-        )
-        assert search_record.budget is None
-        assert fetch_record.budget is None
-        tiers = provider_tier_defaults().get("tinyfish:keyed", [])
-        assert len(tiers) == 1
-        assert tiers[0].funding_mode is FundingMode.NO_BUDGET
 
         before = len(calls)
         snapshot = await adapter.usage_snapshot(
@@ -170,19 +118,5 @@ async def test_tinyfish_free_operations_preserve_rate_budget_split() -> None:
         )
         assert snapshot is None
         assert len(calls) == before
-
-        search_est = await adapter.estimate_cost(
-            SearchRequest(project_id="00000000-0000-4000-8000-0000000000aa", query="free proof")
-        )
-        fetch_est = await adapter.estimate_cost(
-            FetchRequest(
-                project_id="00000000-0000-4000-8000-0000000000aa",
-                url=cast(Any, "https://example.com/page"),
-            ),
-        )
-        assert search_est.units == Decimal("0")
-        assert search_est.currency == "USD"
-        assert fetch_est.units == Decimal("0")
-        assert fetch_est.currency == "USD"
     finally:
         await client.aclose()

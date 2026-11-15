@@ -7,37 +7,46 @@ import { IdentityLines } from "./IdentityLines"
  * same-name rows stay distinguishable where a row overlay covers hover titles.
  */
 describe("IdentityLines", () => {
-  it("shows the primary with the full contact as its title and the contact as a visible second line", () => {
-    render(<IdentityLines primary="Ada Lovelace" secondary="ada@example.com" />)
+  it("shows the primary with its contact as the title and as a visible second line", () => {
+    render(<IdentityLines primary="Ada Lovelace" secondary="Platform team" />)
 
     expect(screen.getByText("Ada Lovelace")).toHaveAttribute(
       "title",
-      "Ada Lovelace (ada@example.com)"
+      "Ada Lovelace (Platform team)"
     )
-    expect(screen.getByText("ada@example.com")).toBeInTheDocument()
+    expect(screen.getByText("Platform team")).toBeInTheDocument()
   })
 
-  it("hides the second line when the contact adds nothing", () => {
+  it("hides the second line when it adds nothing", () => {
     const { container, rerender } = render(
-      <IdentityLines primary="ada@example.com" secondary="ada@example.com" />
+      <IdentityLines primary="Ada Lovelace" secondary="Ada Lovelace" />
     )
     expect(container.querySelectorAll("span span")).toHaveLength(1)
 
     rerender(<IdentityLines primary="Ada Lovelace" secondary={null} />)
     expect(screen.getByText("Ada Lovelace")).toHaveAttribute("title", "Ada Lovelace")
-    expect(screen.queryByText("ada@example.com")).not.toBeInTheDocument()
+    expect(container.querySelectorAll("span span")).toHaveLength(1)
   })
 
-  it("uses the existing contact detail helper output as the primary title when provided", () => {
-    render(
-      <IdentityLines
-        primary="ada"
-        secondary="ada@example.com"
-        detail="ada (ada@work.example)"
-      />
+  it("shows a monospace token after the lead text on the second line", () => {
+    const { container } = render(
+      <IdentityLines primary="test-key" secondary="API key ·" secondaryMono="pw_live_ab12" />
     )
 
-    // The explicit detail wins even though the generated contact would differ.
-    expect(screen.getByText("ada")).toHaveAttribute("title", "ada (ada@work.example)")
+    expect(container).toHaveTextContent("test-keyAPI key · pw_live_ab12")
+    expect(screen.getByText("pw_live_ab12")).toHaveClass("font-mono")
+    expect(screen.getByText("test-key")).toHaveAttribute("title", "test-key (API key · pw_live_ab12)")
+  })
+
+  it("shows the monospace token alone when there is no lead text", () => {
+    const { container } = render(<IdentityLines primary="API key" secondaryMono="pw_live_ab12" />)
+
+    expect(container).toHaveTextContent("API keypw_live_ab12")
+  })
+
+  it("uses the explicit detail as the primary title when provided", () => {
+    render(<IdentityLines primary="ada" secondary="Platform team" detail="ada (platform)" />)
+
+    expect(screen.getByText("ada")).toHaveAttribute("title", "ada (platform)")
   })
 })

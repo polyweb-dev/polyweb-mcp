@@ -21,18 +21,22 @@ from tests.integration.services.oauth.oauth_stubs import (
 )
 
 
-async def test_no_token_material_in_logs_and_error_bodies(oauth_case, caplog):
+async def test_no_token_material_in_logs_and_error_bodies(vault_oauth_case, caplog):
     """Origin test_adv_oauth_leakage.py::test_no_token_material_in_logs_and_error_bodies."""
-    case = oauth_case
+    case = vault_oauth_case
     bodies = []
     with caplog.at_level(logging.DEBUG):
         for outcome in ("access_denied", "expired_token", "invalid_grant"):
             case.stub.poll_script = [outcome]
-            bodies.append(case.client.post(case.path + "/device", headers=case.headers))
-            bodies.append(case.client.post(case.path + "/poll", headers=case.headers))
-            bodies.append(case.client.delete(case.path, headers=case.headers))
+            start = case.client.post(case.path + "/device", headers=case.headers)
+            poll = case.client.post(case.path + "/poll", headers=case.headers)
+            disconnect = case.client.delete(case.path, headers=case.headers)
+            assert (start.status_code, poll.status_code, disconnect.status_code) == (200, 200, 204)
+            bodies.extend((start, poll, disconnect))
         await case.connect()
-        bodies.append(case.client.post(case.path + "/device", headers=case.headers))
+        conflict = case.client.post(case.path + "/device", headers=case.headers)
+        assert conflict.status_code == 409
+        bodies.append(conflict)
         case.stub.refresh_reject = "invalid_grant"
         await case.refresh()
         bodies.append(case.client.get("/dashboard", headers=case.headers))

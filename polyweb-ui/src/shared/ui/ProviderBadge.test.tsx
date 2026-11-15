@@ -54,4 +54,18 @@ describe("ProviderBadge", () => {
       Node.DOCUMENT_POSITION_FOLLOWING
     )
   })
+
+  it("keeps a suffix in the same flex row and text element as the name", () => {
+    const { container } = render(
+      <ProviderBadge providerId="keenable" name="Keenable" suffix=" request" />
+    )
+
+    const outer = container.firstElementChild!
+    const text = screen.getByText("Keenable request")
+    // Logo and one text element are the only children: no loose trailing text
+    // outside the centered row that could sit on another baseline.
+    expect(outer).toHaveClass("inline-flex", "items-center")
+    expect(outer.children).toHaveLength(2)
+    expect(text.parentElement).toBe(outer)
+  })
 })

@@ -167,7 +167,6 @@ async def test_second_authority_for_a_borrowed_pool_fails_before_execution(
         # distinct holder: a stable process-wide holder id would defeat it.
         rival = ExecutionAuthority(
             repository=world.repository,
-            secret_store=world.store,
             authority_key=world.authority_key,
             monotonic_fn=world.monotonic.monotonic_fn,
         )

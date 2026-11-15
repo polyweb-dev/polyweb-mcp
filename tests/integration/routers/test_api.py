@@ -134,56 +134,6 @@ class _QuotaAdapter(ProviderAdapter):
         return ProviderHealth(provider=self._name, status=HealthStatus.UNKNOWN, checked_at=FIXED_AT)
 
 
-class _SimpleAdapter(ProviderAdapter):
-    """Quota-less adapter that never blocks the background poll."""
-
-    def __init__(self, name: str) -> None:
-        self._name = name
-        self.search_calls = 0
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(search=True, fetch=True, cost_estimate=True)
-
-    async def search(self, request: SearchRequest) -> SearchResponse:
-        self.search_calls += 1
-        return SearchResponse(
-            query=request.query,
-            provider=self._name,
-            results=[
-                SearchResult(
-                    title=f"{self._name} hit",
-                    url="https://example.com/r",
-                    snippet="offline",
-                )
-            ],
-            total_results=1,
-        )
-
-    async def fetch(self, request: FetchRequest) -> FetchResponse:
-        return FetchResponse(
-            provider=self._name,
-            document=FetchedDocument(
-                url=request.url,
-                content=f"{self._name} content",
-                fetched_at=datetime.now(UTC),
-            ),
-        )
-
-    async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
-        operation = (
-            UsageOperation.SEARCH if isinstance(request, SearchRequest) else UsageOperation.FETCH
-        )
-        return CostEstimate(provider=self._name, operation=operation, units=Decimal("0"))
-
-    async def quota(self) -> QuotaSnapshot | None:  # keep parity
-        return None
-
-
 async def _drain_background_tasks() -> None:
     for task in list(_BACKGROUND_TASKS):
         with suppress(Exception):

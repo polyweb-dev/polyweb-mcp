@@ -92,8 +92,6 @@ __all__ = ["TavilyAdapter"]
 
 _NAME = "tavily"
 _MAX_SEARCH_RESULTS = 20
-# Tavily bills basic extraction as one credit per five successful URLs.
-_FETCH_CREDIT_PER_URL = Decimal("0.2")
 # Scalar timeouts forwarded to the SDK are capped at the vendor maxima: the
 # SDK clamps search per-call timeouts to 120s and the extract API caps its
 # server-side timeout at 60s.
@@ -282,11 +280,6 @@ _TAVILY_COUNTRIES = {
     "ZM": "zambia",
     "ZW": "zimbabwe",
 }
-
-
-def _parse_published_at(value: Any) -> datetime | None:
-    """Parse Tavily's ISO-8601 ``published_date``; unparseable values are None."""
-    return parse_iso_datetime(value)
 
 
 def _sdk_timeout_seconds(client: httpx.AsyncClient, *, cap: float) -> float:
@@ -729,7 +722,7 @@ class TavilyAdapter(ProviderAdapter):
             title=item.get("title") or "",
             url=item["url"],
             snippet=item.get("content") or "",
-            published_at=_parse_published_at(item.get("published_date")),
+            published_at=parse_iso_datetime(item.get("published_date")),
             score=score,
             metadata=metadata,
         )
@@ -1281,41 +1274,6 @@ class TavilyAdapter(ProviderAdapter):
             paygo_limit=paygo_limit,
             key_usage=key_usage,
             key_limit=key_limit,
-        )
-
-    def _capped_remaining(
-        self,
-        payload: dict[str, Any],
-        plan_remaining: Decimal | None,
-    ) -> Decimal | None:
-        """Cap the plan remaining at the per-key ceiling when the payload has both.
-
-        A key figure that is absent or not a real finite non-negative number
-        supplies no ceiling, so the plan figure stays. That figure never
-        becomes zero through malformed data.
-        """
-
-        key = payload.get("key")
-        if not isinstance(key, dict):
-            return plan_remaining
-        limit = key.get("limit")
-        usage = key.get("usage")
-        if not self._is_quota_number(limit) or not self._is_quota_number(usage):
-            return plan_remaining
-        key_remaining = max(Decimal(0), Decimal(str(limit)) - Decimal(str(usage)))
-        if plan_remaining is None:
-            return key_remaining
-        return min(plan_remaining, key_remaining)
-
-    @staticmethod
-    def _is_quota_number(value: Any) -> bool:
-        """Return whether a payload value is a real, finite, non-negative number."""
-
-        return (
-            not isinstance(value, bool)
-            and isinstance(value, (int, float))
-            and isfinite(value)
-            and value >= 0
         )
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:

@@ -7,18 +7,17 @@ import { KeyBalancesRefreshScope } from "../model/keyBalanceContext"
 
 vi.mock("@/shared/api/client", () => ({ requestJson: vi.fn() }))
 
-const key = (id: string, owner = "owner@example.com") => ({
+const key = (id: string) => ({
   key_id: id,
   label: `Key ${id}`,
-  owner_email: owner,
   auth_mode: "api_key",
   oauth_connected: null,
   balance: { remaining: "12.50", native_unit: "usd", observed_at: "2026-01-01T12:00:00Z" },
 })
 const refreshDashboard = vi.fn().mockResolvedValue(undefined)
 
-function show(isAdmin = true, email: string | null = null) {
-  return render(<KeyBalances providerId="parallel" providerName="Parallel" accountId="account" isAdmin={isAdmin} email={email} refreshDashboard={refreshDashboard} />)
+function show(isAdmin = true) {
+  return render(<KeyBalances providerId="parallel" providerName="Parallel" accountId="account" isAdmin={isAdmin} refreshDashboard={refreshDashboard} />)
 }
 
 beforeEach(() => {
@@ -45,11 +44,12 @@ describe("KeyBalances", () => {
     expect(screen.queryByText("No key balances")).toBeNull()
   })
 
-  it("shows key labels, owners, balances and refresh times", async () => {
+  it("shows key labels, balances and refresh times, and never an owner email", async () => {
     vi.mocked(requestJson).mockResolvedValue([key("1"), { ...key("2"), balance: null }])
     show()
     expect(await screen.findByText("Key 1")).toBeInTheDocument()
     expect(screen.queryByText("owner@example.com")).toBeNull()
+    expect(document.body.innerHTML).not.toContain("@")
     expect(screen.getByText(/\$12.50 left/)).toBeInTheDocument()
     expect(screen.getAllByText("—")[0]).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Refresh Parallel balances" })).toBeInTheDocument()
@@ -89,7 +89,7 @@ describe("KeyBalances", () => {
   it("does not offer refresh when usage is not reported", async () => {
     vi.mocked(requestJson).mockResolvedValue([key("1")])
     render(<KeyBalancesRefreshScope.Provider value={false}>
-      <KeyBalances providerId="parallel" providerName="Parallel" accountId="account" isAdmin email={null} refreshDashboard={refreshDashboard} />
+      <KeyBalances providerId="parallel" providerName="Parallel" accountId="account" isAdmin refreshDashboard={refreshDashboard} />
     </KeyBalancesRefreshScope.Provider>)
     expect(await screen.findByText("Key 1")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Refresh Parallel balances" })).toBeNull()

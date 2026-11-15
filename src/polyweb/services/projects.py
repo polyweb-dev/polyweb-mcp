@@ -515,7 +515,6 @@ class ProjectService:
                 return None
             return ProviderOwnerRead(
                 user_id=member.user_id,
-                email=member.email,
                 username=member.username,
                 first_name=member.first_name,
                 last_name=member.last_name,
@@ -572,7 +571,6 @@ class ProjectService:
                     )
                 return ProviderOwnerTransferRead(
                     user_id=target_id,
-                    email=target.email,
                     username=target.username,
                     first_name=target.first_name,
                     last_name=target.last_name,
@@ -598,7 +596,6 @@ class ProjectService:
             )
             return ProviderOwnerTransferRead(
                 user_id=target_id,
-                email=target.email,
                 username=target.username,
                 first_name=target.first_name,
                 last_name=target.last_name,

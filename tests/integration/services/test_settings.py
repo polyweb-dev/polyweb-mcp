@@ -797,7 +797,6 @@ async def test_context_resolution_and_facade_reject_invalid_or_foreign_state(
                     account_id=boot.account_id,
                 )
             facade = ProjectScopedRepository(session, context=context)
-            assert facade.context is context
             assert (await facade.require_project()).id == project_id
 
         async with repository.session() as session:

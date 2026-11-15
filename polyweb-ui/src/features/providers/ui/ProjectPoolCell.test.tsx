@@ -7,7 +7,7 @@ vi.mock("@/features/vault/model/useFreeProvider", () => ({ useFreeProvider: (pro
 
 const pool: ProjectPool = {
   pool_id: "pool", provider_type: "tinyfish", label: "Alpha - Tinyfish", key_label: "Tinyfish key",
-  owner: { user_id: "owner", email: "owner@example.com" }, rate: { limit: 60, window_seconds: 60 },
+  owner: { user_id: "owner" }, rate: { limit: 60, window_seconds: 60 },
   budget: { limit: 20, period: "month" }, budget_used: 2, operations: ["search", "fetch"],
 }
 
@@ -38,20 +38,22 @@ describe("ProjectPoolCell", () => {
     expect(screen.getByText("20/h")).toBeInTheDocument()
   })
 
-  it("names the pool supplier with the owner display name and email tooltip", () => {
-    const named = { ...pool, owner: { user_id: "owner", email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" } }
+  it("names the pool supplier with the owner display name only", () => {
+    const named = { ...pool, owner: { user_id: "owner", username: "ada", first_name: "Ada", last_name: "Lovelace" } }
     const { container } = render(<ProjectPoolCell pool={named} operation="search" />)
     expect(container.firstChild).toHaveAttribute(
       "title",
-      "Pool: Alpha - Tinyfish. Key: Tinyfish key. Supplied by Ada Lovelace (ada@example.com)"
+      "Pool: Alpha - Tinyfish. Key: Tinyfish key. Supplied by Ada Lovelace"
     )
   })
 
-  it("falls back to the email supplier for a legacy pool owner payload", () => {
-    const { container } = render(<ProjectPoolCell pool={pool} operation="search" />)
+  it("shows Unknown user, never an email, for a pool owner without a name", () => {
+    const stray = { ...pool, owner: { user_id: "owner", email: "owner@example.com" } as ProjectPool["owner"] }
+    const { container } = render(<ProjectPoolCell pool={stray} operation="search" />)
     expect(container.firstChild).toHaveAttribute(
       "title",
-      "Pool: Alpha - Tinyfish. Key: Tinyfish key. Supplied by owner@example.com"
+      "Pool: Alpha - Tinyfish. Key: Tinyfish key. Supplied by Unknown user"
     )
+    expect(container.innerHTML).not.toContain("owner@example.com")
   })
 })

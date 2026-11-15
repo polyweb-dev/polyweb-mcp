@@ -254,7 +254,9 @@ async def test_list_rows_are_summary_only(repository: SQLiteRepository) -> None:
         assert summary.username is None
         assert summary.first_name is None
         assert summary.last_name is None
-        assert summary.email is None
+        assert summary.api_key_name is None
+        assert summary.api_key_prefix is None
+        assert "email" not in summary.model_dump(mode="json")
         assert set(summary.model_dump(mode="json")) == {
             "trace_id",
             "user_id",
@@ -263,7 +265,8 @@ async def test_list_rows_are_summary_only(repository: SQLiteRepository) -> None:
             "username",
             "first_name",
             "last_name",
-            "email",
+            "api_key_name",
+            "api_key_prefix",
             "operation",
             "started_at",
             "duration_ms",

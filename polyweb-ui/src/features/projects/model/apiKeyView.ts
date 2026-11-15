@@ -6,8 +6,8 @@
  */
 import { API_KEY_SCOPES, API_KEY_SCOPE_LABELS, isApiKeyScope } from "@/domains/projects"
 import type { ApiKeyStatus, ProjectApiKey } from "@/domains/projects"
-import { identityDetailLabel, identityLabel } from "@/shared/lib/identity"
-import type { ContactIdentity } from "@/shared/lib/identity"
+import { identityLabel } from "@/shared/lib/identity"
+import type { IdentityProfile } from "@/shared/lib/identity"
 
 const STATUS_LABELS: Record<ApiKeyStatus, string> = {
   active: "Active",
@@ -50,31 +50,17 @@ export function scopesLabel(scopes: readonly string[]): string {
 }
 
 /**
- * Created by column text: the member display name (full name, then
- * username) when the member list is readable and holds the creator, else a
- * short id.
+ * Created by column text: the member display name (full name, then username,
+ * else `Unknown user`) when the member list is readable and holds the
+ * creator, else a short id. Never an email.
  */
 export function creatorLabel(
   createdBy: string,
-  identitiesByUserId: ReadonlyMap<string, ContactIdentity> | null
+  identitiesByUserId: ReadonlyMap<string, IdentityProfile> | null
 ): string {
   const identity = identitiesByUserId?.get(createdBy)
   if (identity === undefined || identity === null) return createdBy.slice(0, 8)
   return identityLabel(identity)
-}
-
-/**
- * Creator contact value for disclosure: the email when it names someone the
- * primary label hides, else `null` so the primary label stands alone.
- */
-export function creatorContactDetail(
-  createdBy: string,
-  identitiesByUserId: ReadonlyMap<string, ContactIdentity> | null
-): string | null {
-  const identity = identitiesByUserId?.get(createdBy)
-  if (identity === undefined || identity === null) return null
-  const detail = identityDetailLabel(identity)
-  return detail === identityLabel(identity) ? null : detail
 }
 
 /**

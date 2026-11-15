@@ -6,7 +6,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 it("detaches project capacity", async () => {
   const pool = { pool_id: "pool1", label: "Search", provider_type: "brave", key_label: "Key",
-    owner: { user_id: "u1", email: "admin@example.com" }, rate: { limit: 10, window_seconds: 60 },
+    owner: { user_id: "u1" }, rate: { limit: 10, window_seconds: 60 },
     budget: null, budget_used: 0, operations: ["search"] }
   const stub = installFetchStub((request) => request.url.endsWith("/unassign") ? ok({
     id: "pool1", credential_id: "k1", provider_type: "brave", project_id: null,
@@ -22,7 +22,7 @@ it("detaches project capacity", async () => {
 it("drops unknown operations and excludes private key identifiers", async () => {
   installFetchStub(() => ok([{
     pool_id: "pool1", label: "Search", provider_type: "brave", key_label: "Key",
-    owner: { user_id: "u1", email: "admin@example.com" }, rate: { limit: null, window_seconds: 60 },
+    owner: { user_id: "u1" }, rate: { limit: null, window_seconds: 60 },
     budget: null, budget_used: 0, operations: ["search", "future"], key_id: "private",
     operation_limits: { search: { rate_limit: null, rate_window_seconds: 3600 } },
   }]))
@@ -37,33 +37,47 @@ it("decodes named, username-only, legacy, nullable, and wrong-type pool owners",
     pool_id: "pool1", label: "Search", provider_type: "brave", key_label: "Key",
     rate: { limit: null, window_seconds: 60 }, budget: null, budget_used: 0, operations: ["search"],
   }
-  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" } }]))
+  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", username: "ada", first_name: "Ada", last_name: "Lovelace" } }]))
   expect((await listProjectPools("p1"))[0]?.owner).toEqual({
-    user_id: "u1", email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace",
+    user_id: "u1", username: "ada", first_name: "Ada", last_name: "Lovelace",
   })
 
-  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", email: "ops@example.com", username: "ops-lead" } }]))
+  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", username: "ops-lead" } }]))
   expect((await listProjectPools("p1"))[0]?.owner).toEqual({
-    user_id: "u1", email: "ops@example.com", username: "ops-lead", first_name: null, last_name: null,
+    user_id: "u1", username: "ops-lead", first_name: null, last_name: null,
   })
 
-  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", email: "lead@example.com" } }]))
-  expect((await listProjectPools("p1"))[0]?.owner).toEqual({ user_id: "u1", email: "lead@example.com" })
+  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1" } }]))
+  expect((await listProjectPools("p1"))[0]?.owner).toEqual({ user_id: "u1" })
 
-  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", email: "lead@example.com", username: null, first_name: null, last_name: null } }]))
+  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", username: null, first_name: null, last_name: null } }]))
   expect((await listProjectPools("p1"))[0]?.owner).toEqual({
-    user_id: "u1", email: "lead@example.com", username: null, first_name: null, last_name: null,
+    user_id: "u1", username: null, first_name: null, last_name: null,
   })
 
-  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", email: "lead@example.com", username: 7 } }]))
+  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", username: 7 } }]))
   await expect(listProjectPools("p1")).rejects.toThrow("unexpected pool")
 })
 
 it("rejects a pool with no recognized operations", async () => {
   installFetchStub(() => ok([{
     pool_id: "pool1", label: "Search", provider_type: "brave", key_label: "Key",
-    owner: { user_id: "u1", email: "admin@example.com" }, rate: { limit: null, window_seconds: 60 },
+    owner: { user_id: "u1" }, rate: { limit: null, window_seconds: 60 },
     budget: null, budget_used: 0, operations: [],
   }]))
   await expect(listProjectPools("p1")).rejects.toThrow("unexpected pool")
+})
+
+it("decodes pool owners without an email and ignores an email an older server still sends", async () => {
+  const base = {
+    pool_id: "pool1", label: "Search", provider_type: "brave", key_label: "Key",
+    rate: { limit: null, window_seconds: 60 }, budget: null, budget_used: 0, operations: ["search"],
+  }
+  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1", email: "old@example.com", username: "ada" } }]))
+  const legacy = (await listProjectPools("p1"))[0]?.owner
+  expect(legacy).toEqual({ user_id: "u1", username: "ada", first_name: null, last_name: null })
+  expect(legacy).not.toHaveProperty("email")
+
+  installFetchStub(() => ok([{ ...base, owner: { user_id: "u1" } }]))
+  expect((await listProjectPools("p1"))[0]?.owner).toEqual({ user_id: "u1" })
 })

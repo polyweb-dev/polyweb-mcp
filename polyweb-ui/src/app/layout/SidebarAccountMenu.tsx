@@ -4,34 +4,59 @@ import { LogOut, UserRound } from "lucide-react"
 import { Link } from "react-router"
 import { cn } from "cn"
 import { accountDisplayName, authErrorText, useAuth } from "@/domains/auth"
-import { identityDetailLabel, identityInitial } from "@/shared/lib/identity"
+import { identityInitial } from "@/shared/lib/identity"
 import { MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from "@/shared/ui/menuStyles"
 import { TAB_PATHS } from "../routes"
 
 const SIGN_OUT_FAILURE = "Sign out failed. Try again."
 
-/** One letter of the text avatar: the display name's, else the email's. */
-function avatarLetter(name: string | null, email: string): string {
-  return identityInitial(name, email)
+type AccountIdentity = {
+  username: string | null
+  first_name: string | null
+  last_name: string | null
+  email: string
+}
+
+/** One letter of the text avatar: the display name's, else the username's, else the email's. */
+function avatarLetter(account: AccountIdentity): string {
+  const username = account.username?.trim() ?? ""
+  return identityInitial(accountDisplayName(account) ?? (username === "" ? null : username), account.email)
 }
 
 /**
- * Identity lines of the account row and popup: the display name above the
- * email when the account has a name or username, else the email alone.
+ * Visible identity of the account: the full name with the username below it,
+ * the name or username alone, and the email only when the account has neither
+ * (the user's own account, so an empty row would be useless).
  */
-function identityLines(account: { username: string | null; first_name: string | null; last_name: string | null; email: string }) {
+function accountIdentityText(account: AccountIdentity): { primary: string; secondary: string | null } {
   const name = accountDisplayName(account)
-  const detail = identityDetailLabel({ ...account, email: account.email })
+  if (name === null) return { primary: account.email, secondary: null }
+  const username = account.username?.trim() ?? ""
+  return { primary: name, secondary: username !== "" && username !== name ? username : null }
+}
+
+/** Hover title: name and username only; the email shows only when it is the whole identity. */
+function accountTitle(account: AccountIdentity): string {
+  const { primary, secondary } = accountIdentityText(account)
+  return secondary === null ? primary : `${primary} (${secondary})`
+}
+
+/**
+ * Identity lines of the account row and popup: the full name above the
+ * username, the single name or username, else the email alone.
+ */
+function identityLines(account: AccountIdentity) {
+  const { primary, secondary } = accountIdentityText(account)
   return (
     <span className="flex min-w-0 flex-col text-left">
       <span
         className="truncate text-[13px] font-medium text-[var(--text-strong)]"
-        title={name === null ? undefined : detail}
+        title={secondary === null ? undefined : accountTitle(account)}
       >
-        {name ?? account.email}
+        {primary}
       </span>
-      {name !== null && (
-        <span className="truncate text-[11px] text-[var(--muted)]">{account.email}</span>
+      {secondary !== null && (
+        <span className="truncate text-[11px] text-[var(--muted)]">{secondary}</span>
       )}
     </span>
   )
@@ -77,9 +102,9 @@ interface SidebarAccountMenuProps {
  * Account row of the sidebar foot and its account popover.
  *
  * One inset divider sits above the whole expanded account row. The row shows
- * the email, with the full name or username above it when the account has
- * one; no role text appears. The popup holds Account and Sign out; it repeats
- * the identity only for the collapsed avatar row, which shows no email. The
+ * the full name with the username below it (never the email, unless the
+ * account has neither); no role text appears. The popup holds Account and Sign
+ * out; it repeats the identity only for the collapsed avatar row. The
  * component reads the
  * safe account projection and the logout action from the auth barrel; it holds
  * no credential, and it renders nothing without a confirmed account.
@@ -91,8 +116,6 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
   const [error, setError] = useState<string | null>(null)
 
   if (account === null) return null
-
-  const name = accountDisplayName(account)
 
   /** One accepted Sign out action on the current logout seam. */
   async function handleSignOut(): Promise<void> {
@@ -121,7 +144,7 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
       <PopoverPrimitive.Trigger
         type="button"
         aria-label="Open user menu"
-        title={collapsed ? identityDetailLabel(account) : undefined}
+        title={collapsed ? accountTitle(account) : undefined}
         className={cn(
           "flex h-10 w-full items-center rounded-md text-[13px] font-medium text-[var(--muted)] transition-colors hover:bg-[var(--raised)] hover:text-[var(--text-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)] aria-expanded:bg-[var(--raised)] motion-reduce:transition-none",
           collapsed ? "justify-center px-0" : "gap-2.5 px-2"
@@ -131,7 +154,7 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
           aria-hidden="true"
           className="grid size-7 shrink-0 place-items-center rounded-full border border-[var(--border-subtle)] bg-[var(--raised)] text-[11px] font-semibold leading-none text-[var(--text-strong)]"
         >
-          {avatarLetter(name, account.email)}
+          {avatarLetter(account)}
         </span>
         {!collapsed && identityLines(account)}
       </PopoverPrimitive.Trigger>
@@ -160,7 +183,7 @@ export function SidebarAccountMenu({ collapsed }: SidebarAccountMenuProps) {
                     aria-hidden="true"
                     className="grid size-10 shrink-0 place-items-center rounded-full border border-[var(--border-subtle)] bg-[var(--secondary)] text-[13px] font-semibold leading-none text-[var(--text-strong)]"
                   >
-                    {avatarLetter(name, account.email)}
+                    {avatarLetter(account)}
                   </span>
                   {identityLines(account)}
                 </div>

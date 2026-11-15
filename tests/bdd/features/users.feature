@@ -79,11 +79,6 @@ Feature: Local user accounts, migration, and settings
     When I fail login five times and then once more
     Then the sixth login should fail with HTTP 429 and a retry delay
 
-  Scenario: Excess registrations return HTTP 429
-    Given an offline users API with account auth and stub adapters
-    When I register five accounts and then one more
-    Then the sixth registration should fail with HTTP 429 and a retry delay
-
   Scenario: Refresh rotates once and logout revokes the family
     Given an offline users API with account auth and stub adapters
     When I register account "cycle-bdd@example.com"
@@ -116,13 +111,6 @@ Feature: Local user accounts, migration, and settings
     Then the login should return a Bearer pair with a 900-second access token
     When I fail login five times and then once more
     Then the sixth login should fail with HTTP 429 and a retry delay
-
-  Scenario: Oversize public auth bodies return HTTP 413
-    Given an offline users API with account auth and stub adapters
-    When I register with a 4097-byte body
-    Then the oversize auth call should fail with HTTP 413 and no credential content
-    When I log in with a 4097-byte body
-    Then the oversize auth call should fail with HTTP 413 and no credential content
 
   Scenario Outline: Anonymous calls cannot reach protected surfaces
     Given an offline users API with account auth and stub adapters

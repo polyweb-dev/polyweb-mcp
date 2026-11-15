@@ -29,7 +29,6 @@ Principal = Annotated[UserPrincipal, Depends(current_principal)]
 
 class PoolOwner(BaseModel):
     user_id: UUID
-    email: str
     username: str | None = None
     first_name: str | None = None
     last_name: str | None = None
@@ -85,7 +84,6 @@ async def list_project_pools(
                     key_label=key.credential.label,
                     owner=PoolOwner(
                         user_id=owner_id,
-                        email=owner.email,
                         username=owner.username,
                         first_name=owner.first_name,
                         last_name=owner.last_name,

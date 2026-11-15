@@ -56,7 +56,7 @@ from polyweb.services.execution import (
 from polyweb.services.execution_scope import (
     ExecutionScopeError,
     execution_attribution,
-    resolve_execution_scope,
+    resolve_execution_boundary,
 )
 from polyweb.services.pool_materializer import materialize_pools
 from tests.fixtures.a2_execution import (
@@ -237,12 +237,14 @@ async def _key_context(world: ExecutionWorld) -> tuple[ProjectKey, ProjectContex
     principal = ProjectApiKeyPrincipal(
         api_key_id=key.api_key_id, project_id=key.project_id, scopes=frozenset(API_KEY_SCOPES)
     )
-    context = await resolve_execution_scope(
-        world.repository,
-        principal,
-        project_id=key.project_id,
-        action=PermissionAction.SEARCH_EXECUTE,
-    )
+    context = (
+        await resolve_execution_boundary(
+            world.repository,
+            principal,
+            project_id=key.project_id,
+            action=PermissionAction.SEARCH_EXECUTE,
+        )
+    ).context
     return key, context
 
 

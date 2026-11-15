@@ -29,52 +29,6 @@ def _reject_control_characters(value: str, field_name: str) -> str:
 
 
 # ----------------------------------------------------------------------
-# Project bindings
-# ----------------------------------------------------------------------
-
-
-class BindingCreate(ContractModel):
-    """Create one project binding. It always starts with no enabled operations.
-
-    ``enabled_operations`` is not accepted here: enabling is a separate,
-    explicit update, so a new binding never silently enables execution.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    credential_id: UUID
-    route_label: str = Field(min_length=1, max_length=100)
-    priority: StrictInt = Field(default=100, ge=0, le=1_000_000)
-
-    @field_validator("route_label")
-    @classmethod
-    def _validate_route_label(cls, value: str) -> str:
-        return _reject_control_characters(value, "route_label")
-
-
-class BindingUpdate(ContractModel):
-    """Change one binding; omitted fields keep their value."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    enabled_operations: frozenset[CredentialOperation] | None = None
-    priority: StrictInt | None = Field(default=None, ge=0, le=1_000_000)
-    route_label: str | None = Field(default=None, min_length=1, max_length=100)
-
-    @field_validator("route_label")
-    @classmethod
-    def _validate_route_label(cls, value: str | None) -> str | None:
-        return None if value is None else _reject_control_characters(value, "route_label")
-
-    @model_validator(mode="after")
-    def _reject_null_fields(self) -> BindingUpdate:
-        for name in ("enabled_operations", "priority", "route_label"):
-            if name in self.model_fields_set and getattr(self, name) is None:
-                raise ValueError(f"{name} cannot be null")
-        return self
-
-
-# ----------------------------------------------------------------------
 # Upstream pools, credential links and project allocations (system only)
 # ----------------------------------------------------------------------
 
@@ -329,8 +283,6 @@ __all__ = [
     "AllocationPut",
     "AllocationRead",
     "AvailableCredentialRead",
-    "BindingCreate",
-    "BindingUpdate",
     "PoolCreate",
     "PoolLinkRead",
     "PoolRead",

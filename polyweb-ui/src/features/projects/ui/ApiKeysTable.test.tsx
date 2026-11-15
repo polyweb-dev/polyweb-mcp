@@ -42,7 +42,7 @@ describe("ApiKeysTable", () => {
         keys={keys}
         controller={controllerStub({
           identitiesByUserId: new Map([
-            [CREATOR, { email: "ada@example.com", username: "ada", first_name: "Ada", last_name: "Lovelace" }],
+            [CREATOR, { username: "ada", first_name: "Ada", last_name: "Lovelace" }],
           ]),
         })}
         archived={false}
@@ -51,18 +51,18 @@ describe("ApiKeysTable", () => {
     expect(screen.getByText("Ada Lovelace")).toBeInTheDocument()
   })
 
-  it("disambiguates two creators who share one personal name by email title", () => {
+  it("shows two creators who share one personal name by name only, never an email", () => {
     const keys = [
       apiKeyFixture({ id: "a", label: "First", created_at: "2026-09-01T00:00:00Z", created_by: CREATOR }),
       apiKeyFixture({ id: "b", label: "Second", created_at: "2026-10-01T00:00:00Z", created_by: OTHER_CREATOR }),
     ]
-    render(
+    const { container } = render(
       <ApiKeysTable
         keys={keys}
         controller={controllerStub({
           identitiesByUserId: new Map([
-            [CREATOR, { email: "ada-one@example.com", first_name: "Ada", last_name: "Lovelace" }],
-            [OTHER_CREATOR, { email: "ada-two@example.com", first_name: "Ada", last_name: "Lovelace" }],
+            [CREATOR, { first_name: "Ada", last_name: "Lovelace" }],
+            [OTHER_CREATOR, { first_name: "Ada", last_name: "Lovelace" }],
           ]),
         })}
         archived={false}
@@ -70,50 +70,28 @@ describe("ApiKeysTable", () => {
     )
     expect(screen.getAllByText("Ada Lovelace")).toHaveLength(2)
     const rows = screen.getAllByRole("row")
-    expect(within(rows[1]).getByText("Ada Lovelace")).toHaveAttribute(
-      "title",
-      "Ada Lovelace (ada-two@example.com)"
-    )
-    expect(within(rows[2]).getByText("Ada Lovelace")).toHaveAttribute(
-      "title",
-      "Ada Lovelace (ada-one@example.com)"
-    )
+    expect(within(rows[1]).getByText("Ada Lovelace")).toHaveAttribute("title", "Ada Lovelace")
+    expect(within(rows[2]).getByText("Ada Lovelace")).toHaveAttribute("title", "Ada Lovelace")
+    expect(container.innerHTML).not.toContain("@")
   })
 
-  it("keeps each creator contact tied to its key row under the Key label", () => {
-    const keys = [
-      apiKeyFixture({ id: "a", label: "First", created_at: "2026-09-01T00:00:00Z", created_by: CREATOR }),
-      apiKeyFixture({ id: "b", label: "Second", created_at: "2026-10-01T00:00:00Z", created_by: OTHER_CREATOR }),
-    ]
-    render(
+  it("shows Unknown user for a creator without a name or username", () => {
+    const keys = [apiKeyFixture({ id: "a", label: "Nameless", created_by: CREATOR })]
+    const { container } = render(
       <ApiKeysTable
         keys={keys}
         controller={controllerStub({
-          identitiesByUserId: new Map([
-            [CREATOR, { email: "ada-one@example.com", first_name: "Ada", last_name: "Lovelace" }],
-            [OTHER_CREATOR, { email: "ada-two@example.com", first_name: "Ada", last_name: "Lovelace" }],
-          ]),
+          // A stray email on the object is not part of the profile and is never read.
+          identitiesByUserId: new Map([[CREATOR, { email: "ghost@example.com" } as object]]),
         })}
         archived={false}
       />
     )
-    // Newest first: the Second/ada-two key sorts above the First/ada-one key,
-    // and each Key cell carries only its own creator contact title.
-    const rows = screen.getAllByRole("row")
-    const [newerCell, olderCell] = [within(rows[1]).getAllByRole("cell")[0]!, within(rows[2]).getAllByRole("cell")[0]!]
-    expect(within(newerCell).getByText("Second")).toBeInTheDocument()
-    expect(
-      within(newerCell).getByTitle("Ada Lovelace (ada-two@example.com)")
-    ).toHaveTextContent("Ada Lovelace")
-    expect(newerCell.textContent).not.toContain("ada-one@example.com")
-    expect(within(olderCell).getByText("First")).toBeInTheDocument()
-    expect(
-      within(olderCell).getByTitle("Ada Lovelace (ada-one@example.com)")
-    ).toHaveTextContent("Ada Lovelace")
-    expect(olderCell.textContent).not.toContain("ada-two@example.com")
+    expect(screen.getByText("Unknown user")).toBeInTheDocument()
+    expect(container.innerHTML).not.toContain("ghost@example.com")
   })
 
-  it("renders every column, newest first, with the creator email", () => {
+  it("renders every column, newest first, with the creator display name", () => {
     const keys = [
       apiKeyFixture({ id: "a", label: "Older", created_at: "2026-09-01T00:00:00Z", expires_at: null }),
       apiKeyFixture({ id: "b", label: "Newer", created_at: "2026-10-01T00:00:00Z", scopes: ["fetch.execute"], created_by: CREATOR }),
@@ -121,7 +99,7 @@ describe("ApiKeysTable", () => {
     render(
       <ApiKeysTable
         keys={keys}
-        controller={controllerStub({ identitiesByUserId: new Map([[CREATOR, { email: "lead@example.com" }]]) })}
+        controller={controllerStub({ identitiesByUserId: new Map([[CREATOR, { first_name: "Lead", last_name: "Admin" }]]) })}
         archived={false}
       />
     )
@@ -129,7 +107,8 @@ describe("ApiKeysTable", () => {
     expect(rows[1]).toHaveTextContent("Newer")
     expect(rows[1]).toHaveTextContent("fs_live_abcd")
     expect(rows[1]).toHaveTextContent(/fetch/i)
-    expect(rows[1]).toHaveTextContent("lead@example.com")
+    expect(rows[1]).toHaveTextContent("Lead Admin")
+    expect(rows[1].textContent).not.toContain("@")
     expect(rows[1]).toHaveTextContent("Never")
     expect(rows[2]).toHaveTextContent("Older")
     expect(rows[2]).toHaveTextContent(/search.*fetch/i)

@@ -486,6 +486,7 @@ def decode_metadata_json(raw: str) -> dict[str, object]:
 
 _SUMMARY_COLUMNS = (
     TraceSpanRow.trace_id,
+    TraceSpanRow.project_id,
     TraceSpanRow.user_id,
     TraceSpanRow.actor_type,
     TraceSpanRow.actor_id,
@@ -507,7 +508,7 @@ class TraceProfile:
     username: str | None
     first_name: str | None
     last_name: str | None
-    email: str | None
+
 
 MIN_TRACE_LIMIT = 1
 MAX_TRACE_LIMIT = 100
@@ -546,7 +547,9 @@ def _trace_actor_type(raw: str | None) -> ActorType | None:
         return None
 
 
-def _trace_summary(row: Any, profile: TraceProfile | None = None) -> TraceSummary:
+def _trace_summary(
+    row: Any, profile: TraceProfile | None = None, key: tuple[str, str] | None = None
+) -> TraceSummary:
     """Project a root row's summary columns into the list/detail summary.
 
     Accepts either the column projection returned by ``list_trace_summaries``
@@ -563,7 +566,8 @@ def _trace_summary(row: Any, profile: TraceProfile | None = None) -> TraceSummar
         username=profile.username if profile is not None else None,
         first_name=profile.first_name if profile is not None else None,
         last_name=profile.last_name if profile is not None else None,
-        email=profile.email if profile is not None else None,
+        api_key_name=key[0] if key is not None else None,
+        api_key_prefix=key[1] if key is not None else None,
         operation=_trace_operation(row.operation),
         started_at=datetime.fromisoformat(str(row.started_at)),
         duration_ms=int(row.duration_ms),
@@ -609,7 +613,17 @@ def _trace_events(events_json: str) -> list[TraceEventDetail]:
     events: list[TraceEventDetail] = []
     for item in raw:
         try:
-            events.append(TraceEventDetail.model_validate(item))
+            event = TraceEventDetail.model_validate(item)
+            results = event.attributes.get("results")
+            if isinstance(results, str):
+                try:
+                    decoded = json.loads(results)
+                except ValueError:
+                    pass
+                else:
+                    if isinstance(decoded, (list, dict)):
+                        event.attributes["results"] = decoded
+            events.append(event)
         except ValueError:
             continue
     return events
@@ -925,6 +939,9 @@ class SQLiteRepository:
             statement = statement.where(TraceSpanRow.outcome == outcome.value)
         async with self._session_factory() as session:
             rows = (await session.execute(statement)).all()
+            keys = await self._trace_keys_in_session(
+                session, [(row.project_id, row.actor_type, row.actor_id) for row in rows]
+            )
             profiles = await self._trace_profiles_in_session(
                 session,
                 [
@@ -935,11 +952,49 @@ class SQLiteRepository:
             )
         summaries: list[TraceSummary] = []
         for row in rows:
-            key = str(row.user_id) if row.user_id is not None else None
+            key = (
+                str(row.user_id)
+                if row.actor_type == ActorType.HUMAN.value and row.user_id is not None
+                else None
+            )
             if key is None and row.actor_type == ActorType.HUMAN.value and row.actor_id:
                 key = str(row.actor_id)
-            summaries.append(_trace_summary(row, profiles.get(key) if key else None))
+            api_key = (
+                keys.get((str(row.project_id), str(row.actor_id)))
+                if row.actor_type == ActorType.PROJECT_API_KEY.value
+                else None
+            )
+            summaries.append(_trace_summary(row, profiles.get(key) if key else None, api_key))
         return summaries
+
+    @staticmethod
+    async def _trace_keys_in_session(
+        session: AsyncSession, identities: Sequence[tuple[str | None, str | None, str | None]]
+    ) -> dict[tuple[str, str], tuple[str, str]]:
+        """Resolve API key labels and public prefixes in one query per page."""
+        from polyweb.persistence.api_keys import ProjectApiKeyRow
+
+        ids = {
+            str(actor_id)
+            for _, actor_type, actor_id in identities
+            if actor_type == ActorType.PROJECT_API_KEY.value and actor_id
+        }
+        if not ids:
+            return {}
+        rows = (
+            await session.execute(
+                select(
+                    ProjectApiKeyRow.project_id,
+                    ProjectApiKeyRow.id,
+                    ProjectApiKeyRow.label,
+                    ProjectApiKeyRow.prefix,
+                ).where(ProjectApiKeyRow.id.in_(ids))
+            )
+        ).all()
+        return {
+            (str(project_id), str(key_id)): (label, prefix)
+            for project_id, key_id, label, prefix in rows
+        }
 
     @staticmethod
     async def _trace_profiles_in_session(
@@ -981,7 +1036,6 @@ class SQLiteRepository:
                 username=user.username,
                 first_name=user.first_name,
                 last_name=user.last_name,
-                email=user.email,
             )
             for user in user_rows
         }
@@ -1005,15 +1059,27 @@ class SQLiteRepository:
                 .order_by(TraceSpanRow.started_at, TraceSpanRow.span_id)
             )
             rows = (await session.scalars(span_statement)).all()
+            keys = await self._trace_keys_in_session(
+                session, [(root.project_id, root.actor_type, root.actor_id)]
+            )
             profiles = await self._trace_profiles_in_session(
                 session,
                 [(str(root.actor_type), str(root.actor_id), root.user_id)],
             )
-        key = str(root.user_id) if root.user_id is not None else None
+        key = (
+            str(root.user_id)
+            if root.actor_type == ActorType.HUMAN.value and root.user_id is not None
+            else None
+        )
         if key is None and root.actor_type == ActorType.HUMAN.value and root.actor_id:
             key = str(root.actor_id)
         profile = profiles.get(key) if key else None
-        summary = _trace_summary(root, profile)
+        api_key = (
+            keys.get((str(root.project_id), str(root.actor_id)))
+            if root.actor_type == ActorType.PROJECT_API_KEY.value
+            else None
+        )
+        summary = _trace_summary(root, profile, api_key)
         return TraceDetail(
             **summary.model_dump(),
             input=root.input_text,

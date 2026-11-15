@@ -7,7 +7,7 @@ import type { ScopedResource } from "@/shared/lib/useScopedResource"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/EmptyState"
 import { RowActionsMenu } from "@/shared/ui/RowActionsMenu"
-import { identityDetailLabel } from "@/shared/lib/identity"
+import { displayNameFromProfile } from "@/shared/lib/identity"
 import type { ProjectProvidersController } from "../model/useProjectProvidersController"
 import { ProjectPoolCell } from "./ProjectPoolCell"
 import { ProviderOrderSection } from "./ProviderOrderSection"
@@ -34,7 +34,8 @@ interface Props {
 function renderReadyContent(props: Omit<Props, "pools"> & { pools: ProjectPool[]; providers: ProviderTypeView[] }) {
   const { projectId, revision, providers, pools, owner, isOwner, canConfigure, missing } = props
   const ownerEntry = owner.status === "ready" ? owner.data : null
-  const ownerContact = ownerEntry === null || ownerEntry === undefined ? null : identityDetailLabel(ownerEntry)
+  // A nameless owner reads as "the provider owner" in the Ask-copy, never an email.
+  const ownerContact = ownerEntry === null || ownerEntry === undefined ? null : displayNameFromProfile(ownerEntry)
   return <>
     <ProviderOrderSection key={projectId} context={{
       projectId, revision, providers, canConfigure, ownerContact, isOwner,

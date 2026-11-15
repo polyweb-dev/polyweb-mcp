@@ -60,11 +60,10 @@ from polyweb.services import monitoring
 from polyweb.services import parallel_oauth as oauth_module
 from polyweb.services.monitoring import (
     clear_quota_poll_cache,
-    effective_quotas_batch,
+    effective_quota,
     refresh_quotas,
 )
 from polyweb.services.provider_limits import ProviderLimitsService
-from polyweb.services.provider_runtime import _quota_state_changed
 from tests.fixtures.api_keys import key_for_account, mcp_project_key
 from tests.fixtures.auth import (
     account_id_from_pair,
@@ -1557,29 +1556,6 @@ async def test_app_lifespan_hydrates_local_quota_before_first_dashboard_read(
     ]
 
 
-def test_quota_hydration_refreshes_an_expired_rolling_window() -> None:
-    observed = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-    current = QuotaSnapshot(
-        provider="keenable",
-        source=QuotaSource.OBSERVED,
-        remaining=Decimal("1000"),
-        limit=Decimal("1000"),
-        reset_at=observed + timedelta(hours=1),
-        observed_at=observed,
-        unit_kind=UnitKind.REQUEST,
-        display_unit="requests",
-        metadata={"window": "hourly"},
-    )
-    refreshed = current.model_copy(
-        update={
-            "observed_at": observed + timedelta(hours=2),
-            "reset_at": observed + timedelta(hours=3),
-        }
-    )
-
-    assert _quota_state_changed(current, refreshed) is True
-
-
 async def test_server_owned_repository_lifespan_creates_and_closes_database(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2278,6 +2254,19 @@ def _counting_record(
     monkeypatch.setattr(repository, "record_quota", _counting_record_quota)
 
 
+async def _effective_quotas(
+    repository: SQLiteRepository, providers: list[str]
+) -> dict[str, QuotaSnapshot]:
+    """Collect the routable quota view per provider, omitting providers without one."""
+
+    quotas: dict[str, QuotaSnapshot] = {}
+    for provider in providers:
+        snapshot = await effective_quota(repository, provider)
+        if snapshot is not None:
+            quotas[provider] = snapshot
+    return quotas
+
+
 @pytest.mark.usefixtures("_clean_poll_state")
 @pytest.mark.parametrize(
     "scenario",
@@ -2290,7 +2279,7 @@ def _counting_record(
         "degenerate_limit_zero",
     ],
 )
-async def test_effective_quotas_batch_soft_zero(
+async def test_effective_quota_soft_zero(
     repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch, scenario: str
 ) -> None:
     """A parallel soft zero clears only after a strictly later success."""
@@ -2314,7 +2303,7 @@ async def test_effective_quotas_batch_soft_zero(
             )
         writes.clear()
 
-        result = await effective_quotas_batch(repo, providers)
+        result = await _effective_quotas(repo, providers)
 
         assert set(result) == {"parallel", "exa"}
         for provider in providers:
@@ -2326,7 +2315,7 @@ async def test_effective_quotas_batch_soft_zero(
             assert cleared.metadata == {"origin": "vendor-poll", "soft_zero": False}
         assert len(writes) == 2
 
-        repeat = await effective_quotas_batch(repo, providers)
+        repeat = await _effective_quotas(repo, providers)
 
         assert len(writes) == 2
         assert repeat == result
@@ -2364,7 +2353,7 @@ async def test_effective_quotas_batch_soft_zero(
         raise AssertionError(f"unknown scenario {scenario!r}")
     writes.clear()
 
-    result = await effective_quotas_batch(repo, [provider])
+    result = await _effective_quotas(repo, [provider])
 
     assert set(result) == {provider}
     snapshot = result[provider]
@@ -2382,13 +2371,12 @@ async def test_effective_quotas_batch_soft_zero(
 
 
 @pytest.mark.usefixtures("_clean_poll_state")
-async def test_effective_quotas_batch_failures_preserve_snapshot(
+async def test_effective_quota_failures_preserve_snapshot(
     repo: SQLiteRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Usage and quota store errors never fail the batch quota read."""
+    """Usage and quota store errors never fail the quota read."""
 
-    assert await effective_quotas_batch(None, ["parallel"]) == {}
-    assert await effective_quotas_batch(repo, []) == {}
+    assert await effective_quota(None, "parallel") is None
 
     await repo.record_quota(_soft_zero_snapshot("parallel", FIXED_AT))
     await repo.record_usage(
@@ -2400,7 +2388,7 @@ async def test_effective_quotas_batch_failures_preserve_snapshot(
         raise RuntimeError("usage store down")
 
     monkeypatch.setattr(repo, "list_provider_usage", _failing_list_usage)
-    preserved = await effective_quotas_batch(repo, ["parallel"])
+    preserved = await _effective_quotas(repo, ["parallel"])
 
     assert preserved["parallel"].remaining == Decimal("0")
     assert preserved["parallel"].limit == Decimal("100")
@@ -2411,7 +2399,7 @@ async def test_effective_quotas_batch_failures_preserve_snapshot(
         raise RuntimeError("quota store down")
 
     monkeypatch.setattr(repo, "record_quota", _failing_record)
-    after_write_failure = await effective_quotas_batch(repo, ["parallel"])
+    after_write_failure = await _effective_quotas(repo, ["parallel"])
 
     assert after_write_failure["parallel"].remaining == Decimal("0")
     assert after_write_failure["parallel"].limit == Decimal("100")

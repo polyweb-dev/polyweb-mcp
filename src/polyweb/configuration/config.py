@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from polyweb.infrastructure.browser_auth import normalize_origin
@@ -142,12 +142,11 @@ class Settings(BaseSettings):
 
     @field_validator("auth_issuer_url", "mcp_resource_url", "execution_authority_url")
     @classmethod
-    def _http_url(cls, value: str | None) -> str | None:
+    def _http_url(cls, value: str | None, info: ValidationInfo) -> str | None:
         """Accept only absolute HTTP or HTTPS override URLs.
 
-        A plain HTTP override is permitted for loopback development only. An
-        advertised issuer or resource URL outside loopback must use HTTPS, so a
-        proxy can never publish a cleartext credential endpoint."""
+        Advertised issuer and resource URLs require HTTPS outside loopback.
+        The execution authority can use HTTP on a trusted internal network."""
 
         if value is None:
             return None
@@ -155,9 +154,13 @@ class Settings(BaseSettings):
         if not stripped:
             return None
         parsed = urlsplit(stripped)
-        if parsed.scheme not in {"http", "https"}:
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("override URLs must use the http or https scheme")
-        if parsed.scheme == "http" and not _is_loopback_host(parsed.hostname):
+        if (
+            info.field_name != "execution_authority_url"
+            and parsed.scheme == "http"
+            and not _is_loopback_host(parsed.hostname)
+        ):
             raise ValueError("override URLs must use https outside loopback development")
         return stripped.rstrip("/")
 

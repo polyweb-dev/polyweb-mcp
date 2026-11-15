@@ -117,7 +117,7 @@ from polyweb.persistence.storage import SQLiteRepository, UsageEventRow
 from polyweb.services.credentials import credential_secret_slot
 from polyweb.services.execution import ExecutionService
 from polyweb.services.execution_authority import AUTHORITY_KEY as REAL_AUTHORITY_KEY
-from polyweb.services.execution_scope import resolve_execution_scope
+from polyweb.services.execution_scope import resolve_execution_boundary
 from polyweb.services.monitoring import clear_quota_poll_cache
 from polyweb.services.provider_limits import ProviderLimitsService
 from polyweb.services.provider_runtime import clear_config_cache
@@ -524,12 +524,14 @@ class AuthorityWorld:
             project_id=key.project_id,
             scopes=frozenset(API_KEY_SCOPES),
         )
-        context = await resolve_execution_scope(
-            self.repository,
-            principal,
-            project_id=key.project_id,
-            action=PermissionAction.SEARCH_EXECUTE,
-        )
+        context = (
+            await resolve_execution_boundary(
+                self.repository,
+                principal,
+                project_id=key.project_id,
+                action=PermissionAction.SEARCH_EXECUTE,
+            )
+        ).context
         return key, context
 
     async def gather(self, tasks: list[asyncio.Task[Any]]) -> tuple[list[Any], list[BaseException]]:
@@ -929,7 +931,6 @@ async def build_authority_world(
         authority_arguments["recovery_seconds"] = recovery_seconds
     authority = ExecutionAuthority(
         repository=repository,
-        secret_store=store,
         authority_key=authority_key,
         monotonic_fn=stepped.monotonic_fn,
         limits=limits_service,

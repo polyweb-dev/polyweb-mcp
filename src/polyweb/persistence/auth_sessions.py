@@ -27,6 +27,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from polyweb.models.users import AuthFamily
 from polyweb.persistence.storage import Base
+from polyweb.persistence.timestamps import parse_timestamp
 
 _TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%f+00:00"
 
@@ -37,15 +38,6 @@ def stored_timestamp(value: datetime) -> str:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("auth timestamps must be timezone-aware")
     return value.astimezone(UTC).strftime(_TIMESTAMP_FORMAT)
-
-
-def parse_timestamp(value: str) -> datetime:
-    """Decode one stored timestamp into an aware UTC datetime."""
-
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def _affected(result: object) -> int:
@@ -276,6 +268,5 @@ __all__ = [
     "AuthSessionRepository",
     "AuthSessionRow",
     "RefreshTokenRow",
-    "parse_timestamp",
     "stored_timestamp",
 ]

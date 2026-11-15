@@ -164,9 +164,9 @@ describe("QuotaAnalytics shell (UI7)", () => {
         if (req.url === "/api/v1/providers/parallel/limits/keys") {
           if (status === "empty") return ok([])
           return ok([
-            { key_id: "api-key", label: "API key", owner_email: "admin@example.com", auth_mode: "api_key", oauth_connected: null, balance: null },
+            { key_id: "api-key", label: "API key", auth_mode: "api_key", oauth_connected: null, balance: null },
             ...(status === "api-only" ? [] : [
-              { key_id: "other-key", label: "Team key", owner_email: "other@example.com", auth_mode: "oauth", oauth_connected: status === "connected", balance: null },
+              { key_id: "other-key", label: "Team key", auth_mode: "oauth", oauth_connected: status === "connected", balance: null },
             ]),
           ])
         }
@@ -196,6 +196,39 @@ describe("QuotaAnalytics shell (UI7)", () => {
       expect(stub.requests.some((req) => req.url.includes("/account/vault/keys"))).toBe(false)
     },
   )
+
+  it("never shows key owner emails, with or without a legacy owner_email on the wire", async () => {
+    const entry = JSON.parse(JSON.stringify(braveCreditEntry()).replaceAll("brave", "parallel")) as {
+      auths: { aggregate_pool: null; usd_views: unknown[] }[]
+    }
+    const auth = entry.auths[0]
+    if (auth === undefined) throw new Error("Missing auth fixture")
+    auth.aggregate_pool = null
+    auth.usd_views = []
+    installFetchStub((req) => {
+      if (req.url === "/api/v1/providers") return ok(allProvidersFixture())
+      if (req.url === "/api/v1/routing/config") return ok(routingConfigFixture())
+      if (req.url.startsWith("/dashboard")) {
+        return ok({ ...dashboardFixture(), provider_limits: [entry], spend_totals: [] })
+      }
+      if (req.url === "/api/v1/providers/parallel/limits/keys") {
+        return ok([
+          { key_id: "no-email", label: "Clean key", auth_mode: "api_key", oauth_connected: null, balance: null },
+          { key_id: "legacy", label: "Legacy key", owner_email: "owner@example.com", auth_mode: "api_key", oauth_connected: null, balance: null },
+        ])
+      }
+      return err(404, null)
+    })
+    render(
+      <PolywebProvider accountId={ADMIN_ACCOUNT_ID} canReadControls canEditControls>
+        <QuotaAnalytics />
+      </PolywebProvider>,
+    )
+
+    expect(await screen.findByText("Clean key")).toBeInTheDocument()
+    expect(await screen.findByText("Legacy key")).toBeInTheDocument()
+    expect(document.body.innerHTML).not.toContain("owner@example.com")
+  })
 
   it("renders the new page sections with no legacy grid and no action section (UI7-05, NUDGE-5)", async () => {
     renderShell(dashboardFixture() as unknown as Record<string, unknown>)

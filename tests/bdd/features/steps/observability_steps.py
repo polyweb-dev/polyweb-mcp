@@ -70,7 +70,8 @@ _LIST_ITEM_KEYS = {
     "username",
     "first_name",
     "last_name",
-    "email",
+    "api_key_name",
+    "api_key_prefix",
     "operation",
     "started_at",
     "duration_ms",
@@ -470,7 +471,6 @@ def step_then_trace_header(context: Any) -> None:
 
 
 @then("the trace list should contain exactly {count:d} trace matching the trace header")
-@then("the trace list should contain exactly {count:d} traces matching the trace header")
 def step_then_trace_list_matches_header(context: Any, count: int) -> None:
     """Verify the list holds one summary row for the traced request, header-matched."""
     body = _trace_list(context)
@@ -479,7 +479,6 @@ def step_then_trace_list_matches_header(context: Any, count: int) -> None:
 
 
 @then('the trace list should contain exactly {count:d} trace with outcome "{outcome}"')
-@then('the trace list should contain exactly {count:d} traces with outcome "{outcome}"')
 def step_then_trace_list_outcome(context: Any, count: int, outcome: str) -> None:
     """Verify the list holds one summary row with the expected outcome."""
     body = _trace_list(context, outcome=outcome)
@@ -489,7 +488,6 @@ def step_then_trace_list_outcome(context: Any, count: int, outcome: str) -> None
 
 
 @then("the trace list should still contain exactly {count:d} trace")
-@then("the trace list should still contain exactly {count:d} traces")
 def step_then_trace_list_still(context: Any, count: int) -> None:
     """Verify untraced reads did not add traces."""
     body = _trace_list(context)
@@ -524,9 +522,13 @@ def step_then_trace_detail_query(context: Any, query: str, count: int) -> None:
     assert item["user_id"] == owner
     assert item["first_name"] == "Test"
     assert item["last_name"] == "User"
-    assert item["email"] is not None and item["email"].endswith("@example.com")
-    assert item["username"] == item["email"].split("@")[0][:64]
+    # A signed-in person ran this search, so no API key is attributed, and the
+    # list never exposes the email (privacy: names and usernames only).
+    assert item["api_key_name"] is None
+    assert item["api_key_prefix"] is None
+    assert isinstance(item["username"], str) and item["username"]
     list_text = json.dumps(listing)
+    assert "@example.com" not in list_text, "email leaked into the trace list"
     assert query not in list_text, "full query leaked into the trace list"
     for expected in _SEARCH_RESULTS:
         assert expected["url"] not in list_text, "result URL leaked into the trace list"

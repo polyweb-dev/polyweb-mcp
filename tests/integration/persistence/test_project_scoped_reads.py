@@ -30,6 +30,7 @@ from polyweb.models.observability import (
 )
 from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID, CredentialOwnerScope
 from polyweb.models.schema_enums import UpstreamScope
+from polyweb.persistence.api_keys import ProjectApiKeyRow
 from polyweb.persistence.bindings import ProjectBindingRepository
 from polyweb.persistence.credentials import CredentialRepository
 from polyweb.persistence.oauth_grants import CredentialOAuthGrantRepository
@@ -40,6 +41,7 @@ from polyweb.persistence.users import UserRow
 from polyweb.services.control_errors import ResourceNotFound
 from polyweb.services.credential_oauth import OAuthTarget
 from polyweb.services.vault_keys import VaultOAuthService
+from tests.fixtures.api_keys import issue_project_key
 from tests.fixtures.auth import create_temp_user, temp_email, temp_principal
 from tests.fixtures.execution import seed_execution_project
 
@@ -565,7 +567,7 @@ async def test_project_trace_summaries_and_detail_carry_saved_human_profile(
         user.username = "trace-alice"
         user.first_name = "Alice"
         user.last_name = "Anderson"
-        expected_email = user.email
+
         await session.commit()
 
     _seed_traces(world)
@@ -592,7 +594,7 @@ async def test_project_trace_summaries_and_detail_carry_saved_human_profile(
     assert intact.username == "trace-alice"
     assert intact.first_name == "Alice"
     assert intact.last_name == "Anderson"
-    assert intact.email == expected_email
+    assert "email" not in intact.model_dump()
 
     legacy = by_trace[_TRACE_A2]
     assert legacy.actor_type is ActorType.HUMAN
@@ -601,7 +603,7 @@ async def test_project_trace_summaries_and_detail_carry_saved_human_profile(
     assert legacy.username == "trace-alice"
     assert legacy.first_name == "Alice"
     assert legacy.last_name == "Anderson"
-    assert legacy.email == expected_email
+    assert "email" not in legacy.model_dump()
 
     summaries_b = await world.repo.list_project_trace_summaries(project_id=world.b.project_id)
     assert len(summaries_b) == 1
@@ -613,7 +615,7 @@ async def test_project_trace_summaries_and_detail_carry_saved_human_profile(
     assert shared.username == "trace-alice"
     assert shared.first_name == "Alice"
     assert shared.last_name == "Anderson"
-    assert shared.email == expected_email
+    assert "email" not in shared.model_dump()
 
     detail_intact = await world.repo.get_project_trace(_TRACE_A, project_id=world.a.project_id)
     assert detail_intact is not None
@@ -623,7 +625,7 @@ async def test_project_trace_summaries_and_detail_carry_saved_human_profile(
     assert detail_intact.username == "trace-alice"
     assert detail_intact.first_name == "Alice"
     assert detail_intact.last_name == "Anderson"
-    assert detail_intact.email == expected_email
+    assert "email" not in detail_intact.model_dump()
 
     detail_legacy = await world.repo.get_project_trace(_TRACE_A2, project_id=world.a.project_id)
     assert detail_legacy is not None
@@ -631,7 +633,7 @@ async def test_project_trace_summaries_and_detail_carry_saved_human_profile(
     assert detail_legacy.actor_id == str(world.a.actor_id)
     assert detail_legacy.user_id is None
     assert detail_legacy.username == "trace-alice"
-    assert detail_legacy.email == expected_email
+    assert "email" not in detail_legacy.model_dump()
 
     # Incomplete legacy profile: null names stay null, IDs stay stable.
     async with world.repo.session() as session:
@@ -646,7 +648,7 @@ async def test_project_trace_summaries_and_detail_carry_saved_human_profile(
     assert reread_by_trace[_TRACE_A].username == "trace-alice"
     assert reread_by_trace[_TRACE_A].first_name is None
     assert reread_by_trace[_TRACE_A].last_name is None
-    assert reread_by_trace[_TRACE_A].email == expected_email
+    assert "email" not in reread_by_trace[_TRACE_A].model_dump()
     assert reread_by_trace[_TRACE_A].actor_id == str(world.a.actor_id)
     assert reread_by_trace[_TRACE_A].user_id == str(world.a.actor_id)
 
@@ -700,7 +702,7 @@ async def test_project_api_key_and_historical_traces_keep_null_human_profile(
     assert api_summary.username is None
     assert api_summary.first_name is None
     assert api_summary.last_name is None
-    assert api_summary.email is None
+    assert "email" not in api_summary.model_dump()
 
     ghost_summary = by_trace[ghost_trace_id]
     assert ghost_summary.actor_type is ActorType.HUMAN
@@ -709,7 +711,7 @@ async def test_project_api_key_and_historical_traces_keep_null_human_profile(
     assert ghost_summary.username is None
     assert ghost_summary.first_name is None
     assert ghost_summary.last_name is None
-    assert ghost_summary.email is None
+    assert "email" not in ghost_summary.model_dump()
 
     api_detail = await world.repo.get_project_trace(api_trace_id, project_id=world.a.project_id)
     assert api_detail is not None
@@ -718,14 +720,64 @@ async def test_project_api_key_and_historical_traces_keep_null_human_profile(
     assert api_detail.username is None
     assert api_detail.first_name is None
     assert api_detail.last_name is None
-    assert api_detail.email is None
+    assert "email" not in api_detail.model_dump()
 
     ghost_detail = await world.repo.get_project_trace(ghost_trace_id, project_id=world.a.project_id)
     assert ghost_detail is not None
     assert ghost_detail.actor_type is ActorType.HUMAN
     assert ghost_detail.actor_id == str(ghost_id)
     assert ghost_detail.username is None
-    assert ghost_detail.email is None
+    assert "email" not in ghost_detail.model_dump()
 
     assert await world.repo.list_project_trace_summaries(project_id=world.b.project_id) == []
     assert await world.repo.get_project_trace(api_trace_id, project_id=world.b.project_id) is None
+
+
+async def test_trace_api_key_identity_reads_current_label_and_revoked_key(world: _World) -> None:
+    key = await issue_project_key(world.repo, label="original key")
+    record = _span(span_id="a000000000000001", trace_id="a" * 32, owner=key.attribution, at=_T0)
+    write_trace_spans(world.repo.database_path, [record])
+    async with world.repo.session() as session:
+        row = await session.get(ProjectApiKeyRow, str(key.api_key_id))
+        assert row is not None
+        row.label = "renamed key"
+        row.revoked_at = _T0.isoformat()
+        await session.commit()
+    summaries = await world.repo.list_project_trace_summaries(project_id=key.project_id)
+    detail = await world.repo.get_project_trace("a" * 32, project_id=key.project_id)
+    assert len(summaries) == 1 and detail is not None
+    for trace in (summaries[0], detail):
+        assert trace.api_key_name == "renamed key"
+        assert trace.api_key_prefix == key.prefix
+        assert trace.username is None
+        assert "email" not in trace.model_dump()
+    async with world.repo.session() as session:
+        row = await session.get(ProjectApiKeyRow, str(key.api_key_id))
+        assert row is not None
+        await session.delete(row)
+        await session.commit()
+    detail = await world.repo.get_project_trace("a" * 32, project_id=key.project_id)
+    assert detail is not None
+    assert detail.api_key_name is None and detail.api_key_prefix is None
+
+
+async def test_trace_key_identity_is_scoped_to_project(world: _World) -> None:
+    key = await issue_project_key(world.repo, label="project B key")
+    foreign = key.attribution.model_copy(update={"project_id": world.a.project_id})
+    write_trace_spans(
+        world.repo.database_path,
+        [
+            _span(span_id="a000000000000001", trace_id="a" * 32, owner=foreign, at=_T0),
+            _span(span_id="b000000000000001", trace_id="b" * 32, owner=key.attribution, at=_T0),
+        ],
+    )
+    for project_id, trace_id, name, prefix in (
+        (world.a.project_id, "a" * 32, None, None),
+        (key.project_id, "b" * 32, "project B key", key.prefix),
+    ):
+        summaries = await world.repo.list_project_trace_summaries(project_id=project_id)
+        detail = await world.repo.get_project_trace(trace_id, project_id=project_id)
+        assert len(summaries) == 1 and detail is not None
+        for trace in (summaries[0], detail):
+            assert trace.api_key_name == name
+            assert trace.api_key_prefix == prefix

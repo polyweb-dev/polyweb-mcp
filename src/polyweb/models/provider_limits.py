@@ -33,7 +33,6 @@ from polyweb.models.observability import ActorType
 
 # Approved common reference: one CRD is USD 0.001 of priced native use.
 CRD_USD_REFERENCE: Final[Decimal] = Decimal("0.001")
-CRD_UNIT_NAME: Final[str] = "CRD"
 CRD_PRICE_VERSION: Final[str] = "crd-usd-0.001"
 LOCAL_FUNDS_DENIAL_CODE: Final[str] = "budget_exhausted"
 LOCAL_RATE_DENIAL_CODE: Final[str] = "rate_limited"

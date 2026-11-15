@@ -17,7 +17,8 @@
 # For every LAN / remote agent, use the streamable-http URL above.
 #
 # State: api + mcp share one SQLite DB and one master-key file on the
-# `polyweb-data` volume. Single-node only — do not scale replicas without
+# `polyweb-data` volume. MCP forwards search and fetch execution to the API.
+# Single-node only — do not scale replicas without
 # moving off SQLite. Provider keys are never in this file; store them in the
 # encrypted vault via the dashboard (http://<host>:3000).
 
@@ -79,10 +80,14 @@ services:
     environment:
       POLYWEB_DB: /data/polyweb.db
       POLYWEB_ENCRYPTION_KEY_FILE: /data/.secret_key
+      POLYWEB_EXECUTION_AUTHORITY_URL: http://api:8001
       # Uncomment for stateless mode behind a proxy / multiple replicas:
       # POLYWEB_MCP_STATELESS: "true"
     volumes:
       - polyweb-data:/data
+    depends_on:
+      api:
+        condition: service_healthy
 
   ui:
     build:

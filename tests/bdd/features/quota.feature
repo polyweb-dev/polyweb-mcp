@@ -170,15 +170,6 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
     Then known-kind totals should stay Decimal-exact
     And legacy rows should appear only in legacy-compatible totals
 
-  # AC-8 — quota metadata round-trip through the public API only.
-  # NOTE: quota metadata persistence needs explicit schema-plan approval;
-  # this scenario asserts behaviorally via latest_quota, never private columns.
-  @ac8
-  Scenario: Quota snapshot metadata survives a public round-trip
-    Given an isolated quota repository
-    When I record a quota snapshot carrying routing metadata
-    Then latest_quota should return the same metadata
-
   # AC-1/AC-8 — poll failure-safety: a bad write must not break poll or routing.
   @ac1 @ac8
   Scenario: A failing quota write never breaks the poll or routing
@@ -333,26 +324,6 @@ Feature: Quota and usage accounting (QUOTA.md acceptance)
     When I run a successful Brave search for "open data documentation" with limit 3
     Then the Brave snapshot should be OBSERVED monthly REQUEST quota with remaining 0 limit 1000
     And Brave should be excluded from search routing when remaining is zero with a known positive limit
-
-  # S4 — shared normalize_degenerate_quota through BOTH read paths (AC-2/AC-6).
-  # Direct record_quota of Brave OBSERVED REQUEST 0/0 (bypassing the adapter's
-  # own zero-limit guard) must still normalize on the dashboard path
-  # (_latest_quotas/collect_stats) exactly like effective_quota, and routing
-  # must stay eligible. RED until polyweb.monitoring.normalize_degenerate_quota
-  # exists and is used by BOTH paths.
-  @quota @ac2
-  Scenario: Degenerate zero-limit quota normalizes through both read paths and stays routable
-    Given an isolated quota repository
-    When I record a Brave OBSERVED REQUEST quota with remaining 0 limit 0
-    Then collect_stats latest_quota for brave should be unknown remaining limit and reset
-    And effective_quota for brave should match the normalized unknown view
-    And Brave should stay eligible from the normalized view despite zero limit
-
-  @quota @ac6
-  Scenario: Keyless rolling-hour local zero stays routable because the pool is shared
-    Given an isolated quota repository
-    When I record a keyless local hourly quota at zero remaining
-    Then keyless local hourly zero should stay eligible for routing
 
   # Brave derived USD spend: manual dashboard math ($5.00 per 1000 requests).
   # 176 REQUEST successes project to $0.88 spend metadata alongside the $5

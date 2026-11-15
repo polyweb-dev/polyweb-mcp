@@ -585,26 +585,6 @@ async def persist_routing_config(
     _POLICY_STAMPS.pop(id(repository), None)
 
 
-# ------------------------------------------------- adapter quota seeding
-
-
-def _quota_state_changed(current: Any, projected: Any) -> bool:
-    if current is None:
-        return True
-    return any(
-        getattr(current, field, None) != getattr(projected, field, None)
-        for field in (
-            "source",
-            "remaining",
-            "limit",
-            "reset_at",
-            "unit_kind",
-            "display_unit",
-            "metadata",
-        )
-    )
-
-
 # ------------------------------------------------- background quota polling
 
 _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
@@ -613,7 +593,6 @@ _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 def schedule_quota_refresh(
     repository: SQLiteRepository | None,
     adapters: Sequence[ProviderAdapter],
-    secret_store: AsyncSecretStore | None,
     *,
     scopes: Mapping[int, ProviderObservationScope] | None = None,
     limits: ProviderLimitsService | None = None,
@@ -626,11 +605,7 @@ def schedule_quota_refresh(
 
     try:
         loop = asyncio.get_running_loop()
-        task = loop.create_task(
-            refresh_quotas(
-                repository, adapters, secret_store=secret_store, scopes=scopes, limits=limits
-            )
-        )
+        task = loop.create_task(refresh_quotas(repository, adapters, scopes=scopes, limits=limits))
         _BACKGROUND_TASKS.add(task)
         task.add_done_callback(_BACKGROUND_TASKS.discard)
         return task

@@ -1,14 +1,15 @@
 /**
  * Project member identity views.
  *
- * Member, owner, and pool-owner views resolve the same way via the shared
- * contact primitives: the full personal name wins, then the username, then
- * the email. The email stays as the contact and disambiguation line. Views
- * never rename projects and never change visibility or permissions.
+ * Members page only: the full personal name wins, then the username, then the
+ * email, which stays as the contact and disambiguation line. Every other view
+ * shows a person by display name only (see `identityLabel`), so the profile
+ * projection below carries no email. Views never rename projects and never
+ * change visibility or permissions.
  */
 import type { ProjectMember } from "@/domains/projects"
-import { identityDetailLabel, identityLabel } from "@/shared/lib/identity"
-import type { ContactIdentity } from "@/shared/lib/identity"
+import { contactLabel, identityDetailLabel } from "@/shared/lib/identity"
+import type { ContactIdentity, IdentityProfile } from "@/shared/lib/identity"
 
 /** One contact identity entry resolved from a project member record. */
 export function identityFromMember(member: ProjectMember): ContactIdentity {
@@ -20,9 +21,18 @@ export function identityFromMember(member: ProjectMember): ContactIdentity {
   }
 }
 
+/** The name-only projection of one member, for views that must not show an email. */
+export function profileFromMember(member: ProjectMember): IdentityProfile {
+  return {
+    username: member.username,
+    first_name: member.first_name,
+    last_name: member.last_name,
+  }
+}
+
 /** Sort key of one member: the display name when present, else the email. */
 export function memberSortLabel(member: ProjectMember): string {
-  return identityLabel(identityFromMember(member)).toLocaleLowerCase()
+  return contactLabel(identityFromMember(member)).toLocaleLowerCase()
 }
 
 /**

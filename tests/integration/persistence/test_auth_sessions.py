@@ -21,10 +21,10 @@ from polyweb.persistence.auth_sessions import (
     AuthSessionRepository,
     AuthSessionRow,
     RefreshTokenRow,
-    parse_timestamp,
     stored_timestamp,
 )
 from polyweb.persistence.storage import SQLiteRepository
+from polyweb.persistence.timestamps import parse_timestamp
 from polyweb.persistence.users import UserRow
 from polyweb.services.users import refresh_token_digest
 from tests.fixtures.auth import create_temp_user, temp_email

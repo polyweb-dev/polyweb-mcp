@@ -233,9 +233,7 @@ class _AdmissionGate:
 _ADMISSION_GATE: ContextVar[_AdmissionGate | None] = ContextVar(
     "polyweb_admission_gate", default=None
 )
-_RETRY_NOT_BEFORE: ContextVar[float | None] = ContextVar(
-    "polyweb_retry_not_before", default=None
-)
+_RETRY_NOT_BEFORE: ContextVar[float | None] = ContextVar("polyweb_retry_not_before", default=None)
 
 
 def _terminal_out_of_credits(exc: BaseException) -> ProviderOperationError | None:
@@ -1328,7 +1326,6 @@ class ExecutionService:
             task = schedule_quota_refresh(
                 self._repository,
                 [leg.adapter for leg in legs],
-                self._secret_store,
                 scopes=scopes,
                 limits=self._limits,
             )
@@ -3199,6 +3196,8 @@ def _provider_response_event(response: SearchResponse | FetchResponse) -> dict[s
         "url": str(document.url),
         "title": document.title,
         "content_length": len(document.content),
+        "content_preview": document.content[:1000],
+        "content_truncated": len(document.content) > 1000,
     }
 
 

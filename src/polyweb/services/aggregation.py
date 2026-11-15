@@ -14,13 +14,6 @@ from polyweb.models.contracts import SearchResponse, SearchResult
 
 _STRIP_QUERY_PARAMS = frozenset(
     {
-        # Google Analytics / Urchin Traffic Monitor
-        "utm_source",
-        "utm_medium",
-        "utm_campaign",
-        "utm_term",
-        "utm_content",
-        "utm_id",
         # Social & Ad Click Identifiers
         "fbclid",
         "gclid",
@@ -123,8 +116,6 @@ def reciprocal_rank_fusion(
 
         for rank_idx, item in enumerate(response.results, start=1):
             canon_key = canonicalize_url(item.url)
-            if not canon_key:
-                canon_key = str(item.url)
 
             if canon_key in seen_in_provider:
                 continue

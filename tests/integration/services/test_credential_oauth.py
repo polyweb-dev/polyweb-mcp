@@ -9,7 +9,8 @@ full database dump (including the WAL).
 Invariants covered:
 
 * two OAuth credentials of one provider connect, disconnect and expire
-  independently, and ``resolve_material`` keeps returning the survivor's token;
+  independently, and ``resolve_material_in_session`` keeps returning the
+  survivor's token;
 * a stale refresh (token generation advanced) and a refresh racing a
   disconnect never write tokens and never move the grant to ``connected``;
 * a device-flow completion racing a disconnect stores nothing;
@@ -61,6 +62,7 @@ from polyweb.models.vault import KeyPoolCreate, VaultKeyCreate, VaultKeyDetails
 from polyweb.persistence.oauth_grants import CredentialOAuthGrantRow
 from polyweb.persistence.projects import ProjectRepository
 from polyweb.persistence.storage import RuntimeSettingRow
+from polyweb.persistence.transactions import begin_read_snapshot
 from polyweb.services.authorization import AuthorizationDenied
 from polyweb.services.control_errors import ResourceNotFound
 from polyweb.services.credential_oauth import CredentialOAuthService, OAuthTarget
@@ -119,7 +121,7 @@ class _World:
         return ProjectService(self.boot.repository, secret_store=self.store)
 
     def context(self, project_id: UUID) -> ProjectContext:
-        # resolve_material grants no actor authority: an empty permission
+        # resolve_material_in_session grants no actor authority: an empty permission
         # snapshot must not change what it returns.
         return ProjectContext(
             account_id=self.boot.account_id,
@@ -250,9 +252,14 @@ async def _vault_grant(world: _World, credential_id: UUID) -> CredentialOAuthGra
 
 
 async def _token(world: _World, credential_id: UUID) -> str | None:
-    resolved = await world.credentials().resolve_material(
-        world.context(world.project.id), credential_id, operation=CredentialOperation.SEARCH
-    )
+    async with world.repository.session() as session:
+        await begin_read_snapshot(session)
+        resolved = await world.credentials().resolve_material_in_session(
+            session,
+            world.context(world.project.id),
+            credential_id,
+            operation=CredentialOperation.SEARCH,
+        )
     return None if resolved is None else resolved.secret.get_secret_value()
 
 

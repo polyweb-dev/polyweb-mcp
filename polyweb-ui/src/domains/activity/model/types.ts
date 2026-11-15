@@ -15,10 +15,16 @@ export interface TraceError {
 /** One Activity list row. Deliberately carries no query and no results. */
 export type TraceActorType = "human" | "project_api_key"
 
+/**
+ * Who initiated a trace. Carries no email: a human is shown by display name
+ * only; an API-key actor is shown by key name and prefix (both `null` when the
+ * key no longer exists).
+ */
 export interface TraceActor {
   kind: TraceActorType | null
   displayName: string | null
-  email: string | null
+  apiKeyName: string | null
+  apiKeyPrefix: string | null
 }
 
 export interface TraceSummary {

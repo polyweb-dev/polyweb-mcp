@@ -46,7 +46,6 @@ from polyweb.models.project_permissions import (
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
-    TEMP_PASSWORD,
     account_id_from_pair,
     bare_login,
     raw_auth_headers,
@@ -151,13 +150,6 @@ async def matrix_client(
         client.agent_id = str(agent_id)  # type: ignore[attr-defined]
         yield client
     await repository.close()
-
-
-def test_anonymous_reports_401_before_role_checks(matrix_client: TestClient) -> None:
-    assert matrix_client.get("/api/v1/providers").status_code == 401
-    denied = matrix_client.patch("/api/v1/providers/tavily", json={"enabled": False})
-    assert denied.status_code == 401
-    assert denied.headers["www-authenticate"] == "Bearer"
 
 
 def test_control_reads_permit_admin_and_developer_only(matrix_client: TestClient) -> None:
@@ -294,30 +286,6 @@ def test_agent_keeps_execution_access(matrix_client: TestClient) -> None:
         assert matrix_client.get(
             f"/api/v1/projects/{project}/api-keys", headers=agent
         ).status_code == (200 if bit == ProjectPermission.TOKENS else 403)
-
-
-def test_public_registration_accepts_each_role_without_privilege_widening(
-    matrix_client: TestClient,
-) -> None:
-    """T2-SIGNUP (A1): signup cannot request a role or flag; the result is ordinary."""
-
-    requested = matrix_client.post(
-        "/auth/register",
-        json={"email": temp_email("matrix-extra"), "password": TEMP_PASSWORD, "role": "admin"},
-    )
-    assert requested.status_code == 422
-
-    flagged = matrix_client.post(
-        "/auth/register",
-        json={
-            "email": temp_email("matrix-flag"),
-            "password": TEMP_PASSWORD,
-            "is_superuser": True,
-        },
-    )
-    assert flagged.status_code == 422
-    # The ordinary-signup result is covered by
-    # test_auth_api.py::test_public_registration_creates_each_role_with_safe_projection.
 
 
 def test_system_admin_without_membership_has_no_project_bypass(

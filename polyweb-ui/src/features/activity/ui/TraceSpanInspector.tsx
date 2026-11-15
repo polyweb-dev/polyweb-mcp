@@ -55,10 +55,14 @@ function titleNode(stage: TraceStage): ReactNode {
   const identity = providerId === null || providerId === "" ? null : providerIdentity(providerId)
   if (identity !== null && identity.id !== "" && identity.id !== AGGREGATED_PROVIDER) {
     return (
-      <span className="flex min-w-0 flex-wrap items-center gap-1">
-        <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-4" />
-        <span className="sr-only"> </span>
-        <span>request</span>
+      <span className="flex min-w-0 items-center leading-5">
+        <ProviderBadge
+          providerId={identity.id}
+          name={identity.name}
+          suffix=" request"
+          logoClassName="size-4"
+          className="leading-5"
+        />
       </span>
     )
   }

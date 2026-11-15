@@ -64,6 +64,15 @@ def test_override_urls_allow_plain_http_only_on_loopback() -> None:
     )
 
 
+def test_execution_authority_accepts_internal_http_and_rejects_invalid_urls() -> None:
+    assert Settings(execution_authority_url="http://api:8001/").execution_authority_url == (
+        "http://api:8001"
+    )
+    for url in ("ftp://api:8001", "http:///search"):
+        with pytest.raises(ValidationError):
+            Settings(execution_authority_url=url)
+
+
 def test_require_transport_port_rejects_missing_port() -> None:
     settings = Settings(api_port=None, mcp_port=None)
     with pytest.raises(ValueError, match="POLYWEB_API_PORT"):

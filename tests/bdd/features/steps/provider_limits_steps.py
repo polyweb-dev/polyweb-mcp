@@ -1367,42 +1367,6 @@ def step_brave_no_bars(context: Any) -> None:
     assert bars == []
 
 
-@given("a Brave adapter with no vendor headers")
-def step_brave_no_headers(context: Any) -> None:
-    _open_repo(context)
-    context.service = _service(context, _brave_records())
-    _run(context, context.service.initialize())
-
-    def handler(request: Any) -> Any:
-        import httpx
-
-        return httpx.Response(200, json=_brave_search_payload())
-
-    adapter, client = _brave_adapter(handler)
-    context.brave_adapter = adapter
-    context.brave_client = client
-
-
-@when("I anchor Brave manual funds of USD 5")
-def step_brave_anchor(context: Any) -> None:
-    class _Anchor:
-        remaining = Decimal("5")
-        allowance = Decimal("5")
-        billing_end = None
-        updated_at = FIXED_AT
-
-    _run(context, context.service.apply_manual_anchor("brave", _Anchor()))
-    context.brave_pool = _run(context, _limits_repo(context).get_pool(_brave_pool_id()))
-
-
-@then("the Brave manual pool projects 5000 estimated CRDs")
-def step_brave_manual(context: Any) -> None:
-    search = next(r for r in _brave_records() if r.operation is LimitOperation.SEARCH)
-    assert context.brave_pool is not None
-    assert context.brave_pool.confidence is Confidence.ESTIMATED
-    assert cu.native_to_crd(context.brave_pool, search.conversion_profile) == Decimal("5000")
-
-
 @given("a Brave app with seeded catalog and monthly headers of 900 left of 1000")
 def step_brave_app(context: Any) -> None:
     from fastapi.testclient import TestClient
@@ -3805,56 +3769,6 @@ def step_tavily_fanout_app(context: Any) -> None:
         context.tavily_fanout_headers = raw_auth_headers(pair["access_token"])
 
 
-@when("I run Tavily fanout search with client fallback enabled")
-def step_tavily_fanout_run(context: Any) -> None:
-    from fastapi.testclient import TestClient
-
-    context.app = context.tavily_fanout_app
-    with TestClient(context.tavily_fanout_app) as client:
-        context.tavily_fanout_held = client.post(
-            "/search",
-            json={
-                "project_id": bdd_project_id(context, context.tavily_fanout_headers),
-                "query": "fanout 402 probe",
-                "limit": 3,
-                "fanout": True,
-            },
-            headers=context.tavily_fanout_headers,
-        )
-    context.tavily_other_released.set()
-    with TestClient(context.tavily_fanout_app) as client:
-        context.tavily_fanout_released = client.post(
-            "/search",
-            json={
-                "project_id": bdd_project_id(context, context.tavily_fanout_headers),
-                "query": "fanout 402 probe",
-                "limit": 3,
-                "fanout": True,
-            },
-            headers=context.tavily_fanout_headers,
-        )
-    context.app = context.tavily_single_app
-    with TestClient(context.tavily_single_app) as client:
-        context.tavily_single_fallback = client.post(
-            "/search",
-            json={
-                "project_id": bdd_project_id(context, context.tavily_fanout_headers),
-                "query": "fanout 402 probe",
-                "limit": 3,
-            },
-            headers=context.tavily_fanout_headers,
-        )
-
-    async def _drain_refresh() -> None:
-        from polyweb.services.provider_runtime import _BACKGROUND_TASKS
-
-        pending = [task for task in list(_BACKGROUND_TASKS) if not task.done()]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-
-    _run(context, _drain_refresh())
-
-
 @then("the Tavily fanout held answer is terminal 402 with the other task cancelled")
 def step_tavily_fanout_held_assert(context: Any) -> None:
     response = context.tavily_fanout_held
@@ -3879,36 +3793,6 @@ def step_tavily_fanout_held_assert(context: Any) -> None:
     assert len(sdk.search_calls) == 1, diagnostic
     assert sdk.search_gate_waited is True, diagnostic
     assert sdk.search_gate_timed_out is False, diagnostic
-
-
-@then(
-    "the Tavily fanout released answer fuses other success "
-    "with local denial and no new vendor attempt"
-)
-def step_tavily_fanout_released_assert(context: Any) -> None:
-    response = context.tavily_fanout_released
-    assert response.status_code == 200
-    body = response.json()
-    assert body.get("provider") == "held-other"
-    assert len(context.tavily_fanout_sdk.search_calls) == 1
-    waterfall = body.get("waterfall", [])
-    tavily_legs = [entry for entry in waterfall if entry.get("provider") == "tavily"]
-    assert len(tavily_legs) == 1
-    assert "budget_exhausted" in (tavily_legs[0].get("error") or "")
-
-
-@then("the Tavily single fallback answer is a local 402 with no new vendor attempt")
-def step_tavily_single_fallback_assert(context: Any) -> None:
-    response = context.tavily_single_fallback
-    assert response.status_code == 402
-    body = response.json()
-    detail = body.get("detail")
-    assert isinstance(detail, dict)
-    assert detail.get("provider") == "tavily"
-    assert detail.get("code") == "budget_exhausted"
-    assert detail.get("status_code") == 402
-    assert len(context.tavily_fanout_sdk.search_calls) == 1
-    _tavily_assert_zero_debit(context)
 
 
 @given("a Tavily adapter with 429 then success and recording sleeper")

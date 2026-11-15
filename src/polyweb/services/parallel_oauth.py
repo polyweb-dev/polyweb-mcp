@@ -12,7 +12,7 @@ import platform
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 from pydantic import Field, SecretStr, ValidationError, field_validator
@@ -33,11 +33,7 @@ __all__ = [
     "DeviceAuthorization",
     "DeviceAuthorizationPending",
     "DeviceCodeExpired",
-    "DeviceCodeResponse",
     "DeviceSlowDown",
-    "OAuthAlreadyPaired",
-    "OAuthMetadata",
-    "OAuthStatusResponse",
     "OAuthUnpaired",
     "ParallelOAuthClient",
     "ParallelOAuthError",
@@ -63,11 +59,7 @@ SUPPORTED_PROVIDER = "parallel"
 
 
 _DEFAULT_DEVICE_INTERVAL_SECONDS = 5
-_SLOW_DOWN_INCREMENT_SECONDS = 5
-_MAX_INTERVAL_SECONDS = 60
 _DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
-
-OAuthStatusName = Literal["pending", "ready", "expired", "denied", "unpaired"]
 
 
 class ParallelOAuthError(Exception):
@@ -94,33 +86,6 @@ class OAuthUnpaired(ParallelOAuthError):
     """Bearer material is invalid; the vault was cleared and status is unpaired."""
 
 
-class OAuthAlreadyPaired(ParallelOAuthError):
-    """A live bearer exists; disconnect before starting a new device flow."""
-
-
-class _NoOAuthPairing(Exception):
-    """No pairing material exists, so no network attempt is possible."""
-
-
-class DeviceCodeResponse(ContractModel):
-    """Public device-flow initiation view; never carries device-code secrets."""
-
-    provider: str
-    user_code: str = Field(min_length=1)
-    verification_uri: str = Field(min_length=1)
-    verification_uri_complete: str | None = None
-    expires_in: int = Field(ge=1)
-    interval: int = Field(ge=1)
-
-
-class OAuthStatusResponse(ContractModel):
-    """Pairing status view; fingerprint/presence-only, never token material."""
-
-    provider: str
-    status: OAuthStatusName
-    expires_in: int | None = Field(default=None, ge=0)
-
-
 class BalancePayload(ContractModel):
     """Validated account balance body: whole cents, Decimal-exact downstream."""
 
@@ -143,18 +108,6 @@ class BalancePayload(ContractModel):
         if value < 0:
             raise ValueError("balance cents must be non-negative")
         return value
-
-
-class OAuthMetadata(ContractModel):
-    """Non-secret pairing metadata persisted under oauth.parallel."""
-
-    client_id: str | None = None
-    scope: str | None = None
-    status: OAuthStatusName = "unpaired"
-    device_expires_at: datetime | None = None
-    access_expires_at: datetime | None = None
-    interval: int | None = Field(default=None, ge=1)
-    last_poll_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -249,15 +202,13 @@ class ParallelOAuthClient:
         self._platform = platform_base_url.rstrip("/")
         self._api = api_base_url.rstrip("/")
 
-    async def register_client(self, *, scope: str = OAUTH_SCOPE) -> tuple[str, SecretStr | None]:
+    async def register_client(self) -> tuple[str, SecretStr | None]:
         """Register a public client; returns its id plus an optional secret.
 
         The Account API register body carries only ``client_name`` plus the
-        host ``platform`` object; ``scope`` stays in the signature for
-        compatibility and is sent with the device-code request instead.
+        host ``platform`` object; ``scope`` is sent with the device-code request.
         """
 
-        del scope
         try:
             response = await self._http.post(
                 self._platform + _REGISTER_PATH,
@@ -370,14 +321,12 @@ class ParallelOAuthClient:
             ) from None
         return _token_grant(_response_object(response))
 
-    async def revoke_token(self, token: SecretStr, hint: str) -> None:
+    async def revoke_token(self, token: SecretStr) -> None:
         """Best-effort revocation; never raises, never logs token material.
 
-        The Account API revokes with a form-encoded ``refresh_token`` field;
-        ``hint`` stays in the signature for compatibility only.
+        The Account API revokes with a form-encoded ``refresh_token`` field.
         """
 
-        del hint
         try:
             await self._http.post(
                 self._platform + _REVOKE_PATH,

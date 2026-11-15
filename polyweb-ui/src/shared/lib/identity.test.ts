@@ -5,7 +5,8 @@ import {
   identityDetailLabel,
   identityInitial,
   identityLabel,
-  traceActorLabel,
+  UNKNOWN_USER_LABEL,
+  contactLabel,
 } from "./identity"
 
 describe("memberIdentity.test.ts", () => {
@@ -33,18 +34,26 @@ describe("memberIdentity.test.ts", () => {
   })
 
   describe("memberIdentity labels and initials", () => {
-    it("uses the display name primary with the email kept for contact", () => {
-      const named = { email: "ada@example.com", first_name: "Ada", last_name: "Lovelace", username: "ada" }
+    it("labels a person by display name only, never an email", () => {
+      const named = { first_name: "Ada", last_name: "Lovelace", username: "ada" }
       expect(identityLabel(named)).toBe("Ada Lovelace")
-      expect(identityDetailLabel(named)).toBe("Ada Lovelace (ada@example.com)")
+      expect(identityLabel({ username: "ops-lead" })).toBe("ops-lead")
+      expect(identityLabel({})).toBe(UNKNOWN_USER_LABEL)
+      expect(UNKNOWN_USER_LABEL).toBe("Unknown user")
+      // A stray email on the object is never read.
+      expect(identityLabel({ email: "lead@example.com" } as object)).toBe("Unknown user")
+      expect(identityLabel({ first_name: " ", last_name: "", username: "  " })).toBe("Unknown user")
     })
 
-    it("falls back from the username to the email alone", () => {
-      expect(identityLabel({ email: "ops@example.com", username: "ops-lead" })).toBe("ops-lead")
+    it("keeps the email only in the explicit contact helpers", () => {
+      const named = { email: "ada@example.com", first_name: "Ada", last_name: "Lovelace", username: "ada" }
+      expect(contactLabel(named)).toBe("Ada Lovelace")
+      expect(identityDetailLabel(named)).toBe("Ada Lovelace (ada@example.com)")
+      expect(contactLabel({ email: "ops@example.com", username: "ops-lead" })).toBe("ops-lead")
       expect(identityDetailLabel({ email: "ops@example.com", username: "ops-lead" })).toBe(
         "ops-lead (ops@example.com)"
       )
-      expect(identityLabel({ email: "lead@example.com" })).toBe("lead@example.com")
+      expect(contactLabel({ email: "lead@example.com" })).toBe("lead@example.com")
       expect(identityDetailLabel({ email: "lead@example.com" })).toBe("lead@example.com")
     })
 
@@ -53,19 +62,6 @@ describe("memberIdentity.test.ts", () => {
       expect(identityInitial("ops-lead", "ops@example.com")).toBe("O")
       expect(identityInitial(null, "lead@example.com")).toBe("L")
       expect(identityInitial(null, "  lead@example.com  ")).toBe("L")
-    })
-
-    it("labels trace actors with disambiguating email only, keeping legacy quiet", () => {
-      expect(traceActorLabel({ displayName: "Ada Lovelace", email: "ada@example.com" })).toBe(
-        "Ada Lovelace (ada@example.com)"
-      )
-      expect(traceActorLabel({ displayName: "Ada Lovelace", email: "Ada Lovelace" })).toBe(
-        "Ada Lovelace"
-      )
-      expect(traceActorLabel({ displayName: null, email: "ada@example.com" })).toBe(
-        "ada@example.com"
-      )
-      expect(traceActorLabel({ displayName: null, email: null })).toBeNull()
     })
   })
 })

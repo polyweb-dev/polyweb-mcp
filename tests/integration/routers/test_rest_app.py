@@ -350,6 +350,9 @@ async def test_search_emits_trace_header_matching_detail_hierarchy(
     assert spans["polyweb.results"]["parent_span_id"] == backend["span_id"]
     assert spans["polyweb.response"]["parent_span_id"] == root["span_id"]
     assert spans["polyweb.provider"]["error"] is None
+    events = spans["polyweb.provider"]["events"]
+    response_event = next(e for e in events if e["name"] == "polyweb.provider.response")
+    assert isinstance(response_event["attributes"]["results"], list)
 
 
 async def test_fetch_route_mirrors_search_tracing(
@@ -377,6 +380,36 @@ async def test_fetch_route_mirrors_search_tracing(
         assert response.status_code == 200
         trace_id = _trace_id_of(response)
         detail = client.get(f"/api/v1/projects/{pid}/traces/{trace_id}", headers=headers).json()
+        settings = client.put(
+            f"/api/v1/projects/{pid}/settings",
+            headers=headers,
+            json={"expected_revision": 0, "trace": {"detail": "metadata"}},
+        )
+        assert settings.status_code == 200, settings.text
+        metadata_response = client.post(
+            "/fetch", json={"project_id": pid, "url": "https://example.com/page"}, headers=headers
+        )
+        assert metadata_response.status_code == 200
+        metadata_id = _trace_id_of(metadata_response)
+        metadata_detail = client.get(
+            f"/api/v1/projects/{pid}/traces/{metadata_id}", headers=headers
+        ).json()
+
+    def provider_response(document: dict) -> dict:
+        return next(
+            event["attributes"]
+            for span in document["spans"]
+            for event in span["events"]
+            if event["name"] == "polyweb.provider.response"
+        )
+
+    full_event = provider_response(detail)
+    assert full_event["content_preview"] == "stubby content"
+    assert full_event["content_truncated"] is False
+    metadata_event = provider_response(metadata_detail)
+    assert "content_preview" not in metadata_event
+    assert "content_truncated" not in metadata_event
+    assert metadata_event["content_length"] == len("stubby content")
 
     assert detail["operation"] == "fetch"
     assert detail["outcome"] == "success"

@@ -11,7 +11,9 @@ attribution the REST transport stamps.
 """
 
 import asyncio
+import inspect
 import logging
+import sys
 import time
 import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -266,13 +268,15 @@ async def _tool_root(
     with use_observability(observability):
         bind_execution_attribution(attribution)
         bind_trace_capture(trace_policy)
-        with observability.span(name, kind=SpanKindName.SERVER, attributes=attributes):
-            try:
-                yield
-            except BaseException as error:
-                _annotate_root_error(observability, error)
-                raise
-        await flush_traces(observability)
+        try:
+            with observability.span(name, kind=SpanKindName.SERVER, attributes=attributes):
+                try:
+                    yield
+                except BaseException as error:
+                    _annotate_root_error(observability, error)
+                    raise
+        finally:
+            await flush_traces(observability)
 
 
 def _execution_tool_error(error: ExecutionScopeError) -> Exception:
@@ -281,6 +285,7 @@ def _execution_tool_error(error: ExecutionScopeError) -> Exception:
     if isinstance(error, ExecutionUnauthenticated):
         return McpAuthenticationError(MCP_AUTH_ERROR)
     if isinstance(error, ExecutionStorageUnavailable):
+        logger.error("MCP execution storage unavailable: %s", type(error).__name__)
         return RuntimeError("execution is temporarily unavailable")
     if isinstance(error, ExecutionProjectRequired):
         return RuntimeError("project_id is required")
@@ -426,6 +431,7 @@ def _mapped_execution_error(error: ExecutionError | Exception) -> Exception:
     """Map the execution service's planning failures onto tool errors."""
 
     if isinstance(error, ExecutionStorageUnavailable):
+        logger.error("MCP execution storage unavailable: %s", type(error).__name__)
         return RuntimeError("execution is temporarily unavailable")
     if isinstance(error, ExecutionRequestInvalid):
         return ValueError(error.detail)
@@ -460,6 +466,7 @@ async def _tool_body(
     forwarder = state["forwarder"]
     execution = state["execution"]
     if forwarder is None and execution is None:
+        logger.error("MCP execution unavailable: no forwarder or local execution backend")
         raise RuntimeError("execution is temporarily unavailable")
     observability = state["observability"]
     response: SearchResponse | FetchResponse
@@ -484,6 +491,7 @@ async def _tool_body(
                     response = await forwarder.search(
                         cast(SearchRequest, request),
                         credential=credential,
+                        project_id=context.project_id,
                         trace_id=trace_id,
                         parent_span_id=parent_span_id,
                         deadline_ms=deadline_ms,
@@ -492,6 +500,7 @@ async def _tool_body(
                     response = await forwarder.fetch(
                         cast(FetchRequest, request),
                         credential=credential,
+                        project_id=context.project_id,
                         trace_id=trace_id,
                         parent_span_id=parent_span_id,
                         deadline_ms=deadline_ms,
@@ -518,6 +527,11 @@ async def _tool_body(
                         deadline=deadline,
                     )
         except ExecutionForwardError as error:
+            logger.warning(
+                "MCP execution forward failed: category=%s cause=%s",
+                error.category,
+                type(error.__cause__).__name__ if error.__cause__ else None,
+            )
             raise RuntimeError(str(error)) from error
         except ExecutionError as error:
             raise _mapped_execution_error(error) from error
@@ -554,6 +568,7 @@ def _register_tools(
         repository = state["repository"]
         principal = await resolve_tool_principal(ctx, stdio_key=stdio_key, repository=repository)
         if repository is None:
+            logger.error("MCP tool call rejected: no repository is configured")
             raise RuntimeError("execution is temporarily unavailable")
         try:
             boundary = await resolve_execution_boundary(
@@ -568,7 +583,13 @@ def _register_tools(
         request: SearchRequest,
         ctx: Context,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        """Search the web through the best available provider or all providers concurrently."""
+        """Search the web. Select providers with routing:
+        {"mode": "require" or "prefer", "providers": ["keenable"]}.
+
+        Recency is provider-specific under providerOptions, e.g. {"tavily": {"time_range": "week"}}
+        or {"tinyfish": {"recency_minutes": 60}}. Unknown request fields are rejected.
+        Example arguments: {"request": {"query": "weather"}}
+        """
         deadline_ms = deadline_from_timeout(get_settings().execution_forward_timeout_seconds)
         try:
             async with asyncio.timeout(
@@ -596,7 +617,12 @@ def _register_tools(
         request: FetchRequest,
         ctx: Context,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
-        """Fetch a URL's content through the best available provider."""
+        """Fetch a URL. Select providers with routing:
+        {"mode": "require" or "prefer", "providers": ["keenable"]}.
+
+        Provider-specific options belong under providerOptions. Unknown request fields are rejected.
+        Example arguments: {"request": {"url": "https://example.com"}}
+        """
         deadline_ms = deadline_from_timeout(get_settings().execution_forward_timeout_seconds)
         try:
             async with asyncio.timeout(
@@ -618,6 +644,38 @@ def _register_tools(
             credential=tool_credential(ctx, stdio_key=stdio_key),
             deadline_ms=deadline_ms,
         )
+
+    # FastMCP's argument model remains the validation authority. Only its
+    # separately stored advertised schema is expanded for clients lacking $ref support.
+    for tool in server._tool_manager.list_tools():
+        tool.parameters = _inline_schema_refs(tool.parameters)
+        if tool.description:
+            tool.description = inspect.cleandoc(tool.description)
+
+
+def _inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Expand local definitions, rejecting recursive or unsupported references."""
+    definitions = schema.get("$defs", {})
+
+    def expand(value: Any, active: tuple[str, ...] = ()) -> Any:
+        if isinstance(value, list):
+            return [expand(item, active) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if "$ref" in value:
+            ref = value["$ref"]
+            if not ref.startswith("#/$defs/") or ref[8:] in active:
+                raise ValueError(f"Unsupported or recursive tool schema reference: {ref}")
+            name = ref[8:]
+            if name not in definitions:
+                raise ValueError(f"Undefined tool schema reference: {ref}")
+            return {
+                **expand(definitions[name], (*active, name)),
+                **{key: expand(item, active) for key, item in value.items() if key != "$ref"},
+            }
+        return {key: expand(item, active) for key, item in value.items() if key != "$defs"}
+
+    return cast(dict[str, Any], expand(schema))
 
 
 def create_server(
@@ -849,6 +907,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         overrides["mcp_port"] = args.port
     effective = settings.model_copy(update=overrides) if overrides else settings
     exit_if_database_reset_required(resolve_database_path(None))
+    if not effective.execution_authority_url and not effective.execution_mcp_standalone:
+        # Without a forwarder or a local authority every tool call would fail, so
+        # refuse to start instead of serving a healthy-looking, unusable server.
+        print(
+            "MCP execution is not configured: set POLYWEB_EXECUTION_AUTHORITY_URL "
+            "to the API (for example http://api:8001) or enable "
+            "POLYWEB_EXECUTION_MCP_STANDALONE.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     auth_service = AuthService(effective)
     # Only stdio reads the process credential channel; an HTTP server never

@@ -1,11 +1,10 @@
 import type { ReactNode } from "react"
 import { cn } from "cn"
-import type { TraceActor, TraceDetail, TraceProviderAttempt } from "@/domains/activity"
+import type { TraceDetail, TraceProviderAttempt } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
-import { traceActorLabel } from "@/shared/lib/identity"
 import { formatLatency } from "@/shared/lib/formatTime"
-import { IdentityLines } from "@/shared/ui/IdentityLines"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
+import { TraceActorCell } from "./TraceActorCell"
 import { TraceStatusPill } from "./TraceStatusPill"
 
 const AGGREGATED_PROVIDER = "aggregated"
@@ -78,7 +77,7 @@ export function TraceDetailSummary({
       <dl className="grid min-w-0 grid-cols-2 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--elevated)] divide-x divide-y divide-[var(--muted)] sm:grid-cols-3 sm:divide-y-0 lg:grid-cols-5 lg:divide-y-0">
         {cell("Status", <TraceStatusPill outcome={attempt?.outcome ?? trace.outcome} />, 0)}
         {cell("Provider", providerCell(trace, attempt), 1)}
-        {cell("Initiated by", actorCell(trace.actor), 2)}
+        {cell("Initiated by", <TraceActorCell actor={trace.actor} />, 2)}
         {cell(
           attempt === null ? "Total latency" : "Provider latency",
           formatLatency(attempt === null ? trace.durationMs : attempt.durationMs),
@@ -93,24 +92,4 @@ export function TraceDetailSummary({
       )}
     </div>
   )
-}
-
-/**
- * Initiated-by cell: the human display name (full name, then username, then
- * email with disambiguation) when known; API-key rows stay key-identified;
- * legacy/unknown rows stay quiet. The two-line rail entry truncates each line
- * with the full contact title, so mid-word email breaks never appear.
- */
-function actorCell(actor: TraceActor): ReactNode {
-  if (actor.kind === "project_api_key") return "API key"
-  const label = traceActorLabel(actor)
-  if (label === null) return "—"
-  if (actor.displayName === null) {
-    return (
-      <span className="block truncate" title={label}>
-        {label}
-      </span>
-    )
-  }
-  return <IdentityLines primary={actor.displayName} secondary={actor.email} detail={label} />
 }

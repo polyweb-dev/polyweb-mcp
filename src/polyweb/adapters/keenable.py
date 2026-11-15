@@ -18,8 +18,16 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import SecretStr, ValidationError
 
-from polyweb.adapters.base import ProviderAdapter
-from polyweb.infrastructure.dates import parse_iso_datetime
+from polyweb.adapters.base import ProviderAdapter, parse_error_record
+from polyweb.infrastructure.dates import (
+    month_start as _month_start,
+)
+from polyweb.infrastructure.dates import (
+    next_month_start as _next_month_start,
+)
+from polyweb.infrastructure.dates import (
+    parse_iso_datetime,
+)
 from polyweb.infrastructure.observability import SpanKindName, current_observability
 from polyweb.infrastructure.resilience import (
     RETRYABLE_STATUS_CODES,
@@ -72,35 +80,6 @@ _KEYLESS_PER_SECOND_LIMIT = Decimal("10")
 _SERVER = urlsplit(_BASE_URL)
 _SERVER_ADDRESS = _SERVER.hostname or "api.keenable.ai"
 _SERVER_PORT = _SERVER.port or 443
-
-
-def _month_start(value: datetime) -> datetime:
-    return datetime(value.year, value.month, 1, tzinfo=UTC)
-
-
-def _next_month_start(value: datetime) -> datetime:
-    if value.month == 12:
-        return datetime(value.year + 1, 1, 1, tzinfo=UTC)
-    return datetime(value.year, value.month + 1, 1, tzinfo=UTC)
-
-
-def _parse_published_at(value: Any) -> datetime | None:
-    """Parse an ISO-8601 timestamp; unparseable values are None."""
-    return parse_iso_datetime(value)
-
-
-def _parse_error_record(index: int) -> dict[str, object]:
-    """Return the safe record for one rejected search result item.
-
-    The record holds no raw payload, URL, key, query, or validation text, so a
-    rejected item can never leak response content into usage metadata.
-    """
-
-    return {
-        "index": index,
-        "code": "invalid_response",
-        "message": "malformed search result item",
-    }
 
 
 def _response_metadata(payload: dict[str, Any], excluded: set[str]) -> dict[str, Any] | None:
@@ -225,11 +204,11 @@ class KeenableAdapter(ProviderAdapter):
                     try:
                         results.append(self._normalize_result(item))
                     except ValidationError:
-                        parse_errors.append(_parse_error_record(index))
+                        parse_errors.append(parse_error_record(index))
                     except ProviderOperationError as exc:
                         if exc.error.code != "invalid_response":
                             raise
-                        parse_errors.append(_parse_error_record(index))
+                        parse_errors.append(parse_error_record(index))
                 results = results[: request.limit]
                 parse_span.set_attributes({TraceAttribute.RESPONSE_RESULT_COUNT: len(results)})
                 usage = self._usage_event(UsageOperation.SEARCH, payload)
@@ -293,7 +272,7 @@ class KeenableAdapter(ProviderAdapter):
             title=item.get("title") or "",
             url=cast(Any, url),
             snippet=item.get("snippet") or item.get("description") or item.get("content") or "",
-            published_at=_parse_published_at(item.get("published_at")),
+            published_at=parse_iso_datetime(item.get("published_at")),
             source=source if isinstance(source, str) else None,
             metadata=metadata,
         )

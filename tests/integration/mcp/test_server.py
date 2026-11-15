@@ -269,6 +269,8 @@ def test_main_cli_dispatch(
 
     # main() runs the pre-start database check: never against the checkout DB.
     monkeypatch.setenv("POLYWEB_DB", str(tmp_path / "main-dispatch.db"))
+    settings = server_module.get_settings().model_copy(update={"execution_mcp_standalone": True})
+    monkeypatch.setattr(server_module, "get_settings", lambda: settings)
 
     calls: list[tuple[str, bool, int | None]] = []
 

@@ -114,7 +114,7 @@ async def seed_key_project_with_pool(
             created_by=key.owner.id,
             values=KeyPoolValues(
                 label="mcp pool",
-                operations=frozenset({"search"}),
+                operations=frozenset({"search", "fetch"}),
                 rate_limit=100,
                 rate_window_seconds=3600,
             ),
@@ -519,13 +519,14 @@ async def test_forwarded_tool_call_verifies_credential_deadline_and_trace(
             sent_at_ms = int(time.time() * 1000)
             result = await server.call_tool(
                 "search",
-                {"request": {"project_id": str(key.project_id), "query": "hop-ok"}},
+                {"request": {"query": "hop-ok"}},
             )
             now_after_ms = int(time.time() * 1000)
         adapter_calls = adapter.search_calls
         dispatches = await _dispatch_rows(repository, key.project_id)
         usage = await _usage_rows(repository, key.project_id)
         hops = list(hop.hops)
+        summaries = await repository.list_project_trace_summaries(project_id=key.project_id)
     finally:
         if server is not None:
             with suppress(Exception):
@@ -572,7 +573,72 @@ async def test_forwarded_tool_call_verifies_credential_deadline_and_trace(
     tool_roots = [entry for entry in root_rows if entry[0] == TraceRootSpan.MCP_SEARCH.value]
     assert tool_roots, f"the MCP tool call must write its root span: {root_rows}"
     assert str(key.project_id) in {entry[1] for entry in tool_roots}, tool_roots
-    with suppress(Exception):
+    with sqlite3.connect(str(repository.database_path)) as connection:
+        spans = connection.execute(
+            "SELECT name, trace_id, span_id, parent_span_id, provider, outcome, result_count "
+            "FROM trace_spans",
+        ).fetchall()
+    roots = [span for span in spans if span[3] is None]
+    assert len(roots) == 1
+    root = roots[0]
+    assert root[0] == TraceRootSpan.MCP_SEARCH.value
+    assert root[1] == trace_raw
+    assert root[4:7] == (PROVIDER, "success", len(payload["results"]))
+    api = next(span for span in spans if span[0] == "POST /search")
+    assert api[1] == root[1] and api[3] == root[2]
+    assert {span[1] for span in spans} == {trace_raw}
+    assert len(summaries) == 1
+    assert summaries[0].trace_id == trace_raw
+    assert summaries[0].provider == PROVIDER
+    assert summaries[0].result_count == len(payload["results"])
+    assert summaries[0].duration_ms >= 0
+
+
+async def test_forwarded_fetch_has_one_global_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = await SQLiteRepository.open(tmp_path / "a3-fetch-hop.db")
+    store = EncryptedDbSecretStore(repository, load_secret_codec(get_settings()))
+    server: Any = None
+    try:
+        key, _, adapter = await seed_key_project_with_pool(repository, store, monkeypatch)
+        forwarding_settings(monkeypatch, authority_url="https://api-authority.test")
+        app = create_app(
+            [adapter],
+            repository=repository,
+            secret_store=store,
+            auth_service=auth_service_for(repository),
+        )
+        hop = install_asgi_hop(monkeypatch, app)
+        server = create_server(
+            [adapter],
+            repository=repository,
+            auth_service=auth_service_for(repository),
+            stdio_token=SecretStr(key.raw),
+        )
+        async with app.router.lifespan_context(app):
+            result = await server.call_tool("fetch", {"request": {"url": "https://example.com"}})
+        assert _tool_success(result)["provider"] == PROVIDER
+        assert adapter.fetch_calls == 1
+        exchanges = [h for h in hop.hops if h.method == "POST" and h.path == "/fetch"]
+        assert len(exchanges) == 1
+        trace_id = exchanges[0].header(TRACE_HEADER)
+        with sqlite3.connect(str(repository.database_path)) as connection:
+            spans = connection.execute(
+                "SELECT name, trace_id, span_id, parent_span_id FROM trace_spans"
+            ).fetchall()
+        roots = [span for span in spans if span[3] is None]
+        assert len(roots) == 1
+        root = roots[0]
+        assert root[0] == TraceRootSpan.MCP_FETCH.value
+        assert trace_id is not None and root[1] == trace_id
+        api = next(span for span in spans if span[0] == "POST /fetch")
+        assert api[3] == root[2]
+        assert {span[1] for span in spans} == {trace_id}
+    finally:
+        if server is not None:
+            with suppress(Exception):
+                await shutdown_injected_observability(server)
         await repository.close()
 
 

@@ -39,27 +39,6 @@ Feature: Parallel OAuth device flow and Account API balance
     When I check the Parallel OAuth status
     Then the OAuth status should be expired
 
-  Scenario: Balance cents map to an AUTHORITATIVE USD snapshot
-    Given an offline Parallel OAuth API with a paired bearer
-    When the bounded quota poll runs with credit 1250 cents and pending 250 cents
-    Then the Parallel latest quota should be AUTHORITATIVE USD 10.00 with unknown limit
-
-  Scenario Outline: Invoice-billed and overdrawn balances stay honest
-    Given an offline Parallel OAuth API with a paired bearer
-    When the bounded quota poll runs with credit <credit> cents and pending <pending> cents invoiced <invoiced>
-    Then the Parallel balance outcome should be "<outcome>"
-
-    # An invoiced org has no observable prepaid balance, so the vendor body
-    # yields no AUTHORITATIVE snapshot; the pairing cannot see funds any more,
-    # and the previously authoritative display is neutralized to an
-    # ESTIMATED-unknown tombstone (source estimated, remaining and limit unset)
-    # rather than being left as a stale, quotable number.
-    Examples:
-      | credit | pending | invoiced | outcome             |
-      | 1250   | 250     | false    | USD 10.00           |
-      | 100    | 500     | false    | USD 0.00            |
-      | 9999   | 0       | true     | neutralized UNKNOWN |
-
   Scenario: Balance rejection unpairs and backs off without hot-looping
     Given an offline Parallel OAuth API with a paired bearer
     When the bounded quota poll runs with a rejected bearer

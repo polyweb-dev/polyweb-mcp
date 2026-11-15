@@ -97,7 +97,6 @@ async def test_project_pools_member_access_and_secret_isolation(
                     "key_label": "Source key",
                     "owner": {
                         "user_id": str(owner_id),
-                        "email": owner_email,
                         "username": "pool-owner",
                         "first_name": "Pool",
                         "last_name": "Owner",
@@ -129,7 +128,6 @@ async def test_project_pools_member_access_and_secret_isolation(
                     "key_label": "Source key",
                     "owner": {
                         "user_id": str(owner_id),
-                        "email": owner_email,
                         "username": None,
                         "first_name": None,
                         "last_name": None,

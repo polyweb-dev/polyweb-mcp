@@ -96,10 +96,19 @@ def _timestamp(nanoseconds: int) -> datetime:
     return datetime.fromtimestamp(nanoseconds / 1_000_000_000, tz=UTC)
 
 
-def _duration_ms(started: int, ended: int) -> int:
-    """Return a non-negative whole-millisecond duration, rounding up sub-ms spans."""
+def _duration_ms(started: int, ended: int, monotonic_ns: object = None) -> int:
+    """Return a non-negative whole-millisecond span duration.
 
-    return max(0, round((ended - started) / 1_000_000))
+    The monotonic duration stamped by the facade wins: wall-clock timestamps can
+    step backwards (NTP or VM clock sync), which would invert ``end - start``.
+    """
+
+    if isinstance(monotonic_ns, int) and not isinstance(monotonic_ns, bool) and monotonic_ns >= 0:
+        return round(monotonic_ns / 1_000_000)
+    if ended < started:
+        logger.warning("trace span ended before its start timestamp (wall clock stepped back)")
+        return 0
+    return round((ended - started) / 1_000_000)
 
 
 def _jsonable(value: object) -> Any:
@@ -260,7 +269,9 @@ def span_record(span: ReadableSpan) -> TraceSpanRecord:
         kind=_span_kind(span),
         started_at=_timestamp(started),
         ended_at=_timestamp(ended),
-        duration_ms=_duration_ms(started, ended),
+        duration_ms=_duration_ms(
+            started, ended, attributes.get(TraceAttribute.MONOTONIC_DURATION_NS)
+        ),
         status_code=status,
         # No exception text is ever persisted: the safe projection is the
         # low-cardinality ``error_type`` that the facade records.

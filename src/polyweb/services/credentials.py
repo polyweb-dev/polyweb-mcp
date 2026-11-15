@@ -21,7 +21,7 @@ mutation appends its scoped audit event in the same transaction: system
 credentials and grants at system scope (grants also at the granted project's
 scope), private credentials at project scope.
 
-``resolve_material`` is the runtime seam for A2: it re-checks credential
+``resolve_material_in_session`` is the runtime seam for A2: it re-checks credential
 state (project liveness, ownership or grant, status, generation) on every
 call and loads the secret. It grants no actor authority; the dispatch path
 performs the live actor permission check.
@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Final, NoReturn, TypeVar
+from typing import Final, TypeVar
 from uuid import UUID
 
 from pydantic import SecretStr
@@ -55,7 +55,6 @@ from polyweb.models.credentials import (
 )
 from polyweb.models.projects import (
     DEFAULT_INSTALLATION_ACCOUNT_ID,
-    AuthorizationDecision,
     CredentialInstanceRead,
     CredentialOwnerScope,
     CredentialProjectGrantRead,
@@ -64,7 +63,6 @@ from polyweb.models.projects import (
     ProjectRead,
     ProjectRolloutState,
     ProjectStatus,
-    ScopeType,
 )
 from polyweb.models.schema_enums import OAuthGrantStatus
 from polyweb.models.users import UserPrincipal
@@ -76,12 +74,10 @@ from polyweb.persistence.oauth_grants import (
     oauth_secret_slot,
 )
 from polyweb.persistence.projects import ProjectRepository
-from polyweb.persistence.scoped import ProjectScopedRepository
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.persistence.transactions import begin_read_snapshot, run_serialized
 from polyweb.services.audit_events import record_project_event, record_system_event
 from polyweb.services.authorization import (
-    AuthorizationDenied,
     ScopedAuthorizationService,
     human_principal,
     project_query,
@@ -96,7 +92,6 @@ CREDENTIAL_CREATED: Final[str] = "credential.created"
 CREDENTIAL_ROTATED: Final[str] = "credential.rotated"
 CREDENTIAL_DELETED: Final[str] = "credential.deleted"
 CREDENTIAL_GRANT_PUT: Final[str] = "credential_grant.put"
-CREDENTIAL_GRANT_DELETED: Final[str] = "credential_grant.deleted"
 
 #: Providers whose credentials may use the per-credential OAuth device flow.
 OAUTH_PROVIDER_TYPES: Final[frozenset[str]] = frozenset({ProviderName.PARALLEL.value})
@@ -380,42 +375,6 @@ class CredentialService:
 
         return await self._write(operation)
 
-    async def delete_grant(
-        self,
-        actor: UserPrincipal,
-        credential_id: UUID,
-        project_id: UUID,
-    ) -> None:
-        """Remove one project's grant on a system credential."""
-
-        self._rollout.require_management()
-
-        async def operation(session: AsyncSession) -> None:
-            await self._require_system_manager(session, actor)
-            credentials = CredentialRepository(session)
-            await self._require_system_credential(credentials, credential_id)
-            grant = await credentials.get_grant(credential_id=credential_id, project_id=project_id)
-            if grant is None:
-                raise CredentialNotFound("credential grant is not available")
-            # Revoking a grant removes every binding of this project to the
-            # credential in the same transaction. The binding's composite
-            # foreign key to the grant also cascades, so no binding can
-            # outlive the grant it was created under.
-            removed_bindings = await ProjectBindingRepository(session).delete_for_credential(
-                project_id=project_id, credential_id=credential_id
-            )
-            await credentials.delete_grant(credential_id=credential_id, project_id=project_id)
-            await self._audit_grant(
-                session,
-                actor,
-                credential_id=credential_id,
-                project_id=project_id,
-                action=CREDENTIAL_GRANT_DELETED,
-                detail={"removed_binding_count": removed_bindings},
-            )
-
-        await self._write(operation)
-
     # ------------------------------------------------------------------
     # Project-scope surface (providers.read / credentials.manage_private)
     # ------------------------------------------------------------------
@@ -438,168 +397,6 @@ class CredentialService:
                 return await self._project_credentials_in_session(session, context)
         except OperationalError as error:
             raise CredentialStorageUnavailable("the credential store is unavailable") from error
-
-    async def get_project_credential(
-        self,
-        actor: UserPrincipal,
-        project_id: UUID,
-        credential_id: UUID,
-    ) -> ProjectCredentialRead:
-        """Return one project-visible credential or a non-revealing not-found."""
-
-        self._rollout.require_management()
-        try:
-            async with self._repository.session() as session:
-                context = await self._require_context(session, actor, project_id)
-                await self._authorization.require_in_session(
-                    session,
-                    project_query(actor, PermissionAction.PROVIDERS_READ, project_id=project_id),
-                )
-                credentials = CredentialRepository(session)
-                private = await credentials.get_private_credential(
-                    account_id=self._account_id,
-                    project_id=project_id,
-                    credential_id=credential_id,
-                )
-                if private is not None:
-                    return _project_read(
-                        private,
-                        operations=ALL_CREDENTIAL_OPERATIONS,
-                        can_manage=self._can_manage_private(context),
-                        generation=private.generation,
-                    )
-                granted = await self._granted_credential(
-                    credentials, project_id=project_id, credential_id=credential_id
-                )
-                if granted is None:
-                    raise CredentialNotFound("credential is not available")
-                credential, operations = granted
-                return _project_read(
-                    credential,
-                    operations=operations,
-                    can_manage=False,
-                    generation=None,
-                )
-        except OperationalError as error:
-            raise CredentialStorageUnavailable("the credential store is unavailable") from error
-
-    async def create_project_credential(
-        self,
-        actor: UserPrincipal,
-        project_id: UUID,
-        body: CredentialCreate,
-    ) -> ProjectCredentialRead:
-        """Create one project-private credential in an active project."""
-
-        self._rollout.require_management()
-
-        async def operation(session: AsyncSession) -> ProjectCredentialRead:
-            context = await self._require_context(session, actor, project_id)
-            await self._authorization.require_in_session(
-                session,
-                project_query(
-                    actor,
-                    PermissionAction.CREDENTIALS_MANAGE_PRIVATE,
-                    project_id=project_id,
-                ),
-            )
-            await self._require_active_project(session, context)
-            self._validate_create(body)
-            created = await self._create_in_session(
-                session,
-                actor,
-                body,
-                owner_scope=CredentialOwnerScope.PROJECT,
-                owner_project_id=project_id,
-            )
-            await self._audit_credential(session, actor, created, CREDENTIAL_CREATED)
-            return _project_read(
-                created,
-                operations=ALL_CREDENTIAL_OPERATIONS,
-                can_manage=True,
-                generation=created.generation,
-            )
-
-        return await self._write(operation)
-
-    async def rotate_project_credential(
-        self,
-        actor: UserPrincipal,
-        project_id: UUID,
-        credential_id: UUID,
-        body: CredentialRotate,
-    ) -> ProjectCredentialRead:
-        """Rotate one project-private credential; system credentials are denied."""
-
-        self._rollout.require_management()
-
-        async def operation(session: AsyncSession) -> ProjectCredentialRead:
-            context = await self._require_context(session, actor, project_id)
-            await self._authorization.require_in_session(
-                session,
-                project_query(
-                    actor,
-                    PermissionAction.CREDENTIALS_MANAGE_PRIVATE,
-                    project_id=project_id,
-                ),
-            )
-            credentials = CredentialRepository(session)
-            private = await credentials.get_private_credential(
-                account_id=self._account_id,
-                project_id=project_id,
-                credential_id=credential_id,
-            )
-            if private is None:
-                await self._reject_foreign_credential(
-                    credentials, project_id=project_id, credential_id=credential_id
-                )
-            await self._require_active_project(session, context)
-            rotated = await self._rotate_in_session(session, credentials, private, body)
-            await self._audit_credential(session, actor, rotated, CREDENTIAL_ROTATED)
-            return _project_read(
-                rotated,
-                operations=ALL_CREDENTIAL_OPERATIONS,
-                can_manage=True,
-                generation=rotated.generation,
-            )
-
-        return await self._write(operation)
-
-    async def delete_project_credential(
-        self,
-        actor: UserPrincipal,
-        project_id: UUID,
-        credential_id: UUID,
-    ) -> None:
-        """Delete one project-private credential; system credentials are denied."""
-
-        self._rollout.require_management()
-
-        async def operation(session: AsyncSession) -> None:
-            context = await self._require_context(session, actor, project_id)
-            await self._authorization.require_in_session(
-                session,
-                project_query(
-                    actor,
-                    PermissionAction.CREDENTIALS_MANAGE_PRIVATE,
-                    project_id=project_id,
-                ),
-            )
-            credentials = CredentialRepository(session)
-            private = await credentials.get_private_credential(
-                account_id=self._account_id,
-                project_id=project_id,
-                credential_id=credential_id,
-            )
-            if private is None:
-                await self._reject_foreign_credential(
-                    credentials, project_id=project_id, credential_id=credential_id
-                )
-            await self._require_active_project(session, context)
-            await self._delete_in_session(session, credentials, private)
-            await self._audit_credential(session, actor, private, CREDENTIAL_DELETED)
-
-        await self._write(operation)
 
     # ------------------------------------------------------------------
     # Runtime seam: credential-state-only material resolution (A2 consumer)
@@ -650,51 +447,6 @@ class CredentialService:
         if granted is None or operation not in granted[1]:
             return None
         return granted[0]
-
-    async def resolve_material(
-        self,
-        context: ProjectContext,
-        credential_id: UUID,
-        *,
-        operation: CredentialOperation,
-        expected_generation: int | None = None,
-    ) -> ResolvedCredential | None:
-        """Load the current secret material of one credential usable by this project.
-
-        This method grants no actor authority. It never consults
-        ``context.effective_permissions``: a context is a snapshot and cannot
-        prove the actor still holds a permission. The dispatch path (A2) must
-        perform the live actor permission check (membership, role, account
-        status, API key revocation and expiry) before it calls this method.
-
-        What this method does check, on every call and against current state:
-        the project exists in this account and is active; the credential is
-        an active private credential of that project, or an active system
-        credential with a grant to that project that lists ``operation``;
-        ``expected_generation``, when given, equals the credential's
-        generation. It then loads the secret: the API key of the current
-        generation slot, or, for an OAuth credential, the access token of the
-        current token generation of a ``connected``, unexpired grant.
-
-        Any failed check or missing slot returns ``None``. The secret never
-        leaves this method except inside the returned ``SecretStr``.
-        """
-
-        self._rollout.require_management()
-        if context.account_id != self._account_id:
-            raise ValueError("project context account does not match the installation account")
-        try:
-            async with self._repository.session() as session:
-                await begin_read_snapshot(session)
-                return await self.resolve_material_in_session(
-                    session,
-                    context,
-                    credential_id,
-                    operation=operation,
-                    expected_generation=expected_generation,
-                )
-        except OperationalError as error:
-            raise CredentialStorageUnavailable("the credential store is unavailable") from error
 
     async def resolve_material_in_session(
         self,
@@ -868,17 +620,6 @@ class CredentialService:
         if project is None:
             raise CredentialNotFound("project is not available")
         return project
-
-    async def _require_active_project(self, session: AsyncSession, context: ProjectContext) -> None:
-        """Reject credential writes against an archived project."""
-
-        scoped = ProjectScopedRepository(session, context=context, account_id=self._account_id)
-        project = await scoped.require_project()
-        if project.status is ProjectStatus.ARCHIVED:
-            raise CredentialConflict(
-                PROJECT_ARCHIVED,
-                "archived projects cannot change credentials",
-            )
 
     async def _create_in_session(
         self,
@@ -1084,34 +825,6 @@ class CredentialService:
             detail=detail,
         )
 
-    async def _reject_foreign_credential(
-        self,
-        credentials: CredentialRepository,
-        *,
-        project_id: UUID,
-        credential_id: UUID,
-    ) -> NoReturn:
-        """Classify a non-private credential for project rotate/delete.
-
-        A live system credential granted to this project is a scope violation
-        (denied at system scope); anything else is a non-revealing not-found.
-        """
-
-        granted = await self._granted_credential(
-            credentials, project_id=project_id, credential_id=credential_id
-        )
-        if granted is not None:
-            raise AuthorizationDenied(
-                AuthorizationDecision(
-                    allowed=False,
-                    reason="system credentials are managed at system scope",
-                    required_permission=PermissionAction.SYSTEM_CREDENTIALS_MANAGE,
-                    scope_type=ScopeType.SYSTEM,
-                    scope_id=self._account_id,
-                )
-            )
-        raise CredentialNotFound("credential is not available")
-
     async def _granted_credential(
         self,
         credentials: CredentialRepository,
@@ -1245,7 +958,6 @@ __all__ = [
     "CREDENTIAL_CREATED",
     "CREDENTIAL_DELETED",
     "CREDENTIAL_GENERATION_CONFLICT",
-    "CREDENTIAL_GRANT_DELETED",
     "CREDENTIAL_GRANT_PUT",
     "CREDENTIAL_LABEL_CONFLICT",
     "CREDENTIAL_ROTATED",

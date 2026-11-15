@@ -50,7 +50,7 @@ afterEach(() => {
 })
 
 describe("SidebarAccountMenu identity", () => {
-  it("shows the email and no role text in the expanded row of an unnamed account", () => {
+  it("falls back to the email, with no role text, when the account has neither name nor username", () => {
     renderMenu(adminAccountFixture({ email: "lead@example.com" }))
 
     const trigger = screen.getByRole("button", { name: "Open user menu" })
@@ -58,7 +58,7 @@ describe("SidebarAccountMenu identity", () => {
     expect(trigger.textContent ?? "").not.toMatch(/Admin|Developer|Agent/)
   })
 
-  it("shows the full name above the email when the account has one", async () => {
+  it("shows the full name above the username and never the email", async () => {
     const user = userEvent.setup()
     renderMenu(
       adminAccountFixture({ email: "ada@example.com", first_name: "Ada", last_name: "Lovelace", username: "ada" })
@@ -66,21 +66,34 @@ describe("SidebarAccountMenu identity", () => {
 
     const trigger = screen.getByRole("button", { name: "Open user menu" })
     expect(trigger).toHaveTextContent("Ada Lovelace")
-    expect(trigger).toHaveTextContent("ada@example.com")
+    expect(trigger).toHaveTextContent("ada")
+    expect(trigger.textContent).toBe("AAda Lovelaceada")
+    expect(trigger.textContent).not.toContain("ada@example.com")
+    expect(trigger.innerHTML).not.toContain("ada@example.com")
 
     // The expanded row already names the account; the popup does not repeat it.
     await openPopup(user)
     const dialog = screen.getByRole("dialog", { name: "User account" })
     expect(dialog).not.toHaveTextContent("Ada Lovelace")
-    expect(dialog).not.toHaveTextContent("ada@example.com")
+    expect(dialog.textContent).not.toContain("ada@example.com")
   })
 
-  it("shows the username when the account has no full name", () => {
+  it("shows the username alone, without the email, when the account has no full name", () => {
     renderMenu(adminAccountFixture({ email: "ops@example.com", username: "ops-lead" }))
 
     const trigger = screen.getByRole("button", { name: "Open user menu" })
-    expect(trigger).toHaveTextContent("ops-lead")
-    expect(trigger).toHaveTextContent("ops@example.com")
+    expect(trigger.textContent).toBe("Oops-lead")
+    expect(trigger.innerHTML).not.toContain("ops@example.com")
+  })
+
+  it("shows the full name alone when the account has a name but no username", () => {
+    renderMenu(
+      adminAccountFixture({ email: "grace@example.com", first_name: "Grace", last_name: "Hopper", username: null })
+    )
+
+    const trigger = screen.getByRole("button", { name: "Open user menu" })
+    expect(trigger.textContent).toBe("GGrace Hopper")
+    expect(trigger.innerHTML).not.toContain("grace@example.com")
   })
 
   it("shows only Account and Sign out in the expanded popup", async () => {
@@ -124,11 +137,29 @@ describe("SidebarAccountMenu collapsed access", () => {
     await openPopup(user)
 
     const dialog = screen.getByRole("dialog", { name: "User account" })
-    expect(dialog).toHaveTextContent("admin")
+    // No name or username on the fixture: the email is the only identity.
     expect(dialog).toHaveTextContent("admin@example.com")
     expect(
       screen.getByRole("button", { name: "Sign out" })
     ).toBeInTheDocument()
+  })
+
+  it("shows the name over the username, never the email, in the collapsed popup", async () => {
+    const user = userEvent.setup()
+    renderMenu(
+      adminAccountFixture({ email: "ada@example.com", first_name: "Ada", last_name: "Lovelace", username: "ada" }),
+      true
+    )
+
+    const trigger = screen.getByRole("button", { name: "Open user menu" })
+    expect(trigger).toHaveAttribute("title", "Ada Lovelace (ada)")
+    await openPopup(user)
+
+    const dialog = screen.getByRole("dialog", { name: "User account" })
+    expect(dialog).toHaveTextContent("Ada Lovelace")
+    expect(dialog).toHaveTextContent("ada")
+    expect(dialog.innerHTML).not.toContain("ada@example.com")
+    expect(document.body.innerHTML).not.toContain("ada@example.com")
   })
 })
 
@@ -325,7 +356,7 @@ describe("SidebarAccountMenu SB4 refinements", () => {
     ["admin", adminAccountFixture()],
     ["developer", developerAccountFixture()],
     ["agent", agentAccountFixture()],
-  ])("shows the email outside and inside without role text for the %s persona", async (_persona, account) => {
+  ])("shows the email fallback outside and inside without role text for the unnamed %s persona", async (_persona, account) => {
     const user = userEvent.setup()
     renderMenu(account)
 
@@ -333,7 +364,7 @@ describe("SidebarAccountMenu SB4 refinements", () => {
     expect(trigger).toHaveTextContent(account.email)
     expect(trigger.textContent ?? "").not.toMatch(/Admin|Developer|Agent/)
     cleanup()
-    // Only the collapsed avatar row hides the email, so only its popup names the account.
+    // Only the collapsed avatar row hides the row text, so only its popup names the account.
     renderMenu(account, true)
 
     await openPopup(user)
@@ -343,7 +374,7 @@ describe("SidebarAccountMenu SB4 refinements", () => {
     expect(dialog.textContent ?? "").not.toMatch(/Admin|Developer|Agent/)
   })
 
-  it("keeps the full long email in the truncating row and inside the collapsed popup", async () => {
+  it("keeps the full long email fallback in the truncating row and inside the collapsed popup", async () => {
     const user = userEvent.setup()
     const account = adminAccountFixture({
       email: "very-long-identity-local-part-that-must-truncate@example.com",
@@ -367,26 +398,37 @@ describe("SidebarAccountMenu SB4 refinements", () => {
 })
 
 describe("SidebarAccountMenu named identity fallback", () => {
-  it("shows the full name primary with the email secondary and the name initial", () => {
+  it("shows the full name primary with the username secondary and the name initial", () => {
     renderMenu(
-      adminAccountFixture({ email: "ada@example.com", first_name: "Ada", last_name: "Lovelace", username: "ada" })
+      adminAccountFixture({ email: "ada@example.com", first_name: "Ada", last_name: "Lovelace", username: "lovelace" })
     )
 
     const trigger = screen.getByRole("button", { name: "Open user menu" })
-    expect(trigger).toHaveTextContent("Ada Lovelace")
-    expect(trigger).toHaveTextContent("ada@example.com")
+    expect(trigger.textContent).toBe("AAda Lovelacelovelace")
     const avatar = trigger.querySelector('span[aria-hidden="true"]')
     expect(avatar?.textContent).toBe("A")
     const nameLine = trigger.querySelector('span[title]')
-    expect(nameLine?.getAttribute("title")).toBe("Ada Lovelace (ada@example.com)")
+    expect(nameLine?.getAttribute("title")).toBe("Ada Lovelace (lovelace)")
+    expect(trigger.innerHTML).not.toContain("ada@example.com")
   })
 
-  it("uses the username initial and the detail title on the collapsed avatar for a username-only account", () => {
+  it("uses the username initial and a username-only title, without the email, on the collapsed avatar", () => {
     renderMenu(adminAccountFixture({ email: "ops@example.com", username: "zeta" }), true)
 
     const trigger = screen.getByRole("button", { name: "Open user menu" })
-    expect(trigger).toHaveAttribute("title", "zeta (ops@example.com)")
+    expect(trigger).toHaveAttribute("title", "zeta")
     expect(trigger).toHaveTextContent("Z")
+  })
+
+  it("never puts the email in the collapsed title when a name exists", () => {
+    renderMenu(
+      adminAccountFixture({ email: "ada@example.com", first_name: "Ada", last_name: null, username: null }),
+      true
+    )
+
+    const trigger = screen.getByRole("button", { name: "Open user menu" })
+    expect(trigger).toHaveAttribute("title", "Ada")
+    expect(trigger.outerHTML).not.toContain("ada@example.com")
   })
 
   it("treats blank names as absent and shows the email alone", () => {

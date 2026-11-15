@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 from exa_py.api import CostDollars, Result, SearchResponse
 
-from polyweb.adapters.exa import ExaAdapter, _next_month_start
+from polyweb.adapters.exa import ExaAdapter
+from polyweb.infrastructure.dates import next_month_start as _next_month_start
 from polyweb.models.contracts import (
     QuotaSnapshot,
     QuotaSource,

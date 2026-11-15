@@ -77,13 +77,18 @@ In a manual setup, run the server from your checkout instead:
       "command": "uv",
       "args": ["run", "polyweb-mcp", "--transport", "stdio"],
       "cwd": "/path/to/polyweb-mcp",
-      "env": { "POLYWEB_MCP_BEARER_TOKEN": "fs_live_REPLACE_ME" }
+      "env": {
+        "POLYWEB_MCP_BEARER_TOKEN": "fs_live_REPLACE_ME",
+        "POLYWEB_EXECUTION_AUTHORITY_URL": "http://127.0.0.1:8001"
+      }
     }
   }
 }
 ```
 
 Over stdio the key comes from the `POLYWEB_MCP_BEARER_TOKEN` environment variable of the server process. Polyweb reads it from the process environment only, never from `.env`. Without it, every tool call is rejected.
+
+The MCP server forwards each call to the API server at `POLYWEB_EXECUTION_AUTHORITY_URL`, so the API server must be running. Without that variable (or `POLYWEB_EXECUTION_MCP_STANDALONE=true`), the MCP server refuses to start.
 
 ## Check the connection
 
@@ -110,6 +115,7 @@ Each call shows up on the project's **Activity** page ([Activity and traces](/da
 | `--stateless` | `POLYWEB_MCP_STATELESS` (`true`) | Stateless HTTP, for proxies or several replicas. In Docker, set the variable on the `mcp` service. |
 | `--host`, `--port` | `POLYWEB_MCP_HOST`, `POLYWEB_MCP_PORT` | Bind address and port. A manual setup has no default port and refuses to start without one. |
 | none | `POLYWEB_MCP_BEARER_TOKEN` | Project API key for stdio only. HTTP never reads it. |
+| none | `POLYWEB_EXECUTION_AUTHORITY_URL` | API server that runs each search and fetch. Docker sets `http://api:8001`. Required unless `POLYWEB_EXECUTION_MCP_STANDALONE` is `true`. |
 
 ## How keys are checked
 

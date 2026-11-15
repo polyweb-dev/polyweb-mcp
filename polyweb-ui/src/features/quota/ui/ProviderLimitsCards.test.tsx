@@ -717,7 +717,7 @@ describe("ProviderLimitsCards display order", () => {
 describe("Quotas review r4b", () => {
   it("places each key balance on its own row without assigning a provider balance to multiple keys", async () => {
     const key = (id: string, balance: unknown) => ({
-      key_id: id, label: id, owner_email: "owner@example.com", auth_mode: "api_key", oauth_connected: null, balance,
+      key_id: id, label: id, auth_mode: "api_key", oauth_connected: null, balance,
     })
     installFetchStub((request) => {
       if (request.url.includes("/limits/keys")) return ok([
@@ -733,7 +733,7 @@ describe("Quotas review r4b", () => {
       providerLimits={[entry] as never} usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()}
       manualEligible={new Set(["brave"])} refreshableProviders={new Set(["brave"])}
       renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
-        accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
+        accountId="account" isAdmin refreshDashboard={() => Promise.resolve()} />} />)
     const first = (await screen.findByText("First key")).closest("tr") as HTMLElement
     const second = screen.getByText("Second key").closest("tr") as HTMLElement
     expect(within(first).getByText("4,500 credits left")).toBeInTheDocument()
@@ -744,7 +744,7 @@ describe("Quotas review r4b", () => {
   })
   it("does not attribute a provider-wide manual balance to a key", async () => {
     installFetchStub((request) => request.url.includes("/limits/keys")
-      ? ok([{ key_id: "you-key", label: "You key", owner_email: "owner@example.com", auth_mode: "api_key",
+      ? ok([{ key_id: "you-key", label: "You key", auth_mode: "api_key",
         oauth_connected: null, balance: null }]) : ok([]))
     const entry = braveEntry()
     entry.provider = "youcom"
@@ -755,14 +755,14 @@ describe("Quotas review r4b", () => {
       providerLimits={[entry] as never} usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()}
       manualEligible={new Set(["youcom"])}
       renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
-        accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
+        accountId="account" isAdmin refreshDashboard={() => Promise.resolve()} />} />)
     const row = (await screen.findByText("You key")).closest("tr") as HTMLElement
     expect(within(row).queryByText(/\$100\.00 left.*manual/)).toBeNull()
     vi.unstubAllGlobals()
   })
   it("includes stored keys even when the active rail is keyless", async () => {
     installFetchStub((request) => request.url.includes("/limits/keys") && request.url.includes("tinyfish")
-      ? ok([{ key_id: "tiny-key", label: "Tinyfish key", owner_email: "owner@example.com", auth_mode: "api_key",
+      ? ok([{ key_id: "tiny-key", label: "Tinyfish key", auth_mode: "api_key",
         oauth_connected: null, balance: null }]) : ok([]))
     const entry = braveEntry()
     entry.provider = "tinyfish"
@@ -772,7 +772,7 @@ describe("Quotas review r4b", () => {
       providerLimits={[entry] as never} usdUsageTotals={[]} refreshDashboard={() => Promise.resolve()}
       manualEligible={new Set()}
       renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
-        accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
+        accountId="account" isAdmin refreshDashboard={() => Promise.resolve()} />} />)
     const row = (await screen.findByText("Tinyfish key")).closest("tr") as HTMLElement
     expect(within(row).getAllByText("—")).toHaveLength(2)
     vi.unstubAllGlobals()
@@ -805,8 +805,8 @@ describe("Quotas review r4b", () => {
 
 it("keeps disconnected OAuth controls on their key row and fixes the balance dialog provider", async () => {
   installFetchStub((request) => request.url.includes("/limits/keys") ? ok([
-    { key_id: "api", label: "dev-parallel", owner_email: "owner@example.com", auth_mode: "api_key", oauth_connected: null, balance: null },
-    { key_id: "oauth", label: "Capture OAuth", owner_email: "owner@example.com", auth_mode: "oauth", oauth_connected: false, balance: null },
+    { key_id: "api", label: "dev-parallel", auth_mode: "api_key", oauth_connected: null, balance: null },
+    { key_id: "oauth", label: "Capture OAuth", auth_mode: "oauth", oauth_connected: false, balance: null },
   ]) : ok([]))
   const entry = { ...braveEntry(), provider: "parallel" }
   render(<ProviderLimitsCards providers={[{ id: "parallel", name: "Parallel" }] as never}
@@ -814,7 +814,7 @@ it("keeps disconnected OAuth controls on their key row and fixes the balance dia
     manualEligible={new Set(["parallel"])}
     renderOAuthActions={() => <a href="/account/keys">Connect in Keys and pools</a>}
     renderKeyBalances={(providerId, providerName) => <KeyBalances providerId={providerId} providerName={providerName}
-      accountId="account" isAdmin email={null} refreshDashboard={() => Promise.resolve()} />} />)
+      accountId="account" isAdmin refreshDashboard={() => Promise.resolve()} />} />)
   const first = (await screen.findByText("dev-parallel")).closest("tr") as HTMLElement
   const oauth = screen.getByText("Capture OAuth").closest("tr") as HTMLElement
   expect(within(first).queryByText("Disconnected")).toBeNull()

@@ -8,7 +8,7 @@ export interface ProjectPool {
   label: string
   provider_type: string
   key_label: string
-  owner: { user_id: string; email: string; username?: string | null; first_name?: string | null; last_name?: string | null }
+  owner: { user_id: string; username?: string | null; first_name?: string | null; last_name?: string | null }
   rate: RateLimit
   budget: PoolBudget | null
   budget_used: number
@@ -47,7 +47,8 @@ function optionalOwnerText(value: unknown): string | null | undefined {
 
 function decodeOwner(value: unknown): ProjectPool["owner"] {
   const item = asRecord(value)
-  if (typeof item.user_id !== "string" || typeof item.email !== "string") {
+  // No email is read: the server no longer sends one and the UI never shows it.
+  if (typeof item.user_id !== "string") {
     throw new ApiError(0, "The server returned an unexpected pool.", value)
   }
   const username = "username" in item ? optionalOwnerText(item.username) : null
@@ -57,9 +58,9 @@ function decodeOwner(value: unknown): ProjectPool["owner"] {
     throw new ApiError(0, "The server returned an unexpected pool.", value)
   }
   if (!("username" in item) && !("first_name" in item) && !("last_name" in item)) {
-    return { user_id: item.user_id, email: item.email }
+    return { user_id: item.user_id }
   }
-  return { user_id: item.user_id, email: item.email, username, first_name: firstName, last_name: lastName }
+  return { user_id: item.user_id, username, first_name: firstName, last_name: lastName }
 }
 
 function decodeOperations(value: unknown): PoolOperation[] {

@@ -1,14 +1,14 @@
 import type { ReactNode } from "react"
 import { Fragment, useState } from "react"
 import { ChevronRight } from "lucide-react"
-import type { TraceActor, TraceSummary } from "@/domains/activity"
+import type { TraceSummary } from "@/domains/activity"
 import { providerIdentity } from "@/domains/providers"
 import { formatDateTime, formatLatency, formatRelativeTime } from "@/shared/lib/formatTime"
-import { IdentityLines } from "@/shared/ui/IdentityLines"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
 import type { TraceLoadState } from "../model/useActivityController"
 import { ActivityProviderRows } from "./ActivityProviderRows"
 import { ActivityRowAction } from "./ActivityRowAction"
+import { TraceActorCell } from "./TraceActorCell"
 import { TraceStatusPill } from "./TraceStatusPill"
 
 const AGGREGATED_PROVIDER = "aggregated"
@@ -36,18 +36,6 @@ function operationLabel(summary: TraceSummary): string {
 
 function resultLabel(summary: TraceSummary): string {
   return summary.resultCount === null ? "—" : String(summary.resultCount)
-}
-
-/**
- * Initiated-by cell: the human display name (full name, then username, then
- * email); API-key rows stay key-identified; legacy rows stay quiet. The
- * visible muted email line keeps two same-name creators distinguishable
- * where the row "View details" overlay covers native hover titles.
- */
-function actorValue(actor: TraceActor): ReactNode {
-  if (actor.kind === "project_api_key") return "API key"
-  if (actor.displayName === null) return actor.email ?? "—"
-  return <IdentityLines primary={actor.displayName} secondary={actor.email} />
 }
 
 /** Chevron disclosure for an all-providers row: discloses one provider per call. */
@@ -120,7 +108,7 @@ function traceRow(options: TraceRowOptions): ReactNode {
           {providerValue(summary)}
         </span>
       </td>
-      <td className="text-[var(--muted)]">{actorValue(summary.actor)}</td>
+      <td className="text-[var(--muted)]"><TraceActorCell actor={summary.actor} /></td>
       <td>
         <TraceStatusPill outcome={summary.outcome} />
       </td>

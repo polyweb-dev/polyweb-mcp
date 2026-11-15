@@ -1100,7 +1100,6 @@ class ExecutionAuthority:
         self,
         repository: SQLiteRepository,
         *,
-        secret_store: object | None = None,
         authority_key: str = AUTHORITY_KEY,
         monotonic_fn: Callable[[], float] | None = None,
         limits: object | None = None,
@@ -1119,7 +1118,6 @@ class ExecutionAuthority:
         # and provider I/O stay with the execution service that composes it.
         # The limits service is retained only to retain an uncertain native
         # debit once during takeover recovery.
-        del secret_store
         self._limits = limits
         self._repository = repository
         self._authority_key = authority_key
@@ -1147,12 +1145,6 @@ class ExecutionAuthority:
         self._closed = False
 
     # ------------------------------------------------------------------ lease
-
-    @property
-    def max_queued_requests(self) -> int:
-        """The authority-wide queued-request bound used for admission waiters."""
-
-        return self._budget.default_max_requests
 
     @property
     def default_max_wait_seconds(self) -> float:
@@ -1201,10 +1193,6 @@ class ExecutionAuthority:
     @property
     def holder_id(self) -> str:
         return self._holder_id
-
-    def lease_token(self, pool_id: UUID) -> int | None:
-        held = self._fences.get(pool_id)
-        return None if held is None else held[0]
 
     def now(self) -> float:
         """Return the authority's local monotonic clock."""
@@ -1553,15 +1541,7 @@ __all__ = [
     "DEFAULT_MAX_QUEUE_WAIT_MS",
     "DEFAULT_RECOVERY_SECONDS",
     "UNIT_COST",
-    "AuthorityUnavailable",
     "DispatchGrant",
     "ExecutionAuthority",
-    "QueueExpired",
     "QueuePolicy",
-    "QueueSaturated",
 ]
-
-#: Tester- and transport-facing names of the A3 refusals.
-AuthorityUnavailable = ExecutionAuthorityUnavailable
-QueueSaturated = ExecutionQueueSaturated
-QueueExpired = ExecutionQueueExpired

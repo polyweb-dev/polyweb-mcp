@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from behave import given, then, when
 
-from polyweb.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+from polyweb.models.contracts import QuotaSnapshot, QuotaSource
 from polyweb.models.credentials import CredentialOAuthDeviceRead, CredentialOAuthStatusRead
 from polyweb.models.schema_enums import OAuthGrantStatus
 from polyweb.services.monitoring import refresh_quotas
@@ -89,12 +89,6 @@ def step_connected_poisoned(context: Any) -> None:
 def step_slow_down(context: Any, interval: int) -> None:
     context.oauth_case.stub.device_interval = interval
     context.oauth_case.stub.poll_script = ["authorization_pending", "slow_down", "success"]
-
-
-@given("a stubbed vendor balance of {credit:d} credit and {pending:d} pending cents")
-def step_balance(context: Any, credit: int, pending: int) -> None:
-    context.oauth_case.stub.credit_cents = credit
-    context.oauth_case.stub.pending_cents = pending
 
 
 @given("a stubbed invoiced vendor balance")
@@ -351,23 +345,6 @@ def step_ready_bounded(context: Any) -> None:
     assert context.adv_status.status is OAuthGrantStatus.CONNECTED
     assert context.oauth_case.stub.poll_calls == 3
     assert context.adv_intervals[1] == context.adv_initial_interval + 5
-
-
-@then('the Parallel quota should be authoritative USD "{usd}" with no limit')
-def step_quota_usd(context: Any, usd: str) -> None:
-    snapshot = context.adv_snapshot
-    assert snapshot.source is QuotaSource.AUTHORITATIVE
-    assert snapshot.remaining == Decimal(usd) and snapshot.limit is None
-    assert snapshot.unit_kind is UnitKind.USD and snapshot.display_unit == "USD"
-    assert (
-        _run(
-            context,
-            context.repository.latest_quota(
-                "parallel", credential_id=context.oauth_case.credential.id
-            ),
-        )
-        == snapshot
-    )
 
 
 @then("the Parallel quota entry should be missing")

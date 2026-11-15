@@ -1,9 +1,11 @@
 /**
- * Generic contact identity primitives.
+ * Generic person identity primitives.
  *
  * Business-agnostic: no domain or feature imports. The full personal name
- * wins, then the username, then the email. The email stays as the contact and
- * disambiguation line. Views never rename entities and never change access.
+ * wins, then the username. Email privacy: `identityLabel` NEVER falls back to
+ * an email; it ends in a neutral label instead. Only the two places that may
+ * show an email (the sidebar account popup and the project Members page) use
+ * the `Contact` helpers below, which take an explicit email.
  */
 
 export interface IdentityProfile {
@@ -12,9 +14,13 @@ export interface IdentityProfile {
   last_name?: string | null
 }
 
+/** A profile that also carries an email; only email-allowed views build one. */
 export interface ContactIdentity extends IdentityProfile {
   email: string
 }
+
+/** Neutral label of a person who has neither a name nor a username. */
+export const UNKNOWN_USER_LABEL = "Unknown user"
 
 function cleanPart(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null
@@ -30,25 +36,33 @@ export function fullNameFromProfile(profile: IdentityProfile): string | null {
   return parts.length > 0 ? parts.join(" ") : null
 }
 
-/**
- * Primary display name of one identity, or `null` when it has none.
- *
- * The full name wins over the username; callers fall back to the email.
- */
+/** Primary display name of one identity (full name, else username), or `null`. */
 export function displayNameFromProfile(profile: IdentityProfile): string | null {
   const fullName = fullNameFromProfile(profile)
   if (fullName !== null) return fullName
   return cleanPart(profile.username)
 }
 
-/** Primary identity label: the display name when present, else the email. */
-export function identityLabel(identity: ContactIdentity): string {
+/**
+ * Display label of a person anywhere an email must not appear: the full name,
+ * else the username, else `Unknown user`. Never an email, even when the
+ * profile object happens to carry one.
+ */
+export function identityLabel(profile: IdentityProfile): string {
+  return displayNameFromProfile(profile) ?? UNKNOWN_USER_LABEL
+}
+
+/**
+ * Email-allowed contact label (Members page, account popup): the display name
+ * when present, else the email.
+ */
+export function contactLabel(identity: ContactIdentity): string {
   return displayNameFromProfile(identity) ?? identity.email
 }
 
 /**
- * Identity with contact detail: `Display (email)` when a display name
- * exists, else the email alone. Keeps the email for disambiguation.
+ * Email-allowed contact detail (Members page, account popup): `Display
+ * (email)` when a display name exists, else the email alone.
  */
 export function identityDetailLabel(identity: ContactIdentity): string {
   const display = displayNameFromProfile(identity)
@@ -58,21 +72,4 @@ export function identityDetailLabel(identity: ContactIdentity): string {
 /** One letter of the text avatar: the display name's, else the email's. */
 export function identityInitial(displayName: string | null, email: string): string {
   return (displayName ?? email).trim().slice(0, 1).toUpperCase() || "?"
-}
-
-/**
- * Trace actor attribution text: the human display name with email only when
- * it disambiguates, or the raw email. `null` keeps legacy/unknown callers
- * quiet; API-key rows never claim a name and are labelled separately.
- */
-export function traceActorLabel(actor: {
-  displayName: string | null
-  email: string | null
-}): string | null {
-  if (actor.displayName !== null) {
-    return actor.email !== null && actor.email !== actor.displayName
-      ? `${actor.displayName} (${actor.email})`
-      : actor.displayName
-  }
-  return actor.email
 }

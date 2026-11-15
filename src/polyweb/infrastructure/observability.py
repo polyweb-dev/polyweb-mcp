@@ -31,6 +31,7 @@ single redaction hook.
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
@@ -635,6 +636,7 @@ class OtelObservability:
         ) as span:
             handle: SpanHandle = _OtelSpan(span)
             token = _ROOT_SPAN.set(handle) if kind is SpanKindName.SERVER else None
+            started_ns = time.perf_counter_ns()
             try:
                 yield handle
             except asyncio.CancelledError:
@@ -651,6 +653,11 @@ class OtelObservability:
                     _EXCEPTION_RECORDED.set(True)
                 raise
             finally:
+                # Set directly on the SDK span: the facade strips internal keys
+                # from caller-supplied attributes.
+                span.set_attribute(
+                    TraceAttribute.MONOTONIC_DURATION_NS, time.perf_counter_ns() - started_ns
+                )
                 if token is not None:
                     _ROOT_SPAN.reset(token)
 

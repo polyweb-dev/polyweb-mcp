@@ -58,6 +58,21 @@ docker compose exec api uv run polyweb-secrets rekey
 - Put the dashboard and API behind HTTPS. Outside loopback development, `POLYWEB_AUTH_ISSUER_URL`, `POLYWEB_MCP_RESOURCE_URL`, and browser origins must use `https`.
 - Use a random `POLYWEB_AUTH_JWT_SECRET` of at least 32 bytes, and keep it out of version control.
 - Polyweb runs as a single node with SQLite, so do not run replicas against one database.
+- Plain HTTP for the MCP-to-API hop is acceptable only in the single-host Compose stack. See [MCP-to-API execution forwarding](#mcp-to-api-execution-forwarding).
+
+## MCP-to-API execution forwarding
+
+Unless `POLYWEB_EXECUTION_MCP_STANDALONE` is enabled, the MCP server does not run provider calls itself. For each search and fetch tool call, it forwards the request to the API's execution authority at `POLYWEB_EXECUTION_AUTHORITY_URL`, sending the caller's verified project API key as a bearer token. The API verifies that key again before it runs the call.
+
+The execution authority URL is the one override that may use plain `http://`. The issuer and MCP resource URLs must use HTTPS outside loopback.
+
+- Compose sets `http://api:8001`. The hop stays on the Docker bridge network of one host, and the project key is not encrypted on that hop. This is acceptable only for that single-host topology.
+- Polyweb does not enforce where this URL points. The validator accepts plain HTTP to any host, so the setting will not stop you from sending keys to another machine.
+- The API port is published on the host (`API_PORT`, 8001 by default) without a bind address, so it listens on every host interface. A client that calls the API directly sends its key over HTTP on loopback or your LAN.
+
+If the MCP server and the API run on different hosts, or the path crosses a network you do not fully control, set `POLYWEB_EXECUTION_AUTHORITY_URL` to an `https://` URL. The API must present a certificate the MCP server can verify. The bundled Compose file serves the API over plain HTTP, so you need TLS in front of it in that case.
+
+Cloud-hosted deployments need the same protection. The hardening work is tracked as TASK-000075. Until that work is done, do not run a cloud-hosted deployment with the plain HTTP setting.
 
 ## Report a problem
 

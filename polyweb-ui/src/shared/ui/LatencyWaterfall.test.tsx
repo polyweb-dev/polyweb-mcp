@@ -29,9 +29,27 @@ describe("LatencyWaterfall", () => {
   })
 
   it("announces the millisecond scale to screen readers", () => {
-    render(<LatencyWaterfall rows={[]} totalMs={3381} ariaLabel="Latency" />)
+    render(
+      <LatencyWaterfall
+        rows={[
+          { id: "a", label: "Alpha", segments: [{ offsetMs: 0, durationMs: 50, color: "red" }], value: "50ms" },
+        ]}
+        totalMs={3381}
+        ariaLabel="Latency"
+      />
+    )
 
     expect(screen.getByText("Timeline scale 0 to 3381 milliseconds")).toBeInTheDocument()
+  })
+
+  it("hides the time axis when no timing was recorded", () => {
+    const { container } = render(<LatencyWaterfall rows={[]} totalMs={1} ariaLabel="Latency" />)
+
+    expect(screen.getByText("No timing was recorded.")).toBeInTheDocument()
+    expect(screen.queryByText(/Timeline scale/)).not.toBeInTheDocument()
+    // No ruler: neither tick labels nor the decorative ms unit are drawn.
+    expect(container.querySelectorAll('[aria-hidden="true"]')).toHaveLength(0)
+    expect(container).not.toHaveTextContent("ms")
   })
 
   it("renders an empty state instead of NaN geometry when the total is zero", () => {

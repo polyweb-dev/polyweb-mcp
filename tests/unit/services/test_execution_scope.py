@@ -19,7 +19,7 @@ from polyweb.models.contracts import SearchRequest, UsageOperation
 from polyweb.models.observability import TraceAttribute
 from polyweb.models.projects import ProjectTracePolicy
 from polyweb.services.execution import _Candidate, _LegChain
-from polyweb.services.execution_scope import resolve_trace_capture
+from polyweb.services.execution_scope import _policy_in_session
 
 
 def _candidate(provider: str) -> _Candidate:
@@ -60,10 +60,10 @@ async def test_trace_policy_read_failure_binds_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "polyweb.services.execution_scope.project_trace_policy",
+        "polyweb.services.execution_scope.project_trace_policy_in_session",
         AsyncMock(side_effect=RuntimeError("storage unavailable")),
     )
-    policy = await resolve_trace_capture(object(), object())
+    policy = await _policy_in_session(object(), object())
     assert policy.captures_payload is False
     provider = TracerProvider()
     exporter = InMemorySpanExporter()

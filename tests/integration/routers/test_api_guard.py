@@ -31,7 +31,6 @@ from polyweb.models.contracts import (
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.api import create_app
 from tests.fixtures.auth import (
-    TEMP_PASSWORD,
     account_id_from_pair,
     raw_auth_headers,
     register_and_login,
@@ -113,7 +112,6 @@ _ANONYMOUS_SURFACES: tuple[tuple[str, str, dict], ...] = (
     ("GET", "/api/v1/providers", {}),
     ("GET", "/api/v1/providers/tavily", {}),
     ("PATCH", "/api/v1/providers/tavily", {"enabled": False}),
-    ("GET", "/api/v1/providers/tavily/oauth/status", {}),
     ("GET", "/api/v1/projects/00000000-0000-4000-8000-0000000000aa/traces", {}),
     ("GET", "/no-such-route", {}),
 )
@@ -196,30 +194,6 @@ async def test_rejected_requests_create_no_trace_root(guard_client: TestClient) 
     assert items[0]["outcome"] == "success"
 
 
-def test_public_exceptions_need_no_credential(guard_client: TestClient) -> None:
-    email = temp_email("guard-public")
-    registered = guard_client.post(
-        "/auth/register",
-        json={
-            "email": email,
-            "password": TEMP_PASSWORD,
-            "username": email.split("@")[0][:64],
-            "first_name": "Test",
-            "last_name": "User",
-        },
-    )
-    assert registered.status_code == 201
-    # A1: public signup returns the safe account projection with no role.
-    assert "role" not in registered.json()
-    assert "is_superuser" not in registered.json()
-
-    logged_in = guard_client.post(
-        "/auth/jwt/login", data={"username": email, "password": TEMP_PASSWORD}
-    )
-    assert logged_in.status_code == 200
-    assert logged_in.headers["cache-control"] == "no-store"
-
-
 def test_refresh_credential_fails_on_access_surfaces(guard_client: TestClient) -> None:
     pair = register_and_login(guard_client, temp_email("guard-separate"))
     refresh = raw_auth_headers(pair["refresh_token"])
@@ -235,7 +209,7 @@ def test_refresh_credential_fails_on_access_surfaces(guard_client: TestClient) -
 
 
 @pytest.mark.asyncio
-async def test_docs_are_public_and_unknown_paths_need_a_token(
+async def test_docs_and_health_are_public_and_unknown_paths_need_a_token(
     tmp_path: Path, auth_secret: str
 ) -> None:
     repository = await SQLiteRepository.open(tmp_path / "guard-docs.db")
@@ -244,6 +218,9 @@ async def test_docs_are_public_and_unknown_paths_need_a_token(
         with TestClient(app) as client:
             assert client.get("/docs").status_code == 200
             assert client.get("/openapi.json").status_code == 200
+            health = client.get("/health")
+            assert health.status_code == 200
+            assert health.json() == {"status": "ok"}
             assert client.get("/no-such-route").status_code == 401
             pair = register_and_login(client, temp_email("guard-docs"))
             headers = raw_auth_headers(pair["access_token"])

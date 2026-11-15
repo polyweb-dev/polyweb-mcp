@@ -143,7 +143,7 @@ async def test_list_returns_newest_first_summary_only(
         assert item["username"] == account.username
         assert item["first_name"] == account.first_name
         assert item["last_name"] == account.last_name
-        assert item["email"] == account.email
+        assert "email" not in item
     first, second = payload["items"]
     assert (first["operation"], first["outcome"], first["result_count"]) == (
         "fetch",
@@ -166,7 +166,8 @@ async def test_list_returns_newest_first_summary_only(
             "username",
             "first_name",
             "last_name",
-            "email",
+            "api_key_name",
+            "api_key_prefix",
             "operation",
             "started_at",
             "duration_ms",
@@ -271,6 +272,7 @@ async def test_detail_returns_full_input_output_and_spans(
 
     assert response.status_code == 200
     detail = response.json()
+    assert "email" not in detail
     assert detail["trace_id"] == _SUCCESS_ID
     assert detail["user_id"] == str(owner)
     assert detail["operation"] == "search"

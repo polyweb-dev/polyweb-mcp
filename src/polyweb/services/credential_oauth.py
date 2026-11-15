@@ -256,7 +256,7 @@ class CredentialOAuthService:
         await run_control_read(self._repository, precheck)
         async with self._vendor() as vendor:
             try:
-                client_id, client_secret = await vendor.register_client(scope=self._scope)
+                client_id, client_secret = await vendor.register_client()
                 device = await vendor.request_device_code(client_id, scope=self._scope)
             except ParallelOAuthError as error:
                 raise UpstreamUnavailable("the OAuth provider is unavailable") from error
@@ -828,7 +828,7 @@ class CredentialOAuthService:
             return
         try:
             async with self._vendor() as vendor:
-                await vendor.revoke_token(token, "refresh_token")
+                await vendor.revoke_token(token)
         except Exception:
             return
 

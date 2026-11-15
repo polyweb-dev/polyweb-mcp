@@ -276,7 +276,7 @@ async def test_authorized_trace_list_and_detail_carry_saved_human_and_key_identi
 
     One human search and one project-API-key search run in the same project
     through the real execution path. The owning human's list and detail reads
-    must carry the saved username/first/last/email with stable human
+    must carry the saved username/first/last with stable human
     actor_type/id, while the key-owned trace must carry the key UUID with all
     human profile fields null. A foreign member's list and detail reads stay
     denied.
@@ -329,7 +329,7 @@ async def test_authorized_trace_list_and_detail_carry_saved_human_and_key_identi
             assert human_item["username"] == profile_a["username"]
             assert human_item["first_name"] == profile_a["first_name"]
             assert human_item["last_name"] == profile_a["last_name"]
-            assert human_item["email"] == profile_a["email"]
+            assert "email" not in human_item
 
             key_item = by_id[key_trace]
             assert key_item["actor_type"] == "project_api_key"
@@ -339,7 +339,9 @@ async def test_authorized_trace_list_and_detail_carry_saved_human_and_key_identi
             assert key_item["username"] is None
             assert key_item["first_name"] is None
             assert key_item["last_name"] is None
-            assert key_item["email"] is None
+            assert "email" not in key_item
+            assert key_item["api_key_name"] == "trace-key"
+            assert key_item["api_key_prefix"] == issued_body["prefix"]
 
             human_detail_resp = await client.get(
                 f"/api/v1/projects/{pid_a}/traces/{human_trace}", headers=headers_a
@@ -352,7 +354,7 @@ async def test_authorized_trace_list_and_detail_carry_saved_human_and_key_identi
             assert human_detail["username"] == profile_a["username"]
             assert human_detail["first_name"] == profile_a["first_name"]
             assert human_detail["last_name"] == profile_a["last_name"]
-            assert human_detail["email"] == profile_a["email"]
+            assert "email" not in human_detail
 
             key_detail_resp = await client.get(
                 f"/api/v1/projects/{pid_a}/traces/{key_trace}", headers=headers_a
@@ -365,11 +367,11 @@ async def test_authorized_trace_list_and_detail_carry_saved_human_and_key_identi
             assert key_detail["username"] is None
             assert key_detail["first_name"] is None
             assert key_detail["last_name"] is None
-            assert key_detail["email"] is None
+            assert "email" not in key_detail
+            assert key_detail["api_key_name"] == "trace-key"
+            assert key_detail["api_key_prefix"] == issued_body["prefix"]
 
-            foreign_list = await client.get(
-                f"/api/v1/projects/{pid_a}/traces", headers=headers_b
-            )
+            foreign_list = await client.get(f"/api/v1/projects/{pid_a}/traces", headers=headers_b)
             assert foreign_list.status_code == 404
             foreign_detail = await client.get(
                 f"/api/v1/projects/{pid_a}/traces/{human_trace}", headers=headers_b

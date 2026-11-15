@@ -6,6 +6,8 @@ import {
   mapTracePage,
   mapTraceSummary,
 } from "./mappers"
+import { deriveProviderAttempts } from "./traceDerivations"
+import { deriveTraceLatencySummary } from "./tracePresentation"
 import {
   AGGREGATED_TRACE_ID,
   ERROR_TRACE_ID,
@@ -402,14 +404,27 @@ describe("mapTraceDetail", () => {
     expect(first).toMatchObject({ source: "keenable", score: 0.92 })
   })
 
-  it("decodes per-provider response results through the shared result decoder", () => {
-    const detail = mapTraceDetail(aggregatedTraceDetailFixture())
-    const attempts = detail.stages.filter(
-      (stage) => stage.name === "polyweb.provider"
-    )
-
-    expect(attempts).toHaveLength(7)
-    // Malformed entries inside an event payload never leak into the domain.
+  it("keeps raw event attributes in the mapper and decodes provider results when deriving attempts", () => {
+    const rawResults = [
+      { title: "No URL here" },
+      "not an object",
+      null,
+      {
+        url: "https://example.com/a",
+        title: 42,
+        snippet: { nested: true },
+        source: "keenable",
+        score: "0.5",
+        injected: "<script>alert(1)</script>",
+      },
+      {
+        title: "Valid",
+        url: "https://example.com/b",
+        snippet: "A snippet",
+        source: "exa",
+        score: 0.5,
+      },
+    ]
     const hostile = mapTraceDetail(
       aggregatedTraceDetailFixture({
         spans: (aggregatedTraceDetailFixture().spans as Record<string, unknown>[]).map(
@@ -421,18 +436,7 @@ describe("mapTraceDetail", () => {
                     {
                       name: "polyweb.provider.response",
                       timestamp: "2026-09-29T09:10:02.045000Z",
-                      attributes: {
-                        result_count: 2,
-                        results: [
-                          { title: "No URL here" },
-                          {
-                            title: "Has URL",
-                            url: "https://example.com/a",
-                            source: "keenable",
-                            score: 0.5,
-                          },
-                        ],
-                      },
+                      attributes: { result_count: 2, results: rawResults },
                     },
                   ],
                 }
@@ -440,13 +444,35 @@ describe("mapTraceDetail", () => {
         ),
       })
     )
-    const firstAttempt = hostile.stages.find(
+
+    // The mapper deliberately does not sanitize event attributes: they stay raw.
+    const providerStage = hostile.stages.find(
       (stage) => stage.name === "polyweb.provider"
     )!
-    const decoded = firstAttempt.events.find(
+    const rawEvent = providerStage.events.find(
       (event) => event.name === "polyweb.provider.response"
     )!
-    expect(decoded.attributes.results).toHaveLength(2)
+    expect(rawEvent.attributes.results).toHaveLength(rawResults.length)
+
+    // The shared decoder runs in the derivation and is what guarantees safety.
+    const [attempt] = deriveProviderAttempts(hostile.stages, null)
+    expect(attempt!.results).toEqual([
+      {
+        title: "https://example.com/a",
+        url: "https://example.com/a",
+        snippet: "",
+        source: "keenable",
+        score: null,
+      },
+      {
+        title: "Valid",
+        url: "https://example.com/b",
+        snippet: "A snippet",
+        source: "exa",
+        score: 0.5,
+      },
+    ])
+    expect(attempt!.results.every((result) => !("injected" in result))).toBe(true)
   })
 
   it("drops events with unusable name or timestamp while keeping valid ones", () => {
@@ -653,7 +679,7 @@ describe("mapTraceDetail span provider identity", () => {
  * payload stay quiet with a null actor.
  */
 describe("mapTraceSummary actor identity", () => {
-  it("decodes a human actor with full name, ids, and contact fields", () => {
+  it("decodes a human actor by display name and ignores any email on the wire", () => {
     const actor = mapTraceSummary(
       traceSummaryFixture({
         actor_type: "human",
@@ -669,8 +695,18 @@ describe("mapTraceSummary actor identity", () => {
     expect(actor).toEqual({
       kind: "human",
       displayName: "Jane Doe",
-      email: "jane@example.com",
+      apiKeyName: null,
+      apiKeyPrefix: null,
     })
+  })
+
+  it("decodes payloads that carry no email at all", () => {
+    const summary = mapTraceSummary(
+      traceSummaryFixture({ actor_type: "human", first_name: "Jane", last_name: "Doe" })
+    )
+
+    expect(summary?.actor).toMatchObject({ kind: "human", displayName: "Jane Doe" })
+    expect(summary?.actor).not.toHaveProperty("email")
   })
 
   it("resolves partial personal names without inventing missing parts", () => {
@@ -690,26 +726,22 @@ describe("mapTraceSummary actor identity", () => {
       traceSummaryFixture({
         actor_type: "human",
         username: "jdoe",
-        email: "jane@example.com",
       })
     )?.actor
 
-    expect(actor).toMatchObject({
-      kind: "human",
-      displayName: "jdoe",
-      email: "jane@example.com",
-    })
+    expect(actor).toMatchObject({ kind: "human", displayName: "jdoe" })
   })
 
-  it("keeps email-only humans with a null display name instead of coercing one", () => {
+  it("never turns an email into a display name", () => {
     const actor = mapTraceSummary(
       traceSummaryFixture({ actor_type: "human", email: "jane@example.com" })
     )?.actor
 
-    expect(actor).toMatchObject({
+    expect(actor).toEqual({
       kind: "human",
       displayName: null,
-      email: "jane@example.com",
+      apiKeyName: null,
+      apiKeyPrefix: null,
     })
   })
 
@@ -736,6 +768,24 @@ describe("mapTraceSummary actor identity", () => {
     ).toBeNull()
   })
 
+  it("decodes the API key name and prefix of an API-key actor", () => {
+    const actor = mapTraceSummary(
+      traceSummaryFixture({
+        actor_type: "project_api_key",
+        actor_id: "key-123",
+        api_key_name: "test-key",
+        api_key_prefix: "pw_live_ab12",
+      })
+    )?.actor
+
+    expect(actor).toEqual({
+      kind: "project_api_key",
+      displayName: null,
+      apiKeyName: "test-key",
+      apiKeyPrefix: "pw_live_ab12",
+    })
+  })
+
   it("keeps API-key rows key-identified even with stray human profile values", () => {
     const actor = mapTraceSummary(
       traceSummaryFixture({
@@ -746,13 +796,64 @@ describe("mapTraceSummary actor identity", () => {
         first_name: "Jane",
         last_name: "Doe",
         email: "jane@example.com",
+        api_key_name: "test-key",
+        api_key_prefix: "pw_live_ab12",
       })
     )?.actor
 
     expect(actor).toEqual({
       kind: "project_api_key",
       displayName: null,
-      email: null,
+      apiKeyName: "test-key",
+      apiKeyPrefix: "pw_live_ab12",
+    })
+  })
+
+  it("decodes API-key rows of older payloads or deleted keys with null key fields", () => {
+    const withoutFields = mapTraceSummary(
+      traceSummaryFixture({ actor_type: "project_api_key", actor_id: "key-123" })
+    )?.actor
+    const nullFields = mapTraceSummary(
+      traceSummaryFixture({
+        actor_type: "project_api_key",
+        api_key_name: null,
+        api_key_prefix: null,
+      })
+    )?.actor
+    const wrongTypes = mapTraceSummary(
+      traceSummaryFixture({
+        actor_type: "project_api_key",
+        api_key_name: 42,
+        api_key_prefix: "  ",
+      })
+    )?.actor
+    const expected = {
+      kind: "project_api_key",
+      displayName: null,
+      apiKeyName: null,
+      apiKeyPrefix: null,
+    }
+
+    expect(withoutFields).toEqual(expected)
+    expect(nullFields).toEqual(expected)
+    expect(wrongTypes).toEqual(expected)
+  })
+
+  it("ignores API key fields on human rows", () => {
+    const actor = mapTraceSummary(
+      traceSummaryFixture({
+        actor_type: "human",
+        first_name: "Jane",
+        api_key_name: "test-key",
+        api_key_prefix: "pw_live_ab12",
+      })
+    )?.actor
+
+    expect(actor).toEqual({
+      kind: "human",
+      displayName: "Jane",
+      apiKeyName: null,
+      apiKeyPrefix: null,
     })
   })
 
@@ -763,7 +864,8 @@ describe("mapTraceSummary actor identity", () => {
     expect(summary?.actor).toEqual({
       kind: null,
       displayName: null,
-      email: null,
+      apiKeyName: null,
+      apiKeyPrefix: null,
     })
   })
 
@@ -793,7 +895,8 @@ describe("mapTraceSummary actor identity", () => {
     expect(summary?.actor).toEqual({
       kind: null,
       displayName: null,
-      email: null,
+      apiKeyName: null,
+      apiKeyPrefix: null,
     })
   })
 
@@ -806,7 +909,6 @@ describe("mapTraceSummary actor identity", () => {
         username: "jdoe",
         first_name: "Jane",
         last_name: "Doe",
-        email: "jane@example.com",
       })
     )
 
@@ -814,7 +916,141 @@ describe("mapTraceSummary actor identity", () => {
     expect(detail.actor).toEqual({
       kind: "human",
       displayName: "Jane Doe",
-      email: "jane@example.com",
+      apiKeyName: null,
+      apiKeyPrefix: null,
+    })
+  })
+
+  it("carries the API key name and prefix through mapTraceDetail", () => {
+    const detail = mapTraceDetail(
+      traceDetailFixture({
+        actor_type: "project_api_key",
+        api_key_name: "test-key",
+        api_key_prefix: "pw_live_ab12",
+      })
+    )
+
+    expect(detail.actor).toMatchObject({
+      kind: "project_api_key",
+      apiKeyName: "test-key",
+      apiKeyPrefix: "pw_live_ab12",
+    })
+  })
+})
+
+/**
+ * A FETCH trace stored by an old backend bug: the root span has `started_at`
+ * AFTER `ended_at` (duration 0) while its children are correct. The detail
+ * must scale to the envelope of all spans instead of the broken root.
+ */
+describe("mapTraceDetail inconsistent root", () => {
+  const at = (seconds: string) => `2026-10-01T10:00:${seconds}Z`
+  const span = (
+    id: string,
+    parent: string | null,
+    name: string,
+    start: string,
+    end: string,
+    durationMs: number,
+    extra: Record<string, unknown> = {}
+  ) => ({
+    span_id: id.padEnd(16, "0"),
+    parent_span_id: parent === null ? null : parent.padEnd(16, "0"),
+    name,
+    stage: name,
+    kind: "internal",
+    started_at: at(start),
+    ended_at: at(end),
+    duration_ms: durationMs,
+    outcome: "success",
+    error: null,
+    events: [],
+    ...extra,
+  })
+
+  function brokenRootDetail() {
+    return mapTraceDetail(
+      traceDetailFixture({
+        operation: "fetch",
+        started_at: at("20.568000"),
+        duration_ms: 0,
+        spans: [
+          span("aa", null, "POST /fetch", "20.568000", "19.352000", 0, { kind: "server" }),
+          span("bb", "aa", "polyweb.route", "18.888000", "18.922000", 34),
+          span("cc", "aa", "polyweb.provider", "18.923000", "19.318000", 394, {
+            kind: "client",
+            provider: "keenable",
+          }),
+          span("dd", "aa", "polyweb.results", "19.351000", "19.351000", 0),
+          span("ee", "aa", "polyweb.response", "19.352000", "19.352000", 1),
+        ],
+      })
+    )
+  }
+
+  it("scales the total to the envelope of all spans instead of the root duration", () => {
+    const detail = brokenRootDetail()
+
+    expect(detail.totalMs).toBe(464)
+    expect(detail.durationMs).toBe(464)
+  })
+
+  it("moves the trace start to the earliest consistent span, ignoring the broken root start", () => {
+    const detail = brokenRootDetail()
+
+    expect(detail.startedAt).toBe(at("18.888000"))
+  })
+
+  it("places every stage offset inside the envelope and spans the root over it", () => {
+    const stages = brokenRootDetail().stages
+    const byName = new Map(stages.map((stage) => [stage.name, stage]))
+
+    expect(byName.get("polyweb.route")).toMatchObject({ offsetMs: 0, durationMs: 34 })
+    expect(byName.get("polyweb.provider")).toMatchObject({ offsetMs: 35, durationMs: 394 })
+    expect(byName.get("POST /fetch")).toMatchObject({ offsetMs: 0, durationMs: 464 })
+    for (const stage of stages) {
+      expect(stage.offsetMs).toBeGreaterThanOrEqual(0)
+      expect(stage.offsetMs + stage.durationMs).toBeLessThanOrEqual(464 + 1)
+    }
+  })
+
+  it("derives the before/active/after breakdown from the corrected envelope", () => {
+    const detail = brokenRootDetail()
+    const attempts = deriveProviderAttempts(detail.stages, detail.provider)
+    const summary = deriveTraceLatencySummary(attempts, detail.totalMs)
+
+    expect(summary.providerActiveMs).toBe(394)
+    expect(summary.beforeProvidersMs).toBe(35)
+    expect(summary.afterProvidersMs).toBe(35)
+  })
+
+  it("keeps a healthy trace untouched", () => {
+    const healthy = mapTraceDetail(traceDetailFixture())
+
+    expect(healthy.durationMs).toBe(248)
+    expect(healthy.totalMs).toBe(248)
+    expect(healthy.startedAt).toBe("2026-09-29T09:15:00.000000Z")
+  })
+
+  it("extends a consistent root that is shorter than the work under it", () => {
+    const detail = mapTraceDetail(
+      traceDetailFixture({
+        started_at: at("10.000000"),
+        duration_ms: 50,
+        spans: [
+          span("aa", null, "POST /search", "10.000000", "10.050000", 50, { kind: "server" }),
+          span("bb", "aa", "polyweb.provider", "10.010000", "10.300000", 290, {
+            provider: "keenable",
+          }),
+        ],
+      })
+    )
+
+    expect(detail.totalMs).toBe(300)
+    expect(detail.durationMs).toBe(300)
+    expect(detail.stages.find((stage) => stage.name === "POST /search")).toMatchObject({
+      offsetMs: 0,
+      durationMs: 300,
     })
   })
 })
