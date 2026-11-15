@@ -2054,8 +2054,8 @@ async def test_cancelled_tracked_call_after_dispatch_keeps_admission_consumed(
     from polyweb.configuration.provider_limits import provider_limit_defaults
     from polyweb.models.contracts import CostEstimate
     from polyweb.models.provider_limits import NativeUsageSnapshot
-    from polyweb.services.monitoring import tracked_call
     from polyweb.services.provider_limits import ProviderLimitsService
+    from tests.fixtures.execution import attributed_tracked_call as tracked_call
 
     fixed_at = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 
@@ -2110,14 +2110,14 @@ async def test_cancelled_tracked_call_after_dispatch_keeps_admission_consumed(
     release = asyncio.Event()
     adapter = _HangingTavilyAdapter(entered, release)
     captured: list[str] = []
-    original_admit = service.admit
+    original_admit = service.admit_attempt
 
-    async def _capturing_admit(context):  # type: ignore[no-untyped-def]
-        admission = await original_admit(context)
-        captured.append(admission.attempt_id)
-        return admission
+    async def _capturing_admit(context, spec):  # type: ignore[no-untyped-def]
+        reservation = await original_admit(context, spec)
+        captured.append(reservation.attempt_id)
+        return reservation
 
-    service.admit = _capturing_admit  # type: ignore[method-assign]
+    service.admit_attempt = _capturing_admit  # type: ignore[method-assign]
     attribution = await seed_execution_project(repository)
     request = SearchRequest(project_id=attribution.project_id, query="q", limit=1)
     task = asyncio.create_task(
