@@ -1132,16 +1132,35 @@ class SQLiteRepository:
         provider: str,
         operation: UsageOperation | None = None,
         since: datetime | None = None,
+        credential_id: UUID | None = None,
+        pool_id: UUID | None = None,
     ) -> list[UsageEvent]:
         """Return one provider's usage ledger in chronological (observed_at, id) order.
 
         A provider's ledger is a shared provider fact (quota sync and latency
         reads), so the provider is required; project reads use
         :meth:`list_project_usage`.
+
+        An explicit ``pool_id`` narrows the ledger to that shared pool's usage;
+        otherwise a ``credential_id`` narrows it to that credential's unpooled
+        usage, the same balance owner :meth:`latest_quota` reads. Legacy rows
+        without a credential or pool stay in every narrowed ledger, so a
+        rebuilt adapter over-counts rather than forgets old usage.
         """
 
+        scope: ColumnElement[bool] = UsageEventRow.provider == provider
+        if pool_id is not None:
+            owner = UsageEventRow.pool_id == str(pool_id)
+        elif credential_id is not None:
+            owner = and_(
+                UsageEventRow.credential_id == str(credential_id),
+                UsageEventRow.pool_id.is_(None),
+            )
+        else:
+            return await self._usage_ledger(scope, operation=operation, since=since)
+        legacy = and_(UsageEventRow.credential_id.is_(None), UsageEventRow.pool_id.is_(None))
         return await self._usage_ledger(
-            UsageEventRow.provider == provider, operation=operation, since=since
+            and_(scope, or_(owner, legacy)), operation=operation, since=since
         )
 
     async def list_project_usage(

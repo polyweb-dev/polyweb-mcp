@@ -19,6 +19,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -34,7 +35,12 @@ from polyweb.configuration.provider_config import (
     system_support_mask,
 )
 from polyweb.infrastructure.secrets import AsyncSecretStore, ProviderName
-from polyweb.models.contracts import RoutingConfigResponse
+from polyweb.models.contracts import (
+    QuotaSnapshot,
+    RoutingConfigResponse,
+    UsageEvent,
+    UsageOperation,
+)
 from polyweb.models.provider_access import ALL_BITS, validate_mask
 from polyweb.models.provider_limits import ProviderObservationScope
 from polyweb.persistence.storage import (
@@ -89,6 +95,116 @@ def build_adapter_with_secret(
     if key is not None and "api_key" in parameters:
         return factory(client, api_key=SecretStr(key))
     return factory(client)
+
+
+# ------------------------------------------------- adapter quota preparation
+
+_QUOTA_STATE_FIELDS = (
+    "source",
+    "remaining",
+    "limit",
+    "reset_at",
+    "unit_kind",
+    "display_unit",
+    "metadata",
+)
+
+
+class _ScopedQuotaReads:
+    """The hydration reads of one key, narrowed to the key's balance owner.
+
+    An adapter's ``hydrate_quota`` reads the newest quota observation and the
+    usage ledger through this view, so a pooled key reads its pool and an
+    unpooled key reads only its own credential. Legacy unattributed usage rows
+    stay counted (see :meth:`SQLiteRepository.list_provider_usage`).
+    """
+
+    def __init__(self, repository: SQLiteRepository, scope: ProviderObservationScope) -> None:
+        self._repository = repository
+        self._scope = scope
+
+    async def latest_quota(self, provider: str) -> QuotaSnapshot | None:
+        """Return the newest quota observation of the key's balance owner."""
+
+        return await self._repository.latest_quota(
+            provider,
+            credential_id=self._scope.credential_id,
+            pool_id=self._scope.upstream_pool_id,
+        )
+
+    async def list_provider_usage(
+        self,
+        *,
+        provider: str,
+        operation: UsageOperation | None = None,
+        since: datetime | None = None,
+    ) -> list[UsageEvent]:
+        """Return the usage ledger of the key's balance owner."""
+
+        return await self._repository.list_provider_usage(
+            provider=provider,
+            operation=operation,
+            since=since,
+            credential_id=self._scope.credential_id,
+            pool_id=self._scope.upstream_pool_id,
+        )
+
+
+def _apply_quota_settings(adapter: ProviderAdapter, config: ProviderConfig, auth_mode: str) -> None:
+    """Apply the saved local quota settings that the adapter constructor does not take."""
+
+    if adapter.name == ProviderName.PARALLEL.value and auth_mode != "oauth":
+        set_free_seed = getattr(adapter, "set_free_seed", None)
+        if callable(set_free_seed):
+            set_free_seed(config.parallel_free_seed_usd)
+    if adapter.name == ProviderName.EXA.value:
+        set_budget = getattr(adapter, "set_monthly_budget", None)
+        if callable(set_budget):
+            set_budget(config.exa_monthly_budget_usd)
+        set_credits = getattr(adapter, "set_manual_starting_credits", None)
+        if callable(set_credits):
+            set_credits(config.exa_manual_starting_credits_usd)
+
+
+async def prepare_adapter_quota(
+    adapter: ProviderAdapter,
+    repository: SQLiteRepository,
+    config: ProviderConfig | None,
+    *,
+    auth_mode: str,
+    scope: ProviderObservationScope,
+) -> None:
+    """Restore one newly built adapter's quota state from settings and the database.
+
+    The execution service calls this once per built adapter (startup, restart,
+    settings change or credential change), never per lease. It applies the
+    Parallel free seed (API-key credentials only) and the Exa monthly budget
+    and manual starting credits, then hydrates the adapter's local ledger from
+    the key's balance owner, and records the hydrated observation for that key
+    when it differs from the stored one.
+    """
+
+    if config is not None:
+        _apply_quota_settings(adapter, config, auth_mode)
+    hydrate = getattr(adapter, "hydrate_quota", None)
+    if not callable(hydrate):
+        return
+    snapshot = await hydrate(_ScopedQuotaReads(repository, scope))
+    if not isinstance(snapshot, QuotaSnapshot):
+        return
+    latest = await repository.latest_quota(
+        adapter.name, credential_id=scope.credential_id, pool_id=scope.upstream_pool_id
+    )
+    if latest is not None and all(
+        getattr(latest, name) == getattr(snapshot, name) for name in _QUOTA_STATE_FIELDS
+    ):
+        return
+    await repository.record_quota(
+        snapshot,
+        credential_id=scope.credential_id,
+        pool_id=scope.upstream_pool_id,
+        credential_generation=scope.credential_generation,
+    )
 
 
 # ------------------------------------------------------ configuration cache
@@ -623,6 +739,7 @@ __all__ = [
     "patch_provider_config",
     "persist_provider_config",
     "persist_routing_config",
+    "prepare_adapter_quota",
     "read_runtime_setting",
     "routing_policy",
     "schedule_quota_refresh",

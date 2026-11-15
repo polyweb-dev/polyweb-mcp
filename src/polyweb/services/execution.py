@@ -36,7 +36,7 @@ import hashlib
 import logging
 import random
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -198,6 +198,7 @@ from polyweb.services.projects import ProjectStorageUnavailable
 from polyweb.services.provider_runtime import (
     build_adapter_with_secret,
     effective_config_for_name,
+    prepare_adapter_quota,
     routing_policy,
     schedule_quota_refresh,
 )
@@ -628,12 +629,13 @@ class _AdapterLease:
 
 
 class _CacheEntry:
-    __slots__ = ("active", "adapter", "retired")
+    __slots__ = ("active", "adapter", "ready", "retired")
 
     def __init__(self, adapter: ProviderAdapter) -> None:
         self.adapter = adapter
         self.active = 0
         self.retired = False
+        self.ready: asyncio.Task[None] | None = None
 
 
 class CredentialAdapterCache:
@@ -660,11 +662,21 @@ class CredentialAdapterCache:
         self,
         key: _AdapterKey,
         builder: Callable[[], ProviderAdapter],
+        prepare: Callable[[ProviderAdapter], Coroutine[Any, Any, None]] | None = None,
     ) -> _AdapterLease:
+        """Lease the entry of ``key``, building and preparing it once when absent.
+
+        ``prepare`` runs once per built adapter, outside the cache lock. Every
+        lease of that entry waits for it, so no request uses an adapter before
+        its saved quota state is restored.
+        """
+
         async with self._lock:
             entry = self._entries.get(key)
             if entry is None:
                 entry = _CacheEntry(builder())
+                if prepare is not None:
+                    entry.ready = asyncio.get_running_loop().create_task(prepare(entry.adapter))
                 self._entries[key] = entry
                 self._order.append(key)
             else:
@@ -673,7 +685,15 @@ class CredentialAdapterCache:
                 self._order.append(key)
             entry.active += 1
             self._trim_locked()
-            return _AdapterLease(self, key, entry.adapter)
+            lease = _AdapterLease(self, key, entry.adapter)
+            ready = entry.ready
+        if ready is not None and not ready.done():
+            try:
+                await asyncio.shield(ready)
+            except BaseException:
+                lease.release()
+                raise
+        return lease
 
     def release(self, key: _AdapterKey) -> None:
         entry = self._entries.get(key)
@@ -759,14 +779,14 @@ class CredentialAdapterCache:
         """Close every cached adapter; safe to call repeatedly."""
 
         async with self._lock:
-            adapters, self._entries, self._order = (
-                [entry.adapter for entry in self._entries.values()],
-                {},
-                [],
-            )
-        for adapter in adapters:
+            entries, self._entries, self._order = list(self._entries.values()), {}, []
+        preparing = [entry.ready for entry in entries if entry.ready is not None]
+        for task in preparing:
+            task.cancel()
+        await asyncio.gather(*preparing, return_exceptions=True)
+        for entry in entries:
             with suppress(Exception):
-                await adapter.aclose()
+                await entry.adapter.aclose()
         pending, self._closing = list(self._closing), set()
         for task in pending:
             with suppress(Exception, asyncio.CancelledError):
@@ -1546,7 +1566,28 @@ class ExecutionService:
                 config=tavily_config,
             )
 
-        lease = await self._adapter_cache.lease(key, build)
+        async def prepare(adapter: ProviderAdapter) -> None:
+            # Best effort, as a failed read must not fail the request: the
+            # adapter then starts from its constructor state.
+            try:
+                scope = ProviderObservationScope(
+                    credential_id=credential.credential_id,
+                    upstream_pool_id=await self._observation_upstream_pool(
+                        credential.credential_id
+                    ),
+                    credential_generation=credential.generation,
+                )
+                await prepare_adapter_quota(
+                    adapter,
+                    self._repository,
+                    config,
+                    auth_mode=credential.auth_mode,
+                    scope=scope,
+                )
+            except Exception:
+                logger.warning("adapter quota state could not be restored")
+
+        lease = await self._adapter_cache.lease(key, build, prepare)
         self._adapter_cache.retire_other_configs(
             credential.provider_type, credential.credential_id, credential.generation, key
         )
