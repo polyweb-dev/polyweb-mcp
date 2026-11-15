@@ -1,10 +1,11 @@
 ---
 id: TASK-000070
 title: Restore provider quota state at runtime startup
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@devin'
 created_date: '2026-11-14T11:37:00Z'
-updated_date: '2026-11-15T12:41:00Z'
+updated_date: '2026-11-15T15:06:00Z'
 labels: []
 dependencies: []
 priority: high
@@ -15,23 +16,52 @@ ordinal: 59000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Since aae1b63 (TASK-000042) the runtime no longer applies saved quota settings or hydrates quota state when the runtime generation is composed. Settings are saved but have no effect, and locally counted usage resets on every restart. Affected providers:
+Since aae1b63 (TASK-000042) adapters are built lazily per credential in ExecutionService._lease_adapter (services/execution.py) instead of eagerly at compose time. The old startup wiring (_apply_parallel_seed in mcp/server.py before aae1b63) looped over eagerly built adapters; that list is now always empty, so saved quota settings are never applied and hydrate_quota is never called.
 
-- Parallel: ParallelAdapter.set_free_seed and hydrate_quota (src/polyweb/adapters/parallel.py) are never called, so the configured free-seed is never applied.
-- Exa: ExaAdapter.set_monthly_budget and hydrate_quota (src/polyweb/adapters/exa.py) are never called, so monthly budget and manual-credit settings have no effect on routing or quota.
-- Brave / Keenable: BraveAdapter.hydrate_quota and KeenableAdapter.hydrate_quota (src/polyweb/adapters/brave.py, keenable.py) are never called, so monthly usage resets to zero on restart and the providers can be over-used past their caps.
+Verified effects:
+- Parallel: set_free_seed / hydrate_quota never called; the API-key free seed is dead config.
+- Exa: set_monthly_budget / set_manual_starting_credits / hydrate_quota never called; budget and manual credits are dead config (control.py:335 loops over the empty adapter list).
+- Brave / Keenable: hydrate_quota never called; in-memory counters reset on every restart AND every adapter rebuild (settings or credential change).
+- Worse than a reset: a fresh adapter's ESTIMATED usage_snapshot overwrites a correct stored pool row (limit_repository apply_snapshot only rejects older or Tavily-specific observations), so the DB funds gate admits calls past the real cap, and a keyed Keenable key exhausted by a vendor 402 is unblocked again.
+- Keenable keyed responses carry usage.credits_remaining (free + purchased, may lag or be absent) and usage.paid (https://docs.keenable.ai/credits); _reported_usage drops credits_remaining. apply_keenable_auth_mode loops over the empty adapter list (api.py:653, mcp/server.py:150).
+- Hydration reads are unscoped: latest_quota(name) reads only unattributed rows and list_provider_usage sums all keys of a provider, while snapshots and usage rows now carry credential_id/pool_id.
+- Manual unblock (PUT /api/v1/providers/{id}/manual-quota) is provider-wide and does not clear adapter latches (_hard_exhausted, _soft_zero).
+- Stale docstring routers/api.py:601-606 and comment mcp/server.py:170-172.
 
-The compose docstring in src/polyweb/routers/api.py (~603) still says quota state hydrates at compose time and is stale.
+Trust order for a key's remaining quota: vendor report (balance API, Brave headers, Keenable usage.credits_remaining, vendor 402) > human record (manual credits/anchor) > configured cap (Exa budget, Parallel free seed) > local count from the DB ledger. Remaining = newest trusted fact minus usage recorded after it. REST is the single executor in normal deployments (MCP forwards to the API); standalone MCP uses the same ExecutionService path.
 
-Fix all four in one place in the runtime composition path so the wiring stays consistent. Merged from former TASK-000071 and TASK-000072.
+Related: TASK-000077 owns Parallel OAuth pools, real Parallel per-call cost and the Parallel OAuth balance. TASK-000076 owns the Quotas page layout. Merged from former TASK-000071 and TASK-000072.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Configured Parallel free-seed is applied to the adapter when the runtime generation is composed
-- [ ] #2 Configured Exa monthly budget and manual credits are applied to the adapter when the runtime generation is composed
-- [ ] #3 Parallel, Exa, Brave and Keenable quota state is hydrated from the repository on startup
-- [ ] #4 Integration test proves a configured Exa budget changes the effective Exa quota
-- [ ] #5 Restart test proves counted Brave and Keenable usage survives a runtime rebuild
-- [ ] #6 routers/api.py compose docstring matches the actual startup behaviour
+- [ ] #1 When an adapter is built (startup, restart, settings change or credential change), each key's remaining quota is computed from the database: the newest trusted fact for the key's balance owner (vendor report, vendor 402, manual record or configured cap) minus the usage recorded after that fact
+- [ ] #2 A local estimate never raises a key's remaining quota above the newest trusted fact in the same period, and never unblocks a key that a vendor 402 exhausted
+- [ ] #3 For Brave, Exa, Parallel, Keenable, Tavily and Firecrawl, a blocked key becomes usable again when a newer vendor report proves new credits, when an admin records new credits for that key, or at the provider reset. A manual record clears both the stored denial and the in-memory adapter block at the blocked key's scope (credential row, or pool row for a pooled key)
+- [ ] #4 PUT /api/v1/providers/{provider_id}/manual-quota accepts an optional key or pool scope. Without a scope it applies to the provider's only eligible key, so the existing Set balance dialog unblocks single-key providers with no UI change. With several keys and no scope it keeps today's provider-level behaviour and does not guess
+- [ ] #5 Tavily: after a 402, a same-month /usage report unblocks the key only when it proves new funds (a credit or allowance increase against the balance saved at the 402, or a provider-issued timestamp after the 402). Reports without that proof stay rejected, so the existing stale-poll and cached-positive 402 protections keep passing
+- [ ] #6 The saved Exa monthly budget and manual credits apply to Exa keys. When the period's recorded spend reaches the limit, Polyweb denies the next Exa call. Recording manual credits also clears Exa's soft-zero block
+- [ ] #7 The saved Parallel free seed applies to Parallel API-key credentials. Parallel OAuth balance and real per-call cost stay in TASK-000077
+- [ ] #8 Brave and Keenable usage counted before a restart or a settings change still counts after it
+- [ ] #9 Usage and balances are tracked per key. Keys in one shared pool share one balance
+- [ ] #10 Keenable without a key stays unmetered: only the per-IP rate limits apply
+- [ ] #11 Keenable with a key: the auth mode comes from the credential. The adapter stores usage.credits_remaining and usage.paid from each billed response as a vendor fact. Use past the free allowance with credits left counts as paid use and does not block the key. A 402 insufficient_credits blocks the key until AC #3 applies. When credits_remaining is absent, the local count is the estimate
+- [ ] #12 Integration tests against a real database prove AC #2, #3, #4, #5, #6 and #8, and each test fails before the fix
+- [ ] #13 The routers/api.py compose docstring and the mcp/server.py startup comment describe the real behaviour
+- [ ] #14 No UI changes. The per-key Set balance action and the user guide with screenshots are in TASK-000076. The quota API marks each number as vendor-confirmed or estimated
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Tests first (fail before fix): Exa budget enforced after compose (tests/integration/routers/test_manual_quota.py); Brave/Keenable usage survives restart and settings change (tests/integration/services/test_quota_units.py); estimate cannot override a vendor fact or revive a 402; per-key manual record unblocks; Keenable credits_remaining stored; Parallel set_free_seed/hydrate unit coverage (tests/unit/adapters/test_parallel.py).
+2. Adapter preparation helper in services/provider_runtime.py, called from ExecutionService._lease_adapter once per built adapter: apply Parallel seed and Exa budget/credits from ProviderConfig, hydrate_quota scoped to the key's balance owner (pool if pooled, else credential), record the snapshot if changed.
+3. Scope hydration reads: optional credential/pool filter on list_provider_usage and use the scoped latest_quota.
+4. Trust-order guard in limit_repository.apply_snapshot (generalise the Tavily-only rule): ESTIMATED snapshots may only lower remaining below the newest trusted fact in the period and never clear a terminal 402.
+5. Per-key manual unblock: scope parameter on the manual-quota route; clears the stored denial and the adapter latch (_hard_exhausted, _soft_zero).
+6. Keenable: keep usage.credits_remaining in _reported_usage and publish it as an observed fact; derive auth mode from the credential at lease time instead of the empty route list.
+7. Fix stale docstring and comment. Narrow local runs (unit + one integration file); Woodpecker for the full integration and behave (not @live and not @latency) suites, at most 20 runs in total.
+
+8. Tavily recovery: keep the 402 baseline (balance, credential generation); accept a same-month vendor_api snapshot only with proof of new funds; clear the adapter clamp only after the repository accepts it. Keep test_402_preserved_despite_positive_cached_balance and the stale-poll tests; deliberately update test_usage_snapshot_after_terminal_clamps_positive_to_zero for the proven-credit case only; add repository, integration and BDD recovery cases.
+9. Manual-quota scope: optional credential/pool scope on PUT/DELETE manual-quota; infer the single eligible key when omitted; route the record through ProviderLimitsService to the scoped NativePoolRow and clear the cached adapter's latch (_hard_exhausted, _soft_zero, Tavily clamp).
+<!-- SECTION:PLAN:END -->
