@@ -211,16 +211,18 @@ def production_capacity_hooks(repository: Any, limits: Any, context: Any) -> dic
     For a leg without a shared pool or key-pool budget, the seam reserves each
     send with ``ProviderLimitsService.admit_attempt`` (no strict spec) under a
     fresh attempt id, settles nothing itself, and releases an unsent send with
-    the service's ``_release_capacity``. The first send keeps the context's
-    attempt id so a test can read its admission back.
+    the service's ``_release_capacity``.
+
+    This mirrors only the no-pool branch of ``ExecutionService._strict_spec``,
+    ``_AttemptSeam._admit`` and ``_AttemptSeam.release``; update it when those
+    change. It omits the fair-queue grant, the live leg recheck and budget
+    handling, which no caller of this fixture observes.
     """
 
     from polyweb.services.execution import _noop_settle, _release_capacity
 
-    attempt_ids = [context.attempt_id]
-
     async def reserve() -> Any:
-        attempt_id = attempt_ids.pop() if attempt_ids else uuid4().hex
+        attempt_id = uuid4().hex
         if not limits.supports(context.provider, context.operation, context.auth_mode):
             return None
         return await limits.admit_attempt(
