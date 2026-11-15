@@ -2510,3 +2510,87 @@ async def test_usage_snapshot_after_terminal_clamps_positive_to_zero() -> None:
     assert snapshot is not None and snapshot.remaining == Decimal("0")
     assert snapshot.source == "vendor_402"
     assert adapter._owned_http.gets == ["https://api.tavily.com/usage"]
+
+
+def _terminal_adapter_after_cached_balance(key: str) -> TavilyAdapter:
+    """A keyed adapter whose cached 40 of 1000 Credits a vendor 402 replaced."""
+    from datetime import UTC, datetime
+
+    from polyweb.models.contracts import QuotaSnapshot, QuotaSource, UnitKind
+
+    adapter = TavilyAdapter(_FakeClient(), sdk_client=_FakeSDK(), api_key=SecretStr(key))
+    adapter._quota_cache = QuotaSnapshot(
+        provider="tavily",
+        source=QuotaSource.AUTHORITATIVE,
+        remaining=Decimal("40"),
+        limit=Decimal("1000"),
+        observed_at=datetime.now(UTC),
+        unit_kind=UnitKind.CREDIT,
+        display_unit="Credits",
+    )
+    return adapter
+
+
+async def test_usage_snapshot_after_terminal_reports_proven_credit_unclamped() -> None:
+    """AC #5: an allowance increase over the 402 baseline is reported, not clamped.
+
+    The adapter still holds its clamp until the store confirms that it
+    accepted the report.
+    """
+    from datetime import UTC, datetime
+
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
+
+    adapter = _terminal_adapter_after_cached_balance("tvly-proven-credit")
+    await adapter.quota_after_error(402)
+    adapter._owned_http = _FakeOwnedHTTP(
+        httpx.Response(
+            200,
+            json=_usage_payload(
+                account={"plan_usage": 960, "plan_limit": 2000},
+                key={"usage": 960, "limit": 5000},
+            ),
+        )
+    )
+
+    snapshot = await adapter.usage_snapshot(
+        UsageSyncRequest(provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC))
+    )
+
+    assert snapshot is not None
+    assert (snapshot.source, snapshot.remaining) == ("vendor_api", Decimal("1040"))
+    assert adapter._terminal_402 is True
+    cached = await adapter.quota()
+    assert cached is not None and cached.remaining == Decimal("0")
+    adapter.usage_snapshot_stored(snapshot)
+    assert adapter._terminal_402 is False
+    cached = await adapter.quota()
+    assert cached is not None and cached.remaining == Decimal("1040")
+
+
+async def test_usage_snapshot_after_terminal_without_new_funds_stays_clamped() -> None:
+    """AC #5: a report that only repeats the cached balance stays a clamped zero."""
+    from datetime import UTC, datetime
+
+    from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
+
+    adapter = _terminal_adapter_after_cached_balance("tvly-stale-credit")
+    await adapter.quota_after_error(402)
+    adapter._owned_http = _FakeOwnedHTTP(
+        httpx.Response(
+            200,
+            json=_usage_payload(
+                account={"plan_usage": 960, "plan_limit": 1000},
+                key={"usage": 960, "limit": 1000},
+            ),
+        )
+    )
+
+    snapshot = await adapter.usage_snapshot(
+        UsageSyncRequest(provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC))
+    )
+
+    assert snapshot is not None
+    assert (snapshot.source, snapshot.remaining) == ("vendor_402", Decimal("0"))
+    adapter.usage_snapshot_stored(snapshot)
+    assert adapter._terminal_402 is True

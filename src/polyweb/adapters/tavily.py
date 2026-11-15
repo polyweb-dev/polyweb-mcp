@@ -543,6 +543,8 @@ class TavilyAdapter(ProviderAdapter):
         # monthly reset; a stale positive usage read cannot override it.
         self._terminal_402 = False
         self._terminal_reset_at: datetime | None = None
+        self._terminal_baseline: tuple[Decimal | None, Decimal | None] | None = None
+        self._pending_quota: QuotaSnapshot | None = None
         # The usage read gets its own runner instance so one scheduled poll
         # spends exactly one attempt and its cooldowns stay isolated from the
         # shared search/extract cooldown key.
@@ -1033,7 +1035,12 @@ class TavilyAdapter(ProviderAdapter):
         try:
             facts = self._plan_facts(payload)
             snapshot = self._usage_snapshot_from_payload(payload, facts, request)
-            self._quota_cache = self._quota_cache_from_facts(facts, snapshot.remaining)
+            self._pending_quota = None
+            if self._terminal_402 and snapshot.source == "vendor_api":
+                self._pending_quota = self._quota_cache_from_facts(facts, snapshot.remaining)
+                self._quota_cache = self._quota_cache_from_facts(facts, Decimal("0"))
+            else:
+                self._quota_cache = self._quota_cache_from_facts(facts, snapshot.remaining)
         except ProviderOperationError:
             raise
         except Exception:
@@ -1095,16 +1102,56 @@ class TavilyAdapter(ProviderAdapter):
             and self._terminal_reset_at is not None
             and now >= self._terminal_reset_at
         ):
-            self._terminal_402 = False
-            self._terminal_reset_at = None
+            self._clear_terminal()
             self._quota_cache = None
             self._usage_cache = None
 
+    def _clear_terminal(self) -> None:
+        self._terminal_402 = False
+        self._terminal_reset_at = None
+        self._terminal_baseline = None
+        self._pending_quota = None
+
     def _mark_terminal(self, now: datetime) -> None:
-        """Enter the terminal out-of-Credits state for the rest of this month."""
+        """Enter the terminal out-of-Credits state for the rest of this month.
+
+        Entering the state saves the cached balance and allowance as the
+        baseline a later usage report must exceed to prove new funds.
+        """
         if not self._terminal_402:
             self._terminal_402 = True
+            cached = self._quota_cache
+            self._terminal_baseline = (
+                (cached.remaining, cached.limit) if cached is not None else None
+            )
         self._terminal_reset_at = _next_month_start(now)
+
+    def _proves_new_funds(self, facts: _UsageFacts) -> bool:
+        """Return whether a usage report exceeds the balance or allowance saved at the 402."""
+
+        if self._terminal_baseline is None:
+            return False
+        remaining, allowance = self._terminal_baseline
+        if facts.allowance is not None and allowance is not None and facts.allowance > allowance:
+            return True
+        return facts.remaining is not None and remaining is not None and facts.remaining > remaining
+
+    def usage_snapshot_stored(self, snapshot: NativeUsageSnapshot) -> None:
+        """Leave the terminal state once the repository stored a proven-funds report.
+
+        The adapter never lifts its own clamp: the limit store first checks the
+        report against the balance it saved at the 402, and the sync service
+        calls this only after that report became the stored pool value.
+        """
+
+        if not self._terminal_402 or snapshot.source != "vendor_api":
+            return
+        if snapshot.remaining is None or snapshot.remaining <= 0:
+            return
+        pending = self._pending_quota
+        self._clear_terminal()
+        if pending is not None:
+            self._quota_cache = pending
 
     def _usage_snapshot_from_payload(
         self,
@@ -1114,9 +1161,10 @@ class TavilyAdapter(ProviderAdapter):
     ) -> NativeUsageSnapshot:
         """Map validated usage facts to the aggregate Credits pool snapshot."""
 
-        remaining = self._terminal_clamp(facts.remaining)
+        proven = self._terminal_402 and self._proves_new_funds(facts)
+        remaining = facts.remaining if proven else self._terminal_clamp(facts.remaining)
         reset_at = _next_month_start(datetime.now(UTC))
-        source = "vendor_402" if self._terminal_402 else "vendor_api"
+        source = "vendor_402" if self._terminal_402 and not proven else "vendor_api"
         tiers = self._usage_tiers(facts)
         return NativeUsageSnapshot(
             pool_id=native_pool_id(_NAME, self.limit_auth_mode, UnitKind.CREDIT),

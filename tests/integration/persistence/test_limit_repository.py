@@ -29,6 +29,7 @@ from polyweb.models.provider_limits import (
     SyncClaim,
     SyncResult,
 )
+from polyweb.persistence.limit_repository import LimitRepository
 from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.database_lifecycle import unlink_with_retries
 from tests.fixtures.execution import FIXTURE_ACTOR
@@ -539,6 +540,96 @@ async def test_tavily_snapshot_rejects_older_terminal_overwrite(limits_repo) -> 
     )
     pool = await limits_repo.get_pool("tavily:keyed:credit")
     assert pool is not None and pool.remaining == Decimal("0")
+
+
+def _tavily_report(
+    *,
+    at: datetime,
+    remaining: str,
+    allowance: str = "1000",
+    source: str = "vendor_api",
+    pool_id: str = "tavily:keyed:credit",
+) -> NativeUsageSnapshot:
+    return NativeUsageSnapshot(
+        pool_id=pool_id,
+        provider="tavily",
+        auth_mode=AuthMode.KEYED,
+        native_unit=UnitKind.CREDIT,
+        observed_at=at,
+        remaining=Decimal(remaining),
+        allowance=Decimal(allowance),
+        credential_generation=0,
+        source=source,
+        confidence=Confidence.AUTHORITATIVE if source == "vendor_api" else Confidence.OBSERVED,
+    )
+
+
+async def _tavily_terminal_after_balance(limits_repo: LimitRepository, pool_id: str) -> None:
+    """Store a 40-Credit vendor balance, then the terminal 402 that zeroes it."""
+
+    await limits_repo.ensure_pool(
+        NativePool(
+            pool_id=pool_id,
+            provider="tavily",
+            auth_mode=AuthMode.KEYED,
+            native_unit=UnitKind.CREDIT,
+            source="vendor_api",
+        )
+    )
+    assert await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT, remaining="40", pool_id=pool_id)
+    )
+    assert await limits_repo.apply_snapshot(
+        _tavily_report(
+            at=FIXED_AT + timedelta(minutes=1),
+            remaining="0",
+            source="vendor_402",
+            pool_id=pool_id,
+        )
+    )
+
+
+@pytest.mark.parametrize("pool_id", ["tavily:keyed:credit", "tavily:keyed:credit#cred:k1"])
+async def test_tavily_same_month_report_without_new_funds_stays_rejected(
+    limits_repo: LimitRepository, pool_id: str
+) -> None:
+    """AC #5: a later report that only repeats the pre-402 balance is no proof of funds.
+
+    This holds for the provider pool and for a key's scoped pool.
+    """
+
+    await _tavily_terminal_after_balance(limits_repo, pool_id)
+
+    accepted = await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=5), remaining="40", pool_id=pool_id)
+    )
+
+    pool = await limits_repo.get_pool(pool_id)
+    assert accepted is False
+    assert pool is not None and pool.remaining == Decimal("0")
+    assert pool.source == "vendor_402"
+
+
+@pytest.mark.parametrize(
+    ("remaining", "allowance"),
+    [("1040", "2000"), ("500", "1000")],
+    ids=["allowance-increase", "credit-increase"],
+)
+async def test_tavily_same_month_report_with_new_funds_replaces_the_402(
+    limits_repo: LimitRepository, remaining: str, allowance: str
+) -> None:
+    """AC #5: a credit or allowance increase over the balance saved at the 402 unblocks."""
+
+    await _tavily_terminal_after_balance(limits_repo, "tavily:keyed:credit")
+
+    accepted = await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=5), remaining=remaining, allowance=allowance)
+    )
+
+    pool = await limits_repo.get_pool("tavily:keyed:credit")
+    assert accepted is True
+    assert pool is not None and pool.remaining == Decimal(remaining)
+    assert pool.source == "vendor_api"
 
 
 def _synth_snapshot(

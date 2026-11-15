@@ -30,6 +30,7 @@ from polyweb.models.provider_limits import (
     AuthMode,
     LimitOperation,
     NativePool,
+    NativeUsageSnapshot,
     ProviderObservationScope,
     SyncClaim,
     SyncResult,
@@ -276,6 +277,7 @@ class LimitSyncService:
                 }
             )
         changed = await self._repository.apply_snapshot(snapshot) if self._repository else False
+        await self._confirm_stored(adapter, snapshot)
         await self._record_scoped_quota(snapshot.pool_id)
         await self._complete(provider, "synced", now, error_code=snapshot.error_code)
         self._failures.pop(provider, None)
@@ -371,6 +373,27 @@ class LimitSyncService:
             )
         )
         return pool_id
+
+    async def _confirm_stored(
+        self, adapter: ProviderAdapter, snapshot: NativeUsageSnapshot
+    ) -> None:
+        """Tell the adapter that the store now holds its observation, when it asks.
+
+        Tavily keeps its terminal 402 clamp until the store accepts a report
+        that proves new funds, so the adapter learns about the acceptance only
+        after the write, never from its own report.
+        """
+
+        stored_hook = getattr(adapter, "usage_snapshot_stored", None)
+        if not callable(stored_hook) or self._repository is None:
+            return
+        pool = await self._repository.get_pool(snapshot.pool_id)
+        if (
+            pool is not None
+            and pool.source == snapshot.source
+            and pool.observed_at == snapshot.observed_at
+        ):
+            stored_hook(snapshot)
 
     async def _record_scoped_quota(self, pool_id: str) -> None:
         """Project accepted native truth onto the same scoped routing snapshot."""

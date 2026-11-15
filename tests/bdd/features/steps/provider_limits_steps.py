@@ -4795,3 +4795,69 @@ def step_keenable_keyless_denied(context: Any) -> None:
     assert context.vendor_calls == []
     bars = _run(context, context.service.rate_limits.progress("keenable", FIXED_AT))
     assert any(b.window == "1h" for b in bars)
+
+
+# ------------------------------------------------- T23 Tavily proof of new funds
+
+
+def _tavily_usage_report(context: Any, remaining: str, allowance: str, minutes: int) -> bool:
+    accepted: bool = _run(
+        context,
+        _limits_repo(context).apply_snapshot(
+            NativeUsageSnapshot(
+                pool_id=_tavily_pool_id(),
+                provider="tavily",
+                auth_mode=AuthMode.KEYED,
+                native_unit=UnitKind.CREDIT,
+                observed_at=FIXED_AT + timedelta(minutes=minutes),
+                remaining=Decimal(remaining),
+                allowance=Decimal(allowance),
+                reset_at=_tavily_next_month(FIXED_AT),
+                credential_generation=0,
+                source="vendor_api",
+            )
+        ),
+    )
+    return accepted
+
+
+@given("a Tavily pool with 40 of 1000 Credits that a vendor 402 replaced")
+def step_tavily_terminal_after_balance(context: Any) -> None:
+    _open_repo(context)
+    context.service = _service(context, _tavily_records(), clock_at=FIXED_AT)
+    _run(context, context.service.initialize())
+    _tavily_seed(context, remaining="40", allowance="1000", at=FIXED_AT - timedelta(minutes=5))
+    _run(context, context.service.record_terminal_402("tavily", AuthMode.KEYED))
+
+
+@when("a later Tavily usage report repeats 40 of 1000 Credits")
+def step_tavily_repeat_report(context: Any) -> None:
+    context.tavily_report_accepted = _tavily_usage_report(context, "40", "1000", minutes=2)
+
+
+@then("the Tavily pool keeps the vendor 402 and denies the next call")
+def step_tavily_keeps_402(context: Any) -> None:
+    assert context.tavily_report_accepted is False
+    pool = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
+    assert pool is not None and (pool.source, pool.remaining) == ("vendor_402", Decimal("0"))
+    try:
+        _run(context, context.service.admit(_tavily_ctx(LimitOperation.SEARCH, "t23-stale")))
+    except LimitDeniedError:
+        return
+    raise AssertionError("a report without new funds must keep the denial")
+
+
+@when("a later Tavily usage report shows 1040 of 2000 Credits")
+def step_tavily_new_funds_report(context: Any) -> None:
+    context.tavily_report_accepted = _tavily_usage_report(context, "1040", "2000", minutes=4)
+
+
+@then("the Tavily pool holds 1040 vendor Credits and admits the next call")
+def step_tavily_recovered(context: Any) -> None:
+    assert context.tavily_report_accepted is True
+    pool = _run(context, _limits_repo(context).get_pool(_tavily_pool_id()))
+    assert pool is not None and (pool.source, pool.remaining) == ("vendor_api", Decimal("1040"))
+    admission = _run(
+        context, context.service.admit(_tavily_ctx(LimitOperation.SEARCH, "t23-recovered"))
+    )
+    assert admission is not None
