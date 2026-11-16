@@ -294,7 +294,7 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
     A named and an inferred scope of the same balance owner use one settings
     key, so GET, PUT and DELETE always meet the same record. The record is
     applied to the limit store before it is saved: when the store keeps a
-    newer vendor fact the route answers 409, and when the store fails it
+    newer observation the route answers 409, and when the store fails it
     answers 503. In both cases nothing is saved, so the operator can retry.
     """
 
@@ -335,8 +335,8 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         rebuild clears the key's vendor 402 block, but a key that the
         provider-wide spend budget denies stays denied.
 
-        409: a newer vendor observation (report or 402) holds the balance, so
-        the record was neither applied nor saved. 503: the limit store could
+        409: a newer observation (vendor report, vendor 402 or another record)
+        holds the balance, so the record was neither applied nor saved. 503: the limit store could
         not apply the record; nothing was saved and the request can be
         retried.
         """
@@ -448,8 +448,9 @@ async def _notify_manual_anchor(
         raise HTTPException(
             status_code=409,
             detail=(
-                "a newer vendor observation holds this balance, so the record was not "
-                "saved; refresh the key's usage and record the balance again"
+                "a newer observation of this balance (a vendor report, a vendor 402 or "
+                "another record) is stored, so the record was not saved; refresh the "
+                "key's usage and record the balance again"
             ),
         ) from None
     except Exception:
