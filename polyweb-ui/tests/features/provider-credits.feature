@@ -143,7 +143,7 @@ Feature: Provider credit units display honestly
     And the usage view should show "Cost (USD)"
     And the usage view should not show "Provider quota view"
 
-  @stub @ui7 @race
+  @stub @ui7 @race @serial
   Scenario: U7-B16 Late older dashboard response cannot restore old funds
     Given the stubbed provider limits show "Brave finite credits"
     And the stubbed credit totals show "Brave no use"
@@ -440,7 +440,7 @@ Feature: Provider credit units display honestly
     And no Tavily provider test requests should exist
     And no Tavily force-sync requests should exist
 
-  @stub @ui7 @tavily @tier
+  @stub @ui7 @tavily @tier @serial
   Scenario: U7-T19 Deferred dashboard still shows confirmed ceiling at once
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
@@ -479,7 +479,7 @@ Feature: Provider credit units display honestly
     And I choose the Tavily card rate tier "prod"
     Then a Tavily confirmation unavailable note should show
 
-  @stub @ui7 @tavily @tier
+  @stub @ui7 @tavily @tier @serial
   Scenario: U7-T22 Obsolete PATCH after unmount writes no state
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
@@ -493,7 +493,7 @@ Feature: Provider credit units display honestly
     And no Tavily usage requests should exist
     And no Tavily provider test requests should exist
 
-  @stub @ui7 @tavily @tier
+  @stub @ui7 @tavily @tier @serial
   Scenario: U7-T23 Credential replacement ignores obsolete PATCH response
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"

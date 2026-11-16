@@ -1,16 +1,22 @@
 import { PillTabs } from "@/shared/ui/PillTabs"
 import { PillTabsPanel } from "@/shared/ui/PillTabsPanel"
+import type { RenderTraceDetails } from "../model/traceDetailsSlot"
 import { usePlaygroundController } from "../model/usePlaygroundController"
 import type { PlaygroundScope } from "../model/usePlaygroundController"
 import { PageHeader } from "@/shared/ui/PageHeader"
 import { FetchSection } from "./FetchSection"
 import { SearchSection } from "./SearchSection"
 
+interface PlaygroundPageProps {
+  scope: PlaygroundScope
+  renderTraceDetails: RenderTraceDetails
+}
+
 /**
  * Search playground page: Search/Fetch pill views over one controller. A mode
  * the caller lacks permission for stays visible but disabled.
  */
-export function PlaygroundPage({ scope }: { scope: PlaygroundScope }) {
+export function PlaygroundPage({ scope, renderTraceDetails }: PlaygroundPageProps) {
   const controller = usePlaygroundController(scope)
   const viewOptions = [
     { value: "search", label: "Search", disabled: !controller.canSearch },
@@ -32,7 +38,7 @@ export function PlaygroundPage({ scope }: { scope: PlaygroundScope }) {
       />
 
       <PillTabsPanel value="search" className="flex flex-1 flex-col space-y-8">
-        <SearchSection controller={controller} />
+        <SearchSection controller={controller} renderTraceDetails={renderTraceDetails} />
       </PillTabsPanel>
 
       <PillTabsPanel value="fetch" className="flex flex-1 flex-col space-y-8">

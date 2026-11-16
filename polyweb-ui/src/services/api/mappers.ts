@@ -49,7 +49,11 @@ function providerDisplayName(
 
 export function mapSearchResponse(
   wire: BackendSearchResponse,
-  options: { wallClockMs: number; catalogNameOf: (id: string) => string | undefined }
+  options: {
+    wallClockMs: number
+    catalogNameOf: (id: string) => string | undefined
+    traceId?: string | null
+  }
 ): SearchResponse {
   const providerId = toUiId(wire.provider)
   const cost = parseUnits(wire.usage?.units)
@@ -112,6 +116,7 @@ export function mapSearchResponse(
     costEstimateCredits: cost,
     ...usageUnit(wire.usage),
     timestamp: wire.usage?.observed_at ?? new Date().toISOString(),
+    traceId: options.traceId ?? null,
   }
 }
 

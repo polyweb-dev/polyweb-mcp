@@ -18,3 +18,5 @@ export type {
   BackendFetchResponse,
 } from "./api/wire";
 export { clampLimit } from "./model/requestUtils";
+export { isTraceId, searchTraceRef } from "./model/traceId";
+export type { SearchTraceRef, TraceUnavailableReason } from "./model/traceId";

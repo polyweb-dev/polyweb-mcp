@@ -192,6 +192,29 @@ describe("off-origin rejection", () => {
   })
 })
 
+describe("response headers", () => {
+  it("returns the body with the headers of the retried response", async () => {
+    const { client, session } = await loadTransport()
+    installImmediateLocks()
+    installChannel()
+    session.setAccessToken("token-old", 900)
+    installPolicy(session, "token-new")
+    installFetchStub((req) =>
+      req.headers["authorization"] === "Bearer token-old"
+        ? err(401, { detail: "not authenticated" })
+        : new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { "Content-Type": "application/json", "X-Trace-Id": "f".repeat(32) },
+          })
+    )
+
+    const response = await client.requestJsonWithHeaders<{ ok: boolean }>("/search")
+
+    expect(response.body).toEqual({ ok: true })
+    expect(response.headers.get("x-trace-id")).toBe("f".repeat(32))
+  })
+})
+
 describe("access renewal and retry", () => {
   it("renews an expired token before the call", async () => {
     const { client, session } = await loadTransport()

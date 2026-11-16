@@ -48,8 +48,29 @@ fi
 
 cd polyweb-ui
 pnpm bddgen
+# Stubbed scenarios run fully parallel across Playwright workers (see
+# playwright.config.ts). The default fills the spot worker but never exceeds
+# its cores; PLAYWRIGHT_WORKERS overrides it.
+cores=$(nproc)
+default_workers=$(( cores < 12 ? cores : 12 ))
+export PLAYWRIGHT_WORKERS="${PLAYWRIGHT_WORKERS:-$default_workers}"
+echo "Playwright workers: ${PLAYWRIGHT_WORKERS} (nproc ${cores})"
 grep_args=(--grep "${PLAYWRIGHT_GREP:-@smoke}")
 if [[ -n "${PLAYWRIGHT_GREP_INVERT:-}" ]]; then
   grep_args+=(--grep-invert "$PLAYWRIGHT_GREP_INVERT")
 fi
-pnpm exec playwright test "${grep_args[@]}" --reporter=line --reporter=html
+for project in chromium chromium-serial; do
+  echo "Selected in ${project}: $(pnpm exec playwright test --list --project "$project" "${grep_args[@]}" 2>/dev/null | tail -n 1)"
+done
+
+# Pass 1: everything except `@serial`, in parallel. An empty selection fails.
+# Pass 2: the `@serial` scenarios on one worker, only after pass 1 has
+# finished, so their fixed delay windows never compete with other workers.
+# The gate selection may hold no `@serial` scenario, so pass 2 may be empty.
+status=0
+PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report \
+  pnpm exec playwright test --project chromium "${grep_args[@]}" --reporter=line --reporter=html || status=$?
+PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/serial \
+  pnpm exec playwright test --project chromium-serial --workers 1 --pass-with-no-tests \
+    "${grep_args[@]}" --reporter=line --reporter=html || status=$?
+exit "$status"

@@ -1,5 +1,5 @@
 import { useEffect } from "react"
-import type { Dispatch, FormEvent, SetStateAction } from "react"
+import type { FormEvent } from "react"
 import { providersForOperation } from "@/domains/providers"
 import type { ProjectProvider } from "@/domains/providers"
 import type { FetchResponse, SearchResponse, SearchResult } from "@/domains/execution"
@@ -75,14 +75,12 @@ export interface PlaygroundController {
   searchError: string | null
   fetchError: string | null
   selectedResultForPreview: SearchResult | null
-  showJsonInspector: boolean
   copied: boolean
   setQuery: (value: string) => void
   setFetchUrl: (value: string) => void
   setSelectedProviderId: (value: string) => void
   setResultCount: (value: number) => void
   setSelectedResultForPreview: (value: SearchResult | null) => void
-  setShowJsonInspector: Dispatch<SetStateAction<boolean>>
   copyToClipboard: (text: string) => void
   handleExecute: (e?: FormEvent) => Promise<void>
   switchMode: (next: PlaygroundMode) => void
@@ -224,14 +222,12 @@ export function usePlaygroundController(scope: PlaygroundScope): PlaygroundContr
     canFetch: scope.canFetch,
     selectedProviderId: effectiveSelectedProviderId,
     selectedResultForPreview: preview.selectedResultForPreview,
-    showJsonInspector: preview.showJsonInspector,
     copied: preview.copied,
     setQuery,
     setFetchUrl,
     setSelectedProviderId,
     setResultCount,
     setSelectedResultForPreview,
-    setShowJsonInspector: preview.setShowJsonInspector,
     copyToClipboard: preview.copyToClipboard,
     handleExecute,
     switchMode,

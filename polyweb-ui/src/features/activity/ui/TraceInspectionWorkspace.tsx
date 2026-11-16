@@ -24,6 +24,8 @@ export interface TraceInspectionWorkspaceProps {
   output: TraceOutput | null
   attempt: TraceProviderAttempt | null
   mode: RankingMode
+  /** Trace-level actions shown at the end of the view switch row. */
+  actions?: ReactNode
 }
 
 type TraceView = "results" | "timeline"
@@ -238,7 +240,7 @@ function timelineView({ trace, selection, onSelectSpan }: SelectionPaneOptions) 
  * selected stage. One switch flips between them; a trace without recorded
  * output starts on its compact summary.
  */
-export function TraceInspectionWorkspace({ trace, output, attempt, mode }: TraceInspectionWorkspaceProps) {
+export function TraceInspectionWorkspace({ trace, output, attempt, mode, actions }: TraceInspectionWorkspaceProps) {
   const [identity, setIdentity] = useState(() => identityOf(trace, attempt))
   const [selection, setSelection] = useState(() => initialSelection(trace, output))
   const current = identityOf(trace, attempt)
@@ -265,9 +267,12 @@ export function TraceInspectionWorkspace({ trace, output, attempt, mode }: Trace
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-2">
       <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-2">
         {viewSwitcher(selection.view, (view) => setSelection((previous) => ({ ...previous, view })), output !== null)}
-        <p className="min-w-0 text-[12px] text-[var(--muted)]">
-          {scopeText({ view: selection.view, trace, output, attempt, mode })}
-        </p>
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
+          <p className="min-w-0 text-[12px] text-[var(--muted)]">
+            {scopeText({ view: selection.view, trace, output, attempt, mode })}
+          </p>
+          {actions}
+        </div>
       </div>
       <div className="min-h-0 min-w-0">
         {selection.view === "results" && resultsView(options)}

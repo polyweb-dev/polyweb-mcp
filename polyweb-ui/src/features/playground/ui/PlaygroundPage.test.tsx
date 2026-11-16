@@ -127,26 +127,11 @@ describe("SearchPlayground (live backend)", () => {
     await waitFor(() => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
-    // Single-entry waterfall: the shared JsonViewer carries exactly one entry
-    // once its collapsed nodes are opened (lazy-mount contract).
-    const inspectorToggle = screen.getByText(/Inspect raw JSON/i)
-    fireEvent.click(inspectorToggle)
-    await waitFor(() => {
-      expect(screen.getByRole("group", { name: "Raw search response" })).toBeInTheDocument()
-    })
-    for (let round = 0; round < 6; round += 1) {
-      const closed = document.querySelectorAll(
-        '[aria-label="Raw search response"] details:not([open]) > summary'
-      )
-      if (closed.length === 0) break
-      closed.forEach((summary) => {
-        fireEvent.click(summary)
-      })
-    }
-    await waitFor(() => {
-      const occurrences = (document.body.textContent?.match(/resultsCount/g) ?? []).length
-      expect(occurrences).toBe(1)
-    })
+    // Single-entry waterfall: the rendered latency list carries exactly one
+    // provider lane (the raw JSON inspector that used to prove this is gone).
+    const lanes = within(screen.getByRole("list", { name: "Provider latency waterfall" })).getAllByRole("listitem")
+    expect(lanes).toHaveLength(1)
+    expect(screen.queryByText(/Inspect raw JSON/i)).not.toBeInTheDocument()
     // No per-attempt trace note exists in the UI: WaterfallPanel renders
     // timings only, so the page must show no unavailable-trace text.
     expect(screen.queryByText(/trace (is )?unavailable|waterfall unavailable/i)).not.toBeInTheDocument()
@@ -388,7 +373,9 @@ describe("SearchPlayground inspector contract (characterization)", () => {
     expect(screen.getAllByText("First live snippet.").length).toBeGreaterThanOrEqual(1)
   })
 
-  it("toggles the raw JSON inspector without losing results", async () => {
+  // TASK-000002 replaced "toggles the raw JSON inspector without losing
+  // results": View details opens the trace popup and closing it keeps results.
+  it("opens and closes View details without losing results", async () => {
     renderWithBackend()
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Search the web/i)).toBeInTheDocument()
@@ -399,16 +386,17 @@ describe("SearchPlayground inspector contract (characterization)", () => {
     await waitFor(() => {
       expect(screen.getByText("Live backend result one")).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByText(/Inspect raw JSON/i))
+    expect(screen.queryByText(/Inspect raw JSON/i)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "View details" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText("Trace detail")).toBeInTheDocument()
+    expect(screen.queryByRole("group", { name: "Raw search response" })).not.toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }))
     await waitFor(() => {
-      expect(screen.getByRole("group", { name: "Raw search response" })).toBeInTheDocument()
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     })
     expect(screen.getByText("Live backend result one")).toBeInTheDocument()
-
-    fireEvent.click(screen.getByText(/Hide raw JSON/i))
-    await waitFor(() => {
-      expect(screen.queryByRole("group", { name: "Raw search response" })).not.toBeInTheDocument()
-    })
     expect(screen.getByText("Live backend result two")).toBeInTheDocument()
   })
 })

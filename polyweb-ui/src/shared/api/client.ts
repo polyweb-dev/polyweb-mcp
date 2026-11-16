@@ -33,6 +33,12 @@ export interface ApiRequestOptions extends RequestInit {
   auth?: "access" | "public" | "cookie"
 }
 
+/** Decoded body of one successful response, with the response headers. */
+export interface ApiResponse<T> {
+  body: T
+  headers: Headers
+}
+
 const OFF_ORIGIN_MESSAGE = "The configured API origin is not the page origin."
 
 /**
@@ -87,13 +93,13 @@ function failureDetail(response: Response, body: unknown): string {
   return hint === null ? detail : `${detail} ${hint}`
 }
 
-async function send<T>(path: string, init: RequestInit): Promise<T> {
+async function send<T>(path: string, init: RequestInit): Promise<ApiResponse<T>> {
   const url = `${apiBase()}${path}`
   try {
     const response = await fetch(url, init)
     const body = await readBody(response)
     if (!response.ok) throw new ApiError(response.status, failureDetail(response, body), body)
-    return body as T
+    return { body: body as T, headers: response.headers }
   } catch (error) {
     throw toApiError(error)
   }
@@ -131,14 +137,14 @@ async function retryUnauthorized<T>(
   init: RequestInit,
   presented: string | null,
   rejected: ApiError
-): Promise<T> {
+): Promise<ApiResponse<T>> {
   const current = getAccessToken()
   if (current === null) throw rejected
   if (current === presented) await refreshAccessToken()
   return send<T>(path, withAuthorization(init, getAccessToken()))
 }
 
-async function accessRequest<T>(path: string, init: RequestInit): Promise<T> {
+async function accessRequest<T>(path: string, init: RequestInit): Promise<ApiResponse<T>> {
   if (needsRenewal()) await refreshAccessToken()
   const presented = getAccessToken()
   try {
@@ -149,7 +155,7 @@ async function accessRequest<T>(path: string, init: RequestInit): Promise<T> {
   }
 }
 
-async function cookieRequest<T>(path: string, init: RequestInit): Promise<T> {
+async function cookieRequest<T>(path: string, init: RequestInit): Promise<ApiResponse<T>> {
   const startedGeneration = sessionGeneration()
   return withCookieLock(async () => {
     if (sessionGeneration() !== startedGeneration) {
@@ -161,14 +167,27 @@ async function cookieRequest<T>(path: string, init: RequestInit): Promise<T> {
 }
 
 /**
- * Perform one JSON API request through the shared transport.
+ * Perform one JSON API request and return its body with the response headers.
  *
- * The default `access` mode serves every protected method of the API service.
+ * Use it only when a caller needs a response header (such as `X-Trace-Id`);
+ * auth, retry, and error handling are identical to {@link requestJson}.
  */
-export async function requestJson<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+export async function requestJsonWithHeaders<T>(
+  path: string,
+  options: ApiRequestOptions = {}
+): Promise<ApiResponse<T>> {
   const { auth = "access", ...init } = options
   const prepared = prepareInit(init)
   if (auth === "public") return send<T>(path, prepared)
   if (auth === "cookie") return cookieRequest<T>(path, prepared)
   return accessRequest<T>(path, prepared)
+}
+
+/**
+ * Perform one JSON API request through the shared transport.
+ *
+ * The default `access` mode serves every protected method of the API service.
+ */
+export async function requestJson<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  return (await requestJsonWithHeaders<T>(path, options)).body
 }

@@ -1,3 +1,4 @@
+import type { RenderTraceDetails } from "../model/traceDetailsSlot"
 import type { PlaygroundController } from "../model/usePlaygroundController"
 import { isNoProviderConfigured } from "./noProviderConfigured"
 import { ProviderSetupNotice } from "./ProviderSetupNotice"
@@ -5,8 +6,13 @@ import { pinnedProviderName } from "./setupGuidance"
 import { SearchComposer } from "./SearchComposer"
 import { SearchResults } from "./SearchResults"
 
+interface SearchSectionProps {
+  controller: PlaygroundController
+  renderTraceDetails: RenderTraceDetails
+}
+
 /** Search panel: fixed composer position, error banner, results. */
-export function SearchSection({ controller }: { controller: PlaygroundController }) {
+export function SearchSection({ controller, renderTraceDetails }: SearchSectionProps) {
   return (
     <>
       <div
@@ -30,7 +36,11 @@ export function SearchSection({ controller }: { controller: PlaygroundController
 
       {/* Widescreen Results Layout: Results List + Inspector Pane */}
       {controller.activeSearch && (
-        <SearchResults controller={controller} result={controller.activeSearch} />
+        <SearchResults
+          controller={controller}
+          result={controller.activeSearch}
+          renderTraceDetails={renderTraceDetails}
+        />
       )}
     </>
   )

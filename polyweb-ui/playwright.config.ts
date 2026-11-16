@@ -19,16 +19,35 @@ const testDir = defineBddConfig({
   outputDir: "tests/features-gen",
 })
 
+/**
+ * Worker contract: stubbed scenarios are independent (each Playwright worker
+ * is its own process, and the Before hook and the Given steps reset the stub
+ * state per scenario), so they run fully parallel. CI sets
+ * PLAYWRIGHT_WORKERS to fill the spot worker; local runs default to one
+ * worker because the shared dev host is slow. A value that is not a whole
+ * number of at least 1 falls back to one worker.
+ *
+ * Scenarios tagged `@serial` hold or delay responses on fixed timers. The
+ * `chromium-serial` project runs them one at a time, but within a single
+ * invocation that one worker still runs beside the `chromium` workers. CI
+ * (scripts/ci/run-ui-bdd.sh) therefore runs the two projects in separate,
+ * consecutive invocations, so `@serial` scenarios run with no other worker.
+ */
+const requestedWorkers = Number(process.env.PLAYWRIGHT_WORKERS ?? 1)
+const SERIAL_TAG = /@serial/
+
 export default defineConfig({
   testDir,
-  fullyParallel: false,
-  workers: 1,
+  fullyParallel: true,
+  workers: Number.isInteger(requestedWorkers) && requestedWorkers >= 1 ? requestedWorkers : 1,
   expect: {
     timeout: 10_000,
   },
   use: {
     baseURL: configuredBaseURL,
     trace: "on-first-retry",
+    // A click on a missing control fails in 10 s instead of the 30 s test timeout.
+    actionTimeout: 10_000,
   },
   snapshotPathTemplate: "tests/snapshots/{projectName}/{testFilePath}/{arg}{ext}",
   webServer: {
@@ -39,6 +58,14 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
+      grepInvert: SERIAL_TAG,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "chromium-serial",
+      grep: SERIAL_TAG,
+      fullyParallel: false,
+      workers: 1,
       use: { ...devices["Desktop Chrome"] },
     },
   ],

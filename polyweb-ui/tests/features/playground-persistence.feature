@@ -40,6 +40,7 @@ Feature: Playground persistence across navigation and reload
     And the last fetch request should name project Alpha
     And the playground state should be persisted only under the project key of Alpha
 
+  @serial
   Scenario: Loading search survives a page switch without duplicate execution
     Given the persisted playground state is cleared
     When I hold the persisted search response

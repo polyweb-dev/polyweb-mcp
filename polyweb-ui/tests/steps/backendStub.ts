@@ -1624,11 +1624,12 @@ async function fulfillRecorded(
   route: Route,
   record: ExecutionRecord,
   body: unknown,
-  status: number
+  status: number,
+  headers: Record<string, string> = {}
 ): Promise<void> {
   record.status = status
   try {
-    await json(route, body, status)
+    await json(route, body, status, headers)
     record.outcome = "fulfilled"
   } catch {
     record.outcome = "aborted"
@@ -2424,10 +2425,16 @@ function dashboardWithQuotaOverride(): Record<string, unknown> {
   return base
 }
 
-function json(route: Route, body: unknown, status = 200): Promise<void> {
+function json(
+  route: Route,
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {}
+): Promise<void> {
   return route.fulfill({
     status,
     contentType: "application/json",
+    headers,
     body: JSON.stringify(body),
   })
 }
@@ -2820,7 +2827,10 @@ export async function installBackendStub(page: Page): Promise<void> {
         url: `https://${gate.projectName.toLowerCase()}.example.com/isolation/${index + 1}`,
       }))
     }
-    return fulfillRecorded(route, record, response, 200)
+    // Like the backend, a traced search names its trace in X-Trace-Id. The id
+    // is Alpha's success fixture, so Playground "View details" opens a trace
+    // that Alpha's project trace route serves (and Beta's answers 404).
+    return fulfillRecorded(route, record, response, 200, { "X-Trace-Id": SUCCESS_TRACE_ID })
   })
 
   // Deterministic fetch: echoes the pinned provider and target URL with
