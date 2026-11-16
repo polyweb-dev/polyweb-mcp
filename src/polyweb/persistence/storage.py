@@ -342,6 +342,60 @@ class QuotaSnapshotRow(Base):
     credential_id: Mapped[str | None] = mapped_column(CHAR(36))
 
 
+def _quota_scope(
+    provider: str, *, credential_id: UUID | None, pool_id: UUID | None
+) -> tuple[ColumnElement[bool], ...]:
+    """Select one balance owner's quota rows: a pool, an unpooled key, or the provider.
+
+    Provider-wide reads select only unattributed, unpooled rows, so an
+    unattributed funds zero never disables unrelated credentials.
+    """
+
+    if pool_id is not None:
+        return (QuotaSnapshotRow.provider == provider, QuotaSnapshotRow.pool_id == str(pool_id))
+    if credential_id is not None:
+        return (
+            QuotaSnapshotRow.provider == provider,
+            QuotaSnapshotRow.credential_id == str(credential_id),
+            QuotaSnapshotRow.pool_id.is_(None),
+        )
+    return (
+        QuotaSnapshotRow.provider == provider,
+        QuotaSnapshotRow.credential_id.is_(None),
+        QuotaSnapshotRow.pool_id.is_(None),
+    )
+
+
+def _stored_instant(text_value: str | None) -> datetime | None:
+    if not text_value:
+        return None
+    try:
+        return datetime.fromisoformat(text_value)
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class QuotaWriteGuard:
+    """Preconditions a quota write checks inside its own transaction (TASK-000070).
+
+    ``marker`` is the scope's :meth:`SQLiteRepository.quota_marker` read before
+    the writer read the state it records. A newer row of the scope means
+    another writer (a manual record) landed since, so the stale write is
+    skipped. ``still_current`` tells whether the writer, a cached adapter, is
+    still the one the cache serves.
+    """
+
+    marker: int | None
+    still_current: Callable[[], bool] | None = None
+
+    async def holds(self, session: AsyncSession, scope: Sequence[ColumnElement[bool]]) -> bool:
+        if self.still_current is not None and not self.still_current():
+            return False
+        latest = await session.scalar(select(func.max(QuotaSnapshotRow.id)).where(*scope))
+        return latest == self.marker
+
+
 class ProviderHealthRow(Base):
     """Row model for provider health observations.
 
@@ -1141,9 +1195,11 @@ class SQLiteRepository:
         reads), so the provider is required; project reads use
         :meth:`list_project_usage`.
 
-        An explicit ``pool_id`` narrows the ledger to that shared pool's usage;
-        otherwise a ``credential_id`` narrows it to that credential's unpooled
-        usage, the same balance owner :meth:`latest_quota` reads. Legacy rows
+        An explicit ``pool_id`` narrows the ledger to that shared pool's usage,
+        including the usage its member keys recorded without a pool (before
+        they joined it), so the pool never under-counts. Otherwise a
+        ``credential_id`` narrows it to that credential's unpooled usage, the
+        same balance owner :meth:`latest_quota` reads. Legacy rows
         without a credential or pool stay in every narrowed ledger, so a
         rebuilt adapter over-counts rather than forgets old usage. With one key
         per provider those rows are that key's own usage. With several keys the
@@ -1153,7 +1209,15 @@ class SQLiteRepository:
 
         scope: ColumnElement[bool] = UsageEventRow.provider == provider
         if pool_id is not None:
-            owner = UsageEventRow.pool_id == str(pool_id)
+            from polyweb.persistence.pools import CredentialPoolLinkRow
+
+            members = select(CredentialPoolLinkRow.credential_id).where(
+                CredentialPoolLinkRow.pool_id == str(pool_id)
+            )
+            owner = or_(
+                UsageEventRow.pool_id == str(pool_id),
+                and_(UsageEventRow.pool_id.is_(None), UsageEventRow.credential_id.in_(members)),
+            )
         elif credential_id is not None:
             owner = and_(
                 UsageEventRow.credential_id == str(credential_id),
@@ -1287,26 +1351,50 @@ class SQLiteRepository:
         credential_id: UUID | None = None,
         pool_id: UUID | None = None,
         credential_generation: int | None = None,
-    ) -> None:
-        """Append a provider quota observation.
+        guard: QuotaWriteGuard | None = None,
+        newest: bool = False,
+    ) -> bool:
+        """Append a provider quota observation and return whether it was written.
 
         A ``credential_id`` scopes the snapshot to one credential instance; a
         shared provider-rail observation stays unattributed so an unrelated
         credential never inherits its balance.
+
+        A ``guard`` is checked inside the write transaction: the write is
+        skipped when another observation of the same scope was recorded
+        after the guard's read, or when its writer is no longer current. With
+        ``newest`` the snapshot is stamped no earlier than the scope's newest
+        stored observation, so it becomes that scope's newest observation.
         """
 
         async with self._session_factory() as session:
+            if (
+                guard is not None
+                or newest
+                or (credential_id is not None and credential_generation is not None)
+            ):
+                await session.execute(text("BEGIN IMMEDIATE"))
             if credential_id is not None and credential_generation is not None:
                 from polyweb.persistence.credentials import ProviderCredentialRow
 
-                await session.execute(text("BEGIN IMMEDIATE"))
                 credential = await session.get(ProviderCredentialRow, str(credential_id))
                 if (
                     credential is None
                     or credential.status != "active"
                     or (credential.generation != credential_generation)
                 ):
-                    return
+                    return False
+            scope = _quota_scope(snapshot.provider, credential_id=credential_id, pool_id=pool_id)
+            if guard is not None and not await guard.holds(session, scope):
+                return False
+            if newest:
+                stored = _stored_instant(
+                    await session.scalar(
+                        select(func.max(QuotaSnapshotRow.observed_at)).where(*scope)
+                    )
+                )
+                if stored is not None and stored > snapshot.observed_at:
+                    snapshot = snapshot.model_copy(update={"observed_at": stored})
             await session.execute(
                 insert(QuotaSnapshotRow).values(
                     provider=snapshot.provider,
@@ -1325,6 +1413,25 @@ class SQLiteRepository:
                 )
             )
             await session.commit()
+        return True
+
+    async def quota_marker(
+        self,
+        provider: str,
+        *,
+        credential_id: UUID | None = None,
+        pool_id: UUID | None = None,
+    ) -> int | None:
+        """Return the id of the newest-written quota row of one scope, or ``None``.
+
+        A :class:`QuotaWriteGuard` holds this marker so a later write can tell
+        whether another observation of the scope landed after its read.
+        """
+
+        scope = _quota_scope(provider, credential_id=credential_id, pool_id=pool_id)
+        async with self._session_factory() as session:
+            marker = await session.scalar(select(func.max(QuotaSnapshotRow.id)).where(*scope))
+        return None if marker is None else int(marker)
 
     async def latest_quota(
         self,
@@ -1345,23 +1452,12 @@ class SQLiteRepository:
 
         statement = (
             select(QuotaSnapshotRow)
-            .where(QuotaSnapshotRow.provider == provider)
+            .where(*_quota_scope(provider, credential_id=credential_id, pool_id=pool_id))
             .order_by(QuotaSnapshotRow.observed_at.desc(), QuotaSnapshotRow.id.desc())
             .limit(1)
         )
         if source is not None:
             statement = statement.where(QuotaSnapshotRow.source == source.value)
-        if pool_id is not None:
-            statement = statement.where(QuotaSnapshotRow.pool_id == str(pool_id))
-        elif credential_id is not None:
-            statement = statement.where(
-                QuotaSnapshotRow.credential_id == str(credential_id),
-                QuotaSnapshotRow.pool_id.is_(None),
-            )
-        else:
-            statement = statement.where(
-                QuotaSnapshotRow.credential_id.is_(None), QuotaSnapshotRow.pool_id.is_(None)
-            )
         async with self._session_factory() as session:
             row = await session.scalar(statement)
         return self._quota_from_row(row) if row is not None else None

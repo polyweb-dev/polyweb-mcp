@@ -45,6 +45,7 @@ from polyweb.models.contracts import (
 from polyweb.models.provider_access import ALL_BITS, validate_mask
 from polyweb.models.provider_limits import ProviderObservationScope
 from polyweb.persistence.storage import (
+    QuotaWriteGuard,
     SQLiteRepository,
     register_setting_listener,
 )
@@ -196,6 +197,10 @@ async def prepare_adapter_quota(
     serves. A manual record retires the adapter while its hydration may still
     run on reads from before the record, so a retired adapter's hydration is
     never recorded: it would replace the record as the newest observation.
+    Both checks run inside the write transaction (:class:`QuotaWriteGuard`):
+    the write is skipped when the adapter was retired, or when any quota row
+    of the key's balance owner was recorded after the hydration's reads
+    began, so a record that lands while the write waits is never overwritten.
     """
 
     if config is not None:
@@ -203,6 +208,9 @@ async def prepare_adapter_quota(
     hydrate = getattr(adapter, "hydrate_quota", None)
     if not callable(hydrate):
         return
+    marker = await repository.quota_marker(
+        adapter.name, credential_id=scope.credential_id, pool_id=scope.upstream_pool_id
+    )
     snapshot = await hydrate(_ScopedQuotaReads(repository, scope))
     if not isinstance(snapshot, QuotaSnapshot):
         return
@@ -213,13 +221,12 @@ async def prepare_adapter_quota(
         getattr(latest, name) == getattr(snapshot, name) for name in _QUOTA_STATE_FIELDS
     ):
         return
-    if still_current is not None and not still_current():
-        return
     await repository.record_quota(
         snapshot,
         credential_id=scope.credential_id,
         pool_id=scope.upstream_pool_id,
         credential_generation=scope.credential_generation,
+        guard=QuotaWriteGuard(marker=marker, still_current=still_current),
     )
 
 
