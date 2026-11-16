@@ -232,7 +232,7 @@ async def _teardown_app_lifespan(
     owns_client: bool,
     client: httpx.AsyncClient | None,
 ) -> None:
-    """Flush traces, stop the limit schedule, then close owned composition resources."""
+    """Flush traces, stop the limit services, then close owned composition resources."""
 
     # Traces are force-flushed and shut down before the repository and
     # adapters close, so the last batch cannot race a closing database.
@@ -248,8 +248,8 @@ async def _teardown_app_lifespan(
     # Queued API key bookkeeping (use stamps, denial events) finishes before
     # any repository closes, injected or owned.
     await DEFAULT_USE_RECORDER.drain()
-    # The schedule task stops and is awaited before the repository and
-    # adapters close, so no poll can race a closing database.
+    # The limit services stop before the repository and adapters close. No
+    # limit polling task runs (TASK-000070).
     await _stop_limits(app, stop_limits)
     if owns_repository and repo is not None:
         clear_quota_poll_cache(repo, routes)
@@ -675,7 +675,11 @@ async def _start_limits(
 
 
 async def _stop_limits(app: FastAPI, stop: asyncio.Event) -> None:
-    """Stop and await the schedule task before the repository and adapters close."""
+    """Stop the limit services before the repository and adapters close.
+
+    No limit schedule task starts any more, so ``_limits_task`` is normally
+    ``None``; a leftover task is still cancelled and awaited.
+    """
 
     stop.set()
     task = getattr(app.state, "_limits_task", None)

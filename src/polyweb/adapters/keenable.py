@@ -667,6 +667,11 @@ class KeenableAdapter(ProviderAdapter):
         firm zero. A vendor-reported ``credits_remaining`` comes next. Without
         one, paid use leaves the aggregate unknown, and so does a spent free
         allowance, because purchased credits may still remain.
+
+        Rule (TASK-000070, A10): a keyed key with its free allowance spent, no
+        paid use and no ``credits_remaining`` reports an unknown balance, not
+        zero, so the pre-call rail does not block it. Polyweb never blocks the
+        large free tier on a guess; the vendor 402 is the hard stop.
         """
 
         free = max(Decimal("0"), self._allowance_limit - self._allowance_spend)
