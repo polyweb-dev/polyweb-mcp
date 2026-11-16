@@ -60,6 +60,7 @@ from polyweb.models.provider_limits import (
     LimitRecordUpdate,
     LimitStoreUnavailable,
     LimitVersionConflict,
+    ManualAnchorRejectedError,
     NativeDebit,
     NativePool,
     NativeUsageSnapshot,
@@ -312,7 +313,9 @@ class ProviderLimitsService:
         replaces a stored vendor 402 or zero. A delete clears only a pool that
         still holds a manual record, so it never removes a vendor 402 or a
         vendor report. Returns the stored pool, or ``None`` when nothing was
-        written.
+        written on purpose (a fresh vendor value stands, or a delete found no
+        manual record). Raises :class:`ManualAnchorRejectedError` when the
+        store rejected the record because a newer trusted fact holds the pool.
         """
 
         if self._repository is None:
@@ -338,13 +341,16 @@ class ProviderLimitsService:
                 source="manual_anchor",
             )
             return await self._repository.get_pool(pool.pool_id)
-        return await self._repository.record_manual_anchor(
+        recorded = await self._repository.record_manual_anchor(
             pool,
             remaining=_anchor_decimal(anchor, "remaining"),
             allowance=_anchor_decimal(anchor, "allowance"),
             reset_at=_anchor_instant(anchor, "billing_end"),
             observed_at=_anchor_instant(anchor, "updated_at") or self._clock(),
         )
+        if recorded is None:
+            raise ManualAnchorRejectedError(pool.pool_id)
+        return recorded
 
     async def _scoped_anchor_pool(
         self, pool: NativePool, scope: ProviderObservationScope

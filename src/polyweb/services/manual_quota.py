@@ -108,11 +108,26 @@ async def load_manual_quota(
     repository: SQLiteRepository | None,
     provider: ProviderName,
     scope: ManualQuotaScope | None = None,
+    *,
+    only_owner: bool = False,
 ) -> ManualQuotaResponse | None:
-    """Return the stored billing anchor view, or ``None`` when absent or corrupt."""
+    """Return the stored billing anchor view, or ``None`` when absent or corrupt.
 
-    payload = await _safe_runtime_setting(repository, manual_quota_key(provider, scope))
+    A record of one key or pool lives under that balance owner's settings
+    key, whether the request named the owner or the route inferred it. A
+    provider-level record saved before scopes existed still applies to the
+    owner it names, or to the provider's only balance owner
+    (``only_owner``).
+    """
+
+    if scope is not None:
+        payload = await _safe_runtime_setting(repository, manual_quota_key(provider, scope))
+        if isinstance(payload, dict):
+            return _anchor_from_payload(provider, payload)
+    payload = await _safe_runtime_setting(repository, manual_quota_key(provider))
     if not isinstance(payload, dict):
+        return None
+    if scope is not None and not _provider_record_applies(payload, scope, only_owner):
         return None
     return _anchor_from_payload(provider, payload)
 
@@ -137,6 +152,18 @@ def manual_quota_payload(
     return payload
 
 
+def manual_quota_record(
+    provider: ProviderName,
+    update: ManualQuotaUpdate,
+    now: datetime,
+    scope: ManualQuotaScope | None = None,
+) -> ManualQuotaResponse:
+    """Return the ESTIMATED capacity view of one record before it is stored."""
+
+    quota = ManualQuota.model_validate(update.model_dump(mode="json"))
+    return manual_quota_response(provider, quota, now, scope)
+
+
 async def persist_manual_quota(
     repository: SQLiteRepository | None,
     provider: ProviderName,
@@ -144,21 +171,23 @@ async def persist_manual_quota(
     now: datetime,
     scope: ManualQuotaScope | None = None,
     *,
-    explicit: bool = False,
+    only_owner: bool = False,
 ) -> ManualQuotaResponse:
     """Persist the billing anchor and return its ESTIMATED capacity view.
 
-    An explicitly scoped record has its own settings key. An unscoped record
-    keeps the provider key, so the existing dialog reads it back, and it
-    remembers the one key it was applied to.
+    A record of one key or pool is stored under that balance owner's
+    settings key, the same key for a named and an inferred scope, so GET,
+    PUT and DELETE always meet the same record. It replaces a provider-level
+    record saved before scopes existed for the same owner. A record without
+    a balance owner keeps the provider key.
     """
 
     quota = ManualQuota.model_validate(update.model_dump(mode="json"))
     if repository is not None:
         await repository.set_runtime_setting(
-            manual_quota_key(provider, scope if explicit else None),
-            manual_quota_payload(quota, now, scope),
+            manual_quota_key(provider, scope), manual_quota_payload(quota, now, scope)
         )
+        await _clear_provider_record(repository, provider, scope, only_owner)
     return manual_quota_response(provider, quota, now, scope)
 
 
@@ -166,12 +195,56 @@ async def clear_manual_quota(
     repository: SQLiteRepository | None,
     provider: ProviderName,
     scope: ManualQuotaScope | None = None,
+    *,
+    only_owner: bool = False,
 ) -> None:
-    """Clear the billing anchor idempotently; unknown providers never reach here."""
+    """Clear the billing anchor idempotently; unknown providers never reach here.
+
+    A scoped delete also clears a provider-level record saved before scopes
+    existed when that record applies to the same owner.
+    """
 
     if repository is None:
         return
     await repository.set_runtime_setting(manual_quota_key(provider, scope), None)
+    await _clear_provider_record(repository, provider, scope, only_owner)
+
+
+async def _clear_provider_record(
+    repository: SQLiteRepository,
+    provider: ProviderName,
+    scope: ManualQuotaScope | None,
+    only_owner: bool,
+) -> None:
+    """Remove the provider-level record when it describes one scoped owner."""
+
+    if scope is None:
+        return
+    key = manual_quota_key(provider)
+    payload = await _safe_runtime_setting(repository, key)
+    if isinstance(payload, dict) and _provider_record_applies(payload, scope, only_owner):
+        await repository.set_runtime_setting(key, None)
+
+
+def _provider_record_applies(
+    payload: dict[object, object], scope: ManualQuotaScope, only_owner: bool
+) -> bool:
+    """Return whether a provider-level record describes one balance owner.
+
+    A record that names a key or pool applies to that owner. A record that
+    names none applies only when the owner is the provider's only one.
+    """
+
+    try:
+        pool_id = _uuid(payload.get("pool_id"))
+        credential_id = _uuid(payload.get("credential_id"))
+    except ValueError:
+        return False
+    if pool_id is not None:
+        return pool_id == scope.pool_id
+    if credential_id is not None:
+        return scope.pool_id is None and credential_id in scope.credential_ids
+    return only_owner
 
 
 async def resolve_manual_quota_scope(
@@ -250,6 +323,13 @@ async def project_manual_record(
 
     A deletion that finds no manual record at the owner's pool changes
     nothing: a vendor 402 and the adapters that hold it stay as they are.
+
+    A record the limit store rejects (a newer vendor fact holds the pool)
+    raises :class:`ManualAnchorRejectedError` before anything else is
+    written, so no zero routing snapshot is stored as if it were the record
+    and no adapter is retired. The routing snapshot is stamped no earlier
+    than the owner's newest snapshot, so a stale adapter hydration written
+    just before it cannot outrank it.
     """
 
     if limits is None:
@@ -274,6 +354,7 @@ async def project_manual_record(
             credential_id=scope.observation.credential_id,
             pool_id=scope.pool_id,
             credential_generation=scope.observation.credential_generation,
+            newest=True,
         )
     if retire is not None:
         retire(set(scope.credential_ids))
