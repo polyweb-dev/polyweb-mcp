@@ -313,9 +313,12 @@ class ProviderLimitsService:
         replaces a stored vendor 402 or zero. A delete clears only a pool that
         still holds a manual record, so it never removes a vendor 402 or a
         vendor report. Returns the stored pool, or ``None`` when nothing was
-        written on purpose (a fresh vendor value stands, or a delete found no
-        manual record). Raises :class:`ManualAnchorRejectedError` when the
-        store rejected the record because a newer trusted fact holds the pool.
+        written on purpose (an unscoped record meets a fresh vendor value, or a
+        delete found no manual record). Raises :class:`ManualAnchorRejectedError`
+        when the store rejected the record because a newer trusted fact holds
+        the pool, and when a scoped record meets a fresh vendor value, so the
+        operator is never told a record was applied when the balance did not
+        change.
         """
 
         if self._repository is None:
@@ -329,6 +332,8 @@ class ProviderLimitsService:
         if stored is not None and _is_fresh_vendor_value(stored):
             # A fresh vendor observation stands. It is never replaced silently by
             # an operator estimate, and it is never cleared by an operator delete.
+            if scope is not None and anchor is not None:
+                raise ManualAnchorRejectedError(pool.pool_id)
             return None
         if anchor is None:
             if stored is None or not _holds_manual_record(stored):

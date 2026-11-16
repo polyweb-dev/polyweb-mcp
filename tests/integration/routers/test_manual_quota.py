@@ -1007,6 +1007,67 @@ async def test_set_balance_older_than_a_vendor_fact_is_a_conflict(
 
 
 @pytest.mark.asyncio
+async def test_set_balance_over_a_fresh_vendor_value_is_a_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
+) -> None:
+    """A scoped record that meets a fresh vendor value says so instead of a silent 200.
+
+    The key's pool holds a fresh authoritative vendor report. The store keeps
+    it, so the route answers 409, keeps the cached adapter and saves no record.
+    """
+
+    from polyweb.configuration.config import get_settings
+    from polyweb.models.contracts import UnitKind
+    from polyweb.models.provider_limits import AuthMode, Confidence, NativeUsageSnapshot
+
+    http = _offline_client()
+    repository, app = await _open_key_world(tmp_path, monkeypatch, "keenable", http)
+    try:
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(client, repository, temp_email("fresh"))
+            await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            world = _KeyWorld(client, app, raw_auth_headers(pair["access_token"]))
+            key_id = world.add_key("keenable", "only")
+            pool_id = world.scoped_pool_id("keenable", key_id)
+            assert await repository.limits.apply_snapshot(
+                NativeUsageSnapshot(
+                    pool_id=pool_id,
+                    provider="keenable",
+                    auth_mode=AuthMode.KEYED,
+                    native_unit=UnitKind.REQUEST,
+                    observed_at=datetime.now(UTC),
+                    source="vendor_api",
+                    confidence=Confidence.AUTHORITATIVE,
+                    remaining=Decimal("40"),
+                    allowance=Decimal("100"),
+                )
+            )
+            lease = await world.lease("keenable", key_id)
+            cached = lease.adapter
+            lease.release()
+            url = "/api/v1/providers/keenable/manual-quota"
+
+            put = client.put(url, json=_payload(allowance="10", usage="0"), headers=world.headers)
+
+            assert put.status_code == 409, put.text
+            pool = await repository.limits.get_pool(pool_id)
+            assert pool is not None and (pool.source, pool.remaining) == (
+                "vendor_api",
+                Decimal("40"),
+            )
+            lease = await world.lease("keenable", key_id)
+            try:
+                assert lease.adapter is cached, "a rejected record retired the adapter"
+            finally:
+                lease.release()
+            assert client.get(url, headers=world.headers).json() is None
+    finally:
+        await repository.close()
+        await http.aclose()
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_set_balance_for_a_shared_pool_unblocks_both_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
 ) -> None:
