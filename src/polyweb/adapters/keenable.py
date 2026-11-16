@@ -82,6 +82,36 @@ _SERVER_ADDRESS = _SERVER.hostname or "api.keenable.ai"
 _SERVER_PORT = _SERVER.port or 443
 
 
+def _reported_balance(latest: QuotaSnapshot | None) -> object:
+    """Return the vendor-reported credits a stored snapshot carries, if any.
+
+    A billed response stores ``credits_remaining`` in its metadata. A scoped
+    sync projection stores the pool value instead, and names the pool source:
+    only a ``vendor_api`` pool holds the reported balance.
+    """
+
+    if latest is None:
+        return None
+    reported = latest.metadata.get("credits_remaining")
+    if reported is not None:
+        return reported
+    if latest.metadata.get("native_source") == "vendor_api":
+        return latest.remaining
+    return None
+
+
+def _credits_remaining(value: object) -> Decimal | None:
+    """Parse a reported ``credits_remaining``; an absent or malformed value stays unknown."""
+
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (ArithmeticError, ValueError):
+        return None
+    return parsed if parsed.is_finite() and parsed >= 0 else None
+
+
 def _response_metadata(payload: dict[str, Any], excluded: set[str]) -> dict[str, Any] | None:
     """Keep useful top-level Keenable fields outside normalized result data."""
 
@@ -110,6 +140,7 @@ class KeenableAdapter(ProviderAdapter):
         self._paid_spend = Decimal("0")
         self._paid_usage_seen = False
         self._hard_exhausted = False
+        self._credits_remaining: Decimal | None = None
         self._ledger_month = _month_start(datetime.now(UTC))
         self._hydrated_month: datetime | None = None
         # Keyless access is a shared rolling rate-limit pool rather than a
@@ -401,6 +432,7 @@ class KeenableAdapter(ProviderAdapter):
             )
         credits, paid, metadata = self._reported_usage(payload)
         self.apply_usage(credits=credits, paid=paid)
+        self._observe_credits(credits, metadata.get("credits_remaining"))
         return UsageEvent(
             provider=self.name,
             operation=operation,
@@ -413,7 +445,15 @@ class KeenableAdapter(ProviderAdapter):
 
     @staticmethod
     def _reported_usage(payload: dict[str, Any] | None) -> tuple[Decimal, bool, dict[str, Any]]:
-        raw = payload.get("_meta", {}).get("keenable/usage") if payload else None
+        """Read one billed response's usage: the HTTP ``usage`` object or the MCP ``_meta``.
+
+        ``credits_remaining`` (unused free plus purchased credits after the
+        call) is kept as exact text when the vendor reports it.
+        """
+
+        raw = payload.get("usage") if payload else None
+        if not isinstance(raw, dict):
+            raw = payload.get("_meta", {}).get("keenable/usage") if payload else None
         if not isinstance(raw, dict):
             return Decimal("1"), False, {}
         credits = raw.get("credits", raw.get("amount", 1))
@@ -429,10 +469,19 @@ class KeenableAdapter(ProviderAdapter):
         if not isinstance(paid, bool):
             raise ValueError("malformed Keenable usage")
         metadata = {key: raw[key] for key in ("sku", "paid") if key in raw}
+        remaining = _credits_remaining(raw.get("credits_remaining"))
+        if remaining is not None:
+            metadata["credits_remaining"] = str(remaining)
         return parsed, paid, metadata
 
     async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
-        """Restore keyed allowance or keyless rolling-window counters."""
+        """Restore keyed allowance or keyless rolling-window counters.
+
+        A keyed key also restores its newest vendor-reported balance of this
+        month, minus the credits recorded after that report. The balance comes
+        from a billed response's snapshot, or from a scoped sync projection of
+        a stored ``vendor_api`` pool, which is the newest snapshot after a sync.
+        """
 
         mode, _headers = self._auth()
         if mode == _KEYLESS:
@@ -484,6 +533,14 @@ class KeenableAdapter(ProviderAdapter):
             and not later_success
             and latest.observed_at >= month_start
         )
+        reported = _reported_balance(latest)
+        self._credits_remaining = None
+        if reported is not None and latest is not None and latest.observed_at >= month_start:
+            later = sum(
+                (event.units for event in current if event.observed_at > latest.observed_at),
+                Decimal("0"),
+            )
+            self._credits_remaining = max(Decimal("0"), Decimal(str(reported)) - later)
         self._hydrated_month = month_start
         return self._snapshot_sync()
 
@@ -504,6 +561,11 @@ class KeenableAdapter(ProviderAdapter):
         free allowance and the paid SKU spend in separate counters. A key with
         paid usage reports an unknown aggregate, not a fabricated balance. A
         vendor 402 is a hard observation, so its reported remaining is zero.
+        A billed response's ``credits_remaining`` is a vendor fact, published
+        as an observed ``vendor_api`` balance (free plus purchased credits)
+        minus the credits of later responses that did not report it. It is
+        stamped at the sync instant, because a local debit after the response
+        re-stamps the stored pool and an older stamp would be rejected.
         Keyless access is unmetered, so it returns no snapshot.
         """
 
@@ -512,8 +574,11 @@ class KeenableAdapter(ProviderAdapter):
             return None
         self._rollover_if_needed(datetime.now(UTC))
         quota = self._snapshot_sync()
+        source = "local_ledger"
         if self._hard_exhausted:
             confidence = Confidence.OBSERVED
+        elif self._credits_remaining is not None:
+            source, confidence = "vendor_api", Confidence.OBSERVED
         elif self._paid_usage_seen:
             confidence = Confidence.UNKNOWN
         else:
@@ -524,7 +589,7 @@ class KeenableAdapter(ProviderAdapter):
             auth_mode=auth_mode,
             native_unit=UnitKind.REQUEST,
             observed_at=request.observed_at,
-            source="local_ledger",
+            source=source,
             confidence=confidence,
             remaining=quota.remaining,
             allowance=quota.limit,
@@ -547,8 +612,22 @@ class KeenableAdapter(ProviderAdapter):
     async def quota_after_error(self, status: int | None) -> QuotaSnapshot | None:
         if status == 402 and self._auth()[0] == _KEYED:
             self._hard_exhausted = True
+            self._credits_remaining = None
             return await self.quota()
         return None
+
+    def _observe_credits(self, credits: Decimal, reported: object) -> None:
+        """Track the key's vendor-reported balance: the newest report minus later use.
+
+        A billed response's ``credits_remaining`` replaces the tracked value. A
+        response without it subtracts its own credits from the last report, and
+        with no report yet the local allowance count stays the estimate.
+        """
+
+        if isinstance(reported, str):
+            self._credits_remaining = Decimal(reported)
+        elif self._credits_remaining is not None:
+            self._credits_remaining = max(Decimal("0"), self._credits_remaining - credits)
 
     def apply_usage(self, *, credits: Decimal, paid: bool = False) -> QuotaSnapshot | None:
         """Apply a reported paid/free usage detail without mixing counters."""
@@ -578,23 +657,36 @@ class KeenableAdapter(ProviderAdapter):
         self._paid_spend = Decimal("0")
         self._paid_usage_seen = False
         self._hard_exhausted = False
+        self._credits_remaining = None
         self._hydrated_month = None
 
     def _snapshot_sync(self) -> QuotaSnapshot:
-        # A vendor 402 hard exhaustion outranks the paid unknown and the free
-        # projection: the reported remaining is a firm zero in every case.
-        remaining = (
-            Decimal("0")
-            if self._hard_exhausted
-            else (
-                None
-                if self._paid_usage_seen
-                else max(Decimal("0"), self._allowance_limit - self._allowance_spend)
-            )
-        )
+        """Project the keyed balance from the strongest fact this adapter holds.
+
+        A vendor 402 hard exhaustion outranks everything: the remaining is a
+        firm zero. A vendor-reported ``credits_remaining`` comes next. Without
+        one, paid use leaves the aggregate unknown, and so does a spent free
+        allowance, because purchased credits may still remain.
+
+        Rule (TASK-000070, A10): a keyed key with its free allowance spent, no
+        paid use and no ``credits_remaining`` reports an unknown balance, not
+        zero, so the pre-call rail does not block it. Polyweb never blocks the
+        large free tier on a guess; the vendor 402 is the hard stop.
+        """
+
+        free = max(Decimal("0"), self._allowance_limit - self._allowance_spend)
+        remaining: Decimal | None
+        if self._hard_exhausted:
+            remaining = Decimal("0")
+        elif self._credits_remaining is not None:
+            remaining = self._credits_remaining
+        elif self._paid_usage_seen or free == 0:
+            remaining = None
+        else:
+            remaining = free
         observed_at = datetime.now(UTC)
         metadata: dict[str, object] = {
-            "free": max(Decimal("0"), self._allowance_limit - self._allowance_spend),
+            "free": free,
             "free_spend": self._allowance_spend,
             "soft_zero": False,
             "window": "monthly",
@@ -602,11 +694,13 @@ class KeenableAdapter(ProviderAdapter):
         if self._paid_usage_seen:
             metadata["paid"] = self._paid_spend
             metadata["paid_spend"] = self._paid_spend
+        if self._credits_remaining is not None and not self._hard_exhausted:
+            metadata["credits_remaining"] = self._credits_remaining
         return QuotaSnapshot(
             provider=self.name,
             source=QuotaSource.OBSERVED,
             remaining=remaining,
-            limit=self._allowance_limit,
+            limit=max(self._allowance_limit, remaining or Decimal("0")),
             reset_at=_next_month_start(observed_at),
             observed_at=observed_at,
             unit_kind=UnitKind.CREDIT,

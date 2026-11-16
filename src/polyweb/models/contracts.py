@@ -516,7 +516,11 @@ class ManualQuotaUpdate(_ManualQuotaInputBase):
 
 
 class ManualQuotaResponse(ContractModel):
-    """Stored billing anchor plus derived ESTIMATED capacity for the dashboard."""
+    """Stored billing anchor plus derived ESTIMATED capacity for the dashboard.
+
+    ``credential_id`` and ``pool_id`` name the key or shared pool the record
+    applies to; both are null for a provider-level record.
+    """
 
     provider: str
     billing_start: date
@@ -528,6 +532,8 @@ class ManualQuotaResponse(ContractModel):
     source: QuotaSource = QuotaSource.ESTIMATED
     updated_at: datetime
     note: str | None = Field(default=None, max_length=500)
+    credential_id: UUID | None = None
+    pool_id: UUID | None = None
 
     @field_validator("allowance", "current_usage", "remaining", mode="before")
     @classmethod

@@ -143,6 +143,13 @@ Feature: Tavily keyed Credits through synthetic headers
     When an old Tavily poll arrives after a newer 402 and local debits
     Then the Tavily old poll cannot replace the newer 402 or debits
 
+  Scenario: T23 Tavily usage report with new Credits recovers a terminal 402 in the same month
+    Given a Tavily pool with 40 of 1000 Credits that a vendor 402 replaced
+    When a later Tavily usage report repeats 40 of 1000 Credits
+    Then the Tavily pool keeps the vendor 402 and denies the next call
+    When a later Tavily usage report shows 1040 of 2000 Credits
+    Then the Tavily pool holds 1040 vendor Credits and admits the next call
+
   Scenario: T18 Tavily stale cache with vendor 402 through REST keeps one attempt zero debit and 402 text
     Given a Tavily REST app with stale positive cache and vendor 402
     When I request one Tavily search through REST

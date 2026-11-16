@@ -873,6 +873,18 @@ class LimitDeniedError(Exception):
         return 402
 
 
+class ManualAnchorRejectedError(Exception):
+    """The limit store kept a newer fact, so an operator's manual record was not stored.
+
+    A vendor report, a vendor 402 or another manual record observed after the
+    record's instant holds the pool. The key's state is left as it is.
+    """
+
+    def __init__(self, pool_id: str) -> None:
+        super().__init__(f"a newer observation holds {pool_id}; the record was not stored")
+        self.pool_id = pool_id
+
+
 def local_funds_denial(
     provider: str,
     *,

@@ -256,17 +256,7 @@ def test_quota_after_error_402_without_limit_invents_no_limit() -> None:
     assert snapshot.metadata["limit_source"] is None
 
 
-def test_quota_after_error_429_produces_observed_zero() -> None:
-    adapter = _make_adapter(budget=Decimal("10.00"))
-    snapshot = adapter.quota_after_error(429)
-    assert snapshot is not None
-    assert snapshot.source is QuotaSource.OBSERVED
-    assert snapshot.remaining == Decimal("0")
-    assert snapshot.metadata["exhaustion"] is True
-    assert snapshot.metadata["exhaustion_status"] == 429
-
-
-@pytest.mark.parametrize("status", [400, 401, 403, 500, None])
+@pytest.mark.parametrize("status", [400, 401, 403, 429, 500, None])
 def test_quota_after_error_other_statuses_pass_through(status: int | None) -> None:
     adapter = _make_adapter(budget=Decimal("10.00"))
     assert adapter.quota_after_error(status) is None
@@ -349,6 +339,47 @@ async def test_hydrate_quota_reconstructs_current_month_spend() -> None:
     # Only current month events (0.007 + 0.003 = 0.010) counted
     assert snapshot.remaining == Decimal("9.990")
     assert snapshot.metadata["spend_usd"] == Decimal("0.010")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "blocked"), [(402, True), (429, False)], ids=["vendor-402", "legacy-429"]
+)
+async def test_hydration_restores_the_block_only_from_a_stored_402(
+    status: int, blocked: bool
+) -> None:
+    """B4 (AC #12): a rebuilt adapter restores soft-zero from a stored 402, never from a 429.
+
+    Rows stored before this change also marked a 429 as soft-zero. A 429 is a
+    rate limit, so a rebuilt adapter from such a row must admit the next call.
+    """
+
+    stored = _make_adapter(budget=Decimal("10.00"))._exhaustion_snapshot(status)
+    adapter = _make_adapter(budget=Decimal("10.00"))
+
+    hydrated = await adapter.hydrate_quota(_MockRepository(latest_quota=stored))
+    view = await adapter.quota()
+
+    assert hydrated is not None and view is not None
+    assert is_soft_quota_zero("exa", view) is blocked
+    assert view.remaining == (Decimal("0") if blocked else Decimal("10.00"))
+
+
+@pytest.mark.asyncio
+async def test_recorded_manual_credits_lift_a_402_soft_zero() -> None:
+    """B4 (AC #6): recording manual credits on a blocked adapter admits the next call."""
+
+    adapter = _make_adapter(budget=Decimal("10.00"))
+    adapter.quota_after_error(402)
+    blocked = await adapter.quota()
+    assert blocked is not None and is_soft_quota_zero("exa", blocked) is True
+
+    adapter.set_manual_starting_credits(Decimal("5"))
+    view = await adapter.quota()
+
+    assert view is not None
+    assert is_soft_quota_zero("exa", view) is False
+    assert view.remaining == Decimal("5")
 
 
 @pytest.mark.asyncio
@@ -642,7 +673,7 @@ def test_exa_adapter_source_never_authoritative() -> None:
 async def test_snapshot_sources_stay_estimated_or_observed() -> None:
     adapter = _make_adapter(budget=Decimal("10.00"))
     normal = await adapter.quota()
-    exhausted = adapter.quota_after_error(429)
+    exhausted = adapter.quota_after_error(402)
     assert exhausted is not None
     assert {normal.source, exhausted.source} <= {
         QuotaSource.ESTIMATED,

@@ -614,3 +614,92 @@ async def test_spent_key_with_funded_plan_denies_key_cap(
             )
         )
     assert "key_cap_exhausted" in excinfo.value.reasons
+
+
+class _ScriptedUsageHTTP:
+    """The adapter-owned usage client, answering each GET with the next payload."""
+
+    def __init__(self) -> None:
+        self.payloads: list[dict[str, object]] = []
+
+    async def get(self, url: str) -> object:
+        import httpx
+
+        del url
+        return httpx.Response(200, json=self.payloads.pop(0))
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _usage(plan_usage: int, plan_limit: int) -> dict[str, object]:
+    return {
+        "account": {"plan_usage": plan_usage, "plan_limit": plan_limit},
+        "key": {"usage": plan_usage, "limit": 5000},
+    }
+
+
+async def test_vendor_report_with_new_credits_recovers_a_terminal_402(
+    repository: SQLiteRepository,
+) -> None:
+    """AC #5 recovery: only a usage report that proves new funds unblocks Tavily.
+
+    The store and the adapter both keep the 402 for a report that repeats the
+    pre-402 balance. A report with a larger allowance replaces the 402, lifts
+    the adapter clamp after the store accepted it, and admission admits again.
+    """
+
+    from datetime import timedelta
+
+    import httpx
+    import pytest
+    from pydantic import SecretStr
+
+    from polyweb.adapters.tavily import TavilyAdapter
+    from polyweb.services.limits_sync import LimitSyncService
+
+    service = _service(repository)
+    await service.initialize()
+    await service.apply_tavily_config(ProviderConfig(), auth_mode=AuthMode.KEYED)
+    client = httpx.AsyncClient()
+    adapter = TavilyAdapter(client, sdk_client=object(), api_key=SecretStr("tvly-recovery"))  # type: ignore[arg-type]
+    usage = _ScriptedUsageHTTP()
+    adapter._owned_http = usage  # type: ignore[assignment]
+    sync = LimitSyncService(repository.limits, service, lambda: [adapter], clock=lambda: FIXED_AT)
+
+    async def poll(at: datetime, payload: dict[str, object]) -> None:
+        usage.payloads.append(payload)
+        adapter._usage_attempt_at = None
+        assert (await sync.sync_provider("tavily", at)).status == "synced"
+
+    def admit(attempt: str) -> object:
+        return service.admit(
+            LimitCallContext(
+                **FIXTURE_ACTOR,
+                provider="tavily",
+                operation=LimitOperation.SEARCH,
+                auth_mode=AuthMode.KEYED,
+                attempt_id=attempt,
+                requested_at=FIXED_AT,
+            )
+        )
+
+    try:
+        await poll(FIXED_AT - timedelta(minutes=5), _usage(960, 1000))
+        await adapter.quota_after_error(402)
+        await service.record_terminal_402("tavily", AuthMode.KEYED)
+
+        await poll(FIXED_AT + timedelta(minutes=2), _usage(960, 1000))
+        pool = await repository.limits.get_pool(TAVILY_POOL)
+        assert pool is not None and (pool.source, pool.remaining) == ("vendor_402", Decimal("0"))
+        with pytest.raises(LimitDeniedError):
+            await admit("tavily-stale")  # type: ignore[misc]
+
+        await poll(FIXED_AT + timedelta(minutes=4), _usage(960, 2000))
+        pool = await repository.limits.get_pool(TAVILY_POOL)
+        assert pool is not None and (pool.source, pool.remaining) == ("vendor_api", Decimal("1040"))
+        assert adapter._terminal_402 is False
+        assert await admit("tavily-recovered") is not None  # type: ignore[misc]
+    finally:
+        await adapter.aclose()
+        await client.aclose()

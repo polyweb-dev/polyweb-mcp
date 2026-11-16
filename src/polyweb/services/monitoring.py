@@ -1216,16 +1216,17 @@ def _terminal_quota_402(exc: BaseException) -> bool:
 
     The shape mirrors ``_terminal_quota_402`` in ``routers/api.py``: a
     ``ProviderOperationError`` whose stored error names ``code="quota_exhausted"``
-    and ``status_code=402`` for providers with credit pools (Tavily, Firecrawl).
-    The monitoring layer must not import from the router, so the predicate is
-    repeated here.
+    and ``status_code=402`` for providers with credit pools (Tavily, Firecrawl,
+    Exa, and keyed Keenable, whose 402 ``insufficient_credits`` must not be
+    retried). The monitoring layer must not import from the router, so the
+    predicate is repeated here.
     """
 
     if not isinstance(exc, ProviderOperationError):
         return False
     error = exc.error
     return (
-        error.provider in ("tavily", "firecrawl", "exa")
+        error.provider in ("tavily", "firecrawl", "exa", "keenable")
         and error.code == "quota_exhausted"
         and error.status_code == 402
     )

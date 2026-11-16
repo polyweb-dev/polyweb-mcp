@@ -60,6 +60,7 @@ from polyweb.models.provider_limits import (
     LimitRecordUpdate,
     LimitStoreUnavailable,
     LimitVersionConflict,
+    ManualAnchorRejectedError,
     NativeDebit,
     NativePool,
     NativeUsageSnapshot,
@@ -67,6 +68,7 @@ from polyweb.models.provider_limits import (
     ProviderLimitDetail,
     ProviderLimitRecord,
     ProviderLimitsResponse,
+    ProviderObservationScope,
     RateAdmission,
     RateBlock,
     RateProgressView,
@@ -293,26 +295,49 @@ class ProviderLimitsService:
             if record.provider == "tavily" and record.auth_mode is AuthMode.KEYED
         ]
 
-    async def apply_manual_anchor(self, provider: str, anchor: object | None) -> None:
+    async def apply_manual_anchor(
+        self,
+        provider: str,
+        anchor: object | None,
+        scope: ProviderObservationScope | None = None,
+    ) -> NativePool | None:
         """Project an operator manual native anchor into the matching pool.
 
         The anchor supplies an estimated native allowance for a provider whose
         usage API is unavailable. A fresh authoritative observation is never
         replaced silently, and a rate-only free provider stays unmetered. A
         deleted anchor restores an unknown state rather than a zero balance.
+
+        A ``scope`` names one key or shared pool: the anchor then fills that
+        balance owner's scoped pool (``#cred:`` or ``#pool:``), where it
+        replaces a stored vendor 402 or zero. A delete clears only a pool that
+        still holds a manual record, so it never removes a vendor 402 or a
+        vendor report. Returns the stored pool, or ``None`` when nothing was
+        written on purpose (an unscoped record meets a fresh vendor value, or a
+        delete found no manual record). Raises :class:`ManualAnchorRejectedError`
+        when the store rejected the record because a newer trusted fact holds
+        the pool, and when a scoped record meets a fresh vendor value, so the
+        operator is never told a record was applied when the balance did not
+        change.
         """
 
         if self._repository is None:
-            return
+            return None
         pool = self._manual_anchor_pool(provider)
         if pool is None:
-            return
+            return None
+        if scope is not None:
+            pool = await self._scoped_anchor_pool(pool, scope)
         stored = await self._repository.get_pool(pool.pool_id)
         if stored is not None and _is_fresh_vendor_value(stored):
             # A fresh vendor observation stands. It is never replaced silently by
             # an operator estimate, and it is never cleared by an operator delete.
-            return
+            if scope is not None and anchor is not None:
+                raise ManualAnchorRejectedError(pool.pool_id)
+            return None
         if anchor is None:
+            if stored is None or not _holds_manual_record(stored):
+                return None
             # The explicit clear path bypasses the preserve rule, so a deleted
             # anchor restores the unknown state rather than the old estimate.
             await self._repository.clear_pool_values(
@@ -320,14 +345,31 @@ class ProviderLimitsService:
                 observed_at=self._clock(),
                 source="manual_anchor",
             )
-            return
-        await self._repository.record_manual_anchor(
+            return await self._repository.get_pool(pool.pool_id)
+        recorded = await self._repository.record_manual_anchor(
             pool,
             remaining=_anchor_decimal(anchor, "remaining"),
             allowance=_anchor_decimal(anchor, "allowance"),
             reset_at=_anchor_instant(anchor, "billing_end"),
             observed_at=_anchor_instant(anchor, "updated_at") or self._clock(),
         )
+        if recorded is None:
+            raise ManualAnchorRejectedError(pool.pool_id)
+        return recorded
+
+    async def _scoped_anchor_pool(
+        self, pool: NativePool, scope: ProviderObservationScope
+    ) -> NativePool:
+        """Return the scoped pool of one key or shared pool, keeping its stored generation."""
+
+        assert self._repository is not None
+        pool_id = scope.native_pool_id(pool.pool_id)
+        stored = await self._repository.get_pool(pool_id)
+        if stored is not None:
+            generation = stored.credential_generation
+        else:
+            generation = 0 if scope.upstream_pool_id is not None else scope.credential_generation
+        return pool.model_copy(update={"pool_id": pool_id, "credential_generation": generation})
 
     def _manual_anchor_pool(self, provider: str) -> NativePool | None:
         """Return the finite paid pool a manual anchor may fill, if any."""
@@ -1508,6 +1550,16 @@ def _is_fresh_vendor_value(pool: NativePool) -> bool:
     """Return whether a pool holds a fresh, vendor-confirmed value."""
 
     return pool.confidence is Confidence.AUTHORITATIVE and not pool.stale and not pool.manual_anchor
+
+
+def _holds_manual_record(pool: NativePool) -> bool:
+    """Return whether a pool's value still comes from an operator manual record.
+
+    The flag alone is not enough: a later vendor report or 402 replaces the
+    value and the source but keeps the flag.
+    """
+
+    return pool.manual_anchor and pool.source == "manual_anchor"
 
 
 def _minute_window(block: RateBlock | ProviderLimitRecord) -> RateWindow | None:

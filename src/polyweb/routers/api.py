@@ -232,7 +232,7 @@ async def _teardown_app_lifespan(
     owns_client: bool,
     client: httpx.AsyncClient | None,
 ) -> None:
-    """Flush traces, stop the limit schedule, then close owned composition resources."""
+    """Flush traces, stop the limit services, then close owned composition resources."""
 
     # Traces are force-flushed and shut down before the repository and
     # adapters close, so the last batch cannot race a closing database.
@@ -248,8 +248,8 @@ async def _teardown_app_lifespan(
     # Queued API key bookkeeping (use stamps, denial events) finishes before
     # any repository closes, injected or owned.
     await DEFAULT_USE_RECORDER.drain()
-    # The schedule task stops and is awaited before the repository and
-    # adapters close, so no poll can race a closing database.
+    # The limit services stop before the repository and adapters close. No
+    # limit polling task runs (TASK-000070).
     await _stop_limits(app, stop_limits)
     if owns_repository and repo is not None:
         clear_quota_poll_cache(repo, routes)
@@ -598,11 +598,14 @@ async def _compose_runtime_generation(
     database: str | Path | None,
     stop_limits: asyncio.Event,
 ) -> None:
-    """Build one runtime generation: adapters, limit rails, execution, tracing.
+    """Build one runtime generation: provider configs, limit rails, execution, tracing.
 
-    The compose step belongs to the lifespan: the quota state hydrates, the
-    limit schedule starts, and the shared execution service (repository,
-    encrypted credential slots, and limit rails) comes up before requests.
+    The compose step belongs to the lifespan: the provider configuration
+    records materialize, the limit service seeds its catalog (no polling
+    schedule starts), and the shared execution service (repository, encrypted
+    credential slots, and limit rails) comes up before requests. Adapters are
+    not built here: the execution service builds one per credential on first
+    use and then restores its saved quota settings and recorded usage.
     """
 
     del adapter_source
@@ -638,10 +641,12 @@ async def _start_limits(
     routes: Sequence[ProviderAdapter],
     stop: asyncio.Event,
 ) -> None:
-    """Seed the catalog and start one schedule task for this runtime generation.
+    """Seed the limit catalog and build this generation's limit and sync services.
 
-    A composition without a repository (injected adapters) has no limit store,
-    so the schedule task does not start.
+    No polling task starts: usage syncs run on demand, after admitted
+    executions and through the admin refresh, which polls the active vault
+    credentials. A composition without a repository (injected adapters) has
+    no limit store, so neither service is built.
     """
 
     if not isinstance(repo, SQLiteRepository):
@@ -650,7 +655,6 @@ async def _start_limits(
 
     limits = ProviderLimitsService(repo.limits)
     await limits.initialize()
-    apply_keenable_auth_mode(routes, limits)
     app.state.limits = limits
 
     async def sync_system_credentials(provider: str, now: datetime) -> SyncResult | None:
@@ -670,18 +674,12 @@ async def _start_limits(
     # vault credentials. There is no global vendor polling schedule.
 
 
-def apply_keenable_auth_mode(routes: Sequence[ProviderAdapter], limits: Any) -> None:
-    """Project Keenable's keyless-or-keyed rail choice into the limit service."""
-
-    from polyweb.infrastructure.secrets import ProviderName as _ProviderName
-
-    adapter = next((route for route in routes if route.name == _ProviderName.KEENABLE.value), None)
-    if adapter is not None:
-        limits.apply_keenable_auth_mode(adapter.limit_auth_mode)
-
-
 async def _stop_limits(app: FastAPI, stop: asyncio.Event) -> None:
-    """Stop and await the schedule task before the repository and adapters close."""
+    """Stop the limit services before the repository and adapters close.
+
+    No limit schedule task starts any more, so ``_limits_task`` is normally
+    ``None``; a leftover task is still cancelled and awaited.
+    """
 
     stop.set()
     task = getattr(app.state, "_limits_task", None)

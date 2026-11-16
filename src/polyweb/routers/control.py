@@ -8,14 +8,16 @@ are written only through the injected :class:`SecretStore`; fingerprints are
 derived in memory and are the only secret-adjacent value ever persisted.
 """
 
+import logging
 import time
 from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import ConfigDict, ValidationError, model_validator
 
 from polyweb.adapters.base import ProviderAdapter
@@ -40,14 +42,22 @@ from polyweb.models.contracts import (
     RoutingConfigUpdate,
     SecretPresence,
 )
+from polyweb.models.provider_limits import ManualAnchorRejectedError
 from polyweb.models.users import UserPrincipal
 from polyweb.persistence.projects import ProjectRepository
 from polyweb.persistence.storage import SQLiteRepository
 from polyweb.routers.auth import current_principal, require_admin, require_control_reader
 from polyweb.routers.control_errors import control_repository
+from polyweb.services.manual_quota import (
+    ManualQuotaScope,
+    ManualQuotaScopeError,
+    manual_quota_record,
+    manual_quota_response,
+    project_manual_record,
+    resolve_manual_quota_scope,
+)
 from polyweb.services.manual_quota import clear_manual_quota as clear_shared_manual_quota
 from polyweb.services.manual_quota import load_manual_quota as load_shared_manual_quota
-from polyweb.services.manual_quota import manual_quota_response
 from polyweb.services.manual_quota import persist_manual_quota as persist_shared_manual_quota
 from polyweb.services.monitoring import latency_p95_ms
 from polyweb.services.projects import ProjectService
@@ -64,6 +74,8 @@ from polyweb.services.provider_runtime import (
 from polyweb.services.routing_order import catalog_call_costs
 
 SecretSource = Literal["encrypted_db", "none"]
+
+logger = logging.getLogger(__name__)
 
 
 def _catalog_patch_schema(schema: dict[str, Any]) -> None:
@@ -257,20 +269,52 @@ def register_control_routes(app: FastAPI) -> None:
     _register_manual_quota_routes(app)
 
 
+_ScopeKey = Annotated[
+    UUID | None,
+    Query(description="Apply the record to this key (credential id) of the provider."),
+]
+_ScopePool = Annotated[
+    UUID | None,
+    Query(description="Apply the record to this shared upstream pool of the provider."),
+]
+
+
 def _register_manual_quota_routes(app: FastAPI) -> None:
-    """Register billing anchors; Exa allowance also seeds its local quota."""
+    """Register billing anchors; an unscoped Exa allowance also seeds its local quota.
+
+    The optional ``credential_id`` or ``pool_id`` query parameter names the
+    key or shared pool a record describes. Without one, a provider with one
+    balance owner gets the record at that key or pool, and a provider with
+    several keeps the provider-level record. The request body is unchanged.
+
+    The saved Exa manual starting credits apply to every Exa key, so only a
+    request without a scope parameter changes them. A key- or pool-scoped Exa
+    record (and its delete) changes only that balance owner's anchor.
+
+    A named and an inferred scope of the same balance owner use one settings
+    key, so GET, PUT and DELETE always meet the same record. The record is
+    applied to the limit store before it is saved: when the store keeps a
+    newer observation the route answers 409, and when the store fails it
+    answers 503. In both cases nothing is saved, so the operator can retry.
+    """
 
     @app.get(
         "/api/v1/providers/{provider_id}/manual-quota",
         response_model=ManualQuotaResponse | None,
     )
     async def get_manual_quota(
-        _principal: _AdminPrincipal, provider_id: str, request: Request
+        _principal: _AdminPrincipal,
+        provider_id: str,
+        request: Request,
+        credential_id: _ScopeKey = None,
+        pool_id: _ScopePool = None,
     ) -> ManualQuotaResponse | None:
         """Return the operator-entered billing anchor; never touches routing."""
 
         name = _require_provider(provider_id)
-        return await load_manual_quota(request.app.state.repository, name)
+        repository = request.app.state.repository
+        scope, only_owner = await _record_scope(repository, name, credential_id, pool_id)
+        return await load_manual_quota(repository, name, scope, only_owner=only_owner)
 
     @app.put(
         "/api/v1/providers/{provider_id}/manual-quota",
@@ -281,50 +325,152 @@ def _register_manual_quota_routes(app: FastAPI) -> None:
         provider_id: str,
         update: ManualQuotaUpdate,
         request: Request,
+        credential_id: _ScopeKey = None,
+        pool_id: _ScopePool = None,
     ) -> ManualQuotaResponse:
-        """Store the billing anchor and return the ESTIMATED capacity view."""
+        """Store the billing anchor and return the ESTIMATED capacity view.
+
+        An unscoped Exa record also sets the provider-wide manual credits. A
+        key- or pool-scoped Exa record writes only that key's balance: the
+        rebuild clears the key's vendor 402 block, but a key that the
+        provider-wide spend budget denies stays denied.
+
+        409: a newer observation (vendor report, vendor 402 or another record)
+        holds the balance, so the record was neither applied nor saved. 503: the limit store could
+        not apply the record; nothing was saved and the request can be
+        retried.
+        """
 
         name = _require_provider(provider_id)
-        response = await persist_manual_quota(
-            request.app.state.repository, name, update, datetime.now(UTC)
+        repository = request.app.state.repository
+        scope, only_owner = await _record_scope(repository, name, credential_id, pool_id)
+        now = datetime.now(UTC)
+        await _notify_manual_anchor(
+            request, name, manual_quota_record(name, update, now, scope), scope
         )
-        await _apply_exa_manual_credits(request, name, update.allowance)
-        await _notify_manual_anchor(request, name, response)
+        response = await persist_manual_quota(
+            repository, name, update, now, scope, only_owner=only_owner
+        )
+        if credential_id is None and pool_id is None:
+            await _apply_exa_manual_credits(request, name, update.allowance)
         return response
 
     @app.delete("/api/v1/providers/{provider_id}/manual-quota", status_code=204)
     async def delete_manual_quota(
-        _principal: _AdminPrincipal, provider_id: str, request: Request
+        _principal: _AdminPrincipal,
+        provider_id: str,
+        request: Request,
+        credential_id: _ScopeKey = None,
+        pool_id: _ScopePool = None,
     ) -> None:
-        """Clear the billing anchor and any Exa manual-credit limit idempotently."""
+        """Clear the billing anchor and any Exa manual-credit limit idempotently.
+
+        503: the limit store could not clear the record's balance; the record
+        stays saved and the request can be retried.
+        """
 
         name = _require_provider(provider_id)
-        await clear_manual_quota(request.app.state.repository, name)
-        await _apply_exa_manual_credits(request, name, None)
-        await _notify_manual_anchor(request, name, None)
+        repository = request.app.state.repository
+        scope, only_owner = await _record_scope(repository, name, credential_id, pool_id)
+        await _notify_manual_anchor(request, name, None, scope)
+        await clear_manual_quota(repository, name, scope, only_owner=only_owner)
+        if credential_id is None and pool_id is None:
+            await _apply_exa_manual_credits(request, name, None)
+
+
+async def _record_scope(
+    repository: SQLiteRepository | None,
+    provider: ProviderName,
+    credential_id: UUID | None,
+    pool_id: UUID | None,
+) -> tuple[ManualQuotaScope | None, bool]:
+    """Resolve a record's balance owner and whether it is the provider's only one.
+
+    A named scope and the inferred single-owner scope resolve to the same
+    owner, so both use one settings key.
+    """
+
+    explicit = await _explicit_scope(repository, provider, credential_id, pool_id)
+    inferred = await resolve_manual_quota_scope(repository, provider)
+    scope = explicit or inferred
+    return scope, inferred is not None and scope == inferred
+
+
+async def _explicit_scope(
+    repository: SQLiteRepository | None,
+    provider: ProviderName,
+    credential_id: UUID | None,
+    pool_id: UUID | None,
+) -> ManualQuotaScope | None:
+    """Resolve a requested key or pool scope; a scope outside the provider is a 422."""
+
+    if credential_id is None and pool_id is None:
+        return None
+    try:
+        return await resolve_manual_quota_scope(
+            repository, provider, credential_id=credential_id, pool_id=pool_id
+        )
+    except ManualQuotaScopeError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
 
 
 async def _notify_manual_anchor(
-    request: Request, provider: ProviderName, anchor: ManualQuotaResponse | None
+    request: Request,
+    provider: ProviderName,
+    anchor: ManualQuotaResponse | None,
+    scope: ManualQuotaScope | None,
 ) -> None:
     """Project a manual native anchor into the provider limit store.
 
     The anchor is an operator estimate, so it never replaces a fresh
     authoritative vendor observation, and a deletion restores the unknown state
-    instead of a manufactured zero balance.
+    instead of a manufactured zero balance. A scoped record also replaces the
+    key's stored denial and retires its cached adapters (see
+    :func:`project_manual_record`).
+
+    A record the store rejects is a 409, and a failed projection is logged
+    and answered with 503, never hidden behind a success: the key would stay
+    blocked while the operator sees the record saved.
     """
 
-    limits = getattr(request.app.state, "limits", None)
-    if limits is None:
-        return
-    with suppress(Exception):
-        await limits.apply_manual_anchor(provider.value, anchor)
+    execution = getattr(request.app.state, "execution", None)
+    retire = getattr(execution, "retire_credential_adapters", None)
+    try:
+        await project_manual_record(
+            request.app.state.repository,
+            getattr(request.app.state, "limits", None),
+            provider,
+            anchor,
+            scope,
+            retire=retire if callable(retire) else None,
+        )
+    except ManualAnchorRejectedError:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "a newer observation of this balance (a vendor report, a vendor 402 or "
+                "another record) is stored, so the record was not saved; refresh the "
+                "key's usage and record the balance again"
+            ),
+        ) from None
+    except Exception:
+        logger.error("manual quota record for %s was not applied", provider.value, exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="the limit store could not apply the record and nothing was saved; retry",
+        ) from None
 
 
 async def _apply_exa_manual_credits(
     request: Request, provider: ProviderName, credits: Decimal | None
 ) -> None:
-    """Persist and apply Exa prepaid credits through the atomic partial seam."""
+    """Persist Exa prepaid credits through the atomic partial seam.
+
+    The saved setting changes the effective Exa configuration, so the next
+    lease of every Exa key builds a new adapter that applies the credits. The
+    routes call this only for an unscoped record, because the setting is
+    provider-wide.
+    """
     if provider is not ProviderName.EXA:
         return
     await patch_provider_config(
@@ -332,11 +478,6 @@ async def _apply_exa_manual_credits(
         provider,
         ProviderConfigUpdate(exa_manual_starting_credits_usd=credits),
     )
-    routes: list[ProviderAdapter] = request.app.state._routes
-    adapter = next((route for route in routes if route.name == provider.value), None)
-    setter = getattr(adapter, "set_manual_starting_credits", None)
-    if callable(setter):
-        setter(credits)
 
 
 def secret_fingerprint(provider: str, key: str) -> str:
@@ -440,11 +581,15 @@ def _manual_quota_response(
 
 
 async def load_manual_quota(
-    repository: SQLiteRepository | None, provider: ProviderName
+    repository: SQLiteRepository | None,
+    provider: ProviderName,
+    scope: ManualQuotaScope | None = None,
+    *,
+    only_owner: bool = False,
 ) -> ManualQuotaResponse | None:
     """Delegate the stored billing anchor read to the shared anchor service."""
 
-    return await load_shared_manual_quota(repository, provider)
+    return await load_shared_manual_quota(repository, provider, scope, only_owner=only_owner)
 
 
 async def persist_manual_quota(
@@ -452,16 +597,27 @@ async def persist_manual_quota(
     provider: ProviderName,
     update: ManualQuotaUpdate,
     now: datetime,
+    scope: ManualQuotaScope | None = None,
+    *,
+    only_owner: bool = False,
 ) -> ManualQuotaResponse:
     """Delegate the billing anchor write to the shared anchor service."""
 
-    return await persist_shared_manual_quota(repository, provider, update, now)
+    return await persist_shared_manual_quota(
+        repository, provider, update, now, scope, only_owner=only_owner
+    )
 
 
-async def clear_manual_quota(repository: SQLiteRepository | None, provider: ProviderName) -> None:
+async def clear_manual_quota(
+    repository: SQLiteRepository | None,
+    provider: ProviderName,
+    scope: ManualQuotaScope | None = None,
+    *,
+    only_owner: bool = False,
+) -> None:
     """Clear the billing anchor idempotently; unknown providers never reach here."""
 
-    await clear_shared_manual_quota(repository, provider)
+    await clear_shared_manual_quota(repository, provider, scope, only_owner=only_owner)
 
 
 async def _latest_health(

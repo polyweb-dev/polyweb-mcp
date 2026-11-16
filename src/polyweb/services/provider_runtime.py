@@ -19,6 +19,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -33,11 +34,18 @@ from polyweb.configuration.provider_config import (
     get_provider_configs,
     system_support_mask,
 )
+from polyweb.infrastructure.dates import month_start
 from polyweb.infrastructure.secrets import AsyncSecretStore, ProviderName
-from polyweb.models.contracts import RoutingConfigResponse
+from polyweb.models.contracts import (
+    QuotaSnapshot,
+    RoutingConfigResponse,
+    UsageEvent,
+    UsageOperation,
+)
 from polyweb.models.provider_access import ALL_BITS, validate_mask
 from polyweb.models.provider_limits import ProviderObservationScope
 from polyweb.persistence.storage import (
+    QuotaWriteGuard,
     SQLiteRepository,
     register_setting_listener,
 )
@@ -89,6 +97,137 @@ def build_adapter_with_secret(
     if key is not None and "api_key" in parameters:
         return factory(client, api_key=SecretStr(key))
     return factory(client)
+
+
+# ------------------------------------------------- adapter quota preparation
+
+_QUOTA_STATE_FIELDS = (
+    "source",
+    "remaining",
+    "limit",
+    "reset_at",
+    "unit_kind",
+    "display_unit",
+    "metadata",
+)
+
+
+class _ScopedQuotaReads:
+    """The hydration reads of one key, narrowed to the key's balance owner.
+
+    An adapter's ``hydrate_quota`` reads the newest quota observation and the
+    usage ledger through this view, so a pooled key reads its pool and an
+    unpooled key reads only its own credential. Usage reads start at the
+    current UTC month when the adapter passes no ``since``, because every
+    monthly hydrator drops older rows anyway.
+
+    Legacy usage rows without a credential or pool predate per-key tracking.
+    When the provider has one key they belong to it. With several keys their
+    owner is unknown, so each key counts them: a restored key over-counts
+    rather than forgets usage, which can block it early until the month ends
+    (see :meth:`SQLiteRepository.list_provider_usage`).
+    """
+
+    def __init__(self, repository: SQLiteRepository, scope: ProviderObservationScope) -> None:
+        self._repository = repository
+        self._scope = scope
+
+    async def latest_quota(self, provider: str) -> QuotaSnapshot | None:
+        """Return the newest quota observation of the key's balance owner."""
+
+        return await self._repository.latest_quota(
+            provider,
+            credential_id=self._scope.credential_id,
+            pool_id=self._scope.upstream_pool_id,
+        )
+
+    async def list_provider_usage(
+        self,
+        *,
+        provider: str,
+        operation: UsageOperation | None = None,
+        since: datetime | None = None,
+    ) -> list[UsageEvent]:
+        """Return the key's usage ledger from ``since``, or from the UTC month start."""
+
+        return await self._repository.list_provider_usage(
+            provider=provider,
+            operation=operation,
+            since=since if since is not None else month_start(datetime.now(UTC)),
+            credential_id=self._scope.credential_id,
+            pool_id=self._scope.upstream_pool_id,
+        )
+
+
+def _apply_quota_settings(adapter: ProviderAdapter, config: ProviderConfig, auth_mode: str) -> None:
+    """Apply the saved local quota settings that the adapter constructor does not take."""
+
+    if adapter.name == ProviderName.PARALLEL.value and auth_mode != "oauth":
+        set_free_seed = getattr(adapter, "set_free_seed", None)
+        if callable(set_free_seed):
+            set_free_seed(config.parallel_free_seed_usd)
+    if adapter.name == ProviderName.EXA.value:
+        set_budget = getattr(adapter, "set_monthly_budget", None)
+        if callable(set_budget):
+            set_budget(config.exa_monthly_budget_usd)
+        set_credits = getattr(adapter, "set_manual_starting_credits", None)
+        if callable(set_credits):
+            set_credits(config.exa_manual_starting_credits_usd)
+
+
+async def prepare_adapter_quota(
+    adapter: ProviderAdapter,
+    repository: SQLiteRepository,
+    config: ProviderConfig | None,
+    *,
+    auth_mode: str,
+    scope: ProviderObservationScope,
+    still_current: Callable[[], bool] | None = None,
+) -> None:
+    """Restore one newly built adapter's quota state from settings and the database.
+
+    The execution service calls this once per built adapter (startup, restart,
+    settings change or credential change), never per lease. It applies the
+    Parallel free seed (API-key credentials only) and the Exa monthly budget
+    and manual starting credits, then hydrates the adapter's local ledger from
+    the key's balance owner, and records the hydrated observation for that key
+    when it differs from the stored one.
+
+    ``still_current`` tells whether the adapter is still the one the cache
+    serves. A manual record retires the adapter while its hydration may still
+    run on reads from before the record, so a retired adapter's hydration is
+    never recorded: it would replace the record as the newest observation.
+    Both checks run inside the write transaction (:class:`QuotaWriteGuard`):
+    the write is skipped when the adapter was retired, or when any quota row
+    of the key's balance owner was recorded after the hydration's reads
+    began, so a record that lands while the write waits is never overwritten.
+    """
+
+    if config is not None:
+        _apply_quota_settings(adapter, config, auth_mode)
+    hydrate = getattr(adapter, "hydrate_quota", None)
+    if not callable(hydrate):
+        return
+    marker = await repository.quota_marker(
+        adapter.name, credential_id=scope.credential_id, pool_id=scope.upstream_pool_id
+    )
+    snapshot = await hydrate(_ScopedQuotaReads(repository, scope))
+    if not isinstance(snapshot, QuotaSnapshot):
+        return
+    latest = await repository.latest_quota(
+        adapter.name, credential_id=scope.credential_id, pool_id=scope.upstream_pool_id
+    )
+    if latest is not None and all(
+        getattr(latest, name) == getattr(snapshot, name) for name in _QUOTA_STATE_FIELDS
+    ):
+        return
+    await repository.record_quota(
+        snapshot,
+        credential_id=scope.credential_id,
+        pool_id=scope.upstream_pool_id,
+        credential_generation=scope.credential_generation,
+        guard=QuotaWriteGuard(marker=marker, still_current=still_current),
+    )
 
 
 # ------------------------------------------------------ configuration cache
@@ -623,6 +762,7 @@ __all__ = [
     "patch_provider_config",
     "persist_provider_config",
     "persist_routing_config",
+    "prepare_adapter_quota",
     "read_runtime_setting",
     "routing_policy",
     "schedule_quota_refresh",

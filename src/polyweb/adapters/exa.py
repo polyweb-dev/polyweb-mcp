@@ -259,10 +259,15 @@ class ExaAdapter(ProviderAdapter):
         self._hydrated_month = None
 
     def set_manual_starting_credits(self, credits: Decimal | None) -> None:
-        """Apply the operator-entered prepaid balance without resetting spend."""
+        """Apply the operator-entered prepaid balance without resetting spend.
+
+        Recording credits is an operator statement that funds exist, so it also
+        clears the soft-zero block of an earlier 402.
+        """
         self._manual_starting_credits = (
             self._validate_budget(credits) if credits is not None else None
         )
+        self._soft_zero = False
 
     def _effective_limit(self) -> tuple[Decimal | None, str | None]:
         if self._manual_starting_credits is not None:
@@ -290,6 +295,8 @@ class ExaAdapter(ProviderAdapter):
             "soft_zero": self._soft_zero,
             "limit_source": limit_source,
         }
+        if self._soft_zero:
+            metadata["exhaustion_status"] = 402
 
         remaining = None
         if limit is not None:
@@ -349,14 +356,23 @@ class ExaAdapter(ProviderAdapter):
         return self._current_snapshot()
 
     def quota_after_error(self, status: int | None) -> QuotaSnapshot | None:
-        """Mirror Brave's observed exhaustion snapshot for Exa 402 and 429."""
-        if status not in (402, 429):
+        """Mirror Brave's observed exhaustion snapshot for an Exa 402.
+
+        Only a 402 means exhausted credits or key budget. A 429 is a rate or
+        concurrency limit, so it takes the vendor cooldown path and leaves the
+        funds state alone.
+        """
+        if status != 402:
             return None
         self._soft_zero = True
         return self._exhaustion_snapshot(status)
 
     async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
-        """Restore monthly spend ledger from database usage events."""
+        """Restore monthly spend ledger from database usage events.
+
+        Only stored 402 evidence restores the soft-zero block. A newer manual
+        record or vendor report replaces that evidence.
+        """
         now = datetime.now(UTC)
         month_start = _month_start(now)
         self._rollover_if_needed(now)
@@ -381,6 +397,7 @@ class ExaAdapter(ProviderAdapter):
             and not later_success
             and latest.observed_at >= month_start
             and latest.metadata.get("soft_zero") is True
+            and latest.metadata.get("exhaustion_status") == 402
         )
         self._hydrated_month = month_start
         return self._current_snapshot(now=now)
