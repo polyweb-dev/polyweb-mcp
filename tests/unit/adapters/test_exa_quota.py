@@ -342,6 +342,47 @@ async def test_hydrate_quota_reconstructs_current_month_spend() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "blocked"), [(402, True), (429, False)], ids=["vendor-402", "legacy-429"]
+)
+async def test_hydration_restores_the_block_only_from_a_stored_402(
+    status: int, blocked: bool
+) -> None:
+    """B4 (AC #12): a rebuilt adapter restores soft-zero from a stored 402, never from a 429.
+
+    Rows stored before this change also marked a 429 as soft-zero. A 429 is a
+    rate limit, so a rebuilt adapter from such a row must admit the next call.
+    """
+
+    stored = _make_adapter(budget=Decimal("10.00"))._exhaustion_snapshot(status)
+    adapter = _make_adapter(budget=Decimal("10.00"))
+
+    hydrated = await adapter.hydrate_quota(_MockRepository(latest_quota=stored))
+    view = await adapter.quota()
+
+    assert hydrated is not None and view is not None
+    assert is_soft_quota_zero("exa", view) is blocked
+    assert view.remaining == (Decimal("0") if blocked else Decimal("10.00"))
+
+
+@pytest.mark.asyncio
+async def test_recorded_manual_credits_lift_a_402_soft_zero() -> None:
+    """B4 (AC #6): recording manual credits on a blocked adapter admits the next call."""
+
+    adapter = _make_adapter(budget=Decimal("10.00"))
+    adapter.quota_after_error(402)
+    blocked = await adapter.quota()
+    assert blocked is not None and is_soft_quota_zero("exa", blocked) is True
+
+    adapter.set_manual_starting_credits(Decimal("5"))
+    view = await adapter.quota()
+
+    assert view is not None
+    assert is_soft_quota_zero("exa", view) is False
+    assert view.remaining == Decimal("5")
+
+
+@pytest.mark.asyncio
 async def test_month_rollover_resets_ledger() -> None:
     adapter = _make_adapter(budget=Decimal("10.00"))
     adapter._spend = Decimal("5.00")

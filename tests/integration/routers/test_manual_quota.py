@@ -833,3 +833,405 @@ async def test_key_scoped_exa_record_keeps_the_provider_wide_credits(
         await repository.close()
         await http.aclose()
         get_settings.cache_clear()
+
+
+# ------------------------------------------------ PR #78 review (TASK-000070)
+
+
+def _fixed_route_clock(monkeypatch: pytest.MonkeyPatch, at: datetime) -> None:
+    """Make the manual-quota route stamp its record at ``at``."""
+
+    class _RouteClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:  # type: ignore[override]
+            return at
+
+    monkeypatch.setattr("polyweb.routers.control.datetime", _RouteClock)
+
+
+async def _block_at(world: _KeyWorld, provider: str, key_id: str, at: datetime) -> Any:
+    """Block one key like a vendor 402 observed at ``at``."""
+
+    limits = world.app.state.limits
+    clock = limits._clock
+    limits._clock = lambda: at
+    try:
+        return await _block_like_a_vendor_402(world, provider, key_id)
+    finally:
+        limits._clock = clock
+
+
+@pytest.mark.asyncio
+async def test_set_balance_after_a_late_debit_unblocks_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
+) -> None:
+    """B1: a call that finishes after the 402 cannot make Set balance fail silently.
+
+    The call was admitted before the 402. Its debit commits after the Set
+    balance request started and re-stamps the key's row with the wall clock.
+    The record must still replace the 402, or the request must say it failed.
+    """
+
+    from datetime import timedelta
+
+    from polyweb.configuration.config import get_settings
+    from polyweb.models.contracts import UnitKind
+    from polyweb.models.provider_limits import (
+        AuthMode,
+        LimitAdmission,
+        LimitDebit,
+        LimitOperation,
+        NativePool,
+    )
+    from tests.fixtures.execution import FIXTURE_ACTOR
+
+    http = _offline_client()
+    repository, app = await _open_key_world(tmp_path, monkeypatch, "keenable", http)
+    try:
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(client, repository, temp_email("late-debit"))
+            await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            world = _KeyWorld(client, app, raw_auth_headers(pair["access_token"]))
+            key_id = world.add_key("keenable", "only")
+            pool_id = world.scoped_pool_id("keenable", key_id)
+            now = datetime.now(UTC)
+            await repository.limits.ensure_pool(
+                NativePool(
+                    pool_id=pool_id,
+                    provider="keenable",
+                    auth_mode=AuthMode.KEYED,
+                    native_unit=UnitKind.REQUEST,
+                )
+            )
+            debit = {
+                "attempt_id": "in-flight",
+                "provider": "keenable",
+                "operation": LimitOperation.SEARCH,
+                "auth_mode": AuthMode.KEYED,
+                "pool_id": pool_id,
+            }
+            await repository.limits.reserve(
+                LimitAdmission(
+                    **FIXTURE_ACTOR,
+                    **debit,
+                    reserved_crd=Decimal("1"),
+                    created_at=now - timedelta(minutes=3),
+                    expires_at=now + timedelta(minutes=5),
+                )
+            )
+            blocked = await _block_at(world, "keenable", key_id, now - timedelta(minutes=2))
+            assert await repository.limits.finalize(
+                LimitDebit(
+                    **debit,
+                    outcome="success",
+                    native_units=Decimal("1"),
+                    crd_debit=Decimal("1"),
+                    reason="local_success",
+                )
+            )
+            _fixed_route_clock(monkeypatch, now - timedelta(minutes=1))
+
+            put = client.put(
+                "/api/v1/providers/keenable/manual-quota",
+                json=_payload(allowance="10", usage="0"),
+                headers=world.headers,
+            )
+
+            assert put.status_code == 200, put.text
+            pool = await repository.limits.get_pool(pool_id)
+            assert pool is not None and (pool.source, pool.remaining) == (
+                "manual_anchor",
+                Decimal("10"),
+            ), "a silent 200 left the key blocked"
+            lease = await world.lease("keenable", key_id)
+            try:
+                assert lease.adapter is not blocked
+                assert _adapter_blocked("keenable", lease.adapter) is False
+            finally:
+                lease.release()
+    finally:
+        await repository.close()
+        await http.aclose()
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_set_balance_older_than_a_vendor_fact_is_a_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
+) -> None:
+    """B1: a record the store rejects is an error, and it leaves the key's state alone.
+
+    The vendor 402 is newer than the record. The route answers 409, writes no
+    zero routing snapshot as if it were the record, keeps the cached adapter
+    and does not save the record.
+    """
+
+    from datetime import timedelta
+    from uuid import UUID
+
+    from polyweb.configuration.config import get_settings
+
+    http = _offline_client()
+    repository, app = await _open_key_world(tmp_path, monkeypatch, "keenable", http)
+    try:
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(client, repository, temp_email("conflict"))
+            await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            world = _KeyWorld(client, app, raw_auth_headers(pair["access_token"]))
+            key_id = world.add_key("keenable", "only")
+            blocked = await _block_at(
+                world, "keenable", key_id, datetime.now(UTC) + timedelta(hours=1)
+            )
+            url = "/api/v1/providers/keenable/manual-quota"
+
+            put = client.put(url, json=_payload(allowance="10", usage="0"), headers=world.headers)
+
+            assert put.status_code == 409, put.text
+            pool = await repository.limits.get_pool(world.scoped_pool_id("keenable", key_id))
+            assert pool is not None and (pool.source, pool.remaining) == (
+                "vendor_402",
+                Decimal("0"),
+            )
+            routing = await repository.latest_quota("keenable", credential_id=UUID(key_id))
+            assert routing is not None and routing.metadata.get("manual_anchor") is not True
+            lease = await world.lease("keenable", key_id)
+            try:
+                assert lease.adapter is blocked, "a rejected record retired the adapter"
+            finally:
+                lease.release()
+            assert client.get(url, headers=world.headers).json() is None
+    finally:
+        await repository.close()
+        await http.aclose()
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_set_balance_for_a_shared_pool_unblocks_both_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
+) -> None:
+    """B4 / AC #3 / AC #4: a pool-scoped record clears that pool's 402 for every member."""
+
+    from uuid import UUID, uuid4
+
+    from polyweb.configuration.config import get_settings
+    from polyweb.models.credentials import CredentialOperation
+    from polyweb.models.projects import DEFAULT_INSTALLATION_ACCOUNT_ID
+    from polyweb.models.provider_limits import AuthMode
+    from polyweb.models.schema_enums import UpstreamScope
+    from polyweb.persistence.pools import UpstreamPoolRepository
+
+    http = _offline_client()
+    repository, app = await _open_key_world(tmp_path, monkeypatch, "keenable", http)
+    try:
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(client, repository, temp_email("pool"))
+            await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            world = _KeyWorld(client, app, raw_auth_headers(pair["access_token"]))
+            keys = [world.add_key("keenable", "first"), world.add_key("keenable", "second")]
+            async with repository.session() as session:
+                pools = UpstreamPoolRepository(session)
+                shared = await pools.create_pool(
+                    account_id=DEFAULT_INSTALLATION_ACCOUNT_ID,
+                    provider_type="keenable",
+                    upstream_scope=UpstreamScope.ACCOUNT,
+                    pool_key=f"shared-{uuid4().hex[:8]}",
+                    label="shared",
+                    constraints=[],
+                )
+                for key_id in keys:
+                    for operation in (CredentialOperation.SEARCH, CredentialOperation.FETCH):
+                        await pools.link_credential(
+                            credential_id=UUID(key_id),
+                            operation=operation,
+                            pool_id=shared.id,
+                            provider_type="keenable",
+                        )
+                await session.commit()
+            base = app.state.limits.observation_pool_id("keenable", AuthMode.KEYED)
+            pool_id = f"{base}#pool:{shared.id}"
+            blocked = []
+            for key_id in keys:
+                lease = await world.lease("keenable", key_id)
+                try:
+                    zero = await lease.adapter.quota_after_error(402)
+                    await repository.record_quota(
+                        zero, credential_id=UUID(key_id), pool_id=shared.id
+                    )
+                    blocked.append(lease.adapter)
+                finally:
+                    lease.release()
+            await app.state.limits.record_terminal_402(
+                "keenable", AuthMode.KEYED, upstream_pool_id=shared.id
+            )
+            denied = await repository.limits.get_pool(pool_id)
+            assert denied is not None and (denied.source, denied.remaining) == (
+                "vendor_402",
+                Decimal("0"),
+            )
+
+            put = client.put(
+                "/api/v1/providers/keenable/manual-quota",
+                params={"pool_id": str(shared.id)},
+                json=_payload(allowance="10", usage="0"),
+                headers=world.headers,
+            )
+
+            assert put.status_code == 200, put.text
+            assert put.json()["pool_id"] == str(shared.id)
+            pool = await repository.limits.get_pool(pool_id)
+            assert pool is not None and pool.remaining == Decimal("10")
+            routing = await repository.latest_quota("keenable", pool_id=shared.id)
+            assert routing is not None and routing.remaining != Decimal("0")
+            for key_id, old in zip(keys, blocked, strict=True):
+                lease = await world.lease("keenable", key_id)
+                try:
+                    assert lease.adapter is not old
+                    assert _adapter_blocked("keenable", lease.adapter) is False
+                finally:
+                    lease.release()
+    finally:
+        await repository.close()
+        await http.aclose()
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("put_scoped", "delete_scoped"),
+    [(False, True), (True, False)],
+    ids=["unscoped-put-scoped-delete", "scoped-put-unscoped-delete"],
+)
+async def test_inferred_and_explicit_scope_share_one_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_secret: str,
+    put_scoped: bool,
+    delete_scoped: bool,
+) -> None:
+    """A4: with one key, a scoped and an unscoped request name the same record."""
+
+    from polyweb.configuration.config import get_settings
+
+    http = _offline_client()
+    repository, app = await _open_key_world(tmp_path, monkeypatch, "keenable", http)
+    try:
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(client, repository, temp_email("one-key"))
+            await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            world = _KeyWorld(client, app, raw_auth_headers(pair["access_token"]))
+            key_id = world.add_key("keenable", "only")
+            url = "/api/v1/providers/keenable/manual-quota"
+            scoped = {"credential_id": key_id}
+
+            put = client.put(
+                url,
+                params=scoped if put_scoped else None,
+                json=_payload("10", "0"),
+                headers=world.headers,
+            )
+            assert put.status_code == 200, put.text
+            for params in (None, scoped):
+                read = client.get(url, params=params, headers=world.headers).json()
+                assert read is not None and read["credential_id"] == key_id, params
+
+            deleted = client.delete(
+                url, params=scoped if delete_scoped else None, headers=world.headers
+            )
+
+            assert deleted.status_code == 204
+            for params in (None, scoped):
+                assert client.get(url, params=params, headers=world.headers).json() is None, params
+            pool = await repository.limits.get_pool(world.scoped_pool_id("keenable", key_id))
+            assert pool is not None and pool.remaining is None
+    finally:
+        await repository.close()
+        await http.aclose()
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_legacy_provider_record_still_applies_to_the_only_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_secret: str
+) -> None:
+    """A4: a provider-level record saved before scopes existed still reads and deletes."""
+
+    from polyweb.configuration.config import get_settings
+
+    http = _offline_client()
+    repository, app = await _open_key_world(tmp_path, monkeypatch, "keenable", http)
+    try:
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(client, repository, temp_email("legacy"))
+            await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            world = _KeyWorld(client, app, raw_auth_headers(pair["access_token"]))
+            key_id = world.add_key("keenable", "only")
+            url = "/api/v1/providers/keenable/manual-quota"
+            await repository.set_runtime_setting(
+                "manual_quota:keenable",
+                {
+                    "billing_start": "2026-08-01",
+                    "billing_end": "2026-09-01",
+                    "allowance": "10",
+                    "current_usage": "4",
+                    "note": None,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+
+            for params in (None, {"credential_id": key_id}):
+                read = client.get(url, params=params, headers=world.headers).json()
+                assert read is not None and _as_decimal(read["remaining"]) == Decimal("6"), params
+
+            assert (
+                client.delete(
+                    url, params={"credential_id": key_id}, headers=world.headers
+                ).status_code
+                == 204
+            )
+            assert client.get(url, headers=world.headers).json() is None
+            assert await repository.get_runtime_setting("manual_quota:keenable") is None
+    finally:
+        await repository.close()
+        await http.aclose()
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_failed_projection_is_an_error_not_a_silent_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_secret: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A6: when the record cannot reach the limit store, the operator learns it and can retry."""
+
+    import logging
+
+    from polyweb.configuration.config import get_settings
+
+    http = _offline_client()
+    repository, app = await _open_key_world(tmp_path, monkeypatch, "keenable", http)
+    try:
+        with TestClient(app) as client:
+            pair = await register_system_admin_login(client, repository, temp_email("fails"))
+            await seed_execution_project(repository, user_id=account_id_from_pair(pair))
+            world = _KeyWorld(client, app, raw_auth_headers(pair["access_token"]))
+            key_id = world.add_key("keenable", "only")
+            await _block_like_a_vendor_402(world, "keenable", key_id)
+            url = "/api/v1/providers/keenable/manual-quota"
+
+            async def unavailable(*args: Any, **kwargs: Any) -> Any:
+                raise RuntimeError("limit store unavailable")
+
+            monkeypatch.setattr(app.state.limits, "apply_manual_anchor", unavailable)
+            with caplog.at_level(logging.ERROR):
+                put = client.put(url, json=_payload("10", "0"), headers=world.headers)
+
+            assert put.status_code == 503, put.text
+            assert any(record.exc_info for record in caplog.records)
+            assert client.get(url, headers=world.headers).json() is None
+    finally:
+        await repository.close()
+        await http.aclose()
+        get_settings.cache_clear()

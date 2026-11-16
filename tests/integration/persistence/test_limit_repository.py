@@ -995,3 +995,257 @@ async def test_manual_anchor_delete_restores_unknown(limits_repo) -> None:
     assert event.detail["cleared"] is True
     assert event.old_native == Decimal("10")
     assert event.new_native is None
+
+
+# ------------------------------------- PR #78 review findings (TASK-000070)
+
+_TAVILY_POOL = "tavily:keyed:credit"
+
+
+def _tavily_figures(*, at: datetime, remaining: str | None, allowance: str | None = "1000"):  # type: ignore[no-untyped-def]
+    """A Tavily usage report whose balance or allowance figure may be absent."""
+
+    return _tavily_report(at=at, remaining="0").model_copy(
+        update={
+            "remaining": None if remaining is None else Decimal(remaining),
+            "allowance": None if allowance is None else Decimal(allowance),
+        }
+    )
+
+
+async def _tavily_pool(limits_repo: LimitRepository) -> NativePool:
+    pool = NativePool(
+        pool_id=_TAVILY_POOL,
+        provider="tavily",
+        auth_mode=AuthMode.KEYED,
+        native_unit=UnitKind.CREDIT,
+        source="vendor_api",
+    )
+    await limits_repo.ensure_pool(pool)
+    return pool
+
+
+async def _tavily_402(limits_repo: LimitRepository, at: datetime) -> None:
+    assert await limits_repo.apply_snapshot(
+        _tavily_report(at=at, remaining="0", source="vendor_402")
+    )
+
+
+async def _tavily_state(limits_repo: LimitRepository) -> tuple[str, Decimal | None]:
+    pool = await limits_repo.get_pool(_TAVILY_POOL)
+    assert pool is not None
+    return pool.source, pool.remaining
+
+
+@pytest.mark.parametrize("partial", [None, "0"], ids=["no-balance", "zero-balance"])
+async def test_tavily_report_without_proof_keeps_the_402_for_a_later_repeat(
+    limits_repo: LimitRepository, partial: str | None
+) -> None:
+    """B2: a report that proves no new funds never lifts the 402.
+
+    After a restart the adapter has no 402 state and sends a plain vendor
+    report. A report without a balance figure, or with a zero balance, must
+    not end the terminal state, or a later lagging report that repeats the
+    pre-402 balance unblocks the key.
+    """
+
+    await _tavily_pool(limits_repo)
+    assert await limits_repo.apply_snapshot(_tavily_report(at=FIXED_AT, remaining="960"))
+    await _tavily_402(limits_repo, FIXED_AT + timedelta(minutes=1))
+
+    partial_accepted = await limits_repo.apply_snapshot(
+        _tavily_figures(at=FIXED_AT + timedelta(minutes=2), remaining=partial)
+    )
+    repeat_accepted = await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=3), remaining="960")
+    )
+
+    assert await _tavily_state(limits_repo) == ("vendor_402", Decimal("0"))
+    assert repeat_accepted is False
+    if partial is None:
+        assert partial_accepted is False, "a report with no balance is no proof of funds"
+
+
+async def test_tavily_out_of_order_higher_report_stays_rejected(
+    limits_repo: LimitRepository,
+) -> None:
+    """AC #15: the baseline is the highest balance this month at the same allowance.
+
+    A lagging replica reports 980 after the newest report said 960. That is
+    above the newest report, but below the 1000 already reported this month,
+    so it proves no new funds. 1040 does.
+    """
+
+    await _tavily_pool(limits_repo)
+    assert await limits_repo.apply_snapshot(_tavily_report(at=FIXED_AT, remaining="1000"))
+    assert await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=1), remaining="960")
+    )
+    await _tavily_402(limits_repo, FIXED_AT + timedelta(minutes=2))
+
+    lagging = await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=5), remaining="980")
+    )
+    assert lagging is False
+    assert await _tavily_state(limits_repo) == ("vendor_402", Decimal("0"))
+
+    proven = await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=6), remaining="1040")
+    )
+    assert proven is True
+    assert await _tavily_state(limits_repo) == ("vendor_api", Decimal("1040"))
+
+
+async def test_tavily_report_without_figures_is_never_the_402_baseline(
+    limits_repo: LimitRepository,
+) -> None:
+    """A1 / AC #15: a report with no figures is skipped, so 1000 after 960 proves funds."""
+
+    await _tavily_pool(limits_repo)
+    assert await limits_repo.apply_snapshot(_tavily_report(at=FIXED_AT, remaining="960"))
+    await limits_repo.apply_snapshot(
+        _tavily_figures(at=FIXED_AT + timedelta(minutes=1), remaining=None, allowance=None)
+    )
+    await _tavily_402(limits_repo, FIXED_AT + timedelta(minutes=2))
+
+    accepted = await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=5), remaining="1000")
+    )
+
+    assert accepted is True
+    assert await _tavily_state(limits_repo) == ("vendor_api", Decimal("1000"))
+
+
+async def test_malformed_legacy_event_detail_does_not_drop_a_402(
+    limits_repo: LimitRepository,
+) -> None:
+    """A12: an unreadable legacy audit detail is treated as absent, never as an error.
+
+    The 402 write reads the month's vendor reports. A malformed row must not
+    raise inside that transaction, or the 402 is silently lost.
+    """
+
+    from polyweb.persistence.limit_rows import LimitEventRow
+    from polyweb.persistence.storage import _timestamp
+
+    await _tavily_pool(limits_repo)
+    assert await limits_repo.apply_snapshot(_tavily_report(at=FIXED_AT, remaining="960"))
+    async with limits_repo._session_factory() as session:
+        session.add(
+            LimitEventRow(
+                event_id="legacy-malformed",
+                provider="tavily",
+                auth_mode=AuthMode.KEYED.value,
+                pool_id=_TAVILY_POOL,
+                observed_at=_timestamp(FIXED_AT + timedelta(seconds=30)),
+                source="vendor_api",
+                reason="vendor_sync",
+                confidence=Confidence.AUTHORITATIVE.value,
+                detail_json="{not json",
+            )
+        )
+        await session.commit()
+
+    await _tavily_402(limits_repo, FIXED_AT + timedelta(minutes=1))
+    repeat = await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=2), remaining="960")
+    )
+
+    assert repeat is False
+    assert await _tavily_state(limits_repo) == ("vendor_402", Decimal("0"))
+
+
+async def test_bounded_estimate_keeps_the_trusted_allowance(limits_repo) -> None:
+    """A2: a local estimate under a trusted row cannot replace the trusted allowance."""
+
+    await limits_repo.ensure_pool(_pool())
+    assert await limits_repo.apply_snapshot(
+        _synth_snapshot(
+            at=FIXED_AT, remaining="4", source="vendor_api", confidence=Confidence.OBSERVED
+        )
+    )
+    estimate = _synth_snapshot(at=FIXED_AT + timedelta(minutes=1), remaining="3").model_copy(
+        update={"allowance": Decimal("1000")}
+    )
+
+    await limits_repo.apply_snapshot(estimate)
+
+    pool = await limits_repo.get_pool("synth:keyed:USD")
+    assert pool is not None
+    assert (pool.source, pool.remaining, pool.allowance) == (
+        "vendor_api",
+        Decimal("3"),
+        Decimal("10"),
+    )
+
+
+async def test_manual_anchor_lands_behind_a_debit_that_finished_after_the_402(
+    limits_repo: LimitRepository,
+) -> None:
+    """B1: an operator record is stamped when it is written.
+
+    A call admitted before the 402 finishes after it, and its debit re-stamps
+    the row with the wall clock. The record that follows was requested before
+    that debit committed, yet it must still replace the 402.
+    """
+
+    pool = await _tavily_pool(limits_repo)
+    assert await limits_repo.apply_snapshot(_tavily_report(at=FIXED_AT, remaining="960"))
+    await limits_repo.reserve(
+        LimitAdmission(
+            **FIXTURE_ACTOR,
+            attempt_id="in-flight",
+            provider="tavily",
+            operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED,
+            pool_id=_TAVILY_POOL,
+            reserved_crd=Decimal("1000"),
+            created_at=FIXED_AT,
+            expires_at=FIXED_AT + timedelta(minutes=5),
+        )
+    )
+    await _tavily_402(limits_repo, FIXED_AT + timedelta(minutes=1))
+    assert await limits_repo.finalize(
+        LimitDebit(
+            attempt_id="in-flight",
+            provider="tavily",
+            operation=LimitOperation.SEARCH,
+            auth_mode=AuthMode.KEYED,
+            pool_id=_TAVILY_POOL,
+            outcome="success",
+            native_units=Decimal("1"),
+            crd_debit=Decimal("1000"),
+            reason="local_success",
+        )
+    )
+
+    stored = await limits_repo.record_manual_anchor(
+        pool,
+        remaining=Decimal("500"),
+        allowance=Decimal("1000"),
+        reset_at=None,
+        observed_at=FIXED_AT + timedelta(minutes=2),
+    )
+
+    assert stored is not None
+    assert (stored.source, stored.remaining) == ("manual_anchor", Decimal("500"))
+
+
+async def test_manual_anchor_older_than_a_vendor_fact_reports_rejection(
+    limits_repo: LimitRepository,
+) -> None:
+    """B1: a record older than a newer vendor fact is not stored, and the caller learns it."""
+
+    pool = await _tavily_pool(limits_repo)
+    await _tavily_402(limits_repo, FIXED_AT + timedelta(minutes=5))
+
+    stored = await limits_repo.record_manual_anchor(
+        pool,
+        remaining=Decimal("500"),
+        allowance=Decimal("1000"),
+        reset_at=None,
+        observed_at=FIXED_AT + timedelta(minutes=2),
+    )
+
+    assert stored is None, "a rejected record must not look like a stored one"
+    assert await _tavily_state(limits_repo) == ("vendor_402", Decimal("0"))

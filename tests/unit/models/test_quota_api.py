@@ -27,6 +27,7 @@ from polyweb.models.quota_api import (
     USDBudgetPayload,
     USDGrantsSummary,
     USDHistoryPage,
+    USDLimitDetail,
     USDProviderLimits,
     USDUsageTotal,
     USDVaultKeyUsage,
@@ -226,3 +227,16 @@ def test_balances_mark_vendor_confirmed_from_confidence_not_source(
 
     assert key["balance"]["vendor_confirmed"] is confirmed
     assert key["balance"]["tiers"][0]["vendor_confirmed"] is confirmed
+
+
+@pytest.mark.parametrize("confidence", ["authoritative", "observed"])
+def test_manual_record_detail_is_never_vendor_confirmed(confidence: str) -> None:
+    """A11: a manual record is an estimate by construction, whatever its confidence says."""
+
+    detail = USDLimitDetail.model_validate(
+        {"source": "manual_anchor", "confidence": confidence, "native_balance": Decimal("10")}
+    )
+
+    assert detail.model_dump(mode="json")["vendor_confirmed"] is False
+    vendor = USDLimitDetail.model_validate({"source": "vendor_api", "confidence": confidence})
+    assert vendor.model_dump(mode="json")["vendor_confirmed"] is True

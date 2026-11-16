@@ -1135,3 +1135,120 @@ async def test_keyed_keenable_credits_remaining_survives_a_native_sync_and_rebui
 
     assert snapshot is not None
     assert (snapshot.source, snapshot.remaining) == ("vendor_api", Decimal("4000"))
+
+
+async def test_manual_record_during_the_hydration_write_stays_the_newest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B3: the retired-adapter check is part of the hydration write itself.
+
+    The preparation read the 402 and passed every check before its write. A
+    Set balance request then records the key's balance and retires the
+    adapter before the hydration's insert runs. The stale hydration must not
+    become the key's newest routing observation.
+    """
+
+    from polyweb.adapters.exa import ExaAdapter
+
+    world = await build_execution_world(tmp_path, monkeypatch, provider="exa")
+    http = httpx.AsyncClient()
+    _install_factory(
+        monkeypatch,
+        "exa",
+        lambda client, api_key=None: ExaAdapter(http, api_key=api_key, sdk_client=_FakeExaSdk()),
+    )
+    restarted: ExecutionService | None = None
+    try:
+        credential = _resolved(world, "a1")
+        config = (await effective_config_for_name(world.repository, "exa", strict=True)).model_copy(
+            update={"exa_monthly_budget_usd": Decimal("10")}
+        )
+        lease = await world.service._lease_adapter(credential, config)
+        try:
+            zero = lease.adapter.quota_after_error(402)
+        finally:
+            lease.release()
+        assert zero is not None
+        await world.repository.record_quota(zero, credential_id=credential.credential_id)
+
+        record = QuotaSnapshot(
+            provider="exa",
+            source=QuotaSource.ESTIMATED,
+            remaining=Decimal("10"),
+            limit=Decimal("10"),
+            unit_kind=UnitKind.USD,
+            observed_at=datetime.now(UTC),
+            metadata={"manual_anchor": True, "window": "monthly"},
+        )
+        restarted = _restarted(world)
+        service = restarted
+        original = world.repository.record_quota
+        landed = False
+
+        async def racing(snapshot: QuotaSnapshot, **kwargs: Any) -> Any:
+            nonlocal landed
+            if not landed and snapshot.metadata.get("manual_anchor") is not True:
+                landed = True
+                await original(record, credential_id=credential.credential_id)
+                service.retire_credential_adapters({credential.credential_id})
+            return await original(snapshot, **kwargs)
+
+        monkeypatch.setattr(world.repository, "record_quota", racing)
+        (await restarted._lease_adapter(credential, config)).release()
+        latest = await world.repository.latest_quota("exa", credential_id=credential.credential_id)
+    finally:
+        if restarted is not None:
+            await restarted.aclose()
+        await world.aclose()
+        await http.aclose()
+
+    assert landed, "the preparation never wrote its hydration"
+    assert latest is not None
+    assert (latest.remaining, latest.metadata.get("manual_anchor")) == (Decimal("10"), True)
+
+
+async def test_pooled_key_counts_its_usage_from_before_it_joined_the_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A7: a pool's balance includes what its keys spent before they were pooled."""
+
+    from polyweb.adapters.brave import BraveAdapter
+
+    world = await build_execution_world(
+        tmp_path,
+        monkeypatch,
+        provider="brave",
+        labels=("a1", "a2"),
+        pool=PoolSpec(constraints=[]),
+    )
+    http = httpx.AsyncClient()
+    _install_factory(
+        monkeypatch,
+        "brave",
+        lambda client, api_key=None: BraveAdapter(http, api_key=api_key),
+    )
+    try:
+        for _ in range(2):
+            await world.repository.record_usage(
+                UsageEvent(
+                    provider="brave",
+                    operation=UsageOperation.SEARCH,
+                    units=Decimal("1"),
+                    unit_kind=UnitKind.REQUEST,
+                    observed_at=datetime.now(UTC),
+                ),
+                attribution=world.project,
+                credential_id=world.credentials["a1"].credential_id,
+            )
+        await _record_usage(
+            world, provider="brave", units="1", unit_kind=UnitKind.REQUEST, label="a2"
+        )
+        config = await effective_config_for_name(world.repository, "brave", strict=True)
+
+        first = await _brave_remaining_requests(world.service, _resolved(world, "a1"), config)
+        second = await _brave_remaining_requests(world.service, _resolved(world, "a2"), config)
+    finally:
+        await world.aclose()
+        await http.aclose()
+
+    assert (first, second) == (Decimal("997"), Decimal("997"))

@@ -504,3 +504,27 @@ async def test_paid_use_past_the_free_allowance_does_not_block_the_key() -> None
 
     assert before is not None and before.remaining != Decimal("0")
     assert after is not None and after.remaining == Decimal("4000")
+
+
+async def test_spent_free_allowance_without_a_vendor_balance_stays_unknown() -> None:
+    """A10 (AC #11): free credits spent, no paid use and no credits_remaining is unknown.
+
+    The free tier is large, so Polyweb never blocks a key on a guess: purchased
+    credits may remain. The vendor 402 is the hard stop.
+    """
+
+    adapter, client = _adapter(_ok_handler(credits=1, paid=False))
+    try:
+        adapter.apply_usage(credits=Decimal("100000"), paid=False)
+        await adapter.search(SearchRequest(project_id=_PROJECT, query="q", limit=1))
+        quota = await adapter.quota()
+        snapshot = await adapter.usage_snapshot(
+            UsageSyncRequest(provider="keenable", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT)
+        )
+    finally:
+        await client.aclose()
+
+    assert quota is not None and quota.remaining is None
+    assert snapshot is not None
+    assert (snapshot.source, snapshot.remaining) == ("local_ledger", None)
+    assert snapshot.confidence is Confidence.ESTIMATED
