@@ -2478,7 +2478,12 @@ async def test_quota_after_success_consecutive_calls_project_from_fresh_cache() 
 
 
 async def test_usage_snapshot_after_terminal_clamps_positive_to_zero() -> None:
-    """A usage poll with balance 500 after terminal 402 reports zero (F1 clamp)."""
+    """A usage poll with balance 500 after terminal 402 keeps the zero clamp (F1 clamp).
+
+    The observation carries the vendor's figures so the limit store can judge
+    them (TASK-000070, PR #78 review: the store owns the verdict). The
+    adapter's own quota stays zero until the store accepts a report.
+    """
     from datetime import UTC, datetime
 
     from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
@@ -2507,8 +2512,11 @@ async def test_usage_snapshot_after_terminal_clamps_positive_to_zero() -> None:
         UsageSyncRequest(provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC))
     )
 
-    assert snapshot is not None and snapshot.remaining == Decimal("0")
-    assert snapshot.source == "vendor_402"
+    assert snapshot is not None and snapshot.remaining == Decimal("500")
+    assert snapshot.source == "vendor_api"
+    cached = await adapter.quota()
+    assert cached is not None and cached.remaining == Decimal("0")
+    assert adapter._terminal_402 is True
     assert adapter._owned_http.gets == ["https://api.tavily.com/usage"]
 
 
@@ -2563,7 +2571,11 @@ async def test_usage_snapshot_after_terminal_reports_proven_credit_unclamped() -
 
 
 async def test_usage_snapshot_after_terminal_without_new_funds_stays_clamped() -> None:
-    """AC #5: a report that only repeats the cached balance stays a clamped zero."""
+    """AC #5: a report that only repeats the cached balance stays a clamped zero.
+
+    The store rejects the report, so the sync never confirms it and the
+    adapter keeps its clamp.
+    """
     from datetime import UTC, datetime
 
     from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
@@ -2585,8 +2597,9 @@ async def test_usage_snapshot_after_terminal_without_new_funds_stays_clamped() -
     )
 
     assert snapshot is not None
-    assert (snapshot.source, snapshot.remaining) == ("vendor_402", Decimal("0"))
-    adapter.usage_snapshot_stored(snapshot)
+    assert (snapshot.source, snapshot.remaining) == ("vendor_api", Decimal("40"))
+    cached = await adapter.quota()
+    assert cached is not None and cached.remaining == Decimal("0")
     assert adapter._terminal_402 is True
 
 
@@ -2630,15 +2643,17 @@ async def test_report_repeating_the_last_vendor_report_after_a_debit_stays_clamp
     """AC #5: the adapter baseline is the last vendor report, not the debited cache.
 
     A lagging report that repeats the reported 40 Credits is above the debited
-    39, but it proves no new funds.
+    39, but it proves no new funds. The adapter passes the report on as the
+    vendor stated it and keeps its clamp; the store judges it.
     """
     adapter = await _terminal_after_report_and_debit("tvly-debit-stale")
 
     snapshot = await _poll_report(adapter, 960, 1000)
 
     assert snapshot is not None
-    assert (snapshot.source, snapshot.remaining) == ("vendor_402", Decimal("0"))
-    adapter.usage_snapshot_stored(snapshot)
+    assert (snapshot.source, snapshot.remaining) == ("vendor_api", Decimal("40"))
+    cached = await adapter.quota()
+    assert cached is not None and cached.remaining == Decimal("0")
     assert adapter._terminal_402 is True
 
 
@@ -2658,16 +2673,3 @@ async def test_report_above_the_last_vendor_report_after_a_debit_is_unclamped(
     assert snapshot is not None
     assert (snapshot.source, snapshot.remaining) == ("vendor_api", expected)
 
-
-async def test_report_from_an_earlier_month_gives_no_402_baseline() -> None:
-    """A 402 baseline comes only from a report of the current month."""
-    from datetime import UTC, datetime
-
-    adapter = await _terminal_adapter_after_vendor_report("tvly-old-report")
-    adapter._reported_at = datetime.now(UTC) - timedelta(days=40)
-    await adapter.quota_after_error(402)
-
-    snapshot = await _poll_report(adapter, 960, 2000)
-
-    assert snapshot is not None
-    assert (snapshot.source, snapshot.remaining) == ("vendor_402", Decimal("0"))

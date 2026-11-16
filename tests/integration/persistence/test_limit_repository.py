@@ -1116,6 +1116,28 @@ async def test_tavily_report_without_figures_is_never_the_402_baseline(
     assert await _tavily_state(limits_repo) == ("vendor_api", Decimal("1000"))
 
 
+async def test_tavily_report_from_an_earlier_month_is_no_402_baseline(
+    limits_repo: LimitRepository,
+) -> None:
+    """A 402 baseline comes only from a report of the current month.
+
+    This rule moved from the adapter to the store with the proof verdict.
+    """
+
+    await _tavily_pool(limits_repo)
+    assert await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT - timedelta(days=20), remaining="960")
+    )
+    await _tavily_402(limits_repo, FIXED_AT)
+
+    accepted = await limits_repo.apply_snapshot(
+        _tavily_report(at=FIXED_AT + timedelta(minutes=5), remaining="1040", allowance="2000")
+    )
+
+    assert accepted is False
+    assert await _tavily_state(limits_repo) == ("vendor_402", Decimal("0"))
+
+
 async def test_malformed_legacy_event_detail_does_not_drop_a_402(
     limits_repo: LimitRepository,
 ) -> None:
