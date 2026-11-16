@@ -5,7 +5,7 @@ status: Testing
 assignee:
   - '@devin'
 created_date: '2026-11-14T11:37:00Z'
-updated_date: '2026-11-16T00:47:00Z'
+updated_date: '2026-11-16T11:34:00Z'
 labels: []
 dependencies: []
 priority: high
@@ -39,7 +39,7 @@ Related: TASK-000077 owns Parallel OAuth pools, real Parallel per-call cost and 
 - [x] #2 A local estimate never raises a key's remaining quota above the newest trusted fact in the same period, and never unblocks a key that a vendor 402 exhausted
 - [x] #3 For Brave, Exa, Parallel, Keenable, Tavily and Firecrawl, a blocked key becomes usable again when a newer vendor report proves new credits, when an admin records new credits for that key, or at the provider reset. A manual record clears both the stored denial and the in-memory adapter block at the blocked key's scope (credential row, or pool row for a pooled key)
 - [x] #4 PUT /api/v1/providers/{provider_id}/manual-quota accepts an optional key or pool scope. Without a scope it applies to the provider's only eligible key, so the existing Set balance dialog unblocks single-key providers with no UI change. With several keys and no scope it keeps today's provider-level behaviour and does not guess
-- [x] #5 Tavily: after a 402, a same-month /usage report unblocks the key only when it proves new funds (a credit or allowance increase against the balance saved at the 402, or a provider-issued timestamp after the 402). Reports without that proof stay rejected, so the existing stale-poll and cached-positive 402 protections keep passing
+- [x] #5 Tavily: after a 402, a same-month /usage report unblocks the key only when it proves new funds, as defined in AC #15 (an allowance above the last reported allowance, or a remaining above the highest remaining among this month's reports with the same allowance). Tavily reports carry no provider timestamp, so a timestamp is never proof. Reports without that proof stay rejected, so the existing stale-poll and cached-positive 402 protections keep passing
 - [x] #6 The saved Exa monthly budget and manual credits apply to Exa keys. When the period's recorded spend reaches the limit, Polyweb denies the next Exa call. Recording manual credits also clears Exa's soft-zero block
 - [x] #7 The saved Parallel free seed applies to Parallel API-key credentials. Parallel OAuth balance and real per-call cost stay in TASK-000077
 - [x] #8 Brave and Keenable usage counted before a restart or a settings change still counts after it
