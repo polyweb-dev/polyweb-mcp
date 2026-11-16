@@ -16,14 +16,16 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import Enum
 from typing import Any, Literal
 from typing import cast as type_cast
 from uuid import UUID
 
-from sqlalchemy import Numeric, cast, delete, func, select, text, update
+from sqlalchemy import Float, Numeric, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from polyweb.models.budget_period import BudgetPeriod, window_bounds
 from polyweb.models.contracts import ProviderError, UnitKind
@@ -339,7 +341,8 @@ _TAVILY_VENDOR_API_SOURCE = "vendor_api"
 # stored with an estimated confidence, so the rank reads the source, not the
 # confidence.
 _LOCAL_ESTIMATE_SOURCES = frozenset({"local_ledger"})
-_TRUSTED_SOURCES = frozenset({"vendor_api", "vendor_402", "vendor_headers", "manual_anchor"})
+_MANUAL_ANCHOR_SOURCE = "manual_anchor"
+_TRUSTED_SOURCES = frozenset({"vendor_api", "vendor_402", "vendor_headers", _MANUAL_ANCHOR_SOURCE})
 _TERMINAL_BASELINE = "terminal_baseline"
 # The source of the incoming observation. A bounded local estimate is stored
 # under the trusted source of the row it lowers, so the event source alone
@@ -370,14 +373,23 @@ def _text(value: Decimal | None) -> str | None:
 
 
 def _decimal(text: str | None) -> Decimal | None:
-    """Read exact decimal text, ignoring a malformed historical value."""
+    """Read exact decimal text, ignoring a malformed or non-finite historical value."""
 
     if text is None:
         return None
     try:
-        return Decimal(text)
+        value = Decimal(text)
     except (ArithmeticError, ValueError):
         return None
+    return value if value.is_finite() else None
+
+
+class _SnapshotOutcome(Enum):
+    """What one observation write did: rejected, stored unchanged, or changed the balance."""
+
+    REJECTED = "rejected"
+    UNCHANGED = "unchanged"
+    CHANGED = "changed"
 
 
 def _dump(value: Any) -> str | None:
@@ -605,50 +617,36 @@ class LimitRepository:
         A local ledger estimate never raises a balance that descends from a
         trusted fact (vendor report, vendor 402 or manual anchor) in the same
         period and credential generation. It may lower that balance; the row
-        then keeps the trusted source, so the bound holds for later estimates.
+        then keeps the trusted source and allowance, so the bound holds for
+        later estimates.
+
+        An operator manual anchor is stamped when it is written: a local debit
+        that committed after the operator's request started does not make the
+        record older than the row. Only a newer trusted fact keeps it out.
         """
+
+        outcome = await self._store_snapshot(snapshot, manual_anchor=manual_anchor)
+        return outcome is _SnapshotOutcome.CHANGED
+
+    async def _store_snapshot(
+        self, snapshot: NativeUsageSnapshot, *, manual_anchor: bool
+    ) -> _SnapshotOutcome:
+        """Write one observation and say whether it was rejected, unchanged or changed."""
 
         async with self._session_factory() as session:
             await session.execute(text("BEGIN IMMEDIATE"))
-            if snapshot.credential_id is not None:
-                credential = await session.get(ProviderCredentialRow, str(snapshot.credential_id))
-                if (
-                    credential is None
-                    or credential.status != "active"
-                    or (
-                        credential.generation != snapshot.credential_generation
-                        or credential.provider_type != snapshot.provider
-                    )
-                ):
-                    return False
             row = await session.get(NativePoolRow, snapshot.pool_id)
-            if (
-                row is not None
-                and snapshot.upstream_pool_id is None
-                and snapshot.credential_generation < row.credential_generation
-            ):
-                return False
-            if await _older_than_row(session, row, snapshot):
-                return False
-            if _tavily_terminal_row(row, snapshot):
-                baseline = await _terminal_baseline(session, snapshot.pool_id)
-                if _tavily_observation_rejected(row, snapshot, baseline):
-                    return False
+            if not await _current_generation(session, row, snapshot):
+                return _SnapshotOutcome.REJECTED
+            stamp = await _write_stamp(session, row, snapshot, manual_anchor)
+            if stamp is None:
+                return _SnapshotOutcome.REJECTED
+            if stamp != snapshot.observed_at:
+                snapshot = snapshot.model_copy(update={"observed_at": stamp})
+            effective = await _effective_observation(session, row, snapshot, manual_anchor)
+            if effective is None:
+                return _SnapshotOutcome.REJECTED
             old_native = _decimal(row.remaining_text) if row is not None else None
-            effective = _preserve_known_values(row, snapshot)
-            ceiling = _trusted_ceiling(row, snapshot, manual_anchor) if row is not None else None
-            if row is not None and ceiling is not None:
-                bounded = _bounded_estimate(row, effective, ceiling)
-                if bounded is None:
-                    return False
-                effective = bounded
-            if snapshot.source == _TAVILY_VENDOR_API_SOURCE and (
-                _is_tavily_credits_pool(snapshot) or "#" in snapshot.pool_id
-            ):
-                debits = await _native_debits_after(session, snapshot.pool_id, snapshot.observed_at)
-                adjusted = _remaining_after(snapshot.remaining, debits)
-                if adjusted is not None and adjusted != effective.remaining:
-                    effective = effective.model_copy(update={"remaining": adjusted})
             changed = row is None or old_native != effective.remaining
             detail: dict[str, Any] = {}
             if snapshot.source == _TAVILY_VENDOR_API_SOURCE:
@@ -690,7 +688,7 @@ class LimitRepository:
                 ),
             )
             await session.commit()
-        return changed
+        return _SnapshotOutcome.CHANGED if changed else _SnapshotOutcome.UNCHANGED
 
     async def clear_pool_values(
         self,
@@ -765,10 +763,14 @@ class LimitRepository:
 
         The operator path also marks the pool as a manual anchor, so a later
         delete can tell an operator estimate from a vendor observation.
+        Returns the stored pool, also when the balance did not change, or
+        ``None`` when the store rejected the observation (a newer trusted fact
+        or a newer credential generation holds the pool), so the caller never
+        mistakes the unchanged old row for the record.
         """
 
         await self.ensure_pool(pool)
-        await self.apply_snapshot(
+        outcome = await self._store_snapshot(
             NativeUsageSnapshot(
                 pool_id=pool.pool_id,
                 provider=pool.provider,
@@ -784,6 +786,8 @@ class LimitRepository:
             ),
             manual_anchor=manual_anchor,
         )
+        if outcome is _SnapshotOutcome.REJECTED:
+            return None
         return await self.get_pool(pool.pool_id)
 
     # --------------------------------------------------------- grants and use
@@ -3134,120 +3138,148 @@ class _TerminalBaseline:
     allowance: Decimal | None
 
 
+def _detail_value(path: str) -> ColumnElement[Any]:
+    """Read one audit detail field in SQL; a malformed legacy payload reads as NULL.
+
+    ``json_extract`` raises on invalid JSON, and a raise inside a write
+    transaction would drop the observation, so the payload is checked first.
+    """
+
+    return case(
+        (
+            func.json_valid(LimitEventRow.detail_json) == 1,
+            func.json_extract(LimitEventRow.detail_json, path),
+        ),
+        else_=None,
+    )
+
+
+_REPORTED_REMAINING = _detail_value(f"$.{_VENDOR_REPORT}.remaining")
+_REPORTED_ALLOWANCE = _detail_value(f"$.{_VENDOR_REPORT}.allowance")
+
+
+def _reported(value: object) -> Decimal | None:
+    """Read one stored vendor-report figure, or ``None`` when absent or unreadable."""
+
+    return None if value is None else _decimal(str(value))
+
+
+def _month_reports(snapshot: NativeUsageSnapshot) -> tuple[ColumnElement[bool], ...]:
+    """Select a pool's accepted vendor reports in the UTC month of a snapshot, up to it.
+
+    The provider, auth mode and instant range come first, so the
+    ``(provider, auth_mode, observed_at)`` index serves the scan.
+    """
+
+    utc = snapshot.observed_at.astimezone(UTC)
+    period_start = utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return (
+        LimitEventRow.provider == snapshot.provider,
+        LimitEventRow.auth_mode == snapshot.auth_mode.value,
+        LimitEventRow.observed_at >= _timestamp(period_start),
+        LimitEventRow.observed_at <= _timestamp(snapshot.observed_at),
+        LimitEventRow.pool_id == snapshot.pool_id,
+        LimitEventRow.reason == "vendor_sync",
+    )
+
+
 async def _last_vendor_report(
     session: AsyncSession, snapshot: NativeUsageSnapshot
 ) -> _TerminalBaseline | None:
-    """Return the newest accepted vendor report of a pool in the period before an instant.
+    """Return the newest vendor report with a figure in the pool's month, up to an instant.
 
     The values are the ones the vendor stated, not the row after local
-    debits: a lagging report repeats them, so only more than these proves
-    new funds. A report from an earlier calendar month gives no baseline.
+    debits. A report with neither a balance nor an allowance is skipped, and a
+    report from an earlier calendar month counts for nothing. The 402 audit
+    event records this report as its ``terminal_baseline``.
     """
 
-    before = snapshot.observed_at
-    utc = before.astimezone(UTC)
-    period_start = utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    rows = await session.scalars(
-        select(LimitEventRow.detail_json)
-        .where(
-            LimitEventRow.provider == snapshot.provider,
-            LimitEventRow.auth_mode == snapshot.auth_mode.value,
-            LimitEventRow.pool_id == snapshot.pool_id,
-            LimitEventRow.reason == "vendor_sync",
-            LimitEventRow.observed_at >= _timestamp(period_start),
-            LimitEventRow.observed_at <= _timestamp(before),
-            func.json_extract(LimitEventRow.detail_json, f"$.{_VENDOR_REPORT}").is_not(None),
+    row = (
+        await session.execute(
+            select(_REPORTED_REMAINING, _REPORTED_ALLOWANCE)
+            .where(
+                *_month_reports(snapshot),
+                or_(_REPORTED_REMAINING.is_not(None), _REPORTED_ALLOWANCE.is_not(None)),
+            )
+            .order_by(LimitEventRow.observed_at.desc(), LimitEventRow.event_id.desc())
+            .limit(1)
         )
-        .order_by(LimitEventRow.observed_at.desc(), LimitEventRow.event_id.desc())
-        .limit(1)
-    )
-    raw = rows.first()
-    report = json.loads(raw).get(_VENDOR_REPORT) if raw else None
-    if not isinstance(report, dict):
+    ).first()
+    if row is None:
         return None
-    return _TerminalBaseline(
-        remaining=_decimal(report.get("remaining")),
-        allowance=_decimal(report.get("allowance")),
-    )
+    return _TerminalBaseline(remaining=_reported(row[0]), allowance=_reported(row[1]))
 
 
-async def _terminal_baseline(session: AsyncSession, pool_id: str) -> _TerminalBaseline | None:
-    """Return the balance saved by the newest transition of a pool into a 402."""
+async def _proves_new_funds(session: AsyncSession, snapshot: NativeUsageSnapshot) -> bool:
+    """Return whether a Tavily report proves funds the month's reports did not show (AC #15).
 
-    rows = await session.scalars(
-        select(LimitEventRow.detail_json)
-        .where(
-            LimitEventRow.pool_id == pool_id,
-            LimitEventRow.source == _TAVILY_VENDOR_402_SOURCE,
-            LimitEventRow.detail_json.like(f'%"{_TERMINAL_BASELINE}"%'),
+    A larger allowance than the newest reported allowance proves funds. A
+    balance proves funds only when it is above the highest balance any report
+    of this month stated at the same allowance, so a lagging replica that
+    repeats an older, higher balance is no proof. Reports without figures are
+    never a baseline, a report without a balance proves nothing by its
+    balance, and with no report this month nothing proves funds. Tavily's
+    report carries no provider timestamp, and the local request time proves
+    nothing about freshness, so only an increase counts.
+    """
+
+    if snapshot.allowance is not None:
+        last_allowance = _reported(
+            await session.scalar(
+                select(_REPORTED_ALLOWANCE)
+                .where(*_month_reports(snapshot), _REPORTED_ALLOWANCE.is_not(None))
+                .order_by(LimitEventRow.observed_at.desc(), LimitEventRow.event_id.desc())
+                .limit(1)
+            )
         )
-        .order_by(LimitEventRow.observed_at.desc(), LimitEventRow.event_id.desc())
-        .limit(1)
+        if last_allowance is not None and snapshot.allowance > last_allowance:
+            return True
+    if snapshot.remaining is None:
+        return False
+    same_allowance = (
+        _REPORTED_ALLOWANCE.is_(None)
+        if snapshot.allowance is None
+        else cast(_REPORTED_ALLOWANCE, Float) == float(snapshot.allowance)
     )
-    raw = rows.first()
-    baseline = json.loads(raw).get(_TERMINAL_BASELINE) if raw else None
-    if not isinstance(baseline, dict):
-        return None
-    return _TerminalBaseline(
-        remaining=_decimal(baseline.get("remaining")),
-        allowance=_decimal(baseline.get("allowance")),
+    highest = _reported(
+        await session.scalar(
+            select(_REPORTED_REMAINING)
+            .where(*_month_reports(snapshot), _REPORTED_REMAINING.is_not(None), same_allowance)
+            .order_by(cast(_REPORTED_REMAINING, Float).desc())
+            .limit(1)
+        )
     )
+    return highest is not None and snapshot.remaining > highest
 
 
-def _proves_new_funds(snapshot: NativeUsageSnapshot, baseline: _TerminalBaseline | None) -> bool:
-    """Return whether a report shows more Credits or allowance than the 402 baseline.
+async def _tavily_verdict(
+    session: AsyncSession, row: NativePoolRow, snapshot: NativeUsageSnapshot
+) -> Literal["accept", "terminal", "reject"]:
+    """Decide what a vendor_api Tavily report does to a stored terminal 402.
 
-    Tavily's usage report carries no provider timestamp, and the local request
-    time proves nothing about freshness, so only an increase counts.
+    An observation stamped at or before the stored terminal observation is
+    rejected. A later month, a passed reset instant, or a newer credential
+    generation supersedes the terminal row normally (``accept``). Inside the
+    same month and generation, only a report that proves new funds lifts the
+    402 (``accept``). A numeric zero agrees with the 402, so it is stored but
+    the row keeps the terminal source (``terminal``). Every other report,
+    including one with no balance figure, is rejected: otherwise the 402 is
+    gone and a later lagging report that repeats the pre-402 balance would
+    unblock the key.
     """
 
-    if baseline is None:
-        return False
-    if (
-        snapshot.allowance is not None
-        and baseline.allowance is not None
-        and snapshot.allowance > baseline.allowance
-    ):
-        return True
-    return (
-        snapshot.remaining is not None
-        and baseline.remaining is not None
-        and snapshot.remaining > baseline.remaining
-    )
-
-
-def _tavily_observation_rejected(
-    row: NativePoolRow | None,
-    snapshot: NativeUsageSnapshot,
-    baseline: _TerminalBaseline | None = None,
-) -> bool:
-    """Return whether a vendor_api Tavily observation must not write.
-
-    An observation stamped at or before the stored terminal observation stays
-    out. A later observation inside the same calendar month with the same
-    credential generation is late vendor data while the stored reset instant
-    is still ahead, so there only a numeric zero, or a report that proves new
-    funds against the balance saved at the 402, can refresh the terminal
-    state. A later month, a passed reset instant, or a newer credential
-    generation supersedes the terminal row normally.
-    """
-
-    if row is None or not _tavily_terminal_row(row, snapshot):
-        return False
     row_observed = _instant(row.observed_at)
     if row_observed is None:
-        return False
+        return "accept"
     if snapshot.observed_at <= row_observed:
-        return True
+        return "reject"
     if snapshot.credential_generation > row.credential_generation:
-        return False
+        return "accept"
     if not _same_period(row, snapshot.observed_at):
-        return False
-    return (
-        snapshot.remaining is not None
-        and snapshot.remaining > 0
-        and not _proves_new_funds(snapshot, baseline)
-    )
+        return "accept"
+    if await _proves_new_funds(session, snapshot):
+        return "accept"
+    return "terminal" if snapshot.remaining == 0 else "reject"
 
 
 def _same_period(row: NativePoolRow, instant: datetime) -> bool:
@@ -3303,53 +3335,130 @@ def _bounded_estimate(
     """Return the estimate to store under a trusted row, or ``None`` to reject it.
 
     An estimate above the stored trusted balance is rejected. A lower or equal
-    one is stored with the trusted source and reset instant, so the stored
-    row stays the bound for the rest of the period.
+    one is stored with the trusted source, allowance and reset instant, so the
+    stored row stays the bound for the rest of the period and a local count
+    never replaces the allowance a vendor or an operator stated.
     """
 
     if estimate.remaining is None or estimate.remaining > ceiling:
         return None
-    return estimate.model_copy(
-        update={"source": row.source, "reset_at": _instant(row.reset_at) or estimate.reset_at}
+    update: dict[str, Any] = {
+        "source": row.source,
+        "reset_at": _instant(row.reset_at) or estimate.reset_at,
+    }
+    trusted_allowance = _decimal(row.allowance_text)
+    if trusted_allowance is not None:
+        update["allowance"] = trusted_allowance
+    return estimate.model_copy(update=update)
+
+
+async def _current_generation(
+    session: AsyncSession, row: NativePoolRow | None, snapshot: NativeUsageSnapshot
+) -> bool:
+    """Return whether an observation comes from the current credential generation.
+
+    A credential-scoped observation needs the active credential of the same
+    provider and generation. An unpooled observation older than the stored
+    row's generation describes a rotated key.
+    """
+
+    if snapshot.credential_id is not None:
+        credential = await session.get(ProviderCredentialRow, str(snapshot.credential_id))
+        if (
+            credential is None
+            or credential.status != "active"
+            or credential.generation != snapshot.credential_generation
+            or credential.provider_type != snapshot.provider
+        ):
+            return False
+    return not (
+        row is not None
+        and snapshot.upstream_pool_id is None
+        and snapshot.credential_generation < row.credential_generation
     )
 
 
-async def _older_than_row(
-    session: AsyncSession, row: NativePoolRow | None, snapshot: NativeUsageSnapshot
-) -> bool:
-    """Return whether an observation is older than the stored row and must not write.
+async def _write_stamp(
+    session: AsyncSession,
+    row: NativePoolRow | None,
+    snapshot: NativeUsageSnapshot,
+    manual_anchor: bool,
+) -> datetime | None:
+    """Return the instant to store an observation at, or ``None`` when it is too old.
 
     A local debit re-stamps the row with the wall clock. A vendor 402 that was
     observed before a concurrent call's debit committed is still the newest
-    vendor fact, so only a newer trusted observation (vendor report, vendor
-    402, manual record or manual delete) keeps the 402 out. A local estimate
-    never does, even when it was stored under a trusted source.
+    vendor fact, so it keeps its own instant and is stored. An operator manual
+    record is stamped when it is written (here, inside the write
+    transaction), so a debit that committed after the operator's request
+    started never makes it older. Both stay out only behind a newer trusted
+    observation (vendor report, vendor 402, manual record or manual delete);
+    a local estimate never keeps them out, even when it was stored under a
+    trusted source. Every other observation older than the row is rejected.
     """
 
-    if row is None:
-        return False
-    row_observed = _instant(row.observed_at)
+    row_observed = _instant(row.observed_at) if row is not None else None
     if row_observed is None or row_observed <= snapshot.observed_at:
-        return False
-    if snapshot.source != _TAVILY_VENDOR_402_SOURCE:
-        return True
-    observed_source = func.coalesce(
-        func.json_extract(LimitEventRow.detail_json, f"$.{_OBSERVED_SOURCE}"),
-        LimitEventRow.source,
-    )
-    newer_fact = await session.scalar(
+        return snapshot.observed_at
+    operator = manual_anchor and snapshot.source == _MANUAL_ANCHOR_SOURCE
+    if snapshot.source != _TAVILY_VENDOR_402_SOURCE and not operator:
+        return None
+    if await _newer_trusted_fact(session, snapshot):
+        return None
+    return max(row_observed, datetime.now(UTC)) if operator else snapshot.observed_at
+
+
+async def _newer_trusted_fact(session: AsyncSession, snapshot: NativeUsageSnapshot) -> bool:
+    """Return whether the pool stored a trusted observation after a snapshot's instant."""
+
+    observed_source = func.coalesce(_detail_value(f"$.{_OBSERVED_SOURCE}"), LimitEventRow.source)
+    newer = await session.scalar(
         select(LimitEventRow.event_id)
         .where(
             LimitEventRow.provider == snapshot.provider,
             LimitEventRow.auth_mode == snapshot.auth_mode.value,
-            LimitEventRow.pool_id == snapshot.pool_id,
             LimitEventRow.observed_at > _timestamp(snapshot.observed_at),
+            LimitEventRow.pool_id == snapshot.pool_id,
             LimitEventRow.reason.in_(("vendor_sync", "reconcile")),
             observed_source.in_(_TRUSTED_SOURCES),
         )
         .limit(1)
     )
-    return newer_fact is not None
+    return newer is not None
+
+
+async def _effective_observation(
+    session: AsyncSession,
+    row: NativePoolRow | None,
+    snapshot: NativeUsageSnapshot,
+    manual_anchor: bool,
+) -> NativeUsageSnapshot | None:
+    """Return the observation to store after the trust rules, or ``None`` to reject it."""
+
+    terminal = False
+    if row is not None and _tavily_terminal_row(row, snapshot):
+        verdict = await _tavily_verdict(session, row, snapshot)
+        if verdict == "reject":
+            return None
+        terminal = verdict == "terminal"
+    effective: NativeUsageSnapshot | None = _preserve_known_values(row, snapshot)
+    ceiling = _trusted_ceiling(row, snapshot, manual_anchor) if row is not None else None
+    if row is not None and ceiling is not None and effective is not None:
+        effective = _bounded_estimate(row, effective, ceiling)
+    if effective is None:
+        return None
+    if snapshot.source == _TAVILY_VENDOR_API_SOURCE and (
+        _is_tavily_credits_pool(snapshot) or "#" in snapshot.pool_id
+    ):
+        debits = await _native_debits_after(session, snapshot.pool_id, snapshot.observed_at)
+        adjusted = _remaining_after(snapshot.remaining, debits)
+        if adjusted is not None and adjusted != effective.remaining:
+            effective = effective.model_copy(update={"remaining": adjusted})
+    if terminal and row is not None:
+        effective = effective.model_copy(
+            update={"source": _TAVILY_VENDOR_402_SOURCE, "confidence": Confidence(row.confidence)}
+        )
+    return effective
 
 
 async def _native_debits_after(
