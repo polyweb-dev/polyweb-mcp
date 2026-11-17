@@ -47,7 +47,7 @@ import pytest
 from pydantic import SecretStr
 
 from polyweb.adapters.base import ProviderAdapter
-from polyweb.adapters.parallel import ParallelAdapter
+from polyweb.adapters.parallel import ParallelAdapter, usage_event_cost_usd
 from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
 from polyweb.models.contracts import (
     FetchRequest,
@@ -1078,6 +1078,49 @@ async def test_hydrate_without_seed_reads_nothing() -> None:
         assert await adapter.hydrate_quota(_LedgerReads([_spend("1")])) is None
     finally:
         await caller.aclose()
+
+
+def _sku_event(operation: UsageOperation, metadata: dict[str, object]) -> UsageEvent:
+    return UsageEvent(
+        provider="parallel",
+        operation=operation,
+        units=Decimal("1"),
+        unit_kind=UnitKind.REQUEST,
+        observed_at=datetime.now(UTC),
+        metadata={"skus": [{"sku": "search", "count": 1}], **metadata},
+    )
+
+
+@pytest.mark.parametrize(
+    ("operation", "metadata", "expected"),
+    [
+        (UsageOperation.SEARCH, {"mode": "advanced", "extra_bundles": 0}, Decimal("0.005")),
+        (UsageOperation.SEARCH, {"mode": "omitted", "extra_bundles": 1}, Decimal("0.006")),
+        (UsageOperation.SEARCH, {"mode": "fast", "extra_bundles": 3}, Decimal("0.004")),
+        (UsageOperation.FETCH, {"url_count": 4}, Decimal("0.004")),
+        (UsageOperation.SEARCH, {"mode": "ultra-mega"}, None),
+        (UsageOperation.SEARCH, {"mode": "basic", "extra_bundles": "many"}, None),
+        (UsageOperation.FETCH, {"url_count": -1}, None),
+    ],
+)
+def test_usage_event_cost_usd_prices_recorded_sku_events(
+    operation: UsageOperation, metadata: dict[str, object], expected: Decimal | None
+) -> None:
+    assert usage_event_cost_usd(_sku_event(operation, metadata)) == expected
+
+
+def test_usage_event_cost_usd_ignores_non_sku_events() -> None:
+    assert usage_event_cost_usd(_spend("0.5")) is None
+    event = _sku_event(UsageOperation.SEARCH, {}).model_copy(update={"metadata": {}})
+    assert usage_event_cost_usd(event) is None
+
+
+def test_event_spend_keeps_zero_for_unpriced_sku_events() -> None:
+    unknown = _sku_event(UsageOperation.SEARCH, {"mode": "ultra-mega"})
+    assert ParallelAdapter._event_spend(unknown) == Decimal("0")
+    assert ParallelAdapter._event_spend(_spend("0.5")) == Decimal("0.5")
+    priced = _sku_event(UsageOperation.SEARCH, {"mode": "turbo", "extra_bundles": 0})
+    assert ParallelAdapter._event_spend(priced) == Decimal("0.001")
 
 
 # --- refine-phase granular edge matrix (non-duplicative boundaries) --------

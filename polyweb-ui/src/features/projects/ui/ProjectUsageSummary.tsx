@@ -53,7 +53,7 @@ export function ProjectUsageSummary({
         <Stat label="Fetches" value={figures.fetches.toLocaleString("en-US")} detail={PERIOD} />
         <Stat
           label={figures.costIncomplete ? "Known provider cost" : "Provider cost"}
-          value={figures.free ? formatCallCost(0) : formatCostTotal(figures.usd)}
+          value={figures.free ? formatCallCost(0) : `${figures.estimated ? "~" : ""}${formatCostTotal(figures.usd)}`}
           detail={PERIOD}
         />
       </dl>

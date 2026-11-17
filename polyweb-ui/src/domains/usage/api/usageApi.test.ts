@@ -35,8 +35,14 @@ describe("usageApi", () => {
 
     expect(usage.projectId).toBe(PROJECT_ALPHA_ID)
     expect(usage.totals).toEqual([
-      { provider: "tavily", operation: "search", totalUnits: 12.5, eventCount: 4, unitKind: "CREDIT" },
-      { provider: "brave", operation: "search", totalUnits: 3, eventCount: 3, unitKind: null },
+      {
+        provider: "tavily", operation: "search", totalUnits: 12.5, eventCount: 4, unitKind: "CREDIT",
+        costUsd: null, costEstimated: false, unpricedCount: 4,
+      },
+      {
+        provider: "brave", operation: "search", totalUnits: 3, eventCount: 3, unitKind: null,
+        costUsd: null, costEstimated: false, unpricedCount: 3,
+      },
     ])
     expect(usage.recent).toEqual([
       {
@@ -50,6 +56,63 @@ describe("usageApi", () => {
         displayUnit: "requests",
       },
     ])
+  })
+
+  it("decodes reported and estimated costs with the unpriced event count", () => {
+    const totals = decodeProjectUsage({
+      totals: [
+        {
+          provider: "brave", operation: "search", total_units: "1", event_count: 1, unit_kind: "REQUEST",
+          cost_usd: "0.005", cost_estimated: true, unpriced_event_count: 0,
+        },
+        {
+          provider: "exa", operation: "search", total_units: "0.007", event_count: 1, unit_kind: "USD",
+          cost_usd: 0.007, cost_estimated: false, unpriced_event_count: 0,
+        },
+        {
+          provider: "tavily", operation: "search", total_units: "6", event_count: 3, unit_kind: "CREDIT",
+          cost_usd: null, cost_estimated: false, unpriced_event_count: 3,
+        },
+      ],
+    }).totals
+
+    expect(totals.map(({ costUsd, costEstimated, unpricedCount }) => ({ costUsd, costEstimated, unpricedCount }))).toEqual([
+      { costUsd: 0.005, costEstimated: true, unpricedCount: 0 },
+      { costUsd: 0.007, costEstimated: false, unpricedCount: 0 },
+      { costUsd: null, costEstimated: false, unpricedCount: 3 },
+    ])
+  })
+
+  it("keeps a legacy USD row's dollars and counts no unpriced events for USD or free rows", () => {
+    const totals = decodeProjectUsage({
+      totals: [
+        { provider: "exa", operation: "search", total_units: "0.035", event_count: 6, unit_kind: "USD" },
+        { provider: "exa", operation: "fetch", total_units: "0.01", event_count: 1, unit_kind: "USD", cost_usd: null },
+        { provider: "keenable", operation: "search", total_units: "0", event_count: 2, unit_kind: "FREE" },
+      ],
+    }).totals
+
+    expect(totals.map(({ costUsd, costEstimated, unpricedCount }) => ({ costUsd, costEstimated, unpricedCount }))).toEqual([
+      { costUsd: 0.035, costEstimated: false, unpricedCount: 0 },
+      { costUsd: 0.01, costEstimated: false, unpricedCount: 0 },
+      { costUsd: null, costEstimated: false, unpricedCount: 0 },
+    ])
+  })
+
+  it("treats malformed cost fields like absent ones", () => {
+    const [total] = decodeProjectUsage({
+      totals: [
+        {
+          provider: "brave", operation: "search", total_units: "2", event_count: 2, unit_kind: "REQUEST",
+          cost_usd: "abc", cost_estimated: "yes", unpriced_event_count: -1,
+        },
+      ],
+    }).totals
+
+    expect(total).toMatchObject({ costUsd: null, costEstimated: false, unpricedCount: 2 })
+    expect(decodeProjectUsage({
+      totals: [{ provider: "brave", operation: "search", event_count: 2, cost_usd: "-0.01", unpriced_event_count: 1.5 }],
+    }).totals[0]).toMatchObject({ costUsd: null, unpricedCount: 2 })
   })
 
   it("rejects a body that is not an object", () => {

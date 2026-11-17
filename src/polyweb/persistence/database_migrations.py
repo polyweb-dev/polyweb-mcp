@@ -392,6 +392,8 @@ _HEAD_COLUMNS: dict[str, frozenset[str]] = {
             "credential_id",
             "binding_id",
             "pool_id",
+            "cost_usd",
+            "cost_source",
         }
     ),
     "trace_spans": frozenset(

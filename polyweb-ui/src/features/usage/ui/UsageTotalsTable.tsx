@@ -5,6 +5,7 @@ import {
   USAGE_COLUMN_HINTS,
   USAGE_COLUMN_LABELS,
   usageAmountText,
+  usageAmountTitle,
   usageTotalsView,
   type UsageAmountColumn,
   type UsageAmounts,
@@ -24,7 +25,11 @@ function amountCells(amounts: UsageAmounts, columns: readonly UsageAmountColumn[
   return columns.map((column) => {
     const text = usageAmountText(amounts, column)
     return (
-      <td key={column} className={text === "—" ? `${className} text-[var(--muted)]` : className}>
+      <td
+        key={column}
+        className={text === "—" ? `${className} text-[var(--muted)]` : className}
+        title={usageAmountTitle(amounts, column)}
+      >
         {text}
       </td>
     )

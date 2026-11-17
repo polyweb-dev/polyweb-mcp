@@ -101,6 +101,28 @@ def extract_cost_usd(url_count: int) -> Decimal:
     return Decimal("0.001") * Decimal(url_count)
 
 
+def usage_event_cost_usd(event: UsageEvent) -> Decimal | None:
+    """Price one recorded Parallel SKU usage event from its mode, bundles, and URL count.
+
+    Return ``None`` when the event is not a SKU request event, carries an
+    unknown legacy search mode, or has malformed pricing metadata.
+    """
+
+    metadata = event.metadata
+    if event.unit_kind is not UnitKind.REQUEST or not isinstance(metadata.get("skus"), list):
+        return None
+    try:
+        if event.operation is UsageOperation.FETCH:
+            return extract_cost_usd(int(metadata.get("url_count", 1)))
+        mode = metadata.get("mode")
+        if isinstance(mode, str) and mode not in SEARCH_USD_BY_MODE and mode != "omitted":
+            return None
+        bundles = int(metadata.get("extra_bundles", 0))
+        return search_cost_usd(mode if isinstance(mode, str) else None, bundles)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_seed(value: Decimal | None) -> Decimal | None:
     """Validate an optional exact, non-negative local seed."""
 
@@ -596,23 +618,14 @@ class ParallelAdapter(ProviderAdapter):
     def _event_spend(event: UsageEvent) -> Decimal:
         if event.unit_kind is UnitKind.USD:
             return event.units
-        if event.unit_kind is not UnitKind.REQUEST:
-            return Decimal("0")
-        metadata = event.metadata
-        if not isinstance(metadata.get("skus"), list):
-            return Decimal("0")
-        if event.operation is UsageOperation.FETCH:
-            return extract_cost_usd(int(metadata.get("url_count", 1)))
-        mode = metadata.get("mode")
-        bundles = metadata.get("extra_bundles", 0)
-        if isinstance(mode, str) and mode not in SEARCH_USD_BY_MODE and mode != "omitted":
-            logger.warning("skipping Parallel usage with unknown legacy mode: %s", mode)
-            return Decimal("0")
-        try:
-            return search_cost_usd(mode if isinstance(mode, str) else None, int(bundles))
-        except (TypeError, ValueError):
-            logger.warning("skipping malformed Parallel usage pricing metadata")
-            return Decimal("0")
+        cost = usage_event_cost_usd(event)
+        if cost is not None:
+            return cost
+        if event.unit_kind is UnitKind.REQUEST and isinstance(event.metadata.get("skus"), list):
+            logger.warning(
+                "skipping Parallel usage with unknown legacy mode or malformed pricing metadata"
+            )
+        return Decimal("0")
 
     def _snapshot_spend(self, snapshot: QuotaSnapshot | None) -> Decimal:
         if snapshot is None or snapshot.remaining is None or self._free_seed is None:

@@ -279,7 +279,7 @@ async def test_cloud_0007_populated_upgrade_preserves_and_coexists(
     from alembic.config import Config as AlembicConfig
 
     import polyweb.persistence.database_migrations as migration_module
-    from polyweb.persistence.database_migrations import validate_database_schema
+    from polyweb.persistence.database_migrations import migration_head, validate_database_schema
 
     database = tmp_path / "keyless-cloud-upgrade.db"
     config = AlembicConfig()
@@ -421,7 +421,8 @@ async def test_cloud_0007_populated_upgrade_preserves_and_coexists(
     with sqlite3.connect(database) as connection:
         schema_before = set(connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master"))
         revision_before = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert revision_before == ("0008_owned_keyless_credentials",)
+    # Head sits above 0008; the refused rollback must also keep every later step.
+    assert revision_before == (migration_head(),)
     with pytest.raises(NotImplementedError, match="owned keyless credentials cannot be downgraded"):
         alembic_command.downgrade(config, "0007_provider_budget_period")
     # A rejected rollback must not rebuild tables, change the index/CHECK, or lose vault data.

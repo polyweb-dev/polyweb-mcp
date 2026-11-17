@@ -9,7 +9,15 @@ from pathlib import Path
 
 import pytest_asyncio
 
-from polyweb.models.contracts import UsageEvent, UsageOperation
+from polyweb.models.contracts import (
+    AGGREGATED_PROVIDER,
+    CostSource,
+    UnitKind,
+    UsageCost,
+    UsageEvent,
+    UsageOperation,
+    UsageStatus,
+)
 from polyweb.persistence.storage import SQLiteRepository
 from tests.fixtures.execution import seed_execution_project
 
@@ -91,6 +99,69 @@ async def test_usage_totals_are_decimal_exact_grouped_since_filtered_and_ordered
         ("alpha", UsageOperation.SEARCH, Decimal("0.000001"), 1),
         ("beta", UsageOperation.SEARCH, Decimal("2.500000"), 1),
     ]
+
+
+def _kind_event(
+    provider: str,
+    units: str,
+    kind: UnitKind | None,
+    *,
+    status: UsageStatus = UsageStatus.SUCCESS,
+) -> UsageEvent:
+    return UsageEvent(
+        provider=provider,
+        operation=UsageOperation.SEARCH,
+        units=Decimal(units),
+        unit_kind=kind,
+        observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        status=status,
+    )
+
+
+def _reported(usd: str) -> UsageCost:
+    return UsageCost(usd=Decimal(usd), source=CostSource.REPORTED)
+
+
+def _estimated(usd: str) -> UsageCost:
+    return UsageCost(usd=Decimal(usd), source=CostSource.ESTIMATED)
+
+
+async def test_usage_totals_sum_cost_flag_estimates_count_unpriced_and_skip_aggregated(
+    repository: SQLiteRepository,
+) -> None:
+    recorded: list[tuple[UsageEvent, UsageCost | None]] = [
+        (_kind_event("exa", "0.007", UnitKind.USD), _reported("0.007")),
+        (_kind_event("exa", "0.001", UnitKind.USD), _reported("0.001")),
+        (_kind_event("brave", "1", UnitKind.REQUEST), _estimated("0.005")),
+        (_kind_event("brave", "1", UnitKind.REQUEST), None),
+        (_kind_event("brave", "0", UnitKind.REQUEST, status=UsageStatus.FAILURE), None),
+        (_kind_event("tavily", "2", UnitKind.CREDIT), None),
+        (_kind_event("legacy", "3", None), None),
+        (_kind_event(AGGREGATED_PROVIDER, "0", None), None),
+    ]
+    attribution = await seed_execution_project(repository)
+    for event, cost in recorded:
+        await repository.record_usage(event, attribution=attribution, cost=cost)
+
+    totals = await repository.installation_usage_totals()
+
+    assert [
+        (
+            total.provider,
+            total.event_count,
+            total.cost_usd,
+            total.cost_estimated,
+            total.unpriced_event_count,
+        )
+        for total in totals
+    ] == [
+        ("brave", 2, Decimal("0.005"), True, 1),
+        ("exa", 2, Decimal("0.008"), False, 0),
+        ("tavily", 1, None, False, 1),
+        ("legacy", 1, None, False, 1),
+    ]
+    recent = await repository.recent_installation_usage(limit=20)
+    assert AGGREGATED_PROVIDER in {event.provider for event in recent}
 
 
 async def test_recent_usage_is_newest_first_and_respects_limit(

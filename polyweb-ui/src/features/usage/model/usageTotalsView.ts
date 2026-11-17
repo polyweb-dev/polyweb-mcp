@@ -13,6 +13,8 @@ export interface UsageAmounts {
   /** At least one call ran on a free (keyless) allowance. */
   free: boolean
   unreportedCost: boolean
+  /** Part of the dollar amount is estimated from the catalog price. */
+  estimated: boolean
 }
 
 interface UsageTotalsRow extends UsageAmounts {
@@ -34,32 +36,40 @@ const COLUMN_ORDER: readonly UsageAmountColumn[] = ["usd", "requests", "credits"
 const OPERATION_ORDER: Readonly<Record<string, number>> = { search: 0, fetch: 1 }
 
 function emptyAmounts(): UsageAmounts {
-  return { calls: 0, usd: null, requests: null, credits: null, other: null, free: false, unreportedCost: false }
+  return {
+    calls: 0, usd: null, requests: null, credits: null, other: null,
+    free: false, unreportedCost: false, estimated: false,
+  }
 }
 
 function add(current: number | null, units: number): number {
   return (current ?? 0) + units
 }
 
+/** Add the USD cost of one ledger total; a free row is never counted as unpriced. */
+function accumulateCost(amounts: UsageAmounts, total: ProjectUsageTotal, knownFree: boolean): void {
+  const free = knownFree || total.unitKind === "FREE"
+  if (free || (total.costUsd === 0 && total.unpricedCount === 0)) amounts.free = true
+  if (total.unpricedCount > 0 && !free) amounts.unreportedCost = true
+  if (total.costUsd === null) return
+  // Ledger costs arrive as numbers, so remove binary addition noise from every running sum.
+  amounts.usd = Number(add(amounts.usd, total.costUsd).toPrecision(15))
+  if (total.costEstimated) amounts.estimated = true
+}
+
 /** Add one ledger total into a row: calls always, units only into their own kind. */
 function accumulate(amounts: UsageAmounts, total: ProjectUsageTotal, knownFree: boolean): void {
   amounts.calls += total.eventCount
-  if (knownFree || total.unitKind === "FREE" || (total.unitKind === "USD" && total.totalUnits === 0)) {
-    amounts.free = true
-  }
-  if (total.unitKind !== "USD" && total.unitKind !== "FREE" && !knownFree) amounts.unreportedCost = true
+  accumulateCost(amounts, total, knownFree)
   switch (total.unitKind) {
     case "USD":
-      amounts.usd = add(amounts.usd, total.totalUnits)
+    case "FREE":
       break
     case "REQUEST":
       amounts.requests = add(amounts.requests, total.totalUnits)
       break
     case "CREDIT":
       amounts.credits = add(amounts.credits, total.totalUnits)
-      break
-    case "FREE":
-      amounts.free = true
       break
     default:
       amounts.other = add(amounts.other, total.totalUnits)
@@ -111,8 +121,15 @@ export function usageAmountText(amounts: UsageAmounts, column: UsageAmountColumn
     if (value === null) return "—"
   }
   if (value === null) return "—"
+  if (column !== "usd") return value.toLocaleString("en-US", AMOUNT_FORMAT)
   // Ledger values arrive as numbers, so remove binary addition noise before display.
-  return column === "usd" ? formatCostTotal(Number(value.toPrecision(15))) : value.toLocaleString("en-US", AMOUNT_FORMAT)
+  const cost = formatCostTotal(Number(value.toPrecision(15)))
+  return amounts.estimated ? `~${cost}` : cost
+}
+
+/** The tooltip of a cell whose dollar amount is partly estimated. */
+export function usageAmountTitle(amounts: UsageAmounts, column: UsageAmountColumn): string | undefined {
+  return usageAmountText(amounts, column).startsWith("~") ? "Estimated from the catalog price" : undefined
 }
 
 export const USAGE_COLUMN_LABELS: Readonly<Record<UsageAmountColumn, string>> = {
@@ -124,7 +141,7 @@ export const USAGE_COLUMN_LABELS: Readonly<Record<UsageAmountColumn, string>> = 
 
 /** What each unit column counts, shown as the header tooltip. */
 export const USAGE_COLUMN_HINTS: Readonly<Record<UsageAmountColumn, string>> = {
-  usd: "Reported provider charges in US dollars; totals include known costs only",
+  usd: "Provider charges in US dollars. ~ marks an estimate from the catalog price; totals include known costs only",
   requests: "Calls counted against a provider's request allowance",
   credits: "Credits the provider deducted, in its own unit",
   other: "Units recorded before unit types were tracked",
