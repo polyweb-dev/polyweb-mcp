@@ -13,7 +13,10 @@
 # send every provider API call to the provider-mock service, keep the real Host
 # header, and use a disposable database (polyweb.mock-dev.db) on this project's
 # own volume. Real provider keys from .env are blanked here, so they never enter
-# the mock stack. The ui service starts only with `--profile ui`.
+# the mock stack. For the UI, run `pnpm dev` in polyweb-ui (VITE_PORT proxies to
+# POLYWEB_API_PORT). The ui container is behind `--profile ui`, which the scripts
+# never pass; if it is started by hand it binds a random loopback port, never the
+# base file's host-wide 3000.
 
 name: ${POLYWEB_MOCK_STACK_PROJECT:?use scripts/linux/mock_stack.sh or scripts/windows/mock_stack.bat}
 
@@ -75,6 +78,8 @@ services:
 
   ui:
     profiles: ["ui"]
+    ports: !override
+      - "127.0.0.1::80"
 
 volumes:
   provider-mock-data:
