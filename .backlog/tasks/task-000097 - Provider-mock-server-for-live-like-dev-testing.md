@@ -4,7 +4,7 @@ title: Provider mock server for live-like dev testing
 status: Testing
 assignee: []
 created_date: '2026-11-17T01:25:00Z'
-updated_date: '2026-11-17T09:35:00Z'
+updated_date: '2026-11-17T10:00:00Z'
 labels:
   - dev-tooling
   - testing
@@ -37,6 +37,8 @@ Evidence (2026-11-17): Woodpecker on 0b37bd1 all green: provider-mock #179 (mock
 Review round (the Devin reviewers died on quota, so the fix round was done in-session): production guard verified at Settings and install time, and the live stack runs with POLYWEB_ENVIRONMENT=production; every provider adapter, SDK client, OAuth flow and limits sync reaches the network through the patched httpx transports after create_async_client runs; CLIs never call providers; the prod image copies only src/ and the mock package stays out of it; the merged mock Compose config namespaces images, volumes and network under the -mock project and binds loopback only. Fixed: compose.mock.yaml ui (behind --profile ui) inherited the base host-wide 3000 publish; it now binds a random loopback port and the header points at pnpm dev. Open minor: the keyless budget counts ledger rows, so keyless requests that fail before charging do not count toward per-minute/day limits.
 
 Environments (owner request, 2026-11-17): pd = root compose.yaml + Dockerfile (deployed, unchanged); npd = docker/npd (worktree source, real providers); dev = docker/dev on top of npd (provider mock). scripts/{linux,windows}/stack npd|dev replaces mock_stack; projects polyweb-wtN-npd / -dev. dev-live = stack.sh dev live (@live against the dev mock); live = api-live (real providers). Woodpecker stays flat (it ignores .woodpecker subfolders). Also fixed: npd host-wide ports and leaked .env mock origin; delete_worktree tore down the pd 'polyweb' project via bare compose down (now only the worktree's own projects). Verified locally: dev up, dev live 22/22 with all calls in the mock log, npd up, down -v for both.
+
+2026-11-17 pd copy check (pre-merge): built compose.yaml + Dockerfile from this branch as a separate project (polyweb-wt1-pdtest, loopback 8213/8214/8215, own image tags and volume, POLYWEB_ENVIRONMENT=production, mock URL unset; the live polyweb stack was not touched). Through the nginx origin: registered a user (got the Default workspace with keyless Keenable and Tavily pools), browser-cookie login, issued a project API key. Keenable-only (routing require, no fallback): REST /search 200 with real results (sqlite.org), REST /fetch 200, MCP search via the API-key bearer 200 (MCP forwarded to the API). Traces and usage recorded 2 searches + 1 fetch, keyless, cost 0. Refresh cookie is __Secure-, Secure, HttpOnly, SameSite=Strict, path /auth/jwt/refresh; refresh 200. Stack, volume and images removed afterwards. Windows script verification split out to TASK-000098 (low).
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
