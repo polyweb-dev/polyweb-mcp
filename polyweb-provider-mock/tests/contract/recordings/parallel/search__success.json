@@ -1,0 +1,60 @@
+{
+  "method": "POST",
+  "url": "https://api.parallel.ai/v1/search",
+  "request_headers": {
+    "host": "api.parallel.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "python-httpx/0.28.1",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>",
+    "content-length": "114",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "objective": "polyweb test",
+    "search_queries": [
+      "polyweb test"
+    ],
+    "mode": "fast",
+    "advanced_settings": {
+      "max_results": 1
+    }
+  },
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:59 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "server": "cloudflare",
+    "x-request-id": "a00a0a0a0a00000a000000000000000a",
+    "via": "1.1 google",
+    "cf-cache-status": "DYNAMIC",
+    "content-encoding": "gzip",
+    "cf-ray": "a0aaa00a0a00000a-AAA"
+  },
+  "response_body": {
+    "search_id": "search_a00a0a0a0a00000a000000000000000a",
+    "results": [
+      {
+        "url": "https://github.com/BlueCannonBall/Polyweb",
+        "title": "GitHub - BlueCannonBall/Polyweb: A web framework utilizing Polynet. \u00b7 GitHub",
+        "publish_date": null,
+        "excerpts": [
+          "Polyweb\n\nPolyweb is a C++ HTTP client/server library built on Polynet . It provides routing, TLS, WebSockets, streamed message bodies, HTTP proxy tunneling, and server-sent event helpers.\nPolyweb uses blocking socket I/O . Server connections are handled concurrently by connection tasks; coroutine generators produce outgoing data chunks, not asynchronous socket operations. It is a networking toolkit rather than a full application framework with sessions, an ORM, or a template engine.\n\nFeatures\n\n* HTTP/1.0 and HTTP/1.1 request/response handling, including keep-alive and chunked bodies.\n* HTTP and HTTPS clients and servers, with OpenSSL-backed TLS through Polynet.\n* Exact-path and wildcard-prefix routes, query parameters, and customizable error responses.\n* Buffered or streamed HTTP bodies, with configurable parser limits.\n* WebSocket clients and servers, streamed outgoing messages, and close/ping handling.\n\n...\n\nHTTP proxies\n\nproxied_fetch takes the destination URL followed by the HTTP proxy URL and uses CONNECT to establish the tunnel. HTTPS then performs TLS over that tunnel. After pn::init() :\npw::Response response;\nif (pn::Status result = pw::proxied_fetch(\"example.com/\", \"127.0.0.1:8080\", response); !result) {\n    std::cerr << result.error().message() << '\\n';\n}\nThis requires a proxy that permits CONNECT to the destination. make_proxied_ws_client provides the corresponding WebSocket setup. These APIs do not imply SOCKS support or that Polyweb itself is a proxy server.\n\nConfiguration and execution model\n\n...\n\nTask API\n\n* Operation | Behavior\n* pool.schedule(callable) | Queues work for pool workers; returns a task handle.\n* pool.schedule(callable, true) | May launch a detached overflow thread when the pool is busy.\n* task->get_status() | Reads the current status without waiting.\n* task->wait() | Waits for completion and returns the final status.\n* task->wait_for(duration) / wait_until(time_point) | Returns the status at completion or timeout; a timeout does not cancel the task.\n* task->get_exception_ptr() | Retrieves a captured exception; use after completion to inspect a failure.\n* tasks.insert(task) | Adds a weak reference to a task for group waiting.\n* tasks.wait() | Waits until no tracked, live task is still running.\n\n...\n\n* With launch_if_busy = true , overflow threads are outside the target worker count and have no configured ceiling. If an overflow thread cannot be created, the task is queued instead. size() does not count these extra threads.\n* resize() changes a target, not an instantaneous worker count. Shrinking does not interrupt an executing task.\n* There is no task cancellation or automatic recovery from a blocked callable. Avoid having all workers wait for additional queued tasks that require the same pool to run.\n* Pool destruction waits for its pool workers to exit; it does not guarantee that pending queued tasks are drained or detached overflow tasks have finished. Wait explicitly for submitted tasks while the pool is still alive, and keep captured references alive until those tasks complete.\n* Do not destroy a pool while callers are still using it. A task wait can be unbounded if the callable never finishes.\n\nUsing Polyweb's shared pool\n\nPolyweb's pw::threadpool is the same tp::ThreadPool type and is shared across its servers. Configure it before starting listeners:\npw::threadpool.resize(8);\nA server task handles a connection, not just one request: keep-alive requests, WebSockets, and long polls can retain that task. Polyweb servers schedule with overflow enabled, so eight target workers do not mean eight maximum active connections. Standalone application work can use a separate tp::ThreadPool to avoid sharing those workers.\n\nCurrent limitations\n\nPolyweb implements HTTP/1.x, not HTTP/2 or HTTP/3. Its tests and fuzzing infrastructure are not a claim of complete HTTP or WebSocket conformance. Current implementation boundaries include:\n* HTTP response bodies are received using Content-Length or chunked framing. Close-delimited response bodies are not currently consumed. fetch excludes the body when reading a response to HEAD through the message-parts mechanism.\n* Headers is a case-insensitive map with one value per name; repeated received fields overwrite previous values. In particular, it does not preserve multiple Set-Cookie fields.\n* WebSocket clients use a fixed default handshake key and a zero default masking key, and do not validate Sec-WebSocket-Accept . Handling of control frames interleaved with fragmented data messages also needs protocol hardening.\n* There is no built-in bounded connection admission or bounded graceful-shutdown policy. Applications exposed to untrusted clients need appropriate connection limits, timeouts, and lifecycle management; a reverse proxy can enforce limits at the edge.\nThe public API is declared in polyweb.hpp , with transport/TLS APIs in Polynet/polynet.hpp and Polynet/tls.hpp .\n\nTests and fuzzing\n\nThe test suite uses Polybuild and runs against scripted connections and local loopback sockets/TLS, without depending on external web services:\ncd tests\nmake MODE=debug\n./polyweb-tests\nCoverage includes fragmented HTTP input, streamed bodies, partial transport reads/writes, WebSocket framing, TLS verification failures, bidirectional TLS traffic, and concurrent handshakes. CI configures Linux debug, ASan/UBSan, TSan, and Windows debug jobs.\nClean before changing sanitizer configurations, then rebuild:\nmake clean\nmake MODE=debug ASAN=1\n./polyweb-tests\n\n# For ThreadSanitizer instead:\nmake clean\nmake MODE=debug TSAN=1\n./polyweb-tests\nThe generated tests/Makefile and tests/.polybuild.mk are committed. Only run Polybuild after changing tests/Polybuild.toml , then commit the regenerated files.\nLibFuzzer targets cover HTTP requests/responses, WebSockets, URLs, and decoders. From the repository root, with a compatible Clang 20 or newer toolchain and standard library:\ncd tests/fuzz\n./build.sh http_request\n./http_request corpus/http_request seeds/http_request -max_total_time=60\nSet CXX to select the compiler. Running ./build.sh without target names builds all five targets. CI configures seed runs on pushes/pull requests and longer scheduled fuzzing runs; see the workflows .\n\nMore examples\n\n* examples/server.cpp : plaintext routes and streaming.\n* examples/tls_server.cpp : TLS server setup.\n* examples/client.cpp : HTTPS fetch.\n* examples/websocket_client.cpp : WebSocket client.\n* examples/hacker_news.cpp : another client application.\nExamples using public services require network access. Read and adapt their addresses, ports, certificate paths, and input handling for your application.\n\nLicense\n\nSee LICENSE for Polyweb's license and Polynet/LICENSE for Polynet's license."
+        ]
+      }
+    ],
+    "warnings": null,
+    "usage": [
+      {
+        "name": "sku_search",
+        "count": 1
+      }
+    ],
+    "metadata": null,
+    "session_id": "session_a00a0a0a0a00000a000000000000000a"
+  }
+}

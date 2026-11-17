@@ -1,0 +1,33 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/search",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "content-length": "34",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "query": "polyweb test",
+    "count": 1
+  },
+  "status": 403,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:51 GMT",
+    "content-type": "application/json",
+    "content-length": "23",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "000aaa00-000a-0aaa-a000-0aa0aa00aaaa",
+    "x-amzn-errortype": "ForbiddenException",
+    "x-amz-apigw-id": "A0aAAAaaAAAAAaa=",
+    "x-amzn-trace-id": "Root=0-0aaaaa0a-0a00aa0a00000a000a00a000"
+  },
+  "response_body": {
+    "message": "Forbidden"
+  }
+}

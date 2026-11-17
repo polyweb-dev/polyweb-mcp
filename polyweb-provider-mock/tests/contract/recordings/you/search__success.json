@@ -1,0 +1,56 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/search",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "content-length": "34",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "query": "polyweb test",
+    "count": 1
+  },
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:51 GMT",
+    "content-type": "application/json",
+    "content-length": "1080",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "aa000a00-a000-0a00-aaa0-a00000aa0aa0",
+    "x-amzn-remapped-content-length": "1080",
+    "x-amz-apigw-id": "A0aAAA0AaAAAa0a=",
+    "x-amzn-remapped-server": "uvicorn",
+    "x-amzn-trace-id": "Root=0-0aaaaa0a-0a00aa000a0a0000000aa000",
+    "x-amzn-remapped-date": "Tue, 17 Nov 2026 01:26:50 GMT"
+  },
+  "response_body": {
+    "results": {
+      "web": [
+        {
+          "url": "https://www.scamadviser.com/check-website/polyweb.cc",
+          "title": "polyweb.cc Reviews | check if the site is a scam or legit | ...",
+          "description": "Check polyweb.cc with our free review tool and find out if polyweb.cc is legit and reliable. Need advice? \u2713 Report scams \u2713 Check Scamadviser!",
+          "thumbnail_url": "https://www.scamadviser.com/images/static/logo/logo_1200x630.png",
+          "original_thumbnail_url": "https://www.scamadviser.com/images/static/logo/logo_1200x630.png",
+          "page_age": "2026-09-04T11:34:17",
+          "favicon_url": "https://you.com/favicon?domain=www.scamadviser.com&size=128",
+          "snippets": [
+            "Scam IQ Test \u00b7 Business \u00b7 Try our App \u00b7 Copied \u00b7 WhatsApp \u00b7 Messages \u00b7 Copy Link \u00b7 VISITREPORT \u00b7 The trust score of polyweb.cc is very low. Why? ScamAdviser \u00b7 Trust Score 0 \u00b7 Last Update: 2 days ago \u00b7 This website has been reported as possibly harmful by Gridinsoft \u00b7",
+            "In summary, the trust score of polyweb.cc is extremely low."
+          ]
+        }
+      ]
+    },
+    "metadata": {
+      "query": "polyweb test",
+      "search_uuid": "aa00a0a0-00aa-0000-0000-000a00a00000",
+      "latency": 0.44082902499940246
+    }
+  }
+}

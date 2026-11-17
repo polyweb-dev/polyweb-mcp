@@ -395,6 +395,8 @@ def build_parser() -> argparse.ArgumentParser:
         _latency_parser,
     ):
         build(groups)
+    for found in discover().values():
+        found.cli_commands(groups)
     return parser
 
 

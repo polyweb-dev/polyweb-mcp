@@ -1,0 +1,48 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/search",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "content-length": "185",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "query": "Example Domain",
+    "count": 1,
+    "include_domains": [
+      "example.com"
+    ],
+    "extraction": {
+      "extraction_mode": "full_page",
+      "extraction_source": "web",
+      "full_page": {
+        "formats": [
+          "markdown",
+          "html"
+        ]
+      }
+    }
+  },
+  "status": 422,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:40 GMT",
+    "content-type": "application/json",
+    "content-length": "40",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "000a0a00-000a-00a0-000a-a00aaaa00000",
+    "x-amzn-remapped-content-length": "40",
+    "x-amz-apigw-id": "A0aAAAAaaAAAA0A=",
+    "x-amzn-remapped-server": "uvicorn",
+    "x-amzn-trace-id": "Root=0-0aaaaa0a-00a00000000a0000000000aa",
+    "x-amzn-remapped-date": "Tue, 17 Nov 2026 01:27:40 GMT"
+  },
+  "response_body": {
+    "error": "invalid request parameter(s)"
+  }
+}

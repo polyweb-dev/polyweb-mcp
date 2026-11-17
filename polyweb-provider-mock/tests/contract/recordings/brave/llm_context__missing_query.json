@@ -1,0 +1,52 @@
+{
+  "method": "GET",
+  "url": "https://api.search.brave.com/res/v1/llm/context?count=1",
+  "request_headers": {
+    "host": "api.search.brave.com",
+    "user-agent": "Polyweb/0.1",
+    "x-subscription-token": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 422,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:17 GMT",
+    "content-type": "application/json",
+    "content-length": "457",
+    "connection": "keep-alive",
+    "server-timing": "search-roundtrip;dur=3.235",
+    "vary": "Accept-Encoding"
+  },
+  "response_body": {
+    "type": "ErrorResponse",
+    "error": {
+      "id": "c67c6c0f-9f9b-f8a9-d5a0-1a14c99c12d9",
+      "status": 422,
+      "detail": "Unable to validate request parameter(s)",
+      "meta": {
+        "errors": [
+          {
+            "type": "missing",
+            "loc": [
+              "query",
+              "q"
+            ],
+            "msg": "Field required",
+            "input": {
+              "country": "US",
+              "search_lang": "en",
+              "count": "1",
+              "spellcheck": true,
+              "operators": true,
+              "operators_fallback": true,
+              "maximum_number_of_tokens": 8192,
+              "freshness": "",
+              "enable_source_metadata": false
+            }
+          }
+        ]
+      },
+      "code": "VALIDATION"
+    },
+    "time": 1794878837
+  }
+}

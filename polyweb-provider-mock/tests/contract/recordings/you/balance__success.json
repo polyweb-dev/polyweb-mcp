@@ -1,0 +1,38 @@
+{
+  "method": "GET",
+  "url": "https://api.you.com/v1/billing/account_balance",
+  "request_headers": {
+    "host": "api.you.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:53 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "server": "cloudflare",
+    "set-cookie": "<REDACTED>",
+    "x-request-id": "00000aa0-0a0a-0a00-aa00-0a0a0aa0a000",
+    "x-correlation-id": "00aa00aa-00a0-00a0-0a00-aaaa0a0aa0a0",
+    "x-trace-id": "000000aa-0a00-00aa-a0a0-a0000aa0a000|2026-11-17T01:26:52.372252+00:00",
+    "cf-cache-status": "DYNAMIC",
+    "content-encoding": "gzip",
+    "cf-ray": "a0aaa000a00a0000-AAA",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "response_body": {
+    "data": {
+      "type": "account",
+      "id": "<REDACTED>",
+      "attributes": {
+        "balance": 19230.0
+      }
+    }
+  }
+}

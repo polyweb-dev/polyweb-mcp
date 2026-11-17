@@ -34,6 +34,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, ClassVar, Literal
 
+from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -268,6 +269,24 @@ class ProviderPlugin(ABC):
         """Return headers the provider adds to every response."""
 
         return {}
+
+    def admin_routes(self, router: APIRouter, store: MockStore) -> None:
+        """Add provider-specific admin routes; use paths under ``/<name>/``.
+
+        ``router`` has the ``/_mock`` prefix and the admin token guard. The
+        default adds nothing.
+        """
+
+        return
+
+    def cli_commands(self, groups: Any) -> None:
+        """Add a ``polyweb-mock <name> ...`` command group to the argparse ``groups``.
+
+        Each leaf parser sets ``handler=(args, store) -> printable result``,
+        as the core commands do. The default adds nothing.
+        """
+
+        return
 
     def not_found(self, request: Request, status: int) -> MockResponse:
         """Return the provider's response to an unknown path or method."""

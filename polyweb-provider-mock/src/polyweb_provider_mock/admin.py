@@ -323,5 +323,7 @@ def build_admin_app(
     router = APIRouter(prefix="/_mock", dependencies=[_guard(admin_token)])
     for register in (_state_routes, _fault_routes, _data_routes):
         register(router, store, plugins)
+    for plugin in plugins.values():
+        plugin.admin_routes(router, store)
     app.include_router(router)
     return app

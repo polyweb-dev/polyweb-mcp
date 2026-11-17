@@ -1,0 +1,53 @@
+{
+  "method": "POST",
+  "url": "https://api.exa.ai/search",
+  "request_headers": {
+    "host": "api.exa.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "exa-py/2.18.1",
+    "content-type": "application/json",
+    "x-api-key": "<REDACTED>",
+    "content-length": "16"
+  },
+  "request_body": {
+    "numResults": 1
+  },
+  "status": 400,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:41 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "258",
+    "connection": "keep-alive",
+    "content-security-policy": "frame-ancestors 'self'",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "origin-agent-cluster": "?1",
+    "referrer-policy": "no-referrer",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "x-content-type-options": "nosniff",
+    "x-dns-prefetch-control": "off",
+    "x-download-options": "noopen",
+    "x-frame-options": "DENY",
+    "x-permitted-cross-domain-policies": "none",
+    "x-xss-protection": "0",
+    "x-request-id": "b90d8b11c25e8c2395d05a45f1aae0ff",
+    "x-exa-region": "us-west-2",
+    "x-exa-processing-region": "us",
+    "vary": "Origin",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "PAYMENT-REQUIRED,PAYMENT-RESPONSE,payment-required,payment-response,WWW-Authenticate,Payment-Receipt,x-request-id,x-exa-queued,x-exa-queue-ms,x-exa-region,x-exa-processing-region,Deprecation,Sunset,Retry-After,X-RateLimit-Scope",
+    "x-exa-queued": "false",
+    "x-exa-queue-ms": "0",
+    "etag": "W/\"102-BXkt+x/jRi4g30Pa0SCRfSkiOmk\"",
+    "cf-cache-status": "DYNAMIC",
+    "server": "cloudflare",
+    "cf-ray": "b7cbb036ce566822-BDH"
+  },
+  "response_body": {
+    "requestId": "b90d8b11c25e8c2395d05a45f1aae0ff",
+    "error": "Invalid request body | Validation error: Invalid input: expected string, received undefined at \"query\" or Invalid input: expected array, received undefined at \"query\"",
+    "tag": "INVALID_REQUEST_BODY"
+  }
+}

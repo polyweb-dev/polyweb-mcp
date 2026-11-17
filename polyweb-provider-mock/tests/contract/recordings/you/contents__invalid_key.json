@@ -1,0 +1,40 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/contents",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "content-length": "85",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "urls": [
+      "https://example.com"
+    ],
+    "formats": [
+      "markdown",
+      "html",
+      "metadata"
+    ],
+    "max_age": 0
+  },
+  "status": 403,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:52 GMT",
+    "content-type": "application/json",
+    "content-length": "23",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "a0a0aa0a-00a0-00aa-000a-aa000aa0a0a0",
+    "x-amzn-errortype": "ForbiddenException",
+    "x-amz-apigw-id": "A0aAaAAAaAAAaAA=",
+    "x-amzn-trace-id": "Root=0-0aaaaa0a-000aa00a0000000a00a0aaa0"
+  },
+  "response_body": {
+    "message": "Forbidden"
+  }
+}

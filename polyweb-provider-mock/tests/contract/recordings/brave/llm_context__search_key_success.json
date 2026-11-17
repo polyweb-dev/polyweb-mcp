@@ -1,0 +1,78 @@
+{
+  "method": "GET",
+  "url": "https://api.search.brave.com/res/v1/llm/context?q=example+domain&count=1&maximum_number_of_urls=1&maximum_number_of_tokens=1024&maximum_number_of_snippets=2&enable_source_metadata=true",
+  "request_headers": {
+    "host": "api.search.brave.com",
+    "user-agent": "Polyweb/0.1",
+    "x-subscription-token": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:54 GMT",
+    "content-type": "application/json",
+    "content-length": "5166",
+    "connection": "keep-alive",
+    "x-ratelimit-limit": "50, 0",
+    "x-ratelimit-policy": "50;w=1, 0;w=2592000",
+    "x-ratelimit-remaining": "49, 0",
+    "x-ratelimit-reset": "1, 1204325",
+    "server-timing": "search-roundtrip;dur=859.43",
+    "vary": "Accept-Encoding, Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site, Sec-Fetch-User",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "x-download-options": "noopen",
+    "x-frame-options": "SAMEORIGIN",
+    "x-xss-protection": "1; mode=block"
+  },
+  "response_body": {
+    "grounding": {
+      "generic": [
+        {
+          "url": "https://blog.hubspot.com/website/what-is-a-domain",
+          "title": "What is a domain name? See these definitions + examples",
+          "snippets": [
+            "## What is a domain?\nA domain is the string of characters a user types into their browser to find your website. It translates a website's numerical IP address into an easy-to-remember format.\n\nFor example, the IP address for HubSpot.com is 172.64.148.142.",
+            "## What does a domain look like?\nA domain typically consists of two or three words separated by periods. A simple example of a domain is **hubspot.com**.",
+            "### Second-Level Domain (SLD)\nThey originally called themselves *Lincoln Park*, but the domain lincolnpark.com was already taken. So, to grab an available domain, they tweaked the spelling to *Linkin Park* and registered the domain linkinpark.com.",
+            "### Top-Level Domain (TLD)\nThe top-level domain is the extension or the part of your domain that indicates the type of entity you are. For example, HubSpot\u2019s top-level domain is \u201c.com\u201d since we\u2019re a commercial entity in the United States.",
+            "Most American businesses register their website with \u201c.com.\u201d In fact, according to data from Verisign, the largest TLD in 2024 was .com, with 156.3 million reported domain names in the domain name base.",
+            "Other TLDs include \u201c.edu\u201d for accredited post-secondary educational institutions, \u201c.gov\u201d for government, and \u201c.org,\u201d which is usually for nonprofits.",
+            "## What is a domain name example?\nAn example of a domain name is usps.com. This is made up of a second-level domain (\u201cusps\u201d) and a top-level domain (\".com\u201d).\n\nOther examples of popular domain names include:\n\n- youtube.com\n- irs.gov\n- harvard.edu\n- redcross.org",
+            "## Domain Name vs. URL\nFor example, the URL of this blog post is **https://blog.hubspot.com/service/what-is-a-domain**. It's made up of the following parts:\n\n- Protocol (\u201chttps://\u201d)\n- Domain name (\u201cblog.hubspot.com\u201d), that comes with a subdomain (\u201cblog.\u201d), a second-level domain (\u201chubspot\u201d), and a top-level domain (\u201c.com\u201d)\n- Subdirectory (\u201c/service/\u201d)\n- Path (\u201c/what-is-a-domain\u201d)\n\nanatomy of a web address",
+            "### 5. Being Memorable\nBut what if your brand name is long? Say it's something like **T-Bones Great American Eatery**! Typing in t-bonesgreatamericaneatery.com would take ages. Meanwhile, the domain t-bones.com is easy, catchy, and short to type.",
+            "Today, \u201c.com\u201d is the most popular by far. As of August 2024, 44% of global websites used a .com top-level domain. The next most popular (\u201c.org\u201d) is used by only 4.2%.",
+            "## What is a domain name?\nThe maximum length of a domain name, not including its extension (like \u201c.com\u201d), is 63 characters. The minimum length is one character. For a quick overview of what a domain name is and what it's made of, check out this video by Elegant Themes.\n\nEverything You Need to Know About Domain Names Play",
+            "## Parts of a Domain Name\nA domain typically has two parts: the second-level and the top-level. Some domains also have a third-level label.",
+            "### parts of a domain name\n\nHubspot comes before the *.com* in the domain for Hubspot.com. Here, Hubspot is the SLD. It primarily identifies the name of your website. The other part, or TLD, is just a system requirement.",
+            "Check out more in the image below:\n\ndomain name examples\n\nThese are just a few domain name examples \u2014 there are millions more. According to data from Verisign, there were over 368.4 million registered domain names at the end of Q1 2025.",
+            "## How to Pick a Punchy Domain Your Visitors Won\u2019t Forget\n- Is it a .com? Is there a better-fit extension like .ai or .io?\n- Is it short and simple?\n- Is it easy to say out loud?\n- Is it number- and hyphen-free?\n- Is it memorable?\n- Are similar domains secured? Should you get a .net, .co, or .io domain instead?\n- Is it available right now?\n- Is it trademark-free?"
+          ]
+        }
+      ],
+      "map": []
+    },
+    "sources": {
+      "https://blog.hubspot.com/website/what-is-a-domain": {
+        "title": "What is a domain name? See these definitions + examples",
+        "hostname": "blog.hubspot.com",
+        "age": [
+          "Thursday, August 21, 2025",
+          "2025-08-21",
+          "452 days ago",
+          "2025-08-21T11:00:04Z"
+        ],
+        "site_name": "HubSpot",
+        "favicon": "https://imgs.search.brave.com/0uePC3GMXuow0A1zd3BFa9o71A9K0E2xNfFdvNeZXIc/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvYzY2NWQ3YTIx/NzhhZGM2MDAxNDhj/NGVhYWMyMDJiZjhl/OWNmYWRlMWVjYTEy/MDYzZTUwZDUzYTU3/ZTZkODM4Mi9ibG9n/Lmh1YnNwb3QuY29t/Lw",
+        "thumbnail": {
+          "src": "https://imgs.search.brave.com/JJOrin8qJ3LOwrSO5Xkg0qJiPUAE5U6QJShH2g6KGUU/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9ibG9n/Lmh1YnNwb3QuY29t/L2h1YmZzL3doYXQt/aXMtYS1kb21haW4u/d2VicA",
+          "original": "https://blog.hubspot.com/hubfs/what-is-a-domain.webp"
+        },
+        "snippet": "**An example of a domain name is usps.com**. This is made up of a second-level domain (\u201cusps\u201d) and a top-level domain (\".com\u201d). \u2026 Today, \u201c.com\u201d is the most popular by far. \u2026 The next most popular (\u201c.org\u201d) is used by only 4.2%.",
+        "description": "Your domain translates your site from a series of numbers to a searchable online entity. Here's how.",
+        "fetched_content_timestamp": 1794728168
+      }
+    }
+  }
+}

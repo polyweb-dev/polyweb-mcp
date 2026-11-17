@@ -1,0 +1,29 @@
+{
+  "method": "GET",
+  "url": "https://api.search.brave.com/res/v1/llm/context?q=example+domain&count=1",
+  "request_headers": {
+    "host": "api.search.brave.com",
+    "user-agent": "Polyweb/0.1",
+    "x-subscription-token": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 422,
+  "response_headers": {
+    "server": "awselb/2.0",
+    "date": "Tue, 17 Nov 2026 01:27:11 GMT",
+    "content-length": "176",
+    "connection": "keep-alive",
+    "content-type": "application/json"
+  },
+  "response_body": {
+    "error": {
+      "code": "SUBSCRIPTION_TOKEN_INVALID",
+      "detail": "The provided subscription token is invalid.",
+      "meta": {
+        "component": "authentication"
+      },
+      "status": 422
+    },
+    "type": "ErrorResponse"
+  }
+}

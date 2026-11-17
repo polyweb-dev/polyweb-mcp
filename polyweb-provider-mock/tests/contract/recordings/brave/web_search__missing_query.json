@@ -1,0 +1,61 @@
+{
+  "method": "GET",
+  "url": "https://api.search.brave.com/res/v1/web/search?count=1",
+  "request_headers": {
+    "host": "api.search.brave.com",
+    "user-agent": "Polyweb/0.1",
+    "x-subscription-token": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 422,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:16 GMT",
+    "content-type": "application/json",
+    "content-length": "642",
+    "connection": "keep-alive",
+    "server-timing": "search-roundtrip;dur=3.517",
+    "vary": "Accept-Encoding"
+  },
+  "response_body": {
+    "type": "ErrorResponse",
+    "error": {
+      "id": "0f6665e6-1494-1344-4648-48a44713214c",
+      "status": 422,
+      "detail": "Unable to validate request parameter(s)",
+      "meta": {
+        "errors": [
+          {
+            "type": "missing",
+            "loc": [
+              "query",
+              "q"
+            ],
+            "msg": "Field required",
+            "input": {
+              "country": "US",
+              "search_lang": "en",
+              "ui_lang": "en-US",
+              "count": "1",
+              "offset": 0,
+              "safesearch": "moderate",
+              "spellcheck": true,
+              "freshness": "",
+              "text_decorations": true,
+              "snippet_answer": true,
+              "poi_cluster": true,
+              "extract_icons": false,
+              "disable_top_stories": false,
+              "enable_rich_callback": false,
+              "include_fetch_metadata": false,
+              "operators": true,
+              "operators_fallback": false,
+              "enable_ads": false
+            }
+          }
+        ]
+      },
+      "code": "VALIDATION"
+    },
+    "time": 1794878836
+  }
+}

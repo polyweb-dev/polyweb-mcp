@@ -1,0 +1,29 @@
+{
+  "method": "GET",
+  "url": "https://api.firecrawl.dev/v2/team/credit-usage",
+  "request_headers": {
+    "host": "api.firecrawl.dev",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "python-httpx/0.28.1",
+    "authorization": "Bearer <REDACTED>"
+  },
+  "request_body": null,
+  "status": 401,
+  "response_headers": {
+    "access-control-allow-origin": "*",
+    "content-length": "55",
+    "content-type": "application/json; charset=utf-8",
+    "date": "Tue, 17 Nov 2026 01:27:30 GMT",
+    "etag": "W/\"37-IfU4XFKR35XRNKabSsCQ+Htx2zU\"",
+    "www-authenticate": "Bearer resource_metadata=\"https://www.firecrawl.dev/.well-known/oauth-protected-resource\"",
+    "x-response-time": "0.448ms"
+  },
+  "response_body": {
+    "success": false,
+    "error": "Unauthorized: Invalid token"
+  },
+  "sdk_version": "4.41.0",
+  "capture_note": "HTTPX decoded response body; original response headers retained. Secret values redacted; identifiers use synthetic same-format values."
+}

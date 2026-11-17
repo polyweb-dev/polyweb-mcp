@@ -1,0 +1,431 @@
+"""Tinyfish plugin wire behavior through the in-process app."""
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID
+
+import httpx
+import pytest
+
+from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
+from polyweb_provider_mock.providers._rate_windows import WindowSpec, add
+from polyweb_provider_mock.store import MockStore
+
+_SEARCH_HOST = {"Host": "api.search.tinyfish.ai"}
+_FETCH_HOST = {"Host": "api.fetch.tinyfish.ai"}
+_QUERY = {"query": "polyweb test", "page": "0"}
+_FETCH = {"urls": ["https://docs.python.org/3/library/json.html"], "format": "markdown"}
+
+
+@pytest.fixture
+def key(store: MockStore) -> str:
+    return next(item.key for item in store.keys("tinyfish") if item.label == "default")
+
+
+@pytest.fixture
+def search_headers(key: str) -> dict[str, str]:
+    return {**_SEARCH_HOST, "X-API-Key": key}
+
+
+@pytest.fixture
+def fetch_headers(key: str) -> dict[str, str]:
+    return {**_FETCH_HOST, "X-API-Key": key}
+
+
+def _assert_error(response: httpx.Response, status: int, code: str) -> dict[str, Any]:
+    body = response.json()
+    assert response.status_code == status
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["cache-control"] == "no-store"
+    assert body["error"]["code"] == code
+    assert body["request_id"] == response.headers["x-request-id"]
+    UUID(body["request_id"])
+    return dict(body["error"])
+
+
+async def test_search_shape_headers_and_ledger(
+    client: httpx.AsyncClient, store: MockStore, search_headers: dict[str, str]
+) -> None:
+    response = await client.get("/", params=_QUERY, headers=search_headers)
+
+    body = response.json()
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["x-ratelimit-limit"] == "30"
+    assert response.headers["x-ratelimit-remaining"] == "29"
+    assert int(response.headers["x-ratelimit-reset"]) > 0
+    assert response.headers["x-cache"] == "Miss from cloudfront"
+    assert list(body) == ["query", "results", "total_results", "page"]
+    assert (body["query"], body["page"], body["total_results"]) == ("polyweb test", 0, 10)
+    first = body["results"][0]
+    assert {"position", "site_name", "title", "snippet", "url"} <= set(first)
+    assert [item["position"] for item in body["results"]] == list(range(1, 11))
+    assert store.ledger("tinyfish")[-1].operation == "search"
+
+
+async def test_search_pages_news_and_research(
+    client: httpx.AsyncClient, search_headers: dict[str, str]
+) -> None:
+    second = (await client.get("/", params={**_QUERY, "page": "1"}, headers=search_headers)).json()
+    news = (
+        await client.get("/", params={**_QUERY, "domain_type": "news"}, headers=search_headers)
+    ).json()
+    papers = (
+        await client.get(
+            "/",
+            params={**_QUERY, "domain_type": "research_paper", "pub_year_min": "2020"},
+            headers=search_headers,
+        )
+    ).json()
+    filtered = (
+        await client.get(
+            "/", params={**_QUERY, "include_domains": "github.com"}, headers=search_headers
+        )
+    ).json()
+
+    assert second["page"] == 1 and second["results"][0]["position"] == 11
+    assert all({"date", "publisher"} <= set(item) for item in news["results"])
+    assert all(
+        {"authors", "venue", "year", "cited_by_count"} <= set(item) for item in papers["results"]
+    )
+    assert all(item["site_name"] == "github.com" for item in filtered["results"])
+
+
+@pytest.mark.parametrize(
+    ("params", "path"),
+    [
+        ({"page": "0"}, ["query"]),
+        ({"query": " "}, ["query"]),
+        ({**_QUERY, "page": "11"}, ["page"]),
+        ({**_QUERY, "page": "x"}, ["page"]),
+        ({**_QUERY, "domain_type": "images"}, ["domain_type"]),
+        ({**_QUERY, "after_date": "2026/01/01"}, ["after_date"]),
+        ({**_QUERY, "recency_minutes": "60", "after_date": "2026-01-01"}, ["recency_minutes"]),
+        ({**_QUERY, "after_date": "2026-02-01", "before_date": "2026-01-01"}, ["after_date"]),
+        ({**_QUERY, "pub_year_min": "2020"}, ["pub_year_min"]),
+        ({**_QUERY, "domain_type": "research_paper", "recency_minutes": "5"}, ["domain_type"]),
+    ],
+)
+async def test_search_validation_is_free(
+    client: httpx.AsyncClient,
+    store: MockStore,
+    search_headers: dict[str, str],
+    params: dict[str, str],
+    path: list[str],
+) -> None:
+    response = await client.get("/", params=params, headers=search_headers)
+
+    error = _assert_error(response, 400, "INVALID_INPUT")
+    assert error["details"][0]["path"] == path
+    assert error["message"].startswith(f'Field "{path[0]}"')
+    assert store.ledger("tinyfish") == []
+
+
+async def test_fetch_shape_and_options(
+    client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
+) -> None:
+    request = {
+        **_FETCH,
+        "links": True,
+        "image_links": True,
+        "iframe_links": True,
+        "include_etag_and_last_modified": True,
+    }
+    response = await client.post("/", json=request, headers=fetch_headers)
+
+    body = response.json()
+    assert response.status_code == 200
+    assert response.headers["x-ratelimit-limit"] == "150"
+    assert body["errors"] == []
+    item = body["results"][0]
+    assert item["url"] == _FETCH["urls"][0]
+    assert item["format"] == "markdown" and item["text"].startswith("# ")
+    assert {"links", "image_links", "iframe_links", "etag", "last_modified"} <= set(item)
+    assert store.ledger("tinyfish")[-1].units == 1
+
+
+@pytest.mark.parametrize(("fmt", "kind"), [("html", str), ("json", dict)])
+async def test_fetch_formats(
+    client: httpx.AsyncClient, fetch_headers: dict[str, str], fmt: str, kind: type
+) -> None:
+    body = (await client.post("/", json={**_FETCH, "format": fmt}, headers=fetch_headers)).json()
+    assert isinstance(body["results"][0]["text"], kind)
+    assert body["results"][0]["format"] == fmt
+
+
+async def test_fetch_highlights_and_selectors(
+    client: httpx.AsyncClient, fetch_headers: dict[str, str]
+) -> None:
+    highlights = (
+        await client.post(
+            "/",
+            json={**_FETCH, "highlights": {"query": "json", "max_snippets": 2}},
+            headers=fetch_headers,
+        )
+    ).json()["results"][0]
+    partial = (
+        await client.post(
+            "/", json={**_FETCH, "include_selectors": ["main", ".sidebar"]}, headers=fetch_headers
+        )
+    ).json()["results"][0]
+    miss = (
+        await client.post(
+            "/", json={**_FETCH, "include_selectors": [".nav"]}, headers=fetch_headers
+        )
+    ).json()
+
+    assert highlights["text"] is None
+    assert [item["rank"] for item in highlights["highlights"]] == [1, 2]
+    assert partial["unmatched_selectors"] == [".sidebar"]
+    assert miss["results"] == [] and miss["errors"][0]["error"] == "selector_not_matched"
+
+
+@pytest.mark.parametrize(
+    ("url", "entry"),
+    [
+        ("https://blocked.example.org/a", {"error": "bot_blocked"}),
+        ("https://timeout.example.org/a", {"error": "timeout"}),
+        ("https://missing.example.org/a", {"error": "page_not_found", "status": 404}),
+        ("https://status-503.example.org/a", {"error": "target_http_error", "status": 503}),
+        ("https://site.invalid/a", {"error": "target_unreachable"}),
+        ("http://10.0.0.1/", {"error": "invalid_url"}),
+    ],
+)
+async def test_fetch_target_failures_are_200_errors(
+    client: httpx.AsyncClient,
+    store: MockStore,
+    fetch_headers: dict[str, str],
+    url: str,
+    entry: dict[str, object],
+) -> None:
+    response = await client.post("/", json={"urls": [url]}, headers=fetch_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"results": [], "errors": [{"url": url, **entry}]}
+    assert store.ledger("tinyfish") == []
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [
+        ({"format": "markdown"}, 400),
+        ({"urls": []}, 400),
+        ({"urls": [f"https://e{i}.example.org/" for i in range(11)]}, 400),
+        ({"urls": ["not a url"]}, 400),
+        ({**_FETCH, "format": "pdf"}, 400),
+        ({**_FETCH, "per_url_timeout_ms": 0}, 400),
+        ({**_FETCH, "links": "yes"}, 400),
+        ({**_FETCH, "highlights": {"query": "x"}, "format": "html"}, 400),
+        (
+            {"urls": ["https://a.example.org/", "https://b.example.org/"], "if_none_match": '"x"'},
+            400,
+        ),
+        ({**_FETCH, "include_selectors": ["div[class"]}, 422),
+    ],
+)
+async def test_fetch_validation(
+    client: httpx.AsyncClient, fetch_headers: dict[str, str], body: dict[str, object], status: int
+) -> None:
+    response = await client.post("/", json=body, headers=fetch_headers)
+    _assert_error(response, status, "INVALID_INPUT")
+
+
+async def test_highlights_without_beta_are_403(
+    client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
+) -> None:
+    with store.db.transaction() as conn:
+        conn.execute("UPDATE accounts SET attributes = '{}' WHERE provider = 'tinyfish'")
+    response = await client.post(
+        "/", json={**_FETCH, "highlights": {"query": "x"}}, headers=fetch_headers
+    )
+    _assert_error(response, 403, "FORBIDDEN")
+
+
+@pytest.mark.parametrize(
+    ("headers", "code", "message"),
+    [
+        ({}, "MISSING_API_KEY", "X-API-Key header is required"),
+        ({"X-API-Key": "wrong"}, "INVALID_API_KEY", "Invalid or expired API key"),
+        ({"Authorization": "Bearer wrong"}, "MISSING_API_KEY", "X-API-Key header is required"),
+    ],
+)
+async def test_auth_errors_match_recordings(
+    client: httpx.AsyncClient, headers: dict[str, str], code: str, message: str
+) -> None:
+    response = await client.get("/", params=_QUERY, headers={**_SEARCH_HOST, **headers})
+
+    assert _assert_error(response, 401, code) == {"code": code, "message": message}
+    assert response.headers["www-authenticate"] == "ApiKey"
+    assert response.headers["x-cache"] == "Error from cloudfront"
+
+
+async def test_revoked_key_is_invalid_api_key(
+    client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
+) -> None:
+    store.set_key_status("tinyfish", "default", "revoked")
+    response = await client.post("/", json=_FETCH, headers=fetch_headers)
+    _assert_error(response, 401, "INVALID_API_KEY")
+
+
+async def test_routing_is_by_host(
+    client: httpx.AsyncClient, key: str, search_headers: dict[str, str]
+) -> None:
+    wrong = await client.get("/", params=_QUERY, headers={**_FETCH_HOST, "X-API-Key": key})
+    post_on_search = await client.post("/", json=_FETCH, headers=search_headers)
+    unknown = await client.get("/v1/other", headers=search_headers)
+
+    _assert_error(wrong, 404, "UNKNOWN_ROUTE")
+    _assert_error(post_on_search, 404, "UNKNOWN_ROUTE")
+    _assert_error(unknown, 404, "UNKNOWN_ROUTE")
+
+
+async def test_minute_limit_is_per_account(
+    client: httpx.AsyncClient, store: MockStore, search_headers: dict[str, str]
+) -> None:
+    store.now = lambda: datetime(2026, 11, 17, 12, 0, 30, tzinfo=UTC)
+    account = store.account("tinyfish").id
+    add(store, WindowSpec(f"tinyfish:{account}:search:minute", 30, 60, aligned=True), 30)
+
+    response = await client.get("/", params=_QUERY, headers=search_headers)
+
+    error = _assert_error(response, 429, "RATE_LIMIT_EXCEEDED")
+    assert error["details"] == {
+        "limit": 30,
+        "unit": "requests",
+        "window_seconds": 60,
+        "upgrade_url": "https://agent.tinyfish.ai/wallet?utm_source=api&utm_medium=rate_limit_error&utm_campaign=search",
+    }
+    assert response.headers["retry-after"] == "30"
+    assert response.headers["x-ratelimit-remaining"] == "0"
+    assert response.headers["x-ratelimit-reset"] == str(
+        int(datetime(2026, 11, 17, 12, 1, tzinfo=UTC).timestamp())
+    )
+
+
+async def test_fetch_minute_limit_counts_urls(
+    client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
+) -> None:
+    store.now = lambda: datetime(2026, 11, 17, 12, 0, 0, tzinfo=UTC)
+    account = store.account("tinyfish").id
+    add(store, WindowSpec(f"tinyfish:{account}:fetch:minute", 150, 60, aligned=True), 149)
+    two = {"urls": ["https://a.example.org/x", "https://b.example.org/y"]}
+
+    response = await client.post("/", json=two, headers=fetch_headers)
+
+    assert _assert_error(response, 429, "RATE_LIMIT_EXCEEDED")["details"]["unit"] == "urls"
+    assert (await client.post("/", json=_FETCH, headers=fetch_headers)).status_code == 200
+
+
+async def test_daily_allowance_then_empty_wallet_is_402(
+    client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
+) -> None:
+    account = store.account("tinyfish").id
+    add(store, WindowSpec(f"tinyfish:{account}:fetch:day", 1000, 86400, aligned=True), 1000)
+
+    response = await client.post("/", json=_FETCH, headers=fetch_headers)
+
+    error = _assert_error(response, 402, "INSUFFICIENT_CREDITS")
+    assert set(error) == {"code", "message"}
+    assert "Daily free Fetch allowance used" in error["message"]
+
+
+async def test_zero_credits_is_402(
+    client: httpx.AsyncClient, store: MockStore, search_headers: dict[str, str]
+) -> None:
+    store.set_credits("tinyfish", Decimal(0))
+    response = await client.get("/", params=_QUERY, headers=search_headers)
+    _assert_error(response, 402, "INSUFFICIENT_CREDITS")
+
+
+@pytest.mark.parametrize(
+    ("fault", "status", "code"),
+    [
+        (FaultSpec(provider="tinyfish", kind=FaultKind.OUTAGE), 503, "BACKEND_UNAVAILABLE"),
+        (
+            FaultSpec(
+                provider="tinyfish", kind=FaultKind.OUTAGE, params=FaultParams(scope="store")
+            ),
+            503,
+            "SERVICE_BUSY",
+        ),
+        (FaultSpec(provider="tinyfish", kind=FaultKind.HTTP_ERROR), 500, "INTERNAL_ERROR"),
+        (
+            FaultSpec(
+                provider="tinyfish", kind=FaultKind.HTTP_ERROR, params=FaultParams(status=504)
+            ),
+            504,
+            "BACKEND_UNAVAILABLE",
+        ),
+        (
+            FaultSpec(
+                provider="tinyfish",
+                kind=FaultKind.QUOTA_EXHAUSTED,
+                params=FaultParams(scope="free_allowance"),
+            ),
+            402,
+            "FREE_ALLOWANCE_EXHAUSTED",
+        ),
+        (FaultSpec(provider="tinyfish", kind=FaultKind.AUTH_INVALID), 401, "INVALID_API_KEY"),
+    ],
+)
+async def test_faults_render_tinyfish_errors(
+    client: httpx.AsyncClient,
+    store: MockStore,
+    search_headers: dict[str, str],
+    fault: FaultSpec,
+    status: int,
+    code: str,
+) -> None:
+    store.add_fault(fault)
+    response = await client.get("/", params=_QUERY, headers=search_headers)
+    _assert_error(response, status, code)
+
+
+async def test_rate_limit_fault_has_headers(
+    client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
+) -> None:
+    store.add_fault(
+        FaultSpec(provider="tinyfish", kind=FaultKind.RATE_LIMIT, params=FaultParams(retry_after=3))
+    )
+    response = await client.post("/", json=_FETCH, headers=fetch_headers)
+
+    assert _assert_error(response, 429, "RATE_LIMIT_EXCEEDED")["details"]["unit"] == "urls"
+    assert response.headers["retry-after"] == "3"
+
+
+async def test_fixtures_override_search_and_fetch(
+    client: httpx.AsyncClient,
+    store: MockStore,
+    search_headers: dict[str, str],
+    fetch_headers: dict[str, str],
+) -> None:
+    saved = {"query": "polyweb test", "results": [], "total_results": 0, "page": 0}
+    store.save_fixture("tinyfish", "search", "polyweb test", saved)
+    url = _FETCH["urls"][0]
+    store.save_fixture("tinyfish", "fetch", url, {"url": url, "error": "empty_content"})
+
+    search = (await client.get("/", params=_QUERY, headers=search_headers)).json()
+    fetch = (await client.post("/", json=_FETCH, headers=fetch_headers)).json()
+
+    assert search == saved
+    assert fetch == {"results": [], "errors": [{"url": url, "error": "empty_content"}]}
+
+
+async def test_usage_history_reflects_the_log(
+    client: httpx.AsyncClient,
+    search_headers: dict[str, str],
+    fetch_headers: dict[str, str],
+) -> None:
+    await client.get("/", params=_QUERY, headers=search_headers)
+    await client.post(
+        "/", json={"urls": [*_FETCH["urls"], "https://blocked.example.org/"]}, headers=fetch_headers
+    )
+
+    search = (await client.get("/usage", headers=search_headers)).json()
+    fetch = (await client.get("/usage", params={"status": "failed"}, headers=fetch_headers)).json()
+
+    assert (search["total"], search["page"], search["has_more"]) == (1, 1, False)
+    assert search["items"][0]["query"] == "polyweb test"
+    assert search["items"][0]["result_count"] == 10
+    assert fetch["total"] == 1 and fetch["items"][0]["error"] == "bot_blocked"

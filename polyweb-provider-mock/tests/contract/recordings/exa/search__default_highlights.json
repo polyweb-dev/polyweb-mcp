@@ -1,0 +1,141 @@
+{
+  "method": "POST",
+  "url": "https://api.exa.ai/search",
+  "request_headers": {
+    "host": "api.exa.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "x-api-key": "<REDACTED>",
+    "user-agent": "exa-py/unknown",
+    "content-type": "application/json",
+    "content-length": "105"
+  },
+  "request_body": {
+    "query": "Example Domain",
+    "contents": {
+      "highlights": true
+    },
+    "numResults": 1,
+    "includeDomains": [
+      "example.com"
+    ]
+  },
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:37 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "content-security-policy": "frame-ancestors 'self'",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "origin-agent-cluster": "?1",
+    "referrer-policy": "no-referrer",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "x-content-type-options": "nosniff",
+    "x-dns-prefetch-control": "off",
+    "x-download-options": "noopen",
+    "x-frame-options": "DENY",
+    "x-permitted-cross-domain-policies": "none",
+    "x-xss-protection": "0",
+    "x-request-id": "950af7b144c894b9526cb1876a82a855",
+    "x-exa-region": "us-west-2",
+    "x-exa-processing-region": "us",
+    "vary": "Origin",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "PAYMENT-REQUIRED,PAYMENT-RESPONSE,payment-required,payment-response,WWW-Authenticate,Payment-Receipt,x-request-id,x-exa-queued,x-exa-queue-ms,x-exa-region,x-exa-processing-region,Deprecation,Sunset,Retry-After,X-RateLimit-Scope",
+    "x-exa-queued": "false",
+    "x-exa-queue-ms": "0",
+    "etag": "W/\"815-bXig2DlXvRYlkMQQkFGj1pvBtl0\"",
+    "cf-cache-status": "DYNAMIC",
+    "content-encoding": "gzip",
+    "server": "cloudflare",
+    "cf-ray": "e4cef1576e28e25a-BCQ"
+  },
+  "response_body": {
+    "requestId": "950af7b144c894b9526cb1876a82a855",
+    "resolvedSearchType": "",
+    "results": [
+      {
+        "id": "https://example.com/",
+        "title": "Example Domain",
+        "url": "https://example.com/",
+        "highlights": [
+          "Example Domain\n\nThis domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes."
+        ],
+        "entities": [
+          {
+            "id": "https://exa.ai/library/organization/qwk5djxtm8s",
+            "type": "company",
+            "version": 1,
+            "properties": {
+              "name": "Buquebus",
+              "foundedYear": 1979,
+              "description": "Buquebus es actualmente el principal transportista de pasajeros del R\u00edo de la Plata y uno de los operadores tur\u00edsticos m\u00e1s importantes del cono sur americano. \r\n\r\nRealiza recorridos fluviales entre Buenos Aires, Colonia del Sacramento y Montevideo. Asimismo, ofrece transporte terrestres entre estas dos localidades uruguayas y otros balnearios, principalmente Punta del Este.\r\n \r\nBuquebus se ha especializado, adem\u00e1s, en Turismo disponiendo de m\u00e1s de 2.500 agentes en el mundo para promover el turismo desde y hacia nuestra regi\u00f3n.\r\n\r\nSu gran objetivo siempre ha sido servir m\u00e1s y mejor al pasajero, brind\u00e1ndole total seguridad, mayor rapidez y el m\u00e1ximo confort, a precios sensatos, con conciencia ambiental y social.",
+              "workforce": {
+                "total": 579
+              },
+              "headquarters": {
+                "address": "Av. Ant\u00e1rtida Argentina 821, Buenos Aires, Buenos Aires C1104AAH, AR",
+                "city": "Buenos Aires",
+                "postalCode": null,
+                "country": "Argentina"
+              },
+              "financials": {
+                "revenueAnnual": 10000000,
+                "fundingTotal": null,
+                "fundingLatestRound": null
+              },
+              "webTraffic": {
+                "visitsMonthly": 495777,
+                "countryRank": 1743,
+                "avgDurationSeconds": 154,
+                "history": [
+                  {
+                    "value": 527794,
+                    "dateFrom": "2026-04",
+                    "dateTo": "2026-04"
+                  },
+                  {
+                    "value": 419093,
+                    "dateFrom": "2026-05",
+                    "dateTo": "2026-05"
+                  },
+                  {
+                    "value": 370931,
+                    "dateFrom": "2026-06",
+                    "dateTo": "2026-06"
+                  },
+                  {
+                    "value": 342642,
+                    "dateFrom": "2026-07",
+                    "dateTo": "2026-07"
+                  },
+                  {
+                    "value": 365361,
+                    "dateFrom": "2026-08",
+                    "dateTo": "2026-08"
+                  },
+                  {
+                    "value": 481046,
+                    "dateFrom": "2026-10",
+                    "dateTo": "2026-10"
+                  }
+                ]
+              },
+              "research": null
+            }
+          }
+        ]
+      }
+    ],
+    "searchTime": 2431.3,
+    "costDollars": {
+      "total": 0.007,
+      "search": {
+        "neural": 0.007
+      }
+    }
+  }
+}

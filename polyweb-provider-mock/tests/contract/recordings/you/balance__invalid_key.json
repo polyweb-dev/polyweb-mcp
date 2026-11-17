@@ -1,0 +1,31 @@
+{
+  "method": "GET",
+  "url": "https://api.you.com/v1/billing/account_balance",
+  "request_headers": {
+    "host": "api.you.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 401,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:54 GMT",
+    "content-type": "application/json",
+    "content-length": "39",
+    "connection": "keep-alive",
+    "server": "cloudflare",
+    "x-request-id": "aaaa00a0-a000-0000-a000-00aaa00a0a0a",
+    "x-correlation-id": "a0000a0a-00a0-000a-a000-a000a00a0a0a",
+    "x-trace-id": "a0a00aaa-00a0-00a0-0a0a-aa0a0a0a0aa0|2026-11-17T01:26:53.537109+00:00",
+    "cf-cache-status": "DYNAMIC",
+    "cf-ray": "a0aaa0000aa00000-AAA",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "response_body": {
+    "detail": "Invalid or expired API key"
+  }
+}

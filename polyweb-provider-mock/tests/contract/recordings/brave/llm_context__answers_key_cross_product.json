@@ -1,0 +1,32 @@
+{
+  "method": "GET",
+  "url": "https://api.search.brave.com/res/v1/llm/context?q=example+domain&count=1&maximum_number_of_urls=1&maximum_number_of_tokens=1024&maximum_number_of_snippets=2&enable_source_metadata=true",
+  "request_headers": {
+    "host": "api.search.brave.com",
+    "user-agent": "Polyweb/0.1",
+    "x-subscription-token": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 400,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:55 GMT",
+    "content-type": "application/json",
+    "content-length": "226",
+    "connection": "keep-alive",
+    "server-timing": "search-roundtrip;dur=11.846",
+    "vary": "Accept-Encoding"
+  },
+  "response_body": {
+    "type": "ErrorResponse",
+    "error": {
+      "id": "3d0a9b3f-4d4d-7f02-19d3-e0bb3b0d7dd4",
+      "status": 400,
+      "detail": "The option is not included in the plan.",
+      "meta": {
+        "component": "authentication"
+      },
+      "code": "OPTION_NOT_IN_PLAN"
+    },
+    "time": 1794878875
+  }
+}

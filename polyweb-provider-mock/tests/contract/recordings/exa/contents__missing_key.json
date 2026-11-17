@@ -1,0 +1,463 @@
+{
+  "method": "POST",
+  "url": "https://api.exa.ai/contents",
+  "request_headers": {
+    "host": "api.exa.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "exa-py/2.18.1",
+    "content-type": "application/json",
+    "content-length": "45"
+  },
+  "request_body": {
+    "urls": [
+      "https://example.com/"
+    ],
+    "text": true
+  },
+  "status": 402,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:41 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "6202",
+    "connection": "keep-alive",
+    "content-security-policy": "frame-ancestors 'self'",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "origin-agent-cluster": "?1",
+    "referrer-policy": "no-referrer",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "x-content-type-options": "nosniff",
+    "x-dns-prefetch-control": "off",
+    "x-download-options": "noopen",
+    "x-frame-options": "DENY",
+    "x-permitted-cross-domain-policies": "none",
+    "x-xss-protection": "0",
+    "x-request-id": "57bd079c481ba7eb1e0fda3e18dae27a",
+    "x-exa-region": "us-west-2",
+    "x-exa-processing-region": "us",
+    "vary": "Origin",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "PAYMENT-REQUIRED,PAYMENT-RESPONSE,payment-required,payment-response,WWW-Authenticate,Payment-Receipt,x-request-id,x-exa-queued,x-exa-queue-ms,x-exa-region,x-exa-processing-region,Deprecation,Sunset,Retry-After,X-RateLimit-Scope",
+    "payment-required": "eyJ4NDAyVmVyc2lvbiI6MiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9hcGkuZXhhLmFpL2NvbnRlbnRzIiwiZGVzY3JpcHRpb24iOiJFeGEgL2NvbnRlbnRzIGVuZHBvaW50IiwibWltZVR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIn0sImFjY2VwdHMiOlt7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6ImVpcDE1NTo4NDUzIiwiYW1vdW50IjoiMTAwMCIsInBheVRvIjoiMHg2ZDZFNjk1YjA5ODYxNDY3YzdkNDYyZjVBQUYzMWNGMzU0MEI5MTkyIiwibWF4VGltZW91dFNlY29uZHMiOjYwLCJhc3NldCI6IjB4ODMzNTg5ZkNENmVEYjZFMDhmNGM3QzMyRDRmNzFiNTRiZEEwMjkxMyIsImV4dHJhIjp7Im5hbWUiOiJVU0QgQ29pbiIsInZlcnNpb24iOiIyIiwiYnJlYWtkb3duIjp7InRleHQiOjAuMDAxfSwidG90YWxVc2QiOjAuMDAxLCJhY2NlcHRJZCI6ImxlZ2FjeSJ9fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6InNvbGFuYTo1ZXlrdDRVc0Z2OFA4TkpkVFJFcFkxdnpxS3FaS3ZkcCIsImFtb3VudCI6IjEwMDAiLCJwYXlUbyI6IjEyRWMyY0ptZlIxQzl1d2VqenhjdU1oVWdFQzd3RHJMZ20xd0J2dlI1dzlFIiwibWF4VGltZW91dFNlY29uZHMiOjYwLCJhc3NldCI6IkVQakZXZGQ1QXVmcVNTcWVNMnFOMXh6eWJhcEM4RzR3RUdHa1p3eVREdDF2IiwiZXh0cmEiOnsiZmVlUGF5ZXIiOiJCRU5yTG9VYm5keG9OTVVTNUpYQXBHTXROeWtMakZYWGl4TXRwRHdEUjlTUCIsInRyYW5zYWN0aW9uVmVyc2lvbnMiOlswLDFdLCJuYW1lIjoiVVNEIENvaW4iLCJ2ZXJzaW9uIjoiMiIsImJyZWFrZG93biI6eyJ0ZXh0IjowLjAwMX0sInRvdGFsVXNkIjowLjAwMSwiYWNjZXB0SWQiOiJzb2xhbmEtdXNkYy1tYWlubmV0In19LHsic2NoZW1lIjoiZXhhY3QiLCJuZXR3b3JrIjoiZWlwMTU1Ojg0NTMiLCJhbW91bnQiOiIxMDAwIiwicGF5VG8iOiIweEI5OGVGMjllYjJiZTE5QWU2NDZBOEZDMDI0ODI1NUI5MEEzMzJkYkMiLCJtYXhUaW1lb3V0U2Vjb25kcyI6NjA0OTAwLCJhc3NldCI6IjB4ODMzNTg5ZkNENmVEYjZFMDhmNGM3QzMyRDRmNzFiNTRiZEEwMjkxMyIsImV4dHJhIjp7Im5hbWUiOiJHYXRld2F5V2FsbGV0QmF0Y2hlZCIsInZlcnNpb24iOiIxIiwidmVyaWZ5aW5nQ29udHJhY3QiOiIweDc3Nzc3Nzc3ZGNjNGQ1YThiNmU0MThmZDA0ZDg5OTdlZjExMDAwZWUiLCJtaW5WYWxpZGl0eVNlY29uZHMiOjYwNDgwMCwiYXNzZXRzIjpbeyJzeW1ib2wiOiJVU0RDIiwiYWRkcmVzcyI6IjB4ODMzNTg5ZmNkNmVkYjZlMDhmNGM3YzMyZDRmNzFiNTRiZGEwMjkxMyIsImRlY2ltYWxzIjo2LCJhdXRob3JpemF0aW9uVmVyc2lvbnMiOlsiMSIsIjIiXX0seyJzeW1ib2wiOiJFVVJDIiwiYWRkcmVzcyI6IjB4NjBhM2UzNWNjMzAyYmZhNDRjYjI4OGJjNWE0ZjMxNmZkYjFhZGI0MiIsImRlY2ltYWxzIjo2LCJhdXRob3JpemF0aW9uVmVyc2lvbnMiOlsiMiJdfV0sImJyZWFrZG93biI6eyJ0ZXh0IjowLjAwMX0sInRvdGFsVXNkIjowLjAwMSwiYWNjZXB0SWQiOiJiYXNlLXVzZGMtZ2F0ZXdheSJ9fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6ImVpcDE1NTo0ODAiLCJhbW91bnQiOiIxMDAwIiwicGF5VG8iOiIweEI5OGVGMjllYjJiZTE5QWU2NDZBOEZDMDI0ODI1NUI5MEEzMzJkYkMiLCJtYXhUaW1lb3V0U2Vjb25kcyI6NjA0OTAwLCJhc3NldCI6IjB4NzlBMDI0ODJBODgwYkNFM0YxM2UwOURhOTcwZEMzNGRiNENEMjRkMSIsImV4dHJhIjp7Im5hbWUiOiJHYXRld2F5V2FsbGV0QmF0Y2hlZCIsInZlcnNpb24iOiIxIiwidmVyaWZ5aW5nQ29udHJhY3QiOiIweDc3Nzc3Nzc3ZGNjNGQ1YThiNmU0MThmZDA0ZDg5OTdlZjExMDAwZWUiLCJtaW5WYWxpZGl0eVNlY29uZHMiOjYwNDgwMCwiYXNzZXRzIjpbeyJzeW1ib2wiOiJVU0RDIiwiYWRkcmVzcyI6IjB4NzlhMDI0ODJhODgwYmNlM2YxM2UwOWRhOTcwZGMzNGRiNGNkMjRkMSIsImRlY2ltYWxzIjo2LCJhdXRob3JpemF0aW9uVmVyc2lvbnMiOlsiMSIsIjIiXX0seyJzeW1ib2wiOiJFVVJDIiwiYWRkcmVzcyI6IjB4MWM2MGJhMGEwZWQxMDE5ZThlYjAzNWU2ZGFmNDE1NWE1Y2UyMzgwYiIsImRlY2ltYWxzIjo2LCJhdXRob3JpemF0aW9uVmVyc2lvbnMiOlsiMiJdfV0sImJyZWFrZG93biI6eyJ0ZXh0IjowLjAwMX0sInRvdGFsVXNkIjowLjAwMSwiYWNjZXB0SWQiOiJ3b3JsZGNoYWluLXVzZGMtZ2F0ZXdheSJ9fSx7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6ImVpcDE1NTo1MDQyIiwiYW1vdW50IjoiMTAwMCIsInBheVRvIjoiMHhCOThlRjI5ZWIyYmUxOUFlNjQ2QThGQzAyNDgyNTVCOTBBMzMyZGJDIiwibWF4VGltZW91dFNlY29uZHMiOjYwNDkwMCwiYXNzZXQiOiIweDM2MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJleHRyYSI6eyJuYW1lIjoiR2F0ZXdheVdhbGxldEJhdGNoZWQiLCJ2ZXJzaW9uIjoiMSIsInZlcmlmeWluZ0NvbnRyYWN0IjoiMHg3Nzc3Nzc3N2RjYzRkNWE4YjZlNDE4ZmQwNGQ4OTk3ZWYxMTAwMGVlIiwibWluVmFsaWRpdHlTZWNvbmRzIjo2MDQ4MDAsImFzc2V0cyI6W3sic3ltYm9sIjoiVVNEQyIsImFkZHJlc3MiOiIweDM2MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJkZWNpbWFscyI6NiwiYXV0aG9yaXphdGlvblZlcnNpb25zIjpbIjEiLCIyIl19LHsic3ltYm9sIjoiY2lyQlRDIiwiYWRkcmVzcyI6IjB4MTcxYTQyMTdiODZhODA3YTY0ZWI5NDc1N2RiNjg0OWZiNGJkYmFhMCIsImRlY2ltYWxzIjo4LCJhdXRob3JpemF0aW9uVmVyc2lvbnMiOlsiMiJdfSx7InN5bWJvbCI6IkVVUkMiLCJhZGRyZXNzIjoiMHhiZWY1ZjZkNTFjYjYyYjU4ZTZhOGY3Nzg2ODY4MTgyNWM2ZmUyMWMxIiwiZGVjaW1hbHMiOjYsImF1dGhvcml6YXRpb25WZXJzaW9ucyI6WyIyIl19XSwiYnJlYWtkb3duIjp7InRleHQiOjAuMDAxfSwidG90YWxVc2QiOjAuMDAxLCJhY2NlcHRJZCI6ImFyYy11c2RjLWdhdGV3YXkifX0seyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJlaXAxNTU6NTA0MiIsImFtb3VudCI6IjEwMDAiLCJwYXlUbyI6IjB4Qjk4ZUYyOWViMmJlMTlBZTY0NkE4RkMwMjQ4MjU1QjkwQTMzMmRiQyIsIm1heFRpbWVvdXRTZWNvbmRzIjozNjAwLCJhc3NldCI6IjB4MzYwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMCIsImV4dHJhIjp7ImFzc2V0VHJhbnNmZXJNZXRob2QiOiJlaXAzMDA5IiwibmFtZSI6IlVTREMiLCJ2ZXJzaW9uIjoiMiIsImJyZWFrZG93biI6eyJ0ZXh0IjowLjAwMX0sInRvdGFsVXNkIjowLjAwMSwiYWNjZXB0SWQiOiJhcmMtdXNkYy1jaXJjbGUifX0seyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJlaXAxNTU6ODQ1MyIsImFtb3VudCI6IjEwMDAiLCJwYXlUbyI6IjB4Qjk4ZUYyOWViMmJlMTlBZTY0NkE4RkMwMjQ4MjU1QjkwQTMzMmRiQyIsIm1heFRpbWVvdXRTZWNvbmRzIjozNjAwLCJhc3NldCI6IjB4ODMzNTg5ZkNENmVEYjZFMDhmNGM3QzMyRDRmNzFiNTRiZEEwMjkxMyIsImV4dHJhIjp7ImFzc2V0VHJhbnNmZXJNZXRob2QiOiJlaXAzMDA5IiwibmFtZSI6IlVTRCBDb2luIiwidmVyc2lvbiI6IjIiLCJicmVha2Rvd24iOnsidGV4dCI6MC4wMDF9LCJ0b3RhbFVzZCI6MC4wMDEsImFjY2VwdElkIjoiYmFzZS11c2RjLWNpcmNsZSJ9fV0sImVycm9yIjoiUGF5bWVudCByZXF1aXJlZCB0byBhY2Nlc3MgdGhpcyByZXNvdXJjZSIsImV4dGVuc2lvbnMiOnsiYmF6YWFyIjp7ImluZm8iOnsiaW5wdXQiOnsidHlwZSI6Imh0dHAiLCJib2R5VHlwZSI6Impzb24iLCJib2R5Ijp7InVybHMiOlsiaHR0cHM6Ly9leGFtcGxlLmNvbSJdLCJ0ZXh0Ijp0cnVlfSwibWV0aG9kIjoiUE9TVCJ9LCJvdXRwdXQiOnsidHlwZSI6Impzb24iLCJleGFtcGxlIjp7InJlc3VsdHMiOlt7InVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20iLCJ0aXRsZSI6IkV4YW1wbGUiLCJ0ZXh0IjoiUGFnZSBjb250ZW50Li4uIn1dfX19LCJzY2hlbWEiOnsiJHNjaGVtYSI6Imh0dHBzOi8vanNvbi1zY2hlbWEub3JnL2RyYWZ0LzIwMjAtMTIvc2NoZW1hIiwidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsiaW5wdXQiOnsidHlwZSI6Im9iamVjdCIsInByb3BlcnRpZXMiOnsidHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiY29uc3QiOiJodHRwIn0sIm1ldGhvZCI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJQT1NUIl19LCJib2R5VHlwZSI6eyJ0eXBlIjoic3RyaW5nIiwiZW51bSI6WyJqc29uIiwiZm9ybS1kYXRhIiwidGV4dCJdfSwiYm9keSI6eyJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJpZHMiOnsidHlwZSI6ImFycmF5IiwiZGVzY3JpcHRpb24iOiJBcnJheSBvZiBFeGEgZG9jdW1lbnQgSURzIHRvIHJldHJpZXZlIGNvbnRlbnQgZm9yIn0sInVybHMiOnsidHlwZSI6ImFycmF5IiwiZGVzY3JpcHRpb24iOiJBcnJheSBvZiBVUkxzIHRvIHJldHJpZXZlIGNvbnRlbnQgZm9yIn0sInRleHQiOnsidHlwZSI6ImJvb2xlYW4iLCJkZXNjcmlwdGlvbiI6IkluY2x1ZGUgZnVsbCB0ZXh0IGNvbnRlbnQifSwiaGlnaGxpZ2h0cyI6eyJ0eXBlIjoiYm9vbGVhbiIsImRlc2NyaXB0aW9uIjoiSW5jbHVkZSB0ZXh0IGhpZ2hsaWdodHMifSwic3VtbWFyeSI6eyJ0eXBlIjoiYm9vbGVhbiIsImRlc2NyaXB0aW9uIjoiSW5jbHVkZSBBSSBzdW1tYXJ5In19fX0sInJlcXVpcmVkIjpbInR5cGUiLCJib2R5VHlwZSIsImJvZHkiLCJtZXRob2QiXSwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfSwib3V0cHV0Ijp7InR5cGUiOiJvYmplY3QiLCJwcm9wZXJ0aWVzIjp7InR5cGUiOnsidHlwZSI6InN0cmluZyJ9LCJleGFtcGxlIjp7InR5cGUiOiJvYmplY3QifX0sInJlcXVpcmVkIjpbInR5cGUiXX19LCJyZXF1aXJlZCI6WyJpbnB1dCJdfX0sImFnZW50a2l0Ijp7ImluZm8iOnsidmVyc2lvbiI6IjEiLCJzdGF0ZW1lbnQiOiJWZXJpZnkgeW91ciBhZ2VudCBpcyBiYWNrZWQgYnkgYSByZWFsIGh1bWFuIHRvIGFjY2VzcyBFeGEiLCJkb21haW4iOiJhcGkuZXhhLmFpIiwidXJpIjoiaHR0cHM6Ly9hcGkuZXhhLmFpL2NvbnRlbnRzIiwibm9uY2UiOiIyZTViYjhmNWQ1NGRiNzVmNzBhZjU4N2Q4NDI1ZDZlZCIsImlzc3VlZEF0IjoiMjAyNi0xMS0xN1QwMToyNzo0MS4wNTFaIiwicmVzb3VyY2VzIjpbImh0dHBzOi8vYXBpLmV4YS5haS9jb250ZW50cyJdfSwic3VwcG9ydGVkQ2hhaW5zIjpbeyJjaGFpbklkIjoiZWlwMTU1OjQ4MCIsInR5cGUiOiJlaXAxOTEifSx7ImNoYWluSWQiOiJlaXAxNTU6NDgwIiwidHlwZSI6ImVpcDEyNzEifV0sInNjaGVtYSI6eyIkc2NoZW1hIjoiaHR0cHM6Ly9qc29uLXNjaGVtYS5vcmcvZHJhZnQvMjAyMC0xMi9zY2hlbWEiLCJ0eXBlIjoib2JqZWN0IiwicHJvcGVydGllcyI6eyJkb21haW4iOnsidHlwZSI6InN0cmluZyJ9LCJhZGRyZXNzIjp7InR5cGUiOiJzdHJpbmcifSwic3RhdGVtZW50Ijp7InR5cGUiOiJzdHJpbmcifSwidXJpIjp7InR5cGUiOiJzdHJpbmciLCJmb3JtYXQiOiJ1cmkifSwidmVyc2lvbiI6eyJ0eXBlIjoic3RyaW5nIn0sImNoYWluSWQiOnsidHlwZSI6InN0cmluZyJ9LCJ0eXBlIjp7InR5cGUiOiJzdHJpbmcifSwibm9uY2UiOnsidHlwZSI6InN0cmluZyJ9LCJpc3N1ZWRBdCI6eyJ0eXBlIjoic3RyaW5nIiwiZm9ybWF0IjoiZGF0ZS10aW1lIn0sImV4cGlyYXRpb25UaW1lIjp7InR5cGUiOiJzdHJpbmciLCJmb3JtYXQiOiJkYXRlLXRpbWUifSwibm90QmVmb3JlIjp7InR5cGUiOiJzdHJpbmciLCJmb3JtYXQiOiJkYXRlLXRpbWUifSwicmVxdWVzdElkIjp7InR5cGUiOiJzdHJpbmcifSwicmVzb3VyY2VzIjp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJmb3JtYXQiOiJ1cmkifX0sInNpZ25hdHVyZSI6eyJ0eXBlIjoic3RyaW5nIn19LCJyZXF1aXJlZCI6WyJkb21haW4iLCJhZGRyZXNzIiwidXJpIiwidmVyc2lvbiIsImNoYWluSWQiLCJ0eXBlIiwibm9uY2UiLCJpc3N1ZWRBdCIsInNpZ25hdHVyZSJdfSwiX29wdGlvbnMiOnsic3RhdGVtZW50IjoiVmVyaWZ5IHlvdXIgYWdlbnQgaXMgYmFja2VkIGJ5IGEgcmVhbCBodW1hbiB0byBhY2Nlc3MgRXhhIiwibW9kZSI6eyJ0eXBlIjoiZnJlZS10cmlhbCIsInVzZXMiOjEwMH0sIm5ldHdvcmsiOiJlaXAxNTU6NDgwIn19fX0=",
+    "www-authenticate": "Payment id=\"2bYXXlUC8w_vwOIKG2OrF3Fbor7fk-fGOKzMhmHviWk\", realm=\"api.exa.ai\", method=\"tempo\", intent=\"charge\", request=\"eyJhbW91bnQiOiIxMDAwIiwiY3VycmVuY3kiOiIweDIwQzAwMDAwMDAwMDAwMDAwMDAwMDAwMGI5NTM3ZDExYzYwRThiNTAiLCJtZXRob2REZXRhaWxzIjp7ImNoYWluSWQiOjQyMTcsImZlZVBheWVyIjp0cnVlLCJzdXBwb3J0ZWRNb2RlcyI6WyJwdWxsIl19LCJyZWNpcGllbnQiOiIweEI5OGVGMjllYjJiZTE5QWU2NDZBOEZDMDI0ODI1NUI5MEEzMzJkYkMifQ\", description=\"Exa /contents endpoint\", expires=\"2026-11-17T01:32:41.054Z\", opaque=\"eyJfbXBweF9zY29wZSI6IlBPU1QgL2NvbnRlbnRzIn0\"",
+    "etag": "W/\"183a-l+CAqvdC86lxrvY5ZGTYG0IDSXc\"",
+    "cf-cache-status": "DYNAMIC",
+    "server": "cloudflare",
+    "cf-ray": "d2aaa7642b9c2330-FAF"
+  },
+  "response_body": {
+    "requestId": "57bd079c481ba7eb1e0fda3e18dae27a",
+    "error": "Payment required to access this resource",
+    "tag": "X402_PAYMENT_REQUIRED",
+    "x402Version": 2,
+    "resource": {
+      "url": "https://api.exa.ai/contents",
+      "description": "Exa /contents endpoint",
+      "mimeType": "application/json"
+    },
+    "accepts": [
+      {
+        "scheme": "exact",
+        "network": "eip155:8453",
+        "amount": "1000",
+        "payTo": "0x6d6E695b09861467c7d462f5AAF31cF3540B9192",
+        "maxTimeoutSeconds": 60,
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "extra": {
+          "name": "USD Coin",
+          "version": "2",
+          "breakdown": {
+            "text": 0.001
+          },
+          "totalUsd": 0.001,
+          "acceptId": "legacy"
+        }
+      },
+      {
+        "scheme": "exact",
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "amount": "1000",
+        "payTo": "12Ec2cJmfR1C9uwejzxcuMhUgEC7wDrLgm1wBvvR5w9E",
+        "maxTimeoutSeconds": 60,
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "extra": {
+          "feePayer": "BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP",
+          "transactionVersions": [
+            0,
+            1
+          ],
+          "name": "USD Coin",
+          "version": "2",
+          "breakdown": {
+            "text": 0.001
+          },
+          "totalUsd": 0.001,
+          "acceptId": "solana-usdc-mainnet"
+        }
+      },
+      {
+        "scheme": "exact",
+        "network": "eip155:8453",
+        "amount": "1000",
+        "payTo": "0xB98eF29eb2be19Ae646A8FC0248255B90A332dbC",
+        "maxTimeoutSeconds": 604900,
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "extra": {
+          "name": "GatewayWalletBatched",
+          "version": "1",
+          "verifyingContract": "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee",
+          "minValiditySeconds": 604800,
+          "assets": [
+            {
+              "symbol": "USDC",
+              "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+              "decimals": 6,
+              "authorizationVersions": [
+                "1",
+                "2"
+              ]
+            },
+            {
+              "symbol": "EURC",
+              "address": "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42",
+              "decimals": 6,
+              "authorizationVersions": [
+                "2"
+              ]
+            }
+          ],
+          "breakdown": {
+            "text": 0.001
+          },
+          "totalUsd": 0.001,
+          "acceptId": "base-usdc-gateway"
+        }
+      },
+      {
+        "scheme": "exact",
+        "network": "eip155:480",
+        "amount": "1000",
+        "payTo": "0xB98eF29eb2be19Ae646A8FC0248255B90A332dbC",
+        "maxTimeoutSeconds": 604900,
+        "asset": "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1",
+        "extra": {
+          "name": "GatewayWalletBatched",
+          "version": "1",
+          "verifyingContract": "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee",
+          "minValiditySeconds": 604800,
+          "assets": [
+            {
+              "symbol": "USDC",
+              "address": "0x79a02482a880bce3f13e09da970dc34db4cd24d1",
+              "decimals": 6,
+              "authorizationVersions": [
+                "1",
+                "2"
+              ]
+            },
+            {
+              "symbol": "EURC",
+              "address": "0x1c60ba0a0ed1019e8eb035e6daf4155a5ce2380b",
+              "decimals": 6,
+              "authorizationVersions": [
+                "2"
+              ]
+            }
+          ],
+          "breakdown": {
+            "text": 0.001
+          },
+          "totalUsd": 0.001,
+          "acceptId": "worldchain-usdc-gateway"
+        }
+      },
+      {
+        "scheme": "exact",
+        "network": "eip155:5042",
+        "amount": "1000",
+        "payTo": "0xB98eF29eb2be19Ae646A8FC0248255B90A332dbC",
+        "maxTimeoutSeconds": 604900,
+        "asset": "0x3600000000000000000000000000000000000000",
+        "extra": {
+          "name": "GatewayWalletBatched",
+          "version": "1",
+          "verifyingContract": "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee",
+          "minValiditySeconds": 604800,
+          "assets": [
+            {
+              "symbol": "USDC",
+              "address": "0x3600000000000000000000000000000000000000",
+              "decimals": 6,
+              "authorizationVersions": [
+                "1",
+                "2"
+              ]
+            },
+            {
+              "symbol": "cirBTC",
+              "address": "0x171a4217b86a807a64eb94757db6849fb4bdbaa0",
+              "decimals": 8,
+              "authorizationVersions": [
+                "2"
+              ]
+            },
+            {
+              "symbol": "EURC",
+              "address": "0xbef5f6d51cb62b58e6a8f77868681825c6fe21c1",
+              "decimals": 6,
+              "authorizationVersions": [
+                "2"
+              ]
+            }
+          ],
+          "breakdown": {
+            "text": 0.001
+          },
+          "totalUsd": 0.001,
+          "acceptId": "arc-usdc-gateway"
+        }
+      },
+      {
+        "scheme": "exact",
+        "network": "eip155:5042",
+        "amount": "1000",
+        "payTo": "0xB98eF29eb2be19Ae646A8FC0248255B90A332dbC",
+        "maxTimeoutSeconds": 3600,
+        "asset": "0x3600000000000000000000000000000000000000",
+        "extra": {
+          "assetTransferMethod": "eip3009",
+          "name": "USDC",
+          "version": "2",
+          "breakdown": {
+            "text": 0.001
+          },
+          "totalUsd": 0.001,
+          "acceptId": "arc-usdc-circle"
+        }
+      },
+      {
+        "scheme": "exact",
+        "network": "eip155:8453",
+        "amount": "1000",
+        "payTo": "0xB98eF29eb2be19Ae646A8FC0248255B90A332dbC",
+        "maxTimeoutSeconds": 3600,
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "extra": {
+          "assetTransferMethod": "eip3009",
+          "name": "USD Coin",
+          "version": "2",
+          "breakdown": {
+            "text": 0.001
+          },
+          "totalUsd": 0.001,
+          "acceptId": "base-usdc-circle"
+        }
+      }
+    ],
+    "extensions": {
+      "bazaar": {
+        "info": {
+          "input": {
+            "type": "http",
+            "bodyType": "json",
+            "body": {
+              "urls": [
+                "https://example.com"
+              ],
+              "text": true
+            },
+            "method": "POST"
+          },
+          "output": {
+            "type": "json",
+            "example": {
+              "results": [
+                {
+                  "url": "https://example.com",
+                  "title": "Example",
+                  "text": "Page content..."
+                }
+              ]
+            }
+          }
+        },
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "http"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "POST"
+                  ]
+                },
+                "bodyType": {
+                  "type": "string",
+                  "enum": [
+                    "json",
+                    "form-data",
+                    "text"
+                  ]
+                },
+                "body": {
+                  "type": "object",
+                  "properties": {
+                    "ids": {
+                      "type": "array",
+                      "description": "Array of Exa document IDs to retrieve content for"
+                    },
+                    "urls": {
+                      "type": "array",
+                      "description": "Array of URLs to retrieve content for"
+                    },
+                    "text": {
+                      "type": "boolean",
+                      "description": "Include full text content"
+                    },
+                    "highlights": {
+                      "type": "boolean",
+                      "description": "Include text highlights"
+                    },
+                    "summary": {
+                      "type": "boolean",
+                      "description": "Include AI summary"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "type",
+                "bodyType",
+                "body",
+                "method"
+              ],
+              "additionalProperties": false
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "example": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "input"
+          ]
+        }
+      },
+      "agentkit": {
+        "info": {
+          "version": "1",
+          "statement": "Verify your agent is backed by a real human to access Exa",
+          "domain": "api.exa.ai",
+          "uri": "https://api.exa.ai/contents",
+          "nonce": "2e5bb8f5d54db75f70af587d8425d6ed",
+          "issuedAt": "2026-11-17T01:27:41.051Z",
+          "resources": [
+            "https://api.exa.ai/contents"
+          ]
+        },
+        "supportedChains": [
+          {
+            "chainId": "eip155:480",
+            "type": "eip191"
+          },
+          {
+            "chainId": "eip155:480",
+            "type": "eip1271"
+          }
+        ],
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "domain": {
+              "type": "string"
+            },
+            "address": {
+              "type": "string"
+            },
+            "statement": {
+              "type": "string"
+            },
+            "uri": {
+              "type": "string",
+              "format": "uri"
+            },
+            "version": {
+              "type": "string"
+            },
+            "chainId": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "nonce": {
+              "type": "string"
+            },
+            "issuedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "expirationTime": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "notBefore": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "requestId": "{'bcca': 'xstoow'}",
+            "resources": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "signature": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "domain",
+            "address",
+            "uri",
+            "version",
+            "chainId",
+            "type",
+            "nonce",
+            "issuedAt",
+            "signature"
+          ]
+        },
+        "_options": {
+          "statement": "Verify your agent is backed by a real human to access Exa",
+          "mode": {
+            "type": "free-trial",
+            "uses": 100
+          },
+          "network": "eip155:480"
+        }
+      }
+    }
+  }
+}

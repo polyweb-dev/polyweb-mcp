@@ -1,0 +1,49 @@
+{
+  "method": "POST",
+  "url": "https://api.keenable.ai/v1/search/public",
+  "request_headers": {
+    "host": "api.keenable.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb/0.1.0",
+    "x-keenable-title": "polyweb",
+    "content-length": "58",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "query": "polyweb test",
+    "max_results": 1,
+    "mode": "realtime"
+  },
+  "status": 200,
+  "response_headers": {
+    "x-request-id": "88f76477-bb52-7035-8001-1684e9b3744e",
+    "vary": "Origin, Accept-Encoding",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "Content-Type,Authorization,X-Request-Id,Server-Timing,PAYMENT-REQUIRED,PAYMENT-RESPONSE,Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+    "x-ratelimit-limit": "1000",
+    "x-ratelimit-remaining": "997",
+    "x-ratelimit-reset": "2026-11-17T02:00:50.796Z",
+    "content-type": "application/json; charset=utf-8",
+    "etag": "W/\"4f9-FiDicuRYXgrnc+9EQAlMGw7MbIc\"",
+    "content-encoding": "gzip",
+    "date": "Tue, 17 Nov 2026 01:27:28 GMT",
+    "via": "1.1 google",
+    "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+    "transfer-encoding": "chunked"
+  },
+  "response_body": {
+    "query": "polyweb test",
+    "mode": "realtime",
+    "results": [
+      {
+        "title": "PolygWEB",
+        "url": "http://polygweb.com/en",
+        "description": "",
+        "snippet": "The POLYGWEB test is a preliminary tool for use before deciding to perform a polygraph test, or for anyone curious to know whether he will \"pass\" the polygraph test The test consists of a range of questions which examine the user's basic credibility level, using a simulation of the original polygraph test. This test uses special algorithms which enable simulation of the polygraph test, and accordingly estimates of the user's chances of passing the polygraph test.\n## get your polygweb results\nTo make the purchase, you will be transferred to a secured PAYPAL site, which offers a variety of payment methods for your convenience.\n\n#### **If I do not tell the truth?**\nI wish to take the POLYGWEB test on the basis of curiosity only, in order to know my chances of passing a polygraph test if I do not tell the truth.\n\non the\n\nThe POLYGWEB test enables you to estimate your chances of passing a polygraph test and gives you the possibility of **knowing** your chances of being found to have told the truth, or to have lied, in an actual polygraph test! **Can you pass a polygraph test?**",
+        "acquired_at": "2018-11-15T03:51:49Z"
+      }
+    ]
+  }
+}

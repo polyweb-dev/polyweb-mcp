@@ -1,0 +1,77 @@
+{
+  "method": "POST",
+  "url": "https://api.firecrawl.dev/v2/scrape",
+  "request_headers": {
+    "host": "api.firecrawl.dev",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "python-httpx/0.28.1",
+    "authorization": "Bearer <REDACTED>",
+    "content-length": "337",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "url": "https://example.com",
+    "onlyMainContent": true,
+    "skipTlsVerification": true,
+    "removeBase64Images": true,
+    "fastMode": false,
+    "blockAds": true,
+    "storeInCache": true,
+    "maxAge": 14400000,
+    "formats": [
+      {
+        "type": "json",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ]
+        }
+      }
+    ],
+    "mobile": false,
+    "origin": "python-sdk@4.41.0"
+  },
+  "status": 200,
+  "response_headers": {
+    "access-control-allow-origin": "*",
+    "content-length": "613",
+    "content-type": "application/json; charset=utf-8",
+    "date": "Tue, 17 Nov 2026 01:27:37 GMT",
+    "etag": "W/\"265-T/b6W8WgSA7ABlGjuNQem7M95Ww\"",
+    "x-response-time": "1389.112ms"
+  },
+  "response_body": {
+    "success": true,
+    "data": {
+      "metadata": {
+        "viewport": "width=device-width,initial-scale=1",
+        "title": "Example Domain",
+        "language": "en",
+        "favicon": "data:,",
+        "scrapeId": "71b0b43a-bc26-28a0-fe96-e580539e14dd",
+        "sourceURL": "https://example.com",
+        "url": "https://example.com/",
+        "statusCode": 200,
+        "contentType": "text/html; charset=utf-8",
+        "proxyUsed": "basic",
+        "cacheState": "hit",
+        "cachedAt": "2026-11-17T01:26:39.776Z",
+        "creditsUsed": 5,
+        "concurrencyLimited": false
+      },
+      "json": {
+        "title": "This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes."
+      }
+    }
+  },
+  "sdk_version": "4.41.0",
+  "capture_note": "HTTPX decoded response body; original response headers retained. Secret values redacted; identifiers use synthetic same-format values."
+}
