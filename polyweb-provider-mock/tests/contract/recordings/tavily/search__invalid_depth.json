@@ -1,0 +1,42 @@
+{
+  "method": "POST",
+  "url": "https://api.tavily.com/search",
+  "request_headers": {
+    "host": "api.tavily.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-tavily-contract-research",
+    "content-type": "application/json",
+    "authorization": "Bearer <REDACTED>",
+    "x-client-source": "tavily-python",
+    "content-length": "100"
+  },
+  "request_body": {
+    "query": "polyweb test",
+    "max_results": 1,
+    "include_usage": true,
+    "search_depth": "invalid-research-enum"
+  },
+  "status": 400,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "97",
+    "connection": "keep-alive",
+    "date": "Tue, 17 Nov 2026 01:27:26 GMT",
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;",
+    "x-cache": "Error from cloudfront",
+    "via": "1.1 be79d19b2a4d9c9c3f1fccd653576e56.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P5",
+    "alt-svc": "h3=\":443\"; ma=86400",
+    "x-amz-cf-id": "EtUC3tTJhd0lfnA3OkJJjRL_hVsJP0CqO5qD_hmLAAgMiRkg9IRgeD=="
+  },
+  "response_body": {
+    "detail": {
+      "error": "Invalid search depth. Must be 'ultra-fast', 'fast', 'basic' or 'advanced'."
+    }
+  },
+  "sdk_version": "0.7.27",
+  "recorded_at": "2026-11-17T01:27:26.851317+00:00",
+  "notes": "HTTPX decoded content encoding. Request/trace IDs are synthetic with original character classes and length. Auth and account identifiers are redacted. Header lengths describe the original wire body."
+}

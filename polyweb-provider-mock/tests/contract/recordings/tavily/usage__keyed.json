@@ -1,0 +1,54 @@
+{
+  "method": "GET",
+  "url": "https://api.tavily.com/usage",
+  "request_headers": {
+    "host": "api.tavily.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-tavily-contract-research",
+    "content-type": "application/json",
+    "authorization": "Bearer <REDACTED>",
+    "x-client-source": "tavily-python"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "312",
+    "connection": "keep-alive",
+    "date": "Tue, 17 Nov 2026 01:27:26 GMT",
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;",
+    "x-cache": "Miss from cloudfront",
+    "via": "1.1 a271e07df9c41dd2c067133c2d7094f0.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P5",
+    "alt-svc": "h3=\":443\"; ma=86400",
+    "x-amz-cf-id": "GkvMiP1KGS-r3DKB4VRCEid0g2mQpjdql62HL2b-nqH-8KttNmaQGB=="
+  },
+  "response_body": {
+    "key": {
+      "usage": 45,
+      "limit": null,
+      "search_usage": 39,
+      "crawl_usage": 0,
+      "extract_usage": 6,
+      "map_usage": 0,
+      "research_usage": 0
+    },
+    "account": {
+      "current_plan": "Researcher",
+      "plan_usage": 45,
+      "plan_limit": 1000,
+      "search_usage": 39,
+      "crawl_usage": 0,
+      "extract_usage": 6,
+      "map_usage": 0,
+      "research_usage": 0,
+      "paygo_usage": 0,
+      "paygo_limit": null
+    }
+  },
+  "sdk_version": "0.7.27",
+  "recorded_at": "2026-11-17T01:27:26.179013+00:00",
+  "notes": "HTTPX decoded content encoding. Request/trace IDs are synthetic with original character classes and length. Auth and account identifiers are redacted. Header lengths describe the original wire body."
+}

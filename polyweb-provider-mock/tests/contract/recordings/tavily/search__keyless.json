@@ -1,0 +1,58 @@
+{
+  "method": "POST",
+  "url": "https://api.tavily.com/search",
+  "request_headers": {
+    "host": "api.tavily.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-tavily-contract-research",
+    "x-tavily-access-mode": "keyless",
+    "content-type": "application/json",
+    "x-client-source": "tavily-python",
+    "content-length": "91"
+  },
+  "request_body": {
+    "query": "polyweb test",
+    "search_depth": "basic",
+    "max_results": 1,
+    "include_usage": true
+  },
+  "status": 429,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "787",
+    "connection": "keep-alive",
+    "date": "Tue, 17 Nov 2026 01:27:23 GMT",
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;",
+    "retry-after": "824",
+    "x-cache": "Error from cloudfront",
+    "via": "1.1 94cda5dabbd4d7c2c2ed13771099b7f6.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P5",
+    "alt-svc": "h3=\":443\"; ma=86400",
+    "x-amz-cf-id": "QT6vOEqGrDOopsPQdClHaQd-HuukM-kOn5Hi2uJ2nUoBvh0AhJppMO=="
+  },
+  "response_body": {
+    "error": {
+      "code": "daily_cap_reached",
+      "message": "You reached the daily keyless Tavily limit. To continue immediately, pay via x402 agentic payment (https://docs.tavily.com/documentation/machine-payments/x402) or sign up at https://tavily.com for a Tavily API key. Otherwise, retry after the time given in the Retry-After response header.",
+      "next_actions": [
+        {
+          "type": "agentic_payment",
+          "resource": "https://docs.tavily.com/documentation/machine-payments/x402",
+          "instruction": "Pay for this request using the x402 agentic payment protocol to continue immediately."
+        },
+        {
+          "type": "signup",
+          "resource": "https://tavily.com",
+          "instruction": "Ask the user to sign up at tavily.com and retry with the API key in the Authorization header as: Bearer <REDACTED>"
+        }
+      ],
+      "window": "day",
+      "retry_after_seconds": 824
+    }
+  },
+  "sdk_version": "0.7.27",
+  "recorded_at": "2026-11-17T01:27:23.991703+00:00",
+  "notes": "HTTPX decoded content encoding. Request/trace IDs are synthetic with original character classes and length. Auth and account identifiers are redacted. Header lengths describe the original wire body."
+}

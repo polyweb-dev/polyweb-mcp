@@ -135,3 +135,37 @@ def test_browser_origins_require_exact_https_outside_loopback() -> None:
     ):
         with pytest.raises(ValidationError):
             Settings(auth_browser_origins=[bad])
+
+
+def test_provider_mock_url_blank_means_off() -> None:
+    assert Settings(_env_file=None).provider_mock_url is None
+    assert Settings(_env_file=None, provider_mock_url="  ").provider_mock_url is None
+
+
+def test_provider_mock_url_accepts_an_exact_origin() -> None:
+    settings = Settings(_env_file=None, provider_mock_url=" http://127.0.0.1:8212/ ")
+
+    assert settings.provider_mock_url == "http://127.0.0.1:8212"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "ftp://127.0.0.1:8212",
+        "127.0.0.1:8212",
+        "http://127.0.0.1:8212/prefix",
+        "http://127.0.0.1:8212/?q=1",
+        "http://user@127.0.0.1:8212",
+    ],
+)
+def test_provider_mock_url_rejects_anything_but_an_http_origin(value: str) -> None:
+    with pytest.raises(ValidationError, match="http or https origin"):
+        Settings(_env_file=None, provider_mock_url=value)
+
+
+def test_provider_mock_url_refuses_production() -> None:
+    with pytest.raises(ValidationError, match="must not be set in production"):
+        Settings(
+            _env_file=None, environment="production", provider_mock_url="http://127.0.0.1:8212"
+        )
+    assert Settings(_env_file=None, environment="production").provider_mock_url is None

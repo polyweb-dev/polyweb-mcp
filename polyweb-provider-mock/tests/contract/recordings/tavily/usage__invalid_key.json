@@ -1,0 +1,36 @@
+{
+  "method": "GET",
+  "url": "https://api.tavily.com/usage",
+  "request_headers": {
+    "host": "api.tavily.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-tavily-contract-research",
+    "content-type": "application/json",
+    "authorization": "Bearer <REDACTED>",
+    "x-client-source": "tavily-python"
+  },
+  "request_body": null,
+  "status": 401,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "64",
+    "connection": "keep-alive",
+    "date": "Tue, 17 Nov 2026 01:27:26 GMT",
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;",
+    "x-cache": "Error from cloudfront",
+    "via": "1.1 04d9ba523f7dfcf04eb449fca651e14e.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P5",
+    "alt-svc": "h3=\":443\"; ma=86400",
+    "x-amz-cf-id": "0ulS8qlJCbhdfHnAbQmMcA6Bmu4OBncu4H8NVdi-3QT1J4jSoOLBhP=="
+  },
+  "response_body": {
+    "detail": {
+      "error": "Unauthorized: missing or invalid API key."
+    }
+  },
+  "sdk_version": "0.7.27",
+  "recorded_at": "2026-11-17T01:27:26.568739+00:00",
+  "notes": "HTTPX decoded content encoding. Request/trace IDs are synthetic with original character classes and length. Auth and account identifiers are redacted. Header lengths describe the original wire body."
+}
