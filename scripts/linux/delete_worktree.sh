@@ -25,7 +25,7 @@ Options:
   -a, --all           Delete ALL existing worktrees (except main repository)
   -f, --force         Force removal [even if dirty or unmerged]
   -k, --keep-branch   Delete worktree directory and registration, but keep the branch
-  --clean-images      Also remove locally built Docker images (--rmi local)
+  --clean-images      Also remove the worktree stacks' Docker images (--rmi all)
   -y, --yes           Skip confirmation prompt
 
 Examples:
@@ -114,15 +114,27 @@ execute_deletion() {
         echo "[1/6] [SKIP] Worktree directory does not exist."
     elif ! command -v docker >/dev/null 2>&1; then
         echo "[1/6] [SKIP] Docker CLI not found."
-    elif [[ -f "$w_path/compose.yaml" || -f "$w_path/docker-compose.yml" ]]; then
-        echo "[1/6] Tearing down Docker Compose containers, networks, and volumes..."
-        if [[ "$CLEAN_IMAGES" == "1" ]]; then
-            (cd "$w_path" && docker compose down --volumes --remove-orphans --rmi local >/dev/null 2>&1)
-        else
-            (cd "$w_path" && docker compose down --volumes --remove-orphans >/dev/null 2>&1)
-        fi
     else
-        echo "[1/6] [SKIP] No Docker Compose file found in worktree."
+        # Only this worktree's own projects, by name (see scripts/linux/stack.sh).
+        # A bare `docker compose down` here would load compose.yaml, whose
+        # project is `polyweb`: the pd stack and its vault volume.
+        local folder base project
+        local rmi=()
+        [[ "$CLEAN_IMAGES" == "1" ]] && rmi=(--rmi all)
+        folder="$(basename "$w_path")"
+        if [[ "${folder,,}" =~ ^polyweb_wt_([1-9])$ ]]; then
+            base="polyweb-wt${BASH_REMATCH[1]}"
+        else
+            base="$(printf '%s' "${folder,,}" | tr '_' '-' | tr -cd 'a-z0-9-')"
+        fi
+        if [[ ! "$base" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "[1/6] [SKIP] Cannot derive this worktree's Compose project names."
+        else
+            echo "[1/6] Tearing down $base-npd and $base-dev (containers, networks, volumes)..."
+            for project in "$base-npd" "$base-dev" "$base-mock"; do
+                (cd / && docker compose -p "$project" down --volumes --remove-orphans "${rmi[@]}" >/dev/null 2>&1) || true
+            done
+        fi
     fi
 
     # Step 2: Unregister Worktree from Git

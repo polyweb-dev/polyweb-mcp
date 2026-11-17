@@ -96,22 +96,24 @@ from the repository root. Never use a production database or real keys.
 
 ### Docker stack
 
-`compose.mock.yaml` adds a `provider-mock` service to `compose.yaml` and
-`compose.dev.yaml`. The api and mcp send all provider traffic to it, use a
-disposable `polyweb.mock-dev.db` on the project's own volume, and get blank
-provider key variables. Always use the helper script. It sets a
-worktree-unique Compose project (`polyweb_wt_1` gives `polyweb-wt1-mock`) and
-publishes the worktree ports on `127.0.0.1` only. A bare `docker compose` with
-the overlay stops, because the overlay needs `POLYWEB_MOCK_STACK_PROJECT`.
+This is the dev stack. `docker/dev/compose.yaml` layers on `compose.yaml` and
+`docker/npd/compose.yaml` and adds a `provider-mock` service. The api and mcp
+send all provider traffic to it, use a disposable `polyweb.mock-dev.db` on the
+project's own volume, and get blank provider key variables. Always use the
+helper script. It sets a worktree-unique Compose project (`polyweb_wt_1` gives
+`polyweb-wt1-dev`) and publishes the worktree ports on `127.0.0.1` only. A bare
+`docker compose` with the overlay stops, because the overlay needs
+`POLYWEB_STACK_PROJECT`.
 
 ```bash
-scripts/linux/mock_stack.sh up        # build, start the mock, seed once, start api + mcp
-scripts/linux/mock_stack.sh cli scenario apply tavily-down
-scripts/linux/mock_stack.sh logs api
-scripts/linux/mock_stack.sh down      # add -v to delete this project's volumes
+scripts/linux/stack.sh dev up         # build, start the mock, seed once, start api + mcp
+scripts/linux/stack.sh dev cli scenario apply tavily-down
+scripts/linux/stack.sh dev logs api
+scripts/linux/stack.sh dev live       # dev-live: the @live scenarios against this mock
+scripts/linux/stack.sh dev down       # add -v to delete this project's volumes
 ```
 
-Windows: `scripts\windows\mock_stack.bat` takes the same commands. The first
+Windows: `scripts\windows\stack.bat dev` takes the same commands. The first
 `up` seeds the mock and the Polyweb database. After `cli reset` or
 `cli seed --reset`, the mock keys change: run `down -v`, then `up`.
 

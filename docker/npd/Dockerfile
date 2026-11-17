@@ -1,6 +1,6 @@
-# Polyweb backend development image.
+# Polyweb backend development image for the npd and dev stacks.
 #
-# Source is bind-mounted by compose.dev.yaml; this image contains dependency
+# Source is bind-mounted by docker/npd/compose.yaml; this image contains dependency
 # manifests only. Runtime .env values are injected by Compose and never copied
 # into the build context or an image layer.
 

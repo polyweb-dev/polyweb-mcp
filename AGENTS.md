@@ -91,12 +91,24 @@ Each workspace/worktree has fixed, isolated ports defined in its root `.env` to 
 - **Landing app** (`polyweb-landing/`): the marketing site's Vite dev server reads `POLYWEB_LANDING_PORT` from the root `.env` and defaults to `5274` when unset.
 - **Zero merge conflicts**: Port configurations live in the local `.env` (gitignored), keeping committed files identical across all branches.
 
+### Environments: pd, npd, dev
+
+| Name | Files | What it is | How to run |
+|------|-------|------------|------------|
+| **pd** | `compose.yaml`, `Dockerfile` (root) | The deployed stack, Compose project `polyweb`: source baked into the image, real providers, `POLYWEB_ENVIRONMENT=production`. | The deploy script only. Never from a worktree. |
+| **npd** | `compose.yaml` + `docker/npd/compose.yaml`, `docker/npd/Dockerfile` | Worktree source bind-mounted, real providers, keys in this project's own vault. Project `polyweb-wtN-npd`. | `scripts/linux/stack.sh npd up\|down\|logs\|ps` |
+| **dev** | npd + `docker/dev/compose.yaml` | As npd, but every provider call goes to the provider mock with fake keys. Project `polyweb-wtN-dev`. | `scripts/linux/stack.sh dev up\|down\|logs\|ps\|seed\|cli <polyweb-mock args>` |
+
+Windows: `scripts\windows\stack.bat` takes the same arguments. Both stacks bind the worktree ports on `127.0.0.1`. Never run `docker compose` with a `docker/` overlay by hand: `compose.yaml` names the pd `polyweb` project, so the overlays refuse to render without the script's `POLYWEB_STACK_PROJECT`. Run `down` only for your own `-npd`/`-dev` project. `docker/test/Dockerfile` is the Windows mutation-test image (`scripts\windows\run_gremlin_mutation_docker.bat`).
+
+Test runs: **live** is the `@live` Behave scenarios against the real providers (Woodpecker `api-live`, spends credits). **dev-live** is the same scenarios answered by the mock: `scripts/linux/stack.sh dev live` locally, and the `provider-mock` Woodpecker workflow in CI.
+
 ### Provider mock dev environment
 
 `polyweb-provider-mock/` is a development-only server that answers as every provider (Exa, Tavily, Firecrawl, Parallel, You.com, Brave, Keenable, Tinyfish), with fake keys, credits and fault scenarios. Use it to run the app or the `@live` suites without real keys or provider cost. Its README (section "Run Polyweb against the mock") has the full steps.
-- **Docker**: `scripts/linux/mock_stack.sh up|down|logs|seed|cli <polyweb-mock args>` (Windows: `scripts\windows\mock_stack.bat`). The script sets a worktree-unique Compose project (`polyweb-wt1-mock`) and the worktree ports. Never run `docker compose` with `compose.mock.yaml` by hand: `compose.yaml` names the live `polyweb` project. Run `down` only for your own `-mock` project.
+- **Docker**: the dev stack above (`scripts/linux/stack.sh dev up`).
 - **uv**: start the mock on `POLYWEB_PROVIDER_MOCK_PORT`, then `uv run python scripts/seed_dev.py --keys-from-mock http://127.0.0.1:<port>`, then start the API and MCP with `POLYWEB_DB=polyweb.mock-dev.db` and `POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:<port>`.
-- **Live suite against the mock**: export the keys from `polyweb-mock export-keys`, plus `POLYWEB_PROVIDER_MOCK_URL`, `POLYWEB_TEST_PROVIDER_MOCK=1` and `POLYWEB_RUN_LIVE=1`, then run `uv run --no-sync behave --tags="@live and not @latency"`. CI runs the same in the manual `provider-mock` workflow.
+- **dev-live (live suite against the mock)**: `scripts/linux/stack.sh dev live [behave args]` starts the dev mock and runs the scenarios on the host. By hand: export the keys from `polyweb-mock export-keys`, plus `POLYWEB_PROVIDER_MOCK_URL`, `POLYWEB_TEST_PROVIDER_MOCK=1` and `POLYWEB_RUN_LIVE=1`, then run `uv run --no-sync behave --tags="@live and not @latency"`. CI runs the same in the manual `provider-mock` workflow.
 - **Safety**: `POLYWEB_PROVIDER_MOCK_URL` is refused in production. Tests ignore it unless `POLYWEB_TEST_PROVIDER_MOCK=1` is set. Never put real keys into the mock or into `polyweb.mock-dev.db`.
 
 ### Creating worktrees
