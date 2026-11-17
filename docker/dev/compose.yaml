@@ -25,6 +25,10 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${POLYWEB_PROVIDER_MOCK_PORT:?set POLYWEB_PROVIDER_MOCK_PORT}:8212"
+    environment:
+      # Links the mock hands out (the Parallel device page) must open in the host
+      # browser, not at the container address.
+      POLYWEB_PROVIDER_MOCK_PUBLIC_URL: http://127.0.0.1:${POLYWEB_PROVIDER_MOCK_PORT:?set POLYWEB_PROVIDER_MOCK_PORT}
     volumes:
       - provider-mock-data:/data
     healthcheck:

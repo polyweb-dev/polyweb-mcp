@@ -32,7 +32,9 @@ class MockSettings:
     ``admin_token`` protects the ``/_mock`` admin API with a bearer token when
     set. ``auto_seed`` seeds the default accounts and keys into a database
     that has never been seeded. ``random_seed`` makes fault probabilities and
-    latency jitter repeatable.
+    latency jitter repeatable. ``public_url`` is the origin a browser on the
+    host uses to reach the mock (for links the mock hands out, such as the
+    Parallel device page); unset, the listening socket address is used.
     """
 
     host: str = "127.0.0.1"
@@ -41,6 +43,7 @@ class MockSettings:
     admin_token: str | None = None
     auto_seed: bool = True
     random_seed: int | None = None
+    public_url: str | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "MockSettings":
@@ -54,4 +57,5 @@ class MockSettings:
             admin_token=env.get("POLYWEB_PROVIDER_MOCK_ADMIN_TOKEN", "").strip() or None,
             auto_seed=_flag(env.get("POLYWEB_PROVIDER_MOCK_AUTO_SEED"), default=True),
             random_seed=int(seed) if seed else None,
+            public_url=env.get("POLYWEB_PROVIDER_MOCK_PUBLIC_URL", "").strip().rstrip("/") or None,
         )

@@ -6,6 +6,7 @@ token lifetimes are deterministic.
 
 import json
 import random
+import re
 import sqlite3
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -373,7 +374,7 @@ async def _register(client: httpx.AsyncClient) -> str:
         json={"client_name": "polyweb", "platform": {"system": "Linux"}},
         headers=PLATFORM,
     )
-    assert response.status_code == 200
+    assert response.status_code == 201
     return str(response.json()["client_id"])
 
 
@@ -413,7 +414,31 @@ async def _connect(
     return client_id, response.json()
 
 
-async def test_device_flow_pending_slow_down_approve_and_single_use(
+async def test_registration_matches_the_recorded_platform(client: httpx.AsyncClient) -> None:
+    """Shape recorded from the real platform.parallel.ai on 2026-11-17."""
+
+    response = await client.post(
+        "/getServiceKeys/register",
+        json={"client_name": "polyweb", "platform": {"system": "Linux"}},
+        headers=PLATFORM,
+    )
+    body = response.json()
+
+    assert response.status_code == 201
+    assert re.fullmatch(r"polyweb-[a-z]+-[a-z]+-[a-z]+-[0-9a-f]{8}", body["client_id"])
+    assert {k: v for k, v in body.items() if k != "client_id"} == {
+        "token_endpoint_auth_method": "none",
+        "grant_types": [DEVICE_GRANT, "refresh_token"],
+        "response_types": ["none"],
+    }
+    assert (response.headers["server"], response.headers["cache-control"]) == (
+        "Vercel",
+        "no-store",
+    )
+    assert response.headers["pragma"] == "no-cache"
+
+
+async def test_device_flow_pending_approve_and_single_use(
     client: httpx.AsyncClient, store: MockStore, clock: Clock
 ) -> None:
     client_id = await _register(client)
@@ -421,15 +446,23 @@ async def test_device_flow_pending_slow_down_approve_and_single_use(
 
     assert device["verification_uri"] == "http://127.0.0.1:8212/_mock/parallel/oauth/device"
     assert device["verification_uri_complete"].endswith(f"?user_code={device['user_code']}")
-    assert (device["expires_in"], device["interval"]) == (600, 5)
+    assert (device["expires_in"], device["interval"]) == (600, 2)
+    assert len(device["device_code"]) == 48
+    assert re.fullmatch(r"[A-Z]{4}-[A-Z]{4}", device["user_code"])
     first = await _poll(client, client_id, device["device_code"])
     fast = await _poll(client, client_id, device["device_code"])
-    assert (first.status_code, first.json()["error"]) == (400, "authorization_pending")
-    assert (fast.status_code, fast.json()["error"]) == (400, "slow_down")
+    # The real platform answered authorization_pending to polls 0.2 s apart.
+    for pending in (first, fast):
+        assert (pending.status_code, pending.json()) == (
+            400,
+            {
+                "error": "authorization_pending",
+                "error_description": "The user has not yet completed authorization",
+            },
+        )
+    assert first.headers["cache-control"] == "public, max-age=0, must-revalidate"
     ParallelAccount(store).decide(device["user_code"].replace("-", "").lower(), "approve")
-    clock.advance(9)
-    assert (await _poll(client, client_id, device["device_code"])).json()["error"] == "slow_down"
-    clock.advance(15)
+    clock.advance(2)
     granted = await _poll(client, client_id, device["device_code"])
     clock.advance(20)
     reused = await _poll(client, client_id, device["device_code"])
@@ -451,6 +484,26 @@ async def test_device_flow_pending_slow_down_approve_and_single_use(
     )
     assert tokens["access_token"].count(".") == 2
     assert (reused.status_code, reused.json()["error"]) == (400, "invalid_grant")
+
+
+async def test_enforce_interval_answers_slow_down_and_widens_the_interval(
+    client: httpx.AsyncClient, store: MockStore, clock: Clock
+) -> None:
+    ParallelAccount(store).update_settings(enforce_interval=True)
+    client_id = await _register(client)
+    device = (await _device(client, client_id)).json()
+
+    first = await _poll(client, client_id, device["device_code"])
+    fast = await _poll(client, client_id, device["device_code"])
+    clock.advance(2)
+    still_fast = await _poll(client, client_id, device["device_code"])
+    clock.advance(12)
+    waited = await _poll(client, client_id, device["device_code"])
+
+    assert first.json()["error"] == "authorization_pending"
+    assert (fast.status_code, fast.json()["error"]) == (400, "slow_down")
+    assert still_fast.json()["error"] == "slow_down"
+    assert waited.json()["error"] == "authorization_pending"
 
 
 @pytest.mark.parametrize(
@@ -476,9 +529,10 @@ async def test_device_code_lapses_on_the_clock(
     device = (await _device(client, client_id)).json()
     clock.advance(601)
 
-    assert (await _poll(client, client_id, device["device_code"])).json()["error"] == (
-        "expired_token"
-    )
+    assert (await _poll(client, client_id, device["device_code"])).json() == {
+        "error": "expired_token",
+        "error_description": "Device code has expired",
+    }
 
 
 async def test_device_request_errors(client: httpx.AsyncClient) -> None:
@@ -492,10 +546,29 @@ async def test_device_request_errors(client: httpx.AsyncClient) -> None:
     )
     wrong_code = await _poll(client, client_id, "not-a-device-code")
 
-    assert (bad_scope.status_code, bad_scope.json()["error"]) == (400, "invalid_scope")
+    # Bodies recorded from the real platform on 2026-11-17.
+    assert (bad_scope.status_code, bad_scope.json()) == (
+        400,
+        {
+            "error": "invalid_scope",
+            "error_description": (
+                "scope is not supported for the account-service-public audience: account:read"
+            ),
+        },
+    )
     assert (no_client.status_code, no_client.json()["error"]) == (401, "invalid_client")
-    assert other_grant.json()["error"] == "unsupported_grant_type"
-    assert wrong_code.json()["error"] == "invalid_grant"
+    assert other_grant.json() == {
+        "error": "unsupported_grant_type",
+        "error_description": "Unsupported grant_type: password",
+    }
+    assert wrong_code.json() == {
+        "error": "invalid_grant",
+        "error_description": "Device code not found",
+    }
+    assert (wrong_code.headers["server"], wrong_code.headers["cache-control"]) == (
+        "Vercel",
+        "public, max-age=0, must-revalidate",
+    )
 
 
 async def test_auto_approve_and_client_secret(client: httpx.AsyncClient, store: MockStore) -> None:

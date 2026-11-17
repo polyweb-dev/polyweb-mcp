@@ -37,6 +37,7 @@ Seeded keys are fake but match each provider's real format (`tvly-dev-mock...`,
 | `POLYWEB_PROVIDER_MOCK_ADMIN_TOKEN` | unset | protects `/_mock/*` (see below) |
 | `POLYWEB_PROVIDER_MOCK_AUTO_SEED` | on | seed a database that was never seeded |
 | `POLYWEB_PROVIDER_MOCK_RANDOM_SEED` | unset | repeatable fault probabilities and jitter |
+| `POLYWEB_PROVIDER_MOCK_PUBLIC_URL` | unset | browser origin for links the mock hands out, such as the Parallel device page (the dev stack sets `http://127.0.0.1:<mock port>`); unset uses the listening address |
 
 ## How routing works
 
@@ -86,6 +87,13 @@ that Polyweb shows) stays usable behind the token: its form asks for the
 token, or open it once with `&admin_token=<token>` to keep the token in an
 HttpOnly, `SameSite=Strict` cookie for `/_mock`. The approve and deny routes it
 posts to stay guarded. The token never appears in a provider response.
+
+The Parallel platform endpoints (register, device code, token poll, revoke)
+match a recording of the real `platform.parallel.ai` up to approval
+(2026-11-17): status codes, `error_description` strings, headers, the 2 s poll
+interval, and no `slow_down` for fast polls (`polyweb-mock parallel oauth set
+--enforce-interval on` turns it on). The token response, refresh rotation, and
+revoke behavior still follow the documentation only.
 
 <!-- DEV-STACK START -->
 ## Run Polyweb against the mock

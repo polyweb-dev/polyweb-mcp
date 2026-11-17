@@ -8,12 +8,22 @@ Polyweb (``polyweb.services.parallel_oauth``) calls, on ``platform.parallel.ai``
 ``Authorization: Bearer <access token>``. The mock also serves the documented
 apps and key-minting endpoints of the same Account API.
 
-Behaviour follows the official account guide (no live device flow was ever
-recorded): RFC 8628 poll errors at HTTP 400 (``authorization_pending``,
-``slow_down`` with a 5 second interval increase, ``access_denied``,
-``expired_token``, ``invalid_grant``), 10 minute access tokens, refresh tokens
-that rotate on every use and expire after 30 idle days, and revoke by form
-``refresh_token`` (access tokens stay valid until they expire).
+Recorded against the real platform on 2026-11-17, up to approval: client
+registration (HTTP 201, a ``<client_name>-<word>-<word>-<word>-<hex8>`` public
+client id, ``token_endpoint_auth_method: none``), the device code (48-character
+``device_code``, ``XXXX-XXXX`` user code, 600 s lifetime, 2 s interval),
+``invalid_scope``, ``unsupported_grant_type``, ``invalid_grant`` for an unknown
+device code, ``authorization_pending`` and ``expired_token``, with their exact
+``error_description`` strings, ``Server: Vercel``, ``no-store`` plus
+``pragma: no-cache`` on success and ``public, max-age=0, must-revalidate`` on
+errors. The platform did not answer ``slow_down`` to two polls 0.2 s apart nor
+to 283 polls at the interval, so ``enforce_interval`` is off by default.
+
+Not yet recorded (from the official account guide): the token response,
+``access_denied``, ``slow_down`` (5 second interval increase), 10 minute
+access tokens, refresh tokens that rotate on every use and expire after 30
+idle days, and revoke by form ``refresh_token`` (access tokens stay valid until
+they expire).
 
 A human cannot approve a mock code at Parallel, so the device page is the
 mock's own ``/_mock/parallel/oauth/device``; ``polyweb-mock parallel oauth
@@ -62,6 +72,7 @@ from polyweb_provider_mock import content
 from polyweb_provider_mock.access import AdminAccess
 from polyweb_provider_mock.models import KeyFormat
 from polyweb_provider_mock.providers.base import MockResponse, OperationContext, bearer_token
+from polyweb_provider_mock.settings import MockSettings
 from polyweb_provider_mock.store import MockStore, NotFoundError, PluginState
 
 __all__ = [
@@ -105,6 +116,21 @@ _DEVICE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 _USER_CODE_ALPHABET: Final = "BCDFGHJKLMNPQRSTVWXZ"
 _SLOW_DOWN_STEP: Final = 5
 _DEVICE_PAGE: Final = "/_mock/parallel/oauth/device"
+#: Headers of the platform host (Vercel), recorded 2026-11-17.
+_PLATFORM_OK_HEADERS: Final = {
+    "server": "Vercel",
+    "cache-control": "no-store",
+    "pragma": "no-cache",
+}
+_PLATFORM_ERROR_HEADERS: Final = {
+    "server": "Vercel",
+    "cache-control": "public, max-age=0, must-revalidate",
+}
+_CLIENT_ID_WORDS: Final = (
+    ("brave", "calm", "eager", "gentle", "happy", "lucky", "nervous", "quiet", "swift", "witty"),
+    ("amber", "coral", "ivory", "lemon", "olive", "peach", "plum", "sage", "slate", "teal"),
+    ("badger", "falcon", "gecko", "heron", "jackal", "lynx", "otter", "panda", "raven", "walrus"),
+)
 
 DeviceStatus = Literal["pending", "approved", "denied", "expired", "consumed"]
 
@@ -129,8 +155,9 @@ class OAuthSettings(BaseModel):
     auto_approve: bool = False
     token_product_access: bool = True
     issue_client_secret: bool = False
-    enforce_interval: bool = True
-    interval: int = Field(default=5, ge=1)
+    # The real platform did not answer slow_down to fast polls (2026-11-17).
+    enforce_interval: bool = False
+    interval: int = Field(default=2, ge=1)
     device_ttl: int = Field(default=600, ge=1)
     access_ttl: int = Field(default=600, ge=1)
     refresh_idle_ttl: int = Field(default=30 * 86400, ge=1)
@@ -190,7 +217,7 @@ class OAuthError(Exception):
         return MockResponse(
             status=self.status,
             body={"error": self.error, "error_description": self.description},
-            headers={"cache-control": "no-store"},
+            headers=dict(_PLATFORM_ERROR_HEADERS),
         )
 
 
@@ -256,6 +283,14 @@ def _form(raw: bytes) -> dict[str, str]:
 
 def _normalize_user_code(code: str) -> str:
     return "".join(char for char in code.upper() if char.isalnum())
+
+
+def _client_id(client_name: str) -> str:
+    """Return a real-shaped public client id, e.g. ``polyweb-nervous-peach-jackal-f3b197a2``."""
+
+    slug = "".join(char if char.isalnum() else "-" for char in client_name.lower()).strip("-")
+    words = "-".join(secrets.choice(group) for group in _CLIENT_ID_WORDS)
+    return f"{slug or 'client'}-{words}-{secrets.token_hex(4)}"
 
 
 def _user_code() -> str:
@@ -334,7 +369,7 @@ class ParallelAccount:
         platform = body.get("platform")
         with self._tx() as state:
             client = Client(
-                client_id=content.stable_uuid(PROVIDER, "client", secrets.token_hex(16)),
+                client_id=_client_id(name),
                 client_secret=(
                     secrets.token_urlsafe(32) if self._settings(state).issue_client_secret else None
                 ),
@@ -346,6 +381,13 @@ class ParallelAccount:
         body_out: dict[str, Any] = {"client_id": client.client_id}
         if client.client_secret is not None:
             body_out["client_secret"] = client.client_secret
+        body_out |= {
+            "token_endpoint_auth_method": (
+                "none" if client.client_secret is None else "client_secret_post"
+            ),
+            "grant_types": [_DEVICE_GRANT, "refresh_token"],
+            "response_types": ["none"],
+        }
         return body_out
 
     def _client(self, state: PluginState, form: Mapping[str, str]) -> Client:
@@ -371,11 +413,14 @@ class ParallelAccount:
                 raise OAuthError("invalid_scope", "scope is required.")
             unknown = sorted(set(scope.split()) - SCOPES)
             if unknown:
-                raise OAuthError("invalid_scope", f"Unsupported scope: {' '.join(unknown)}.")
+                raise OAuthError(
+                    "invalid_scope",
+                    f"scope is not supported for the {_AUDIENCE} audience: {' '.join(unknown)}",
+                )
             settings = self._settings(state)
             now = self.store.now()
             grant = DeviceGrant(
-                device_code=secrets.token_urlsafe(32),
+                device_code=secrets.token_urlsafe(36),
                 user_code=_user_code(),
                 client_id=client.client_id,
                 scope=scope,
@@ -413,7 +458,7 @@ class ParallelAccount:
             return self._refresh(form)
         if not grant_type:
             raise OAuthError("invalid_request", "grant_type is required.")
-        raise OAuthError("unsupported_grant_type", f"Unsupported grant_type: {grant_type}.")
+        raise OAuthError("unsupported_grant_type", f"Unsupported grant_type: {grant_type}")
 
     def _device_token(self, form: Mapping[str, str]) -> dict[str, Any]:
         outcome: OAuthError | dict[str, Any]
@@ -425,7 +470,7 @@ class ParallelAccount:
             data = state.get(f"device:{code}")
             grant = None if data is None else DeviceGrant.model_validate(data)
             if grant is None or grant.client_id != client.client_id:
-                raise OAuthError("invalid_grant", "The device code is invalid.")
+                raise OAuthError("invalid_grant", "Device code not found")
             outcome = self._device_outcome(state, grant)
         if isinstance(outcome, OAuthError):
             raise outcome
@@ -441,7 +486,7 @@ class ParallelAccount:
         if grant.status in {"pending", "approved"} and now >= grant.expires_at:
             grant = grant.model_copy(update={"status": "expired"})
         terminal = {
-            "expired": OAuthError("expired_token", "The device code has expired."),
+            "expired": OAuthError("expired_token", "Device code has expired"),
             "denied": OAuthError("access_denied", "The user denied the authorization request."),
             "consumed": OAuthError("invalid_grant", "The device code was already used."),
         }
@@ -457,7 +502,7 @@ class ParallelAccount:
             outcome = OAuthError("slow_down", "Polling too frequently; wait longer between polls.")
         elif grant.status == "pending":
             outcome = OAuthError(
-                "authorization_pending", "The user has not yet approved the request."
+                "authorization_pending", "The user has not yet completed authorization"
             )
         else:
             account_id = grant.account_id or self._default_account()
@@ -728,6 +773,15 @@ class ParallelAccount:
 
 
 def _server_base(context: OperationContext) -> str:
+    """Return the browser origin of the device page.
+
+    ``POLYWEB_PROVIDER_MOCK_PUBLIC_URL`` wins: in a container the listening
+    socket is the container address, which the host browser cannot open.
+    """
+
+    public = MockSettings.from_env().public_url
+    if public:
+        return public
     server = context.request.scope.get("server")
     if isinstance(server, (tuple, list)) and len(server) == 2 and server[0]:
         host, port = server
@@ -738,7 +792,11 @@ def _server_base(context: OperationContext) -> str:
 async def handle_register(context: OperationContext) -> MockResponse:
     try:
         body = context.json()
-        return MockResponse(body=ParallelAccount(context.store).register(body))
+        return MockResponse(
+            status=201,
+            body=ParallelAccount(context.store).register(body),
+            headers=dict(_PLATFORM_OK_HEADERS),
+        )
     except json.JSONDecodeError:
         return OAuthError("invalid_request", "The request body is not valid JSON.").response()
     except OAuthError as error:
@@ -749,7 +807,7 @@ async def handle_device_code(context: OperationContext) -> MockResponse:
     try:
         account = ParallelAccount(context.store)
         body = account.device_code(_form(context.raw_body), _server_base(context))
-        return MockResponse(body=body, headers={"cache-control": "no-store"})
+        return MockResponse(body=body, headers=dict(_PLATFORM_OK_HEADERS))
     except OAuthError as error:
         return error.response()
 
@@ -757,7 +815,7 @@ async def handle_device_code(context: OperationContext) -> MockResponse:
 async def handle_token(context: OperationContext) -> MockResponse:
     try:
         body = ParallelAccount(context.store).token(_form(context.raw_body))
-        return MockResponse(body=body, headers={"cache-control": "no-store", "pragma": "no-cache"})
+        return MockResponse(body=body, headers=dict(_PLATFORM_OK_HEADERS))
     except OAuthError as error:
         return error.response()
 
@@ -765,7 +823,7 @@ async def handle_token(context: OperationContext) -> MockResponse:
 async def handle_revoke(context: OperationContext) -> MockResponse:
     try:
         ParallelAccount(context.store).revoke(_form(context.raw_body))
-        return MockResponse(body={})
+        return MockResponse(body={}, headers={"server": "Vercel"})
     except OAuthError as error:
         return error.response()
 

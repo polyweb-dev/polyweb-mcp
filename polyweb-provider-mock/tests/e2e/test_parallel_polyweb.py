@@ -410,7 +410,8 @@ async def test_device_flow_cli_approval_balance_and_token_search(
 ) -> None:
     started = await oauth.start()
     assert started.verification_uri == f"{mock.origin}/_mock/parallel/oauth/device"
-    assert started.interval == 5 and started.expires_in == 600
+    # Recorded from the real platform (2026-11-17): 2 s interval, 600 s lifetime.
+    assert started.interval == 2 and started.expires_in == 600
     assert (await oauth.poll()).status is OAuthGrantStatus.PENDING
 
     _cli(mock, "parallel", "oauth", "approve", started.user_code)
@@ -439,6 +440,9 @@ async def test_device_flow_cli_approval_balance_and_token_search(
 
 
 async def test_slow_down_then_denial_ends_the_flow(mock: _Mock, oauth: _OAuth) -> None:
+    # The real platform did not enforce the interval; the opt-in mode still drives
+    # Polyweb's slow_down handling.
+    _cli(mock, "parallel", "oauth", "set", "--enforce-interval", "on")
     started = await oauth.start()
     assert (await oauth.poll()).status is OAuthGrantStatus.PENDING
 
