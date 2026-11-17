@@ -4,7 +4,7 @@ title: Provider mock server for live-like dev testing
 status: Testing
 assignee: []
 created_date: '2026-11-17T01:25:00Z'
-updated_date: '2026-11-17T08:14:00Z'
+updated_date: '2026-11-17T09:35:00Z'
 labels:
   - dev-tooling
   - testing
@@ -35,6 +35,8 @@ Debugging complex bugs needs the full app running as if live, but real provider 
 <!-- SECTION:NOTES:BEGIN -->
 Evidence (2026-11-17): Woodpecker on 0b37bd1 all green: provider-mock #179 (mock ruff/format/mypy/664 tests, then root Behave @live against the mock: 9 features, 22 scenarios passed, 0 failed), api-unit #180, api-integration #181, api-bdd #182. Full stack (mock + API + MCP) in an isolated polyweb-wt1-mock Compose project: search 200 for all 8 providers, fetch for the 7 with fetch, keyless Keenable/Tavily, MCP search+fetch, balances match the mock ledger, Parallel OAuth device flow connects. Faults through the app: outage -> auto/prefer fall back; +1500 ms latency visible; revoked/invalid key -> provider skipped next request; credits exhausted -> 402 and limits 0; 429 storm -> 8/8 via Retry-After and fallback; recovery after clearing. Known non-mock failures: routing_latency_live p95 gate fails on the busy host with or without the mock (CI owns it); UI @live features without a sign-in step fail on main too (TASK-000083).
 Review round (the Devin reviewers died on quota, so the fix round was done in-session): production guard verified at Settings and install time, and the live stack runs with POLYWEB_ENVIRONMENT=production; every provider adapter, SDK client, OAuth flow and limits sync reaches the network through the patched httpx transports after create_async_client runs; CLIs never call providers; the prod image copies only src/ and the mock package stays out of it; the merged mock Compose config namespaces images, volumes and network under the -mock project and binds loopback only. Fixed: compose.mock.yaml ui (behind --profile ui) inherited the base host-wide 3000 publish; it now binds a random loopback port and the header points at pnpm dev. Open minor: the keyless budget counts ledger rows, so keyless requests that fail before charging do not count toward per-minute/day limits.
+
+Environments (owner request, 2026-11-17): pd = root compose.yaml + Dockerfile (deployed, unchanged); npd = docker/npd (worktree source, real providers); dev = docker/dev on top of npd (provider mock). scripts/{linux,windows}/stack npd|dev replaces mock_stack; projects polyweb-wtN-npd / -dev. dev-live = stack.sh dev live (@live against the dev mock); live = api-live (real providers). Woodpecker stays flat (it ignores .woodpecker subfolders). Also fixed: npd host-wide ports and leaked .env mock origin; delete_worktree tore down the pd 'polyweb' project via bare compose down (now only the worktree's own projects). Verified locally: dev up, dev live 22/22 with all calls in the mock log, npd up, down -v for both.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
