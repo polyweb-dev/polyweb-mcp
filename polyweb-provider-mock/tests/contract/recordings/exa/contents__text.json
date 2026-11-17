@@ -56,27 +56,27 @@
     "results": [
       {
         "id": "https://example.com/",
-        "title": "Example Domain",
+        "title": "Synthetic title 162b8154.",
         "url": "https://example.com/",
         "author": null,
-        "text": "Example Domain\n\nThis domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.",
+        "text": "Synthetic text da93e777.",
         "entities": [
           {
-            "id": "https://exa.ai/library/organization/qwk5djxtm8s",
+            "id": "https://example.com/synthetic/8a7997f265",
             "type": "company",
             "version": 1,
             "properties": {
-              "name": "Buquebus",
+              "name": "Synthetic name d4521a76.",
               "foundedYear": 1979,
-              "description": "Buquebus es actualmente el principal transportista de pasajeros del R\u00edo de la Plata y uno de los operadores tur\u00edsticos m\u00e1s importantes del cono sur americano. \r\n\r\nRealiza recorridos fluviales entre Buenos Aires, Colonia del Sacramento y Montevideo. Asimismo, ofrece transporte terrestres entre estas dos localidades uruguayas y otros balnearios, principalmente Punta del Este.\r\n \r\nBuquebus se ha especializado, adem\u00e1s, en Turismo disponiendo de m\u00e1s de 2.500 agentes en el mundo para promover el turismo desde y hacia nuestra regi\u00f3n.\r\n\r\nSu gran objetivo siempre ha sido servir m\u00e1s y mejor al pasajero, brind\u00e1ndole total seguridad, mayor rapidez y el m\u00e1ximo confort, a precios sensatos, con conciencia ambiental y social.",
+              "description": "Synthetic description 3ec6c51d.",
               "workforce": {
                 "total": 579
               },
               "headquarters": {
-                "address": "Av. Ant\u00e1rtida Argentina 821, Buenos Aires, Buenos Aires C1104AAH, AR",
-                "city": "Buenos Aires",
+                "address": "Synthetic address e8adff58.",
+                "city": "Synthetic city abae7682.",
                 "postalCode": null,
-                "country": "Argentina"
+                "country": "Synthetic country ea0b937e."
               },
               "financials": {
                 "revenueAnnual": 10000000,

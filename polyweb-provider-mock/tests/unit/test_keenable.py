@@ -294,9 +294,9 @@ async def test_keyed_per_second_limit_is_shared_by_the_organization(
 async def test_public_hourly_pool_runs_out(client: httpx.AsyncClient, store: MockStore) -> None:
     clock = [datetime(2026, 11, 17, 1, 0, 0, tzinfo=UTC)]
     store.now = lambda: clock[0]
-    from polyweb_provider_mock.providers._rate_windows import WindowSpec, add
+    from polyweb_provider_mock.windows import WindowSpec
 
-    add(store, WindowSpec("keenable:public:fetch:hour", 1000, 3600), 1000)
+    store.count_window(WindowSpec("keenable:public:fetch:hour", 1000, 3600), 1000)
     clock[0] = clock[0].replace(minute=30)
 
     response = await client.get("/v1/fetch/public", params=_FETCH, headers=_PUBLIC)

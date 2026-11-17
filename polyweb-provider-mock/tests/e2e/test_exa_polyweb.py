@@ -7,40 +7,25 @@ error that the adapter's unit tests assert for real Exa payloads.
 """
 
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from decimal import Decimal
-from pathlib import Path
 from uuid import UUID
 
 import httpx
 import pytest
 from polyweb.adapters.exa import ExaAdapter
 from polyweb.infrastructure.http import create_async_client
-from polyweb.infrastructure.provider_mock import provider_mock_origin
 from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
 from polyweb.models.contracts import FetchRequest, ProviderError, SearchRequest
 from pydantic import SecretStr
 
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
-from polyweb_provider_mock.providers import discover
 from polyweb_provider_mock.store import MockStore
-from tests.e2e._exa_firecrawl_server import polyweb_settings, serve_mock
+from tests._support.live_server import LiveMock, polyweb_settings
 
+MOCK_RANDOM_SEED = 11
+MOCK_UNSET_ENV = ("EXA_API_KEY",)
 _PROJECT = UUID("00000000-0000-4000-8000-0000000000ee")
-
-
-@pytest.fixture(scope="module")
-def mock_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, MockStore]]:
-    with serve_mock(Path(tmp_path_factory.mktemp("exa")), "EXA_API_KEY") as served:
-        yield served
-
-
-@pytest.fixture
-def store(mock_server: tuple[str, MockStore]) -> MockStore:
-    origin, state = mock_server
-    assert provider_mock_origin() == origin
-    state.seed(discover().values(), reset=True)
-    return state
 
 
 @pytest.fixture
@@ -63,7 +48,7 @@ class _Adapters:
 
 
 @pytest.fixture
-async def adapters(mock_server: tuple[str, MockStore]) -> AsyncIterator[_Adapters]:
+async def adapters(mock_server: LiveMock) -> AsyncIterator[_Adapters]:
     factory = _Adapters(mock_server[0])
     yield factory
     for adapter, client in factory.opened:
@@ -193,8 +178,14 @@ async def test_credit_exhaustion_is_terminal_quota_exhausted(
         ),
         (FaultSpec(provider="exa", kind=FaultKind.AUTH_INVALID), ("invalid_api_key", 401, False)),
         (
-            FaultSpec(provider="exa", kind=FaultKind.TIMEOUT, params=FaultParams(seconds=0.5)),
+            FaultSpec(
+                provider="exa", kind=FaultKind.TIMEOUT, params=FaultParams(seconds=0.5, status=504)
+            ),
             ("http_error", 504, True),
+        ),
+        (
+            FaultSpec(provider="exa", kind=FaultKind.TIMEOUT, params=FaultParams(seconds=0.5)),
+            ("transport_error", None, True),
         ),
     ],
 )

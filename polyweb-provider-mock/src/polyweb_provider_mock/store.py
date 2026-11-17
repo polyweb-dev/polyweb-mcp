@@ -5,15 +5,19 @@ a CLI change applies to the next request without a restart. Credit amounts
 are stored as decimal strings and handled as :class:`~decimal.Decimal`.
 """
 
+import calendar
 import json
 import random
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import BaseModel
 
 from polyweb_provider_mock.db import TABLES, Database
 from polyweb_provider_mock.faults import (
@@ -33,12 +37,23 @@ from polyweb_provider_mock.models import (
     LogEntry,
     PriceRule,
     ResetRule,
+    reset_anchor,
 )
+from polyweb_provider_mock.windows import Window, WindowSpec, read_window, write_window
 
 if TYPE_CHECKING:
     from polyweb_provider_mock.providers.base import ProviderPlugin
 
-__all__ = ["Charge", "MockStore", "NotFoundError", "Principal", "QuotaExhausted"]
+__all__ = [
+    "Charge",
+    "MockStore",
+    "NotFoundError",
+    "PluginState",
+    "Principal",
+    "QuotaExhausted",
+    "next_reset",
+    "period_start",
+]
 
 _LOG_RETENTION = 10_000
 _UNSET: Any = object()
@@ -82,6 +97,47 @@ class Charge:
     usd: Decimal | None
 
 
+class PluginState:
+    """JSON records of one plugin namespace in the ``meta`` table, on one connection.
+
+    Names are stored as ``<namespace>.<name>``. Get one from
+    :meth:`MockStore.state`; every read and write inside that ``with`` block
+    belongs to the same transaction.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, namespace: str) -> None:
+        self._conn = conn
+        self._prefix = f"{namespace}."
+
+    def get(self, name: str) -> Any:
+        """Return the stored value, or ``None``."""
+
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE name = ?", (self._prefix + name,)
+        ).fetchone()
+        return None if row is None else json.loads(row["value"])
+
+    def put(self, name: str, value: Any) -> None:
+        """Store a JSON-ready value (a pydantic model is dumped in JSON mode)."""
+
+        if isinstance(value, BaseModel):
+            value = value.model_dump(mode="json")
+        self._conn.execute(
+            "INSERT OR REPLACE INTO meta (name, value) VALUES (?, ?)",
+            (self._prefix + name, json.dumps(value)),
+        )
+
+    def values(self, prefix: str) -> list[Any]:
+        """Return the values whose name starts with ``prefix``, oldest write first."""
+
+        full = self._prefix + prefix
+        rows = self._conn.execute(
+            "SELECT value FROM meta WHERE substr(name, 1, ?) = ? ORDER BY rowid",
+            (len(full), full),
+        ).fetchall()
+        return [json.loads(row["value"]) for row in rows]
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -102,23 +158,40 @@ def _dt(value: str | None) -> datetime | None:
     return None if value is None else datetime.fromisoformat(value)
 
 
-def period_start(rule: ResetRule, now: datetime) -> datetime:
-    """Return the start of the billing period that contains ``now``."""
+def _anchored(year: int, month: int, anchor: int) -> datetime:
+    """Return 00:00 UTC of day ``anchor`` of a month, clamped to the month's last day."""
+
+    return datetime(year, month, min(anchor, calendar.monthrange(year, month)[1]), tzinfo=UTC)
+
+
+def _shift_month(year: int, month: int, step: int) -> tuple[int, int]:
+    index = year * 12 + month - 1 + step
+    return index // 12, index % 12 + 1
+
+
+def period_start(rule: ResetRule, now: datetime, anchor: int = 1) -> datetime:
+    """Return the start of the billing period that contains ``now``.
+
+    A monthly period starts on day ``anchor`` of the month (clamped to the
+    month's length), for example the day the organization was created.
+    """
 
     day = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     if rule == "monthly":
-        return day.replace(day=1)
+        start = _anchored(day.year, day.month, anchor)
+        if start > day:
+            start = _anchored(*_shift_month(day.year, day.month, -1), anchor)
+        return start
     return day if rule == "daily" else now
 
 
-def next_reset(rule: ResetRule, start: datetime) -> datetime | None:
+def next_reset(rule: ResetRule, start: datetime, anchor: int = 1) -> datetime | None:
     """Return when a period that began at ``start`` ends; ``None`` never resets."""
 
     if rule == "daily":
         return start + timedelta(days=1)
     if rule == "monthly":
-        year, month = (start.year + 1, 1) if start.month == 12 else (start.year, start.month + 1)
-        return start.replace(year=year, month=month, day=1)
+        return _anchored(*_shift_month(start.year, start.month, 1), anchor)
     return None
 
 
@@ -254,7 +327,8 @@ class MockStore:
     ) -> int:
         seed = plugin.default_seed()
         for account in seed.accounts:
-            start = period_start(account.reset_rule, now)
+            anchor = reset_anchor(account.attributes)
+            start = period_start(account.reset_rule, now, anchor)
             conn.execute(
                 "INSERT OR IGNORE INTO accounts (provider, id, plan, credit_limit, reset_rule,"
                 " period_start, period_reset, attributes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -265,7 +339,7 @@ class MockStore:
                     _text(account.credit_limit),
                     account.reset_rule,
                     _ts(start),
-                    _ts(next_reset(account.reset_rule, start)),
+                    _ts(next_reset(account.reset_rule, start, anchor)),
                     json.dumps(account.attributes),
                 ),
             )
@@ -326,8 +400,9 @@ class MockStore:
         start, reset = account.period_start, account.period_reset
         if reset is None or now < reset:
             return account
+        anchor = reset_anchor(account.attributes)
         while reset is not None and now >= reset:
-            start, reset = reset, next_reset(account.reset_rule, reset)
+            start, reset = reset, next_reset(account.reset_rule, reset, anchor)
         conn.execute(
             "UPDATE accounts SET credits_used = '0', period_start = ?, period_reset = ?"
             " WHERE provider = ? AND id = ?",
@@ -412,6 +487,99 @@ class MockStore:
                 (plan, provider, account_id),
             )
             return self._rolled(conn, provider, account_id)
+
+    def set_account_attributes(
+        self, provider: str, changes: Mapping[str, Any], account_id: str | None = None
+    ) -> Account:
+        """Merge ``changes`` into the account attributes; a ``None`` value removes one.
+
+        Changing ``reset_day`` moves the current monthly period to the new
+        anchor; the used credits stay.
+        """
+
+        with self.db.transaction() as conn:
+            current = self._rolled(conn, provider, self._account_id(conn, provider, account_id))
+            attributes = dict(current.attributes)
+            for name, value in changes.items():
+                if value is None:
+                    attributes.pop(name, None)
+                else:
+                    attributes[name] = value
+            anchor = reset_anchor(attributes)
+            start, reset = current.period_start, current.period_reset
+            if "reset_day" in changes:
+                start = period_start(current.reset_rule, self.now(), anchor)
+                reset = next_reset(current.reset_rule, start, anchor)
+            conn.execute(
+                "UPDATE accounts SET attributes = ?, period_start = ?, period_reset = ?"
+                " WHERE provider = ? AND id = ?",
+                (json.dumps(attributes), _ts(start), _ts(reset), provider, current.id),
+            )
+            return self._rolled(conn, provider, current.id)
+
+    def account_ids(self, provider: str) -> list[str]:
+        """Return the provider's account ids in creation order, without rolling periods.
+
+        Safe to call while a :meth:`state` transaction of a plugin is open.
+        """
+
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM accounts WHERE provider = ? ORDER BY rowid", (provider,)
+            ).fetchall()
+        return [str(row["id"]) for row in rows]
+
+    # --------------------------------------------------------- plugin state
+
+    @contextmanager
+    def state(self, namespace: str, *, write: bool = True) -> Iterator["PluginState"]:
+        """Yield plugin key-value state under ``namespace``, in one transaction.
+
+        Plugins keep their own records (for example OAuth device codes) here
+        instead of new tables; ``reset`` clears them with the rest of the state.
+        ``write=False`` opens a plain read connection.
+        """
+
+        opener = self.db.transaction if write else self.db.connect
+        with opener() as conn:
+            yield PluginState(conn, namespace)
+
+    # -------------------------------------------------------- rate windows
+
+    def admit_windows(
+        self, specs: Sequence[WindowSpec], units: int = 1
+    ) -> tuple[Window | None, list[Window]]:
+        """Consume ``units`` in every window, or in none when one would overflow.
+
+        Returns the first window that refused (or ``None``) and the state of
+        every window after the check, in ``specs`` order.
+        """
+
+        now = self.now()
+        with self.db.transaction() as conn:
+            windows = [read_window(conn, spec, now) for spec in specs]
+            refused = next((w for w in windows if w.used + units > w.spec.limit), None)
+            if refused is None:
+                windows = [Window(w.spec, w.used + units, w.start) for w in windows]
+            for window in windows:
+                write_window(conn, window)
+        return refused, windows
+
+    def peek_window(self, spec: WindowSpec) -> Window:
+        """Return a window's state without consuming it."""
+
+        with self.db.connect() as conn:
+            return read_window(conn, spec, self.now())
+
+    def count_window(self, spec: WindowSpec, units: int) -> Window:
+        """Count ``units`` in a window even past its limit (for example successes)."""
+
+        now = self.now()
+        with self.db.transaction() as conn:
+            current = read_window(conn, spec, now)
+            window = Window(spec, current.used + units, current.start)
+            write_window(conn, window)
+        return window
 
     # ----------------------------------------------------------------- keys
 
@@ -632,36 +800,65 @@ class MockStore:
         is debited. Keyless calls are recorded but debit no account.
         """
 
-        rule = self.price(principal.provider, operation)
-        amount = Decimal(0) if rule is None else rule.credits_per_unit * units
-        usd = None if rule is None or rule.usd_per_unit is None else rule.usd_per_unit * units
+        return self._charge(principal, {operation: Decimal(units)})[0]
+
+    def charge_all(
+        self, principal: Principal, parts: Iterable[tuple[str, int | Decimal]]
+    ) -> list[Charge]:
+        """Debit the priced parts of one request in one transaction, all or nothing.
+
+        Parts of the same operation are merged and parts without units are
+        skipped. The whole debit is checked against the account and key
+        allowance at once, so a request billed in several parts is never half
+        debited: :class:`QuotaExhausted` leaves every balance and carry as it was.
+        """
+
+        merged: dict[str, Decimal] = {}
+        for operation, units in parts:
+            if units > 0:
+                merged[operation] = merged.get(operation, Decimal(0)) + Decimal(units)
+        return self._charge(principal, merged) if merged else []
+
+    def _charge(self, principal: Principal, parts: Mapping[str, Decimal]) -> list[Charge]:
+        rules = {operation: self.price(principal.provider, operation) for operation in parts}
+        charges: list[Charge] = []
         with self.db.transaction() as conn:
-            account_id: str | None = None
-            debit = amount
+            account: Account | None = None
             if principal.account is not None and not principal.keyless:
                 account = self._rolled(conn, principal.provider, principal.account.id)
-                account_id = account.id
+            for operation, units in parts.items():
+                rule = rules[operation]
+                amount = Decimal(0) if rule is None else rule.credits_per_unit * units
+                usd = None if rule is None or rule.usd_per_unit is None else rule.usd_per_unit
+                usd = None if usd is None else usd * units
+                debit = amount
                 if rule is not None and rule.rule == "accumulate":
-                    debit = self._accumulate(conn, account, operation, amount)
-                self._check_funds(conn, account, principal.key, debit)
-                self._debit(conn, account, principal.key, debit)
-            elif rule is not None and rule.rule == "accumulate":
-                debit = amount.to_integral_value(rounding=ROUND_FLOOR)
-            conn.execute(
-                "INSERT INTO usage_ledger (ts, provider, account_id, key_label, operation,"
-                " units, credits, usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    _ts(self.now()),
-                    principal.provider,
-                    account_id,
-                    principal.label,
-                    operation,
-                    _text(units),
-                    _text(debit),
-                    _text(usd),
-                ),
-            )
-        return Charge(operation=operation, units=units, credits=debit, usd=usd)
+                    debit = (
+                        amount.to_integral_value(rounding=ROUND_FLOOR)
+                        if account is None
+                        else self._accumulate(conn, account, operation, amount)
+                    )
+                charges.append(Charge(operation=operation, units=units, credits=debit, usd=usd))
+            if account is not None:
+                total = sum((item.credits for item in charges), Decimal(0))
+                self._check_funds(conn, account, principal.key, total)
+                self._debit(conn, account, principal.key, total)
+            for item in charges:
+                conn.execute(
+                    "INSERT INTO usage_ledger (ts, provider, account_id, key_label, operation,"
+                    " units, credits, usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        _ts(self.now()),
+                        principal.provider,
+                        None if account is None else account.id,
+                        principal.label,
+                        item.operation,
+                        _text(item.units),
+                        _text(item.credits),
+                        _text(item.usd),
+                    ),
+                )
+        return charges
 
     def _accumulate(
         self, conn: sqlite3.Connection, account: Account, operation: str, amount: Decimal

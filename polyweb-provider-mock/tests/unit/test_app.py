@@ -1,15 +1,22 @@
 """Host dispatch, plugin discovery, the admin API, and log redaction."""
 
+import json
 import random
+import time
 
 import httpx
 import pytest
 
 from polyweb_provider_mock.app import MockApplication, request_host
+from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
+from polyweb_provider_mock.pipeline import REDACTED, build_provider_app, redact_body
 from polyweb_provider_mock.providers import discover
-from polyweb_provider_mock.providers.base import ProviderPlugin
+from polyweb_provider_mock.providers.base import Operation, ProviderPlugin
+from polyweb_provider_mock.providers.tavily import TavilyPlugin
 from polyweb_provider_mock.store import MockStore
 from tests.conftest import TAVILY
+
+_ELSEWHERE = frozenset({"api.elsewhere.example"})
 
 
 @pytest.mark.parametrize(
@@ -55,7 +62,9 @@ async def test_admin_health_and_state_routes(client: httpx.AsyncClient) -> None:
     )
     assert fault.json()["remaining"] == 1
     exported = await client.get("/_mock/export-keys")
-    assert exported.text.startswith("POLYWEB_TAVILY_API_KEY=tvly-dev-mock")
+    lines = exported.text.splitlines()
+    assert any(line.startswith("POLYWEB_TAVILY_API_KEY=tvly-dev-mock") for line in lines)
+    assert lines == sorted(lines)
     applied = await client.post("/_mock/scenarios/tavily-down")
     assert applied.json()[0]["scenario"] == "tavily-down"
     cleared = await client.delete("/_mock/scenarios")
@@ -72,6 +81,70 @@ async def test_admin_token_guards_everything_but_health(store: MockStore) -> Non
         assert (await http.get("/_mock/keys")).status_code == 401
         allowed = await http.get("/_mock/keys", headers={"Authorization": "Bearer s3cret"})
         assert allowed.status_code == 200
+
+
+async def test_admin_attributes_route_and_operation_hosts(client: httpx.AsyncClient) -> None:
+    changed = await client.put(
+        "/_mock/accounts/attributes",
+        json={"provider": "tinyfish", "attributes": {"search_per_minute": 5}},
+    )
+    assert changed.json()["attributes"]["search_per_minute"] == 5
+    providers = {item["name"]: item for item in (await client.get("/_mock/providers")).json()}
+    operations = {op["name"]: op["hosts"] for op in providers["tinyfish"]["operations"]}
+    assert operations["search"] == ["api.search.tinyfish.ai"]
+    assert operations["usage"] == ["api.fetch.tinyfish.ai", "api.search.tinyfish.ai"]
+
+
+def test_an_operation_cannot_name_a_host_its_plugin_does_not_claim(store: MockStore) -> None:
+    class _Stray(TavilyPlugin):
+        def operations(self) -> list[Operation]:
+            return [Operation("stray", "GET", "/stray", self._usage, hosts=_ELSEWHERE)]
+
+    with pytest.raises(ValueError, match="does not claim"):
+        build_provider_app(_Stray(), store, random.Random(1))
+
+
+async def test_timeout_fault_holds_then_closes_without_a_response(
+    client: httpx.AsyncClient, store: MockStore, tavily_headers: dict[str, str]
+) -> None:
+    store.add_fault(
+        FaultSpec(provider="tavily", kind=FaultKind.TIMEOUT, params=FaultParams(seconds=0.2))
+    )
+    started = time.perf_counter()
+
+    with pytest.raises(ConnectionAbortedError):
+        await client.post("/search", json={"query": "q"}, headers=tavily_headers)
+
+    assert time.perf_counter() - started >= 0.2
+    entry = store.log_tail("tavily")[-1]
+    assert (entry.status, entry.fault, entry.response_body) == (None, "timeout#1", None)
+    assert store.account("tavily").credits_used == 0
+
+
+def test_redact_body_removes_secret_fields_jwts_and_the_presented_key() -> None:
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4eXoxMjM0NSJ9.c2lnbmF0dXJlMTIzNDU2"
+    body = {
+        "access_token": jwt,
+        "refresh_token": "r-123",
+        "raw_api_key": "pk-123",
+        "client_secret": "cs",
+        "nested": [{"apiKey": "k", "note": f"echo tvly-dev-ABC and {jwt}"}],
+        "max_tokens": 5,
+        "token_type": "Bearer",
+        "results": [{"title": "kept"}],
+    }
+
+    logged = json.loads(redact_body(json.dumps(body).encode(), ("tvly-dev-ABC",)))
+
+    assert logged["access_token"] == logged["refresh_token"] == REDACTED
+    assert logged["raw_api_key"] == logged["client_secret"] == REDACTED
+    assert logged["nested"] == [{"apiKey": REDACTED, "note": f"echo {REDACTED} and {REDACTED}"}]
+    assert (logged["max_tokens"], logged["token_type"], logged["results"]) == (
+        5,
+        "Bearer",
+        [{"title": "kept"}],
+    )
+    assert redact_body(f"<p>{jwt}</p>".encode()) == f"<p>{REDACTED}</p>"
 
 
 async def test_provider_unknown_path_uses_provider_format(

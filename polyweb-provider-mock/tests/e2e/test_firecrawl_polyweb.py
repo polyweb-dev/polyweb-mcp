@@ -7,12 +7,10 @@ same normalized error that the adapter's unit tests assert for real
 Firecrawl payloads.
 """
 
-import time
 import types
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 from uuid import UUID
 
 import httpx
@@ -20,34 +18,19 @@ import pytest
 from firecrawl.v2.methods.aio import scrape as sdk_scrape
 from polyweb.adapters.firecrawl import FirecrawlAdapter
 from polyweb.infrastructure.http import create_async_client
-from polyweb.infrastructure.provider_mock import provider_mock_origin
 from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
 from polyweb.models.contracts import FetchRequest, ProviderError, SearchRequest
 from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 from pydantic import SecretStr
 
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
-from polyweb_provider_mock.providers import discover
 from polyweb_provider_mock.store import MockStore
-from tests.e2e._exa_firecrawl_server import polyweb_settings, serve_mock
+from tests._support.live_server import LiveMock, polyweb_settings
 
+MOCK_RANDOM_SEED = 11
+MOCK_UNSET_ENV = ("FIRECRAWL_API_KEY", "FIRECRAWL_API_URL")
 _PROJECT = UUID("00000000-0000-4000-8000-0000000000fc")
 _DOC = "https://docs.python.org/3/library/json.html"
-
-
-@pytest.fixture(scope="module")
-def mock_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, MockStore]]:
-    folder = Path(tmp_path_factory.mktemp("firecrawl"))
-    with serve_mock(folder, "FIRECRAWL_API_KEY", "FIRECRAWL_API_URL") as served:
-        yield served
-
-
-@pytest.fixture
-def store(mock_server: tuple[str, MockStore]) -> MockStore:
-    origin, state = mock_server
-    assert provider_mock_origin() == origin
-    state.seed(discover().values(), reset=True)
-    return state
 
 
 @pytest.fixture
@@ -70,7 +53,7 @@ class _Adapters:
 
 
 @pytest.fixture
-async def adapters(mock_server: tuple[str, MockStore]) -> AsyncIterator[_Adapters]:
+async def adapters(mock_server: LiveMock) -> AsyncIterator[_Adapters]:
     factory = _Adapters(mock_server[0])
     yield factory
     for adapter, client in factory.opened:
@@ -252,10 +235,19 @@ async def test_402_on_credit_usage_is_a_vendor_zero_or_quota_exhausted(
         ),
         (
             FaultSpec(
-                provider="firecrawl", kind=FaultKind.TIMEOUT, params=FaultParams(seconds=0.5)
+                provider="firecrawl",
+                kind=FaultKind.TIMEOUT,
+                params=FaultParams(seconds=0.5, status=504),
             ),
             "fetch",
             ("http_error", 504, True),
+        ),
+        (
+            FaultSpec(
+                provider="firecrawl", kind=FaultKind.TIMEOUT, params=FaultParams(seconds=0.5)
+            ),
+            "fetch",
+            ("transport_error", None, True),
         ),
     ],
 )
@@ -278,41 +270,42 @@ async def test_http_faults_map_like_real_firecrawl_payloads(
 
 
 async def test_rate_limited_quota_poll_waits_for_retry_after(
-    store: MockStore, key: str, adapters: _Adapters, mock_server: tuple[str, MockStore]
+    store: MockStore, key: str, mock_server: LiveMock
 ) -> None:
-    store.add_fault(
-        FaultSpec(
-            provider="firecrawl",
-            operation="credit_usage",
-            kind=FaultKind.RATE_LIMIT,
-            params=FaultParams(retry_after=1),
-            count=1,
-        )
+    limited = FaultSpec(
+        provider="firecrawl",
+        operation="credit_usage",
+        kind=FaultKind.RATE_LIMIT,
+        params=FaultParams(retry_after=1),
+        count=1,
     )
-    error = await _error(adapters(key).quota())
-    store.add_fault(
-        FaultSpec(
-            provider="firecrawl",
-            operation="credit_usage",
-            kind=FaultKind.RATE_LIMIT,
-            params=FaultParams(retry_after=1),
-            count=1,
-        )
+    sleeps: list[float] = []
+
+    async def sleeper(delay: float) -> None:
+        sleeps.append(delay)
+
+    client = create_async_client(polyweb_settings(mock_server.origin, timeout=30))
+    single = FirecrawlAdapter(
+        client, api_key=SecretStr(key), runner=ResilientRunner(client, max_attempts=1)
     )
-    client = create_async_client(polyweb_settings(mock_server[0]))
     retrying = FirecrawlAdapter(
-        client, api_key=SecretStr(key), runner=ResilientRunner(client, max_attempts=2)
+        client,
+        api_key=SecretStr(key),
+        runner=ResilientRunner(client, max_attempts=2, sleeper=sleeper),
     )
-    started = time.perf_counter()
     try:
+        store.add_fault(limited)
+        error = await _error(single.quota())
+        store.add_fault(limited)
         quota = await retrying.quota()
     finally:
+        await single.aclose()
         await retrying.aclose()
         await client.aclose()
 
     assert (error.code, error.status_code, error.retryable) == ("http_error", 429, True)
     assert quota is not None and quota.remaining == 1000
-    assert time.perf_counter() - started >= 1.0
+    assert sleeps == [1.0]
     assert [entry.status for entry in store.log_tail("firecrawl")] == [429, 429, 200]
 
 

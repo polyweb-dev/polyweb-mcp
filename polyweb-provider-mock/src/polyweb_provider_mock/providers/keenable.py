@@ -44,10 +44,12 @@ Credits: every successful keyed call costs 1 credit (``search.pro``,
 models purchased credits, and ``usage.paid`` turns true once the free
 allowance is spent. Keyless calls are free and have no ``usage``.
 
-Accuracy gaps: the allowance resets on the UTC calendar month, not on the
-organization's creation day; consumed purchased credits come back at the
-monthly reset (real purchased credits never expire but are not refunded);
-``billing_url`` is inferred from the docs' "Billing page of the console".
+Accuracy gaps: the allowance resets on the UTC calendar month unless the
+account's ``reset_day`` attribute anchors it to the organization's creation
+day (``polyweb-mock account set keenable reset_day=17``); consumed purchased
+credits come back at the monthly reset (real purchased credits never expire
+but are not refunded); ``billing_url`` is inferred from the docs' "Billing
+page of the console".
 
 Synthetic fetch targets (first host label): ``blocked`` 403
 ``target_blocked``, ``paywall``/``login`` 422 ``target_paywalled``,
@@ -64,7 +66,6 @@ import json
 import secrets
 import uuid
 from collections.abc import Mapping, Sequence
-from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -82,7 +83,6 @@ from polyweb_provider_mock.models import (
     PriceRule,
     ProviderSeed,
 )
-from polyweb_provider_mock.providers._rate_windows import Window, WindowSpec, admit
 from polyweb_provider_mock.providers.base import (
     Credentials,
     ErrorContext,
@@ -94,7 +94,8 @@ from polyweb_provider_mock.providers.base import (
     bearer_token,
     header_value,
 )
-from polyweb_provider_mock.store import Charge
+from polyweb_provider_mock.store import Charge, MockStore
+from polyweb_provider_mock.windows import Window, WindowSpec
 
 __all__ = ["PLUGIN", "KeenablePlugin"]
 
@@ -145,11 +146,6 @@ _DATE_PARAMS: Final = (
     "query_time",
 )
 _FETCH_PARAMS: Final = frozenset({"url", "max_chars", "live", "prompt", "session_id"})
-
-#: Whether the key on the current request lacks the ``keen_`` prefix. The
-#: pipeline renders auth errors without the key value, so ``credentials()``
-#: records it here for ``error()`` (both run in the same request context).
-_MALFORMED: ContextVar[bool] = ContextVar("keenable_malformed_key", default=False)
 
 
 @dataclass(frozen=True)
@@ -621,13 +617,10 @@ class KeenablePlugin(ProviderPlugin):
             ),
         )
 
-    def credentials(self, request: Request) -> Credentials:
+    def credentials(self, request: Request, store: MockStore) -> Credentials:
         if request.url.path.rstrip("/").endswith("/public"):
-            _MALFORMED.set(False)
             return Credentials(key=None, keyless=True)
-        key = header_value(request, "x-api-key") or bearer_token(request)
-        _MALFORMED.set(key is not None and not key.startswith(_KEY_PREFIX))
-        return Credentials(key=key)
+        return Credentials(key=header_value(request, "x-api-key") or bearer_token(request))
 
     def default_seed(self) -> ProviderSeed:
         return ProviderSeed(
@@ -692,7 +685,9 @@ class KeenablePlugin(ProviderPlugin):
                 extra={**hint, "api_keys_url": _API_KEYS_URL},
             )
         if kind is ErrorKind.AUTH_INVALID:
-            message = "Malformed API key" if _MALFORMED.get() else "Invalid API key"
+            presented = context.presented_key
+            malformed = presented is not None and not presented.startswith(_KEY_PREFIX)
+            message = "Malformed API key" if malformed else "Invalid API key"
             return _envelope(
                 "invalid_api_key",
                 context.message or message,
@@ -800,7 +795,7 @@ class KeenablePlugin(ProviderPlugin):
         else:
             account = principal.account.id if principal.account is not None else "unknown"
             specs = [WindowSpec(f"keenable:org:{account}:second", _KEYED_PER_SECOND, 1)]
-        refused, windows = admit(context.store, specs)
+        refused, windows = context.admit(specs)
         if refused is not None:
             scope = "hour" if refused.spec.seconds >= 3600 else "second"
             return self._rate_limited(

@@ -9,21 +9,31 @@ A plugin declares:
 - ``name``, ``hosts`` (the real API hosts it answers), and ``key_format``.
 - :meth:`ProviderPlugin.operations`: the real method and path of every
   endpoint, its operation name, whether it is billed, whether it accepts the
-  keyless rail, and which key scopes it needs. Each operation has an async
-  handler that receives an :class:`OperationContext` and returns a
-  :class:`MockResponse` in the provider's success format.
+  keyless rail, which key scopes it needs, the hosts it is served on (all
+  plugin hosts by default), and whether the request log may keep its bodies.
+  Each operation has an async handler that receives an
+  :class:`OperationContext` and returns a :class:`MockResponse` in the
+  provider's success format.
 - :meth:`ProviderPlugin.credentials`: how a request presents its key
-  (bearer, header, or query) and whether it asks for keyless mode.
+  (bearer, header, or query) and whether it asks for keyless mode. It may
+  read the store, for example to map a token to a key.
 - :meth:`ProviderPlugin.default_seed` and :meth:`ProviderPlugin.default_pricing`.
 - :meth:`ProviderPlugin.error`: the provider's real error status, headers,
-  and body for every :class:`ErrorKind`.
+  and body for every :class:`ErrorKind`. The :class:`ErrorContext` carries
+  the store, the account, the request, and the presented key when known.
+- Optional: :meth:`ProviderPlugin.response_headers` (including the real
+  ``Server`` header; the mock's server sends none of its own),
+  :meth:`ProviderPlugin.admin_routes`, :meth:`ProviderPlugin.admin_pages`,
+  and :meth:`ProviderPlugin.cli_commands`.
 
 The pipeline (:mod:`polyweb_provider_mock.pipeline`) owns everything that is
 common: fault rules, authentication against the key table, keyless budgets,
-credit checks, the request log, and malformed-body faults. A handler only
-validates the request, calls :meth:`OperationContext.charge` for billed work,
-and builds the body. ``polyweb_provider_mock/providers/tavily.py`` is the
-reference implementation.
+credit checks, the request log and its secret redaction, and malformed-body
+faults. A handler only validates the request, calls
+:meth:`OperationContext.charge` (or :meth:`OperationContext.charge_all` for a
+request billed in parts) for billed work, spends any provider rate windows
+with :meth:`OperationContext.admit`, and builds the body.
+``polyweb_provider_mock/providers/tavily.py`` is the reference implementation.
 """
 
 import json
@@ -39,8 +49,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from polyweb_provider_mock import content
-from polyweb_provider_mock.models import Fixture, KeyFormat, PriceRule, ProviderSeed
+from polyweb_provider_mock.access import AdminAccess
+from polyweb_provider_mock.models import Account, Fixture, KeyFormat, PriceRule, ProviderSeed
 from polyweb_provider_mock.store import Charge, MockStore, Principal
+from polyweb_provider_mock.windows import Window, WindowSpec
 
 __all__ = [
     "Credentials",
@@ -97,6 +109,12 @@ class ErrorContext:
     exhausted (``account``, ``key``, ``paygo``) or which keyless window
     applies (``day``, ``minute``). ``missing_key`` separates an absent key
     from a wrong one, for providers that answer them differently.
+
+    The pipeline also fills ``store``, ``account`` (of the presented key, when
+    it resolved), ``request``, and ``presented_key`` (the value that
+    :meth:`ProviderPlugin.credentials` returned), so an error can carry
+    ledger-based headers or word a malformed key differently. Never echo
+    ``presented_key`` into a response.
     """
 
     operation: str
@@ -108,6 +126,10 @@ class ErrorContext:
     missing_key: bool = False
     scope: str | None = None
     details: Mapping[str, Any] = field(default_factory=dict)
+    store: MockStore | None = field(default=None, compare=False, repr=False)
+    account: Account | None = field(default=None, compare=False, repr=False)
+    request: Request | None = field(default=None, compare=False, repr=False)
+    presented_key: str | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -154,7 +176,12 @@ class Operation:
     operations accept ``quota_exhausted`` faults. ``keyless`` operations
     accept a request whose :class:`Credentials` ask for keyless mode.
     ``auth="none"`` skips key checks (for example OAuth endpoints). A
-    non-empty ``scopes`` needs a key that holds one of them.
+    non-empty ``scopes`` needs a key that holds one of them. A non-empty
+    ``hosts`` serves the path on those plugin hosts only; on another host the
+    path does not exist (:meth:`ProviderPlugin.not_found` answers), so two
+    hosts can serve different operations on one path.
+    ``log_body=False`` keeps the request and response bodies out of the
+    request log, for operations that carry tokens or minted keys.
     """
 
     name: str
@@ -165,6 +192,8 @@ class Operation:
     keyless: bool = False
     auth: Literal["key", "none"] = "key"
     scopes: frozenset[str] = frozenset()
+    hosts: frozenset[str] = frozenset()
+    log_body: bool = True
 
 
 class OperationContext:
@@ -180,6 +209,7 @@ class OperationContext:
         principal: Principal,
         store: MockStore,
         sequence: int,
+        credentials: Credentials | None = None,
     ) -> None:
         self.plugin = plugin
         self.operation = operation
@@ -188,6 +218,7 @@ class OperationContext:
         self.principal = principal
         self.store = store
         self.sequence = sequence
+        self.credentials = credentials or Credentials(key=None)
         #: Set by the handler to the normalized query or URL it answered.
         self.match_key: str | None = None
         self.charges: list[Charge] = []
@@ -204,16 +235,43 @@ class OperationContext:
         self.charges.append(result)
         return result
 
+    def charge_all(self, parts: Sequence[tuple[str, int | Decimal]]) -> list[Charge]:
+        """Debit the priced parts of one request, all or nothing.
+
+        Raises ``QuotaExhausted`` (and debits nothing) when the whole cost
+        exceeds the allowance; see :meth:`MockStore.charge_all`.
+        """
+
+        result = self.store.charge_all(self.principal, parts)
+        self.charges.extend(result)
+        return result
+
+    def admit(
+        self, specs: Sequence[WindowSpec], units: int = 1
+    ) -> tuple[Window | None, list[Window]]:
+        """Spend ``units`` in every rate window, or in none; see :meth:`MockStore.admit_windows`."""
+
+        return self.store.admit_windows(specs, units)
+
     def fixture(self, match_key: str, operation: str | None = None) -> Fixture | None:
         """Return a saved fixture for this operation and match key."""
 
         return self.store.fixture(self.plugin.name, operation or self.operation.name, match_key)
 
+    def error_context(self, **values: Any) -> ErrorContext:
+        """Return an :class:`ErrorContext` for this request with the pipeline facts filled."""
+
+        values.setdefault("keyless", self.principal.keyless)
+        values.setdefault("store", self.store)
+        values.setdefault("account", self.principal.account)
+        values.setdefault("request", self.request)
+        values.setdefault("presented_key", self.credentials.key)
+        return ErrorContext(operation=self.operation.name, **values)
+
     def error(self, kind: ErrorKind, **values: Any) -> MockResponse:
         """Render a provider error for this operation."""
 
-        values.setdefault("keyless", self.principal.keyless)
-        return self.plugin.error(kind, ErrorContext(operation=self.operation.name, **values))
+        return self.plugin.error(kind, self.error_context(**values))
 
     def request_id(self) -> str:
         """Return a UUID-shaped request ID that is unique per mock request."""
@@ -250,8 +308,12 @@ class ProviderPlugin(ABC):
         """Return every endpoint the provider serves."""
 
     @abstractmethod
-    def credentials(self, request: Request) -> Credentials:
-        """Return the key a request presents and whether it asks for keyless mode."""
+    def credentials(self, request: Request, store: MockStore) -> Credentials:
+        """Return the key a request presents and whether it asks for keyless mode.
+
+        ``store`` gives read access to state and the mock clock (``store.now``),
+        for providers whose credential is a token that maps to a key.
+        """
 
     @abstractmethod
     def default_seed(self) -> ProviderSeed:
@@ -266,15 +328,32 @@ class ProviderPlugin(ABC):
         """Return the provider's real response for one error kind."""
 
     def response_headers(self) -> dict[str, str]:
-        """Return headers the provider adds to every response."""
+        """Return headers the provider adds to every response.
+
+        The mock's HTTP server sends no ``Server`` header, so a plugin sets
+        the provider's real one here (or per response) when it has one.
+        """
 
         return {}
 
-    def admin_routes(self, router: APIRouter, store: MockStore) -> None:
+    def admin_routes(self, router: APIRouter, store: MockStore, access: AdminAccess) -> None:
         """Add provider-specific admin routes; use paths under ``/<name>/``.
 
-        ``router`` has the ``/_mock`` prefix and the admin token guard. The
-        default adds nothing.
+        ``router`` has the ``/_mock`` prefix and the admin token guard;
+        ``access`` can remember a token posted by a page form in the admin
+        cookie. The default adds nothing.
+        """
+
+        return
+
+    def admin_pages(self, router: APIRouter, store: MockStore, access: AdminAccess) -> None:
+        """Add browser pages under ``/_mock/<name>/`` that need no admin token.
+
+        A page may only render (for example a form that posts to a guarded
+        route of :meth:`admin_routes`). When ``access.required``, the page
+        should offer an ``admin_token`` field or remember a valid
+        ``?admin_token=`` with :meth:`AdminAccess.remember`. The default adds
+        nothing.
         """
 
         return

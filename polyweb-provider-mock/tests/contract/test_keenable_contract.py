@@ -16,11 +16,15 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 
-from tests.contract.test_tavily_contract import assert_same_shape
+from tests._support.shape import assert_same_shape
 
 _RECORDINGS = sorted((Path(__file__).parent / "recordings" / "keenable").glob("*.json"))
 _FORWARDED = {"content-type", "x-keenable-title", "user-agent", "accept"}
 _RATE_HEADERS = ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset")
+
+
+def _same_shape(recorded: Any, mocked: Any) -> None:
+    assert_same_shape(recorded, mocked)
 
 
 def test_every_recording_is_sanitized() -> None:
@@ -60,7 +64,7 @@ async def test_mock_matches_recorded_exchange(path: Path, client: httpx.AsyncCli
     mocked = response.json()
     if "request_id" in recording["response_body"]:
         assert mocked["request_id"] == response.headers["x-request-id"]
-    assert_same_shape(recording["response_body"], mocked)
+    _same_shape(recording["response_body"], mocked)
     if recording["status"] != 200:
         recorded = recording["response_body"]
         assert (mocked["code"], mocked["type"], mocked["param"]) == (

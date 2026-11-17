@@ -16,6 +16,8 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     Defaults come from ``POLYWEB_PROVIDER_MOCK_HOST`` (127.0.0.1),
     ``POLYWEB_PROVIDER_MOCK_PORT`` (8212), and ``POLYWEB_PROVIDER_MOCK_DB``.
+    uvicorn sends no ``Server`` header: each plugin sends its provider's real
+    one, or none, as the provider does.
     """
 
     import uvicorn
@@ -34,4 +36,5 @@ def main(argv: Sequence[str] | None = None) -> None:
         port=effective.port,
         log_level=args.log_level,
         proxy_headers=False,
+        server_header=False,
     )

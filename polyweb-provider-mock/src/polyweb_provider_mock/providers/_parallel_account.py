@@ -20,17 +20,25 @@ mock's own ``/_mock/parallel/oauth/device``; ``polyweb-mock parallel oauth
 approve|deny|expire <user_code>`` and the ``auto_approve`` setting decide
 codes too.
 
-State lives in the core ``meta`` table under ``parallel.oauth.*`` names, so the
-CLI and the server share it and ``polyweb-mock reset`` clears it without a core
-schema change. Access tokens are HS256 JWTs signed with a fixed mock key; their
-claims carry the organization (mock account) and scopes.
+State lives in the core plugin state (:meth:`MockStore.state`, the ``meta``
+table under ``parallel.oauth.*`` names), so the CLI and the server share it
+and ``polyweb-mock reset`` clears it without a core schema change. Balance
+facts are account attributes (:meth:`MockStore.set_account_attributes`).
+Access tokens are HS256 JWTs signed with a fixed mock key; their claims carry
+the organization (mock account) and scopes.
 
 Product access with an OAuth token: ``ParallelOAuthAdapter`` sends the access
 token as ``x-api-key`` to ``/v1/search`` and ``/v1/extract``. Whether real
 Parallel accepts that is unverified (the docs separate Account API tokens from
 API keys). The mock accepts it while ``token_product_access`` is on (the
-default, so the app path runs): a valid token maps to the account's hidden
-``oauth:<account>`` bridge key, which the setting activates or revokes.
+default, so the app path runs): a valid, unexpired token maps to the
+account's hidden ``oauth:<account>`` bridge key, which the setting activates
+or revokes. The plugin's ``credentials()`` checks the expiry on the mock clock.
+
+The device page is an unguarded admin page (it only renders the form); with
+``POLYWEB_PROVIDER_MOCK_ADMIN_TOKEN`` set, its form asks for the token, or a
+visit with ``?admin_token=<token>`` remembers it in the admin cookie. The
+approve and deny routes it posts to stay guarded.
 """
 
 import base64
@@ -39,22 +47,22 @@ import hmac
 import html
 import json
 import secrets
-import sqlite3
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
+from contextlib import AbstractContextManager
 from datetime import datetime, timedelta
 from decimal import ROUND_FLOOR
 from typing import Any, Final, Literal
 from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from polyweb_provider_mock import content
+from polyweb_provider_mock.access import AdminAccess
 from polyweb_provider_mock.models import KeyFormat
 from polyweb_provider_mock.providers.base import MockResponse, OperationContext, bearer_token
-from polyweb_provider_mock.store import MockStore, NotFoundError
+from polyweb_provider_mock.store import MockStore, NotFoundError, PluginState
 
 __all__ = [
     "ACCOUNT_OPERATIONS",
@@ -63,6 +71,7 @@ __all__ = [
     "ParallelAccount",
     "bridge_key",
     "bridge_label",
+    "register_admin_pages",
     "register_admin_routes",
     "register_cli",
     "token_claims",
@@ -262,45 +271,34 @@ class ParallelAccount:
 
     # ------------------------------------------------------------- storage
 
-    @contextmanager
-    def _tx(self) -> Iterator[sqlite3.Connection]:
-        with self.store.db.transaction() as conn:
-            yield conn
+    def _tx(self, *, write: bool = True) -> AbstractContextManager[PluginState]:
+        return self.store.state(_PREFIX, write=write)
 
     @staticmethod
-    def _get(conn: sqlite3.Connection, name: str) -> Any:
-        row = conn.execute(
-            "SELECT value FROM meta WHERE name = ?", (f"{_PREFIX}.{name}",)
-        ).fetchone()
-        return None if row is None else json.loads(row["value"])
-
-    @staticmethod
-    def _put(conn: sqlite3.Connection, name: str, value: BaseModel | Mapping[str, Any]) -> None:
-        text = value.model_dump_json() if isinstance(value, BaseModel) else json.dumps(value)
-        conn.execute(
-            "INSERT OR REPLACE INTO meta (name, value) VALUES (?, ?)", (f"{_PREFIX}.{name}", text)
-        )
-
-    @staticmethod
-    def _all(conn: sqlite3.Connection, kind: str) -> list[Any]:
-        rows = conn.execute(
-            "SELECT value FROM meta WHERE name LIKE ? ORDER BY rowid", (f"{_PREFIX}.{kind}:%",)
-        ).fetchall()
-        return [json.loads(row["value"]) for row in rows]
-
-    def _settings(self, conn: sqlite3.Connection) -> OAuthSettings:
-        return OAuthSettings.model_validate(self._get(conn, "settings") or {})
+    def _settings(state: PluginState) -> OAuthSettings:
+        return OAuthSettings.model_validate(state.get("settings") or {})
 
     def settings(self) -> OAuthSettings:
-        with self.store.db.connect() as conn:
-            return self._settings(conn)
+        with self._tx(write=False) as state:
+            return self._settings(state)
+
+    def _default_account(self) -> str:
+        accounts = self.store.account_ids(PROVIDER)
+        if not accounts:
+            raise NotFoundError("no parallel account; run `polyweb-mock seed`")
+        return accounts[0]
+
+    def _has_account(self, account_id: str) -> bool:
+        return account_id in self.store.account_ids(PROVIDER)
 
     def update_settings(self, **changes: Any) -> OAuthSettings:
         """Change settings; ``token_product_access`` also (de)activates every bridge key."""
 
-        with self._tx() as conn:
-            updated = OAuthSettings.model_validate({**self._settings(conn).model_dump(), **changes})
-            self._put(conn, "settings", updated)
+        with self._tx() as state:
+            updated = OAuthSettings.model_validate(
+                {**self._settings(state).model_dump(), **changes}
+            )
+            state.put("settings", updated)
         if "token_product_access" in changes:
             status: Literal["active", "revoked"] = (
                 "active" if updated.token_product_access else "revoked"
@@ -334,27 +332,27 @@ class ParallelAccount:
         if not isinstance(name, str) or not name.strip():
             raise OAuthError("invalid_client_metadata", "client_name is required.")
         platform = body.get("platform")
-        with self._tx() as conn:
+        with self._tx() as state:
             client = Client(
                 client_id=content.stable_uuid(PROVIDER, "client", secrets.token_hex(16)),
                 client_secret=(
-                    secrets.token_urlsafe(32) if self._settings(conn).issue_client_secret else None
+                    secrets.token_urlsafe(32) if self._settings(state).issue_client_secret else None
                 ),
                 client_name=name,
                 platform=platform if isinstance(platform, dict) else {},
                 created_at=self.store.now(),
             )
-            self._put(conn, f"client:{client.client_id}", client)
+            state.put(f"client:{client.client_id}", client)
         body_out: dict[str, Any] = {"client_id": client.client_id}
         if client.client_secret is not None:
             body_out["client_secret"] = client.client_secret
         return body_out
 
-    def _client(self, conn: sqlite3.Connection, form: Mapping[str, str]) -> Client:
+    def _client(self, state: PluginState, form: Mapping[str, str]) -> Client:
         client_id = form.get("client_id", "")
         if not client_id:
             raise OAuthError("invalid_request", "client_id is required.")
-        data = self._get(conn, f"client:{client_id}")
+        data = state.get(f"client:{client_id}")
         if data is None:
             raise OAuthError("invalid_client", "Client authentication failed.", 401)
         client = Client.model_validate(data)
@@ -366,15 +364,15 @@ class ParallelAccount:
         return client
 
     def device_code(self, form: Mapping[str, str], base_url: str) -> dict[str, Any]:
-        with self._tx() as conn:
-            client = self._client(conn, form)
+        with self._tx() as state:
+            client = self._client(state, form)
             scope = " ".join(form.get("scope", "").split())
             if not scope:
                 raise OAuthError("invalid_scope", "scope is required.")
             unknown = sorted(set(scope.split()) - SCOPES)
             if unknown:
                 raise OAuthError("invalid_scope", f"Unsupported scope: {' '.join(unknown)}.")
-            settings = self._settings(conn)
+            settings = self._settings(state)
             now = self.store.now()
             grant = DeviceGrant(
                 device_code=secrets.token_urlsafe(32),
@@ -382,12 +380,12 @@ class ParallelAccount:
                 client_id=client.client_id,
                 scope=scope,
                 status="approved" if settings.auto_approve else "pending",
-                account_id=self._default_account(conn) if settings.auto_approve else None,
+                account_id=self._default_account() if settings.auto_approve else None,
                 created_at=now,
                 expires_at=now + timedelta(seconds=settings.device_ttl),
                 interval=settings.interval,
             )
-            self._save_device(conn, grant)
+            self._save_device(state, grant)
         if grant.account_id is not None:
             self._ensure_bridge(grant.account_id)
         page = (settings.verification_base_url or base_url).rstrip("/") + _DEVICE_PAGE
@@ -400,22 +398,12 @@ class ParallelAccount:
             "interval": grant.interval,
         }
 
-    def _save_device(self, conn: sqlite3.Connection, grant: DeviceGrant) -> None:
-        self._put(conn, f"device:{grant.device_code}", grant)
-        self._put(
-            conn,
+    def _save_device(self, state: PluginState, grant: DeviceGrant) -> None:
+        state.put(f"device:{grant.device_code}", grant)
+        state.put(
             f"user:{_normalize_user_code(grant.user_code)}",
             {"device_code": grant.device_code},
         )
-
-    @staticmethod
-    def _default_account(conn: sqlite3.Connection) -> str:
-        row = conn.execute(
-            "SELECT id FROM accounts WHERE provider = ? ORDER BY rowid LIMIT 1", (PROVIDER,)
-        ).fetchone()
-        if row is None:
-            raise NotFoundError("no parallel account; run `polyweb-mock seed`")
-        return str(row["id"])
 
     def token(self, form: Mapping[str, str]) -> dict[str, Any]:
         grant_type = form.get("grant_type", "")
@@ -429,27 +417,27 @@ class ParallelAccount:
 
     def _device_token(self, form: Mapping[str, str]) -> dict[str, Any]:
         outcome: OAuthError | dict[str, Any]
-        with self._tx() as conn:
-            client = self._client(conn, form)
+        with self._tx() as state:
+            client = self._client(state, form)
             code = form.get("device_code", "")
             if not code:
                 raise OAuthError("invalid_request", "device_code is required.")
-            data = self._get(conn, f"device:{code}")
+            data = state.get(f"device:{code}")
             grant = None if data is None else DeviceGrant.model_validate(data)
             if grant is None or grant.client_id != client.client_id:
                 raise OAuthError("invalid_grant", "The device code is invalid.")
-            outcome = self._device_outcome(conn, grant)
+            outcome = self._device_outcome(state, grant)
         if isinstance(outcome, OAuthError):
             raise outcome
         return outcome
 
     def _device_outcome(
-        self, conn: sqlite3.Connection, grant: DeviceGrant
+        self, state: PluginState, grant: DeviceGrant
     ) -> OAuthError | dict[str, Any]:
         """Advance one poll of a device grant; persist it; return the error or tokens."""
 
         now = self.store.now()
-        settings = self._settings(conn)
+        settings = self._settings(state)
         if grant.status in {"pending", "approved"} and now >= grant.expires_at:
             grant = grant.model_copy(update={"status": "expired"})
         terminal = {
@@ -472,7 +460,7 @@ class ParallelAccount:
                 "authorization_pending", "The user has not yet approved the request."
             )
         else:
-            account_id = grant.account_id or self._default_account(conn)
+            account_id = grant.account_id or self._default_account()
             session = Session(
                 id=content.stable_uuid(PROVIDER, "session", secrets.token_hex(16)),
                 client_id=grant.client_id,
@@ -483,16 +471,16 @@ class ParallelAccount:
                 authorization_expires_at=now + timedelta(seconds=settings.authorization_ttl),
                 created_at=now,
             )
-            self._save_session(conn, session)
+            self._save_session(state, session)
             grant = grant.model_copy(update={"status": "consumed"})
             outcome = self._token_body(session, settings, now)
         grant = grant.model_copy(update={"last_poll_at": now, "polls": grant.polls + 1})
-        self._put(conn, f"device:{grant.device_code}", grant)
+        state.put(f"device:{grant.device_code}", grant)
         return outcome
 
-    def _save_session(self, conn: sqlite3.Connection, session: Session) -> None:
-        self._put(conn, f"session:{session.id}", session)
-        self._put(conn, f"refresh:{session.refresh_token}", {"session": session.id})
+    def _save_session(self, state: PluginState, session: Session) -> None:
+        state.put(f"session:{session.id}", session)
+        state.put(f"refresh:{session.refresh_token}", {"session": session.id})
 
     @staticmethod
     def _token_body(session: Session, settings: OAuthSettings, now: datetime) -> dict[str, Any]:
@@ -507,28 +495,24 @@ class ParallelAccount:
             "scope": session.scope,
         }
 
-    def _session_of(self, conn: sqlite3.Connection, refresh_token: str) -> Session | None:
-        pointer = self._get(conn, f"refresh:{refresh_token}") if refresh_token else None
+    def _session_of(self, state: PluginState, refresh_token: str) -> Session | None:
+        pointer = state.get(f"refresh:{refresh_token}") if refresh_token else None
         if pointer is None:
             return None
-        data = self._get(conn, f"session:{pointer['session']}")
+        data = state.get(f"session:{pointer['session']}")
         return None if data is None else Session.model_validate(data)
 
     def _refresh(self, form: Mapping[str, str]) -> dict[str, Any]:
-        with self._tx() as conn:
-            client = self._client(conn, form)
+        with self._tx() as state:
+            client = self._client(state, form)
             token = form.get("refresh_token", "")
             if not token:
                 raise OAuthError("invalid_request", "refresh_token is required.")
-            session = self._session_of(conn, token)
+            session = self._session_of(state, token)
             now = self.store.now()
-            account = conn.execute(
-                "SELECT 1 FROM accounts WHERE provider = ? AND id = ?",
-                (PROVIDER, "" if session is None else session.account_id),
-            ).fetchone()
             if (
                 session is None
-                or account is None
+                or not self._has_account(session.account_id)
                 or session.revoked_at is not None
                 or session.client_id != client.client_id
                 or not hmac.compare_digest(session.refresh_token, token)
@@ -536,7 +520,7 @@ class ParallelAccount:
                 or now >= session.authorization_expires_at
             ):
                 raise OAuthError("invalid_grant", "The refresh token is invalid or expired.")
-            settings = self._settings(conn)
+            settings = self._settings(state)
             session = session.model_copy(
                 update={
                     "refresh_token": secrets.token_urlsafe(48),
@@ -545,29 +529,28 @@ class ParallelAccount:
                     "refreshed_at": now,
                 }
             )
-            self._save_session(conn, session)
+            self._save_session(state, session)
             return self._token_body(session, settings, now)
 
     def revoke(self, form: Mapping[str, str]) -> None:
         token = form.get("refresh_token", "")
         if not token:
             raise OAuthError("invalid_request", "refresh_token is required.")
-        with self._tx() as conn:
-            session = self._session_of(conn, token)
+        with self._tx() as state:
+            session = self._session_of(state, token)
             if session is None or session.revoked_at is not None:
                 return
             if hmac.compare_digest(session.refresh_token, token):
-                self._put(
-                    conn,
+                state.put(
                     f"session:{session.id}",
                     session.model_copy(update={"revoked_at": self.store.now()}),
                 )
 
     # ------------------------------------------------------- admin control
 
-    def _device_by_user_code(self, conn: sqlite3.Connection, user_code: str) -> DeviceGrant:
-        pointer = self._get(conn, f"user:{_normalize_user_code(user_code)}")
-        data = None if pointer is None else self._get(conn, f"device:{pointer['device_code']}")
+    def _device_by_user_code(self, state: PluginState, user_code: str) -> DeviceGrant:
+        pointer = state.get(f"user:{_normalize_user_code(user_code)}")
+        data = None if pointer is None else state.get(f"device:{pointer['device_code']}")
         if data is None:
             raise NotFoundError(f"no parallel device authorization with user code {user_code!r}")
         return DeviceGrant.model_validate(data)
@@ -580,8 +563,8 @@ class ParallelAccount:
     ) -> DeviceGrant:
         """Approve, deny, or expire a pending device code, as the user or the clock would."""
 
-        with self._tx() as conn:
-            grant = self._device_by_user_code(conn, user_code)
+        with self._tx() as state:
+            grant = self._device_by_user_code(state, user_code)
             if grant.status != "pending" and not (
                 decision == "expire" and grant.status != "consumed"
             ):
@@ -589,19 +572,14 @@ class ParallelAccount:
             if self.store.now() >= grant.expires_at and decision != "expire":
                 raise ValueError("the device code has expired")
             if decision == "approve":
-                account = account_id or self._default_account(conn)
-                if (
-                    conn.execute(
-                        "SELECT 1 FROM accounts WHERE provider = ? AND id = ?", (PROVIDER, account)
-                    ).fetchone()
-                    is None
-                ):
+                account = account_id or self._default_account()
+                if not self._has_account(account):
                     raise NotFoundError(f"no parallel account {account!r}")
                 grant = grant.model_copy(update={"status": "approved", "account_id": account})
             else:
                 status: DeviceStatus = "denied" if decision == "deny" else "expired"
                 grant = grant.model_copy(update={"status": status})
-            self._put(conn, f"device:{grant.device_code}", grant)
+            state.put(f"device:{grant.device_code}", grant)
         if grant.account_id is not None:
             self._ensure_bridge(grant.account_id)
         return grant
@@ -610,23 +588,23 @@ class ParallelAccount:
         """Revoke every live session (refresh tokens stop working); return how many."""
 
         revoked = 0
-        with self._tx() as conn:
-            for data in self._all(conn, "session"):
+        with self._tx() as state:
+            for data in state.values("session:"):
                 session = Session.model_validate(data)
                 if session.revoked_at is None:
                     revoked += 1
                     update = {"revoked_at": self.store.now()}
-                    self._put(conn, f"session:{session.id}", session.model_copy(update=update))
+                    state.put(f"session:{session.id}", session.model_copy(update=update))
         return revoked
 
     def overview(self) -> dict[str, Any]:
         """Return settings, device codes, and sessions without token or code secrets."""
 
-        with self.store.db.connect() as conn:
-            devices = [DeviceGrant.model_validate(item) for item in self._all(conn, "device")]
-            sessions = [Session.model_validate(item) for item in self._all(conn, "session")]
-            clients = len(self._all(conn, "client"))
-            settings = self._settings(conn)
+        with self._tx(write=False) as state:
+            devices = [DeviceGrant.model_validate(item) for item in state.values("device:")]
+            sessions = [Session.model_validate(item) for item in state.values("session:")]
+            clients = len(state.values("client:"))
+            settings = self._settings(state)
         return {
             "settings": settings.model_dump(mode="json"),
             "clients": clients,
@@ -645,24 +623,15 @@ class ParallelAccount:
     ) -> dict[str, Any]:
         """Set the balance-only account facts the ledger does not hold."""
 
-        with self._tx() as conn:
-            account = account_id or self._default_account(conn)
-            row = conn.execute(
-                "SELECT attributes FROM accounts WHERE provider = ? AND id = ?", (PROVIDER, account)
-            ).fetchone()
-            if row is None:
-                raise NotFoundError(f"no parallel account {account!r}")
-            attributes = json.loads(row["attributes"])
-            if pending_debit_cents is not None:
-                if pending_debit_cents < 0:
-                    raise ValueError("pending debit cents must be non-negative")
-                attributes["pending_debit_cents"] = pending_debit_cents
-            if will_invoice is not None:
-                attributes["will_invoice"] = will_invoice
-            conn.execute(
-                "UPDATE accounts SET attributes = ? WHERE provider = ? AND id = ?",
-                (json.dumps(attributes), PROVIDER, account),
-            )
+        account = account_id or self._default_account()
+        changes: dict[str, Any] = {}
+        if pending_debit_cents is not None:
+            if pending_debit_cents < 0:
+                raise ValueError("pending debit cents must be non-negative")
+            changes["pending_debit_cents"] = pending_debit_cents
+        if will_invoice is not None:
+            changes["will_invoice"] = will_invoice
+        self.store.set_account_attributes(PROVIDER, changes, account)
         return self.balance(account)
 
     # ---------------------------------------------------------- account API
@@ -696,13 +665,9 @@ class ParallelAccount:
             return "invalid"
         if self.store.now().timestamp() >= float(claims.get("exp", 0)):
             return "expired"
-        with self.store.db.connect() as conn:
-            session = self._get(conn, f"session:{claims.get('sub')}")
-            account = conn.execute(
-                "SELECT 1 FROM accounts WHERE provider = ? AND id = ?",
-                (PROVIDER, str(claims.get("org_id"))),
-            ).fetchone()
-        if session is None or account is None:
+        with self._tx(write=False) as state:
+            session = state.get(f"session:{claims.get('sub')}")
+        if session is None or not self._has_account(str(claims.get("org_id"))):
             return "invalid"
         return claims
 
@@ -924,7 +889,7 @@ for scope <code>balance:read</code> (or whatever the client asked for).</p>
 <p>{message}</p>
 <form method="post" action="/_mock/parallel/oauth/approve">
 <label>User code <input name="user_code" value="{code}" autofocus></label>
-<button type="submit">Approve</button>
+{token_field}<button type="submit">Approve</button>
 <button type="submit" formaction="/_mock/parallel/oauth/deny">Deny</button>
 </form></body></html>
 """
@@ -940,8 +905,37 @@ async def _decision_body(request: Request) -> dict[str, Any]:
     return dict(_form(raw))
 
 
-def register_admin_routes(router: APIRouter, store: MockStore) -> None:
-    """Add ``/_mock/parallel/...``: OAuth state, decisions, the device page, balance facts."""
+_TOKEN_FIELD = (
+    '<label>Mock admin token <input name="admin_token" type="password" autocomplete="off">'
+    "</label>\n"
+)
+
+
+def _page(access: AdminAccess, message: str, code: str, *, remembered: bool) -> str:
+    field = _TOKEN_FIELD if access.required and not remembered else ""
+    return _PAGE.format(message=message, code=html.escape(code), token_field=field)
+
+
+def register_admin_pages(router: APIRouter, access: AdminAccess) -> None:
+    """Add the device page ``/_mock/parallel/oauth/device``; it needs no admin token.
+
+    The page only renders the approval form. The form posts to the guarded
+    approve and deny routes; with an admin token set, the form asks for it
+    unless the browser already holds the admin cookie, which a visit with
+    ``?admin_token=<token>`` sets.
+    """
+
+    @router.get("/parallel/oauth/device", response_class=HTMLResponse)
+    async def device_page(request: Request, user_code: str = "") -> Response:
+        token = access.page_token(request)
+        remembered = token is not None or await access.allowed(request)
+        message = "Enter the code that the application shows."
+        page = HTMLResponse(_page(access, message, user_code, remembered=remembered))
+        return access.remember(page, token)
+
+
+def register_admin_routes(router: APIRouter, store: MockStore, access: AdminAccess) -> None:
+    """Add ``/_mock/parallel/...``: OAuth state, decisions, and balance facts."""
 
     account = ParallelAccount(store)
 
@@ -952,11 +946,6 @@ def register_admin_routes(router: APIRouter, store: MockStore) -> None:
     @router.put("/parallel/oauth/settings")
     async def oauth_settings(request: Request) -> dict[str, Any]:
         return account.update_settings(**await _decision_body(request)).model_dump(mode="json")
-
-    @router.get("/parallel/oauth/device", response_class=HTMLResponse)
-    async def device_page(user_code: str = "") -> str:
-        message = "Enter the code that the application shows."
-        return _PAGE.format(message=message, code=html.escape(user_code))
 
     async def decide(request: Request, decision: Literal["approve", "deny", "expire"]) -> Any:
         data = await _decision_body(request)
@@ -970,7 +959,10 @@ def register_admin_routes(router: APIRouter, store: MockStore) -> None:
             return grant.model_dump(mode="json", exclude={"device_code"})
         verb = {"approve": "approved", "deny": "denied", "expire": "expired"}[decision]
         message = f"Code <strong>{html.escape(grant.user_code)}</strong> {verb}."
-        return HTMLResponse(_PAGE.format(message=message, code=""))
+        token = await access.form_token(request)
+        page = HTMLResponse(_page(access, message, "", remembered=True))
+        access.remember(page, token)
+        return page
 
     @router.post("/parallel/oauth/approve")
     async def approve(request: Request) -> Any:

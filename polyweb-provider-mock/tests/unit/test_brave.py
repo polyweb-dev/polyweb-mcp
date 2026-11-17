@@ -295,6 +295,22 @@ async def test_faults_use_the_application_envelope(
     assert isinstance(body["error"]["id"], str) and isinstance(body["time"], int)
 
 
+async def test_fault_rate_limit_carries_the_ledger_rate_headers(
+    client: httpx.AsyncClient, store: MockStore, search: dict[str, str]
+) -> None:
+    store.set_credits("brave", Decimal(1000), "brave-search", used=Decimal(7))
+    store.add_fault(FaultSpec(provider="brave", kind=FaultKind.RATE_LIMIT, count=1))
+
+    limited = await client.get(_WEB, params={"q": "x"}, headers=search)
+
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"] == "60"
+    assert limited.headers["x-ratelimit-limit"] == "50, 1007"
+    assert limited.headers["x-ratelimit-remaining"] == "50, 1000"
+    assert limited.headers["x-ratelimit-policy"] == "50;w=1, 1007;w=2592000"
+    assert "server" not in limited.headers
+
+
 async def test_outage_is_the_load_balancer_page(
     client: httpx.AsyncClient, store: MockStore, search: dict[str, str]
 ) -> None:

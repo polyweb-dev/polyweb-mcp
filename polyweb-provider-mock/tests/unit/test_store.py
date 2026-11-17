@@ -9,7 +9,14 @@ import pytest
 
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
 from polyweb_provider_mock.providers import discover, plugin
-from polyweb_provider_mock.store import MockStore, NotFoundError, QuotaExhausted
+from polyweb_provider_mock.store import (
+    MockStore,
+    NotFoundError,
+    QuotaExhausted,
+    next_reset,
+    period_start,
+)
+from polyweb_provider_mock.windows import WindowSpec
 
 
 class _Clock:
@@ -28,11 +35,17 @@ def _principal(store: MockStore, label: str = "default"):
 
 
 def test_seed_is_idempotent_and_keys_match_the_real_format(store: MockStore) -> None:
+    plugins = discover()
     first = store.keys("tavily")
-    assert store.seed(discover().values()) == {"tavily": 2}
-    assert store.keys("tavily") == first
+    everything = store.keys()
+    seeded = store.seed(plugins.values())
+    assert seeded == {name: len(item.default_seed().keys) for name, item in plugins.items()}
+    assert seeded["tavily"] == 2
+    assert store.keys() == everything
     assert all(key.key.startswith("tvly-dev-mock") and len(key.key) == 41 for key in first)
-    assert store.export_keys() == [("POLYWEB_TAVILY_API_KEY", first[0].key)]
+    exported = store.export_keys()
+    assert ("POLYWEB_TAVILY_API_KEY", first[0].key) in exported
+    assert exported == sorted(exported) and len({name for name, _ in exported}) == len(exported)
 
 
 def test_seeded_keys_are_repeatable_across_databases(tmp_path: Path, store: MockStore) -> None:
@@ -84,6 +97,90 @@ def test_key_limit_is_checked_separately(store: MockStore) -> None:
     with pytest.raises(QuotaExhausted) as raised:
         store.charge(principal, "search.basic")
     assert raised.value.scope == "key"
+
+
+def test_charge_all_is_all_or_nothing(store: MockStore) -> None:
+    store.set_credits("tavily", Decimal(3))
+    principal = _principal(store)
+
+    with pytest.raises(QuotaExhausted) as raised:
+        store.charge_all(
+            principal, [("search.advanced", 1), ("search.basic", 1), ("extract.basic", 5)]
+        )
+    assert raised.value.scope == "account"
+    assert store.account("tavily").credits_used == 0
+    assert store.ledger("tavily") == []
+
+    charges = store.charge_all(
+        principal, [("search.advanced", 1), ("search.basic", 0), ("extract.basic", 5)]
+    )
+    assert [(item.operation, item.credits) for item in charges] == [
+        ("search.advanced", 2),
+        ("extract.basic", 1),
+    ]
+    assert store.account("tavily").credits_used == 3
+    assert len(store.ledger("tavily")) == 2
+
+
+def test_account_attributes_merge_remove_and_move_the_reset_anchor(tmp_path: Path) -> None:
+    clock = _Clock(datetime(2026, 11, 20, 12, tzinfo=UTC))
+    store = MockStore(tmp_path / "mock.db", now=clock)
+    store.seed(discover().values())
+    store.charge(_principal(store), "search.basic")
+
+    account = store.set_account_attributes("tavily", {"reset_day": 17, "paygo_limit": None})
+    assert account.attributes == {"paygo_usage": 0, "reset_day": 17}
+    assert account.period_start == datetime(2026, 11, 17, tzinfo=UTC)
+    assert account.period_reset == datetime(2026, 12, 17, tzinfo=UTC)
+    assert account.credits_used == 1
+
+    clock.now = datetime(2026, 12, 18, tzinfo=UTC)
+    rolled = store.account("tavily")
+    assert (rolled.credits_used, rolled.period_start) == (0, datetime(2026, 12, 17, tzinfo=UTC))
+    with pytest.raises(ValueError, match="reset_day"):
+        store.set_account_attributes("tavily", {"reset_day": 0})
+
+
+def test_reset_anchor_clamps_to_the_end_of_short_months() -> None:
+    start = period_start("monthly", datetime(2027, 2, 28, 9, tzinfo=UTC), anchor=31)
+    assert start == datetime(2027, 2, 28, tzinfo=UTC)
+    assert next_reset("monthly", start, anchor=31) == datetime(2027, 3, 31, tzinfo=UTC)
+    early = period_start("monthly", datetime(2027, 1, 5, tzinfo=UTC), anchor=17)
+    assert early == datetime(2026, 12, 17, tzinfo=UTC)
+
+
+def test_plugin_state_is_namespaced_and_cleared_by_reset(store: MockStore) -> None:
+    with store.state("demo") as state:
+        state.put("item:b", {"n": 2})
+        state.put("item:a", {"n": 1})
+        state.put("other", [1])
+    with store.state("demo", write=False) as state:
+        assert state.values("item:") == [{"n": 2}, {"n": 1}]
+        assert state.get("other") == [1] and state.get("missing") is None
+    with store.state("dem", write=False) as state:
+        assert state.values("") == []
+    store.reset()
+    with store.state("demo", write=False) as state:
+        assert state.get("other") is None
+
+
+def test_rate_windows_admit_all_or_none_and_reset(tmp_path: Path) -> None:
+    clock = _Clock(datetime(2026, 11, 17, 12, 0, 30, tzinfo=UTC))
+    store = MockStore(tmp_path / "mock.db", now=clock)
+    minute = WindowSpec("demo:minute", 2, 60, aligned=True)
+    hour = WindowSpec("demo:hour", 10, 3600)
+
+    assert store.admit_windows([minute, hour])[0] is None
+    refused, windows = store.admit_windows([minute, hour], units=2)
+    assert refused is not None and refused.spec == minute
+    assert [window.used for window in windows] == [1, 1]
+    assert windows[0].reset == datetime(2026, 11, 17, 12, 1, tzinfo=UTC)
+    assert refused.retry_after(clock.now) == 30
+    assert store.count_window(minute, 5).used == 6
+
+    clock.now += timedelta(seconds=31)
+    assert store.peek_window(minute).used == 0
+    assert store.peek_window(hour).used == 1
 
 
 def test_add_and_set_credits(store: MockStore) -> None:

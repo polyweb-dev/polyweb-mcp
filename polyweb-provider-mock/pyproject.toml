@@ -25,6 +25,7 @@ dev = [
     "polyweb",
     "pytest==8.4.2",
     "pytest-asyncio==1.4.0",
+    "pytest-xdist==3.8.0",
     "ruff==0.16.3",
 ]
 

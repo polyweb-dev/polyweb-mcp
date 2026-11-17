@@ -64,6 +64,7 @@ from polyweb_provider_mock.providers.base import (
     ProviderPlugin,
     header_value,
 )
+from polyweb_provider_mock.store import MockStore
 
 __all__ = ["PLUGIN", "YouPlugin"]
 
@@ -128,7 +129,7 @@ def _gateway(
     """Add the AWS API gateway headers; ``backend`` adds the remapped uvicorn headers."""
 
     now = datetime.now(UTC)
-    headers = {"x-amzn-requestid": _uuid(generator)}
+    headers = {"server": "Server", "x-amzn-requestid": _uuid(generator)}
     if backend:
         headers["x-amzn-remapped-content-length"] = str(len(response.content()))
     if errortype is not None:
@@ -149,6 +150,7 @@ def _edge(response: MockResponse, generator: random.Random) -> MockResponse:
 
     now = datetime.now(UTC)
     response.headers = {
+        "server": "cloudflare",
         "x-request-id": _uuid(generator),
         "x-correlation-id": _uuid(generator),
         "x-trace-id": f"{_uuid(generator)}|{now.isoformat()}",
@@ -355,14 +357,19 @@ class YouPlugin(ProviderPlugin):
 
     def operations(self) -> Sequence[Operation]:
         return (
-            Operation("search", "POST", "/v1/search", self._search),
-            Operation("contents", "POST", "/v1/contents", self._contents),
+            Operation("search", "POST", "/v1/search", self._search, hosts=_GATEWAY_HOSTS),
+            Operation("contents", "POST", "/v1/contents", self._contents, hosts=_GATEWAY_HOSTS),
             Operation(
-                "balance", "GET", "/v1/billing/account_balance", self._balance, billable=False
+                "balance",
+                "GET",
+                "/v1/billing/account_balance",
+                self._balance,
+                billable=False,
+                hosts=_API_HOSTS,
             ),
         )
 
-    def credentials(self, request: Request) -> Credentials:
+    def credentials(self, request: Request, store: MockStore) -> Credentials:
         return Credentials(key=header_value(request, "x-api-key"))
 
     def default_seed(self) -> ProviderSeed:
@@ -486,14 +493,6 @@ class YouPlugin(ProviderPlugin):
         detail = "Method Not Allowed" if status == 405 else "Not Found"
         return _edge(MockResponse(status, {"detail": detail}), generator)
 
-    def _misrouted(self, context: OperationContext) -> MockResponse | None:
-        """Answer a path that exists on the other You.com host as the real hosts do."""
-
-        on_gateway = (context.request.url.hostname or "").lower() in _GATEWAY_HOSTS
-        if on_gateway == (context.operation.name in _GATEWAY_OPERATIONS):
-            return None
-        return self.not_found(context.request, 404)
-
     def drop_required_field(self, operation: str, body: Any) -> Any:
         if (
             operation == "search"
@@ -525,9 +524,6 @@ class YouPlugin(ProviderPlugin):
     # --------------------------------------------------------------- search
 
     async def _search(self, context: OperationContext) -> MockResponse:
-        misrouted = self._misrouted(context)
-        if misrouted is not None:
-            return misrouted
         try:
             body: Any = context.json()
         except json.JSONDecodeError:
@@ -621,9 +617,6 @@ class YouPlugin(ProviderPlugin):
     # ------------------------------------------------------------- contents
 
     async def _contents(self, context: OperationContext) -> MockResponse:
-        misrouted = self._misrouted(context)
-        if misrouted is not None:
-            return misrouted
         generator = content.rng(self.name, "headers", context.sequence)
         checked = self._contents_request(context)
         if isinstance(checked, MockResponse):
@@ -727,9 +720,6 @@ class YouPlugin(ProviderPlugin):
     # -------------------------------------------------------------- balance
 
     async def _balance(self, context: OperationContext) -> MockResponse:
-        misrouted = self._misrouted(context)
-        if misrouted is not None:
-            return misrouted
         account = context.principal.account
         if account is None:
             return context.error(ErrorKind.AUTH_INVALID, missing_key=True)

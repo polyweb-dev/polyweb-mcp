@@ -17,7 +17,7 @@ import httpx
 import pytest
 
 from polyweb_provider_mock.store import MockStore
-from tests.contract._exa_firecrawl_shape import assert_same_shape
+from tests._support.shape import assert_same_shape
 
 _RECORDINGS = sorted((Path(__file__).parent / "recordings" / "exa").glob("*.json"))
 _WRONG_KEY = "00000000-0000-4000-8000-000000000000"
@@ -30,6 +30,10 @@ _PRESENCE = (
     "www-authenticate",
     "access-control-expose-headers",
 )
+
+
+def _same_shape(recorded: Any, mocked: Any) -> None:
+    assert_same_shape(recorded, mocked, lists="pairwise")
 
 
 def _headers(name: str, recording: dict[str, Any], key: str) -> dict[str, str]:
@@ -71,7 +75,7 @@ async def test_mock_matches_recorded_exchange(
     for header in _PRESENCE:
         assert (header in response.headers) == (header in recording["response_headers"]), header
     mocked = response.json()
-    assert_same_shape(recording["response_body"], mocked)
+    _same_shape(recording["response_body"], mocked)
     if "requestId" in mocked:
         assert response.headers["x-request-id"] == mocked["requestId"]
         assert len(mocked["requestId"]) == 32 and int(mocked["requestId"], 16) >= 0

@@ -24,7 +24,12 @@ with ``x-api-key``. Formats follow the live recordings of 2026-11-17
 There is no keyless REST mode (the free hosted MCP is a different product).
 
 Account API (OAuth device flow, balance, apps, key minting) lives in
-:mod:`polyweb_provider_mock.providers._parallel_account`.
+:mod:`polyweb_provider_mock.providers._parallel_account`. Every operation is
+served on its real host only; the OAuth and key-minting operations keep their
+bodies (client secrets, device codes, tokens, minted keys) out of the request
+log. A valid, unexpired access token presented as ``x-api-key`` maps to the
+account's bridge key in :meth:`ParallelPlugin.credentials`; an expired or
+orphaned one is an unknown key (401 ``Invalid API key (C.1)``).
 
 Synthetic extract targets: a host whose first label is ``blocked`` fails with
 an upstream 403, a ``.invalid`` host fails to resolve, and a non-HTTP URL is
@@ -33,7 +38,7 @@ an invalid URL; each becomes an ``errors`` entry of an HTTP 200 response.
 
 import json
 import secrets
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from http import HTTPStatus
@@ -44,6 +49,7 @@ from fastapi import APIRouter
 from starlette.requests import Request
 
 from polyweb_provider_mock import content
+from polyweb_provider_mock.access import AdminAccess
 from polyweb_provider_mock.models import AccountSeed, KeyFormat, KeySeed, PriceRule, ProviderSeed
 from polyweb_provider_mock.providers import _parallel_account as account_api
 from polyweb_provider_mock.providers.base import (
@@ -358,81 +364,85 @@ class ParallelPlugin(ProviderPlugin):
     key_format: ClassVar[KeyFormat] = account_api.KEY_FORMAT
 
     def operations(self) -> Sequence[Operation]:
-        def account(name: str, method: str, path: str, handler: Any, host: str) -> Operation:
+        api, platform = frozenset({API_HOST}), frozenset({PLATFORM_HOST})
+
+        def account(
+            name: str, method: str, path: str, handler: Any, hosts: frozenset[str], *, log: bool
+        ) -> Operation:
             return Operation(
-                name, method, path, self._on(host, handler), billable=False, auth="none"
+                name, method, path, handler, billable=False, auth="none", hosts=hosts, log_body=log
             )
 
         return (
-            Operation("search", "POST", "/v1/search", self._on(API_HOST, self._search)),
-            Operation("extract", "POST", "/v1/extract", self._on(API_HOST, self._extract)),
+            Operation("search", "POST", "/v1/search", self._search, hosts=api),
+            Operation("extract", "POST", "/v1/extract", self._extract, hosts=api),
             account(
                 "register",
                 "POST",
                 "/getServiceKeys/register",
                 account_api.handle_register,
-                PLATFORM_HOST,
+                platform,
+                log=False,
             ),
             account(
                 "device_code",
                 "POST",
                 "/getServiceKeys/device/code",
                 account_api.handle_device_code,
-                PLATFORM_HOST,
+                platform,
+                log=False,
             ),
             account(
-                "token", "POST", "/getServiceKeys/token", account_api.handle_token, PLATFORM_HOST
+                "token",
+                "POST",
+                "/getServiceKeys/token",
+                account_api.handle_token,
+                platform,
+                log=False,
             ),
             account(
                 "revoke",
                 "POST",
                 "/getServiceKeys/token/revoke",
                 account_api.handle_revoke,
-                PLATFORM_HOST,
+                platform,
+                log=False,
             ),
             account(
                 "balance",
                 "GET",
                 "/account/service/v1/balance",
                 account_api.handle_balance,
-                API_HOST,
+                api,
+                log=True,
             ),
-            account("apps", "GET", "/account/service/v1/apps", account_api.handle_apps, API_HOST),
+            account(
+                "apps", "GET", "/account/service/v1/apps", account_api.handle_apps, api, log=True
+            ),
             account(
                 "create_key",
                 "POST",
                 "/account/service/v1/apps/{app_id}/keys",
                 account_api.handle_create_key,
-                API_HOST,
+                api,
+                log=False,
             ),
             account(
                 "delete_key",
                 "DELETE",
                 "/account/service/v1/apps/{app_id}/keys/{api_key_id}",
                 account_api.handle_delete_key,
-                API_HOST,
+                api,
+                log=True,
             ),
         )
 
-    def _on(
-        self, host: str, handler: Callable[[OperationContext], Awaitable[MockResponse]]
-    ) -> Callable[[OperationContext], Awaitable[MockResponse]]:
-        """Serve a path only on its real host; the other host answers 404."""
-
-        async def guarded(context: OperationContext) -> MockResponse:
-            presented = (context.request.headers.get("host") or "").split(":")[0].lower()
-            if presented and presented != host:
-                return self.not_found(context.request, 404)
-            return await handler(context)
-
-        return guarded
-
-    def credentials(self, request: Request) -> Credentials:
+    def credentials(self, request: Request, store: MockStore) -> Credentials:
         key = header_value(request, "x-api-key")
         if key is not None and key.count(".") == 2:
             # An Account API access token used as a product key (ParallelOAuthAdapter).
-            claims = account_api.token_claims(key)
-            if claims is not None:
+            claims = account_api.ParallelAccount(store).access(key)
+            if isinstance(claims, dict):
                 return Credentials(key=account_api.bridge_key(str(claims.get("org_id"))))
         return Credentials(key=key)
 
@@ -490,10 +500,18 @@ class ParallelPlugin(ProviderPlugin):
 
     def response_headers(self) -> dict[str, str]:
         ray = f"{secrets.token_hex(8)}-SJC"
-        return {"via": "1.1 google", "cf-cache-status": "DYNAMIC", "cf-ray": ray}
+        return {
+            "server": "cloudflare",
+            "via": "1.1 google",
+            "cf-cache-status": "DYNAMIC",
+            "cf-ray": ray,
+        }
 
-    def admin_routes(self, router: APIRouter, store: MockStore) -> None:
-        account_api.register_admin_routes(router, store)
+    def admin_routes(self, router: APIRouter, store: MockStore, access: AdminAccess) -> None:
+        account_api.register_admin_routes(router, store, access)
+
+    def admin_pages(self, router: APIRouter, store: MockStore, access: AdminAccess) -> None:
+        account_api.register_admin_pages(router, access)
 
     def cli_commands(self, groups: Any) -> None:
         account_api.register_cli(groups)
@@ -573,20 +591,7 @@ class ParallelPlugin(ProviderPlugin):
 
     # --------------------------------------------------------------- search
 
-    def _token_refused(self, context: OperationContext) -> MockResponse | None:
-        """Refuse an expired or orphaned OAuth access token used as a product key."""
-
-        presented = header_value(context.request, "x-api-key")
-        if presented is None or account_api.token_claims(presented) is None:
-            return None
-        if isinstance(account_api.ParallelAccount(context.store).access(presented), str):
-            return context.error(ErrorKind.AUTH_INVALID)
-        return None
-
     async def _search(self, context: OperationContext) -> MockResponse:
-        refused = self._token_refused(context)
-        if refused is not None:
-            return refused
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request
@@ -657,9 +662,6 @@ class ParallelPlugin(ProviderPlugin):
     # -------------------------------------------------------------- extract
 
     async def _extract(self, context: OperationContext) -> MockResponse:
-        refused = self._token_refused(context)
-        if refused is not None:
-            return refused
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request

@@ -9,6 +9,7 @@ Examples::
 
     polyweb-mock seed --reset
     polyweb-mock credits add tavily 500
+    polyweb-mock account set keenable reset_day=17
     polyweb-mock fault add tavily --op search --kind rate_limit --probability 0.5 \\
         --count 10 --duration 10m
     polyweb-mock latency set tavily --ms 800 --jitter 200
@@ -108,6 +109,24 @@ def _credits(args: argparse.Namespace, store: MockStore) -> Any:
     if args.action == "add":
         return store.add_credits(args.provider, args.amount, args.account)
     return store.set_credits(args.provider, args.amount, args.account, used=args.used)
+
+
+def _attribute(text: str) -> tuple[str, Any]:
+    name, sep, raw = text.partition("=")
+    if not sep or not name.strip():
+        raise argparse.ArgumentTypeError(f"expected NAME=VALUE, not {text!r}")
+    try:
+        value: Any = json.loads(raw) if raw else None
+    except json.JSONDecodeError:
+        value = raw
+    return name.strip(), value
+
+
+def _account(args: argparse.Namespace, store: MockStore) -> Any:
+    if args.action == "show":
+        return store.accounts(args.provider)
+    plugin(args.provider)
+    return store.set_account_attributes(args.provider, dict(args.attributes), args.account)
 
 
 def _pricing(args: argparse.Namespace, store: MockStore) -> Any:
@@ -260,6 +279,17 @@ def _credits_parser(groups: Any) -> None:
     put.add_argument("--account")
     put.add_argument("--used", type=_decimal, help="also set the used credits")
     credits.set_defaults(handler=_credits)
+
+    account = groups.add_parser("account", help="show accounts or set account attributes")
+    actions = account.add_subparsers(dest="action", required=True)
+    actions.add_parser("show").add_argument("provider", nargs="?")
+    attrs = actions.add_parser(
+        "set", help="merge NAME=VALUE attributes (JSON values; NAME= removes one)"
+    )
+    attrs.add_argument("provider")
+    attrs.add_argument("attributes", nargs="+", type=_attribute, metavar="NAME=VALUE")
+    attrs.add_argument("--account", help="account id (default: the provider's first account)")
+    account.set_defaults(handler=_account)
 
 
 def _pricing_parser(groups: Any) -> None:

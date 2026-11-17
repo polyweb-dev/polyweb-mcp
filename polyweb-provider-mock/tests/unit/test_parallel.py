@@ -6,6 +6,7 @@ token lifetimes are deterministic.
 
 import json
 import random
+import sqlite3
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -733,6 +734,81 @@ async def test_admin_device_page_and_decisions(client: httpx.AsyncClient) -> Non
     assert all("device_code" not in item for item in state["devices"])
     settings = await client.put("/_mock/parallel/oauth/settings", json={"auto_approve": True})
     assert settings.json()["auto_approve"] is True
+
+
+async def test_device_page_stays_usable_behind_the_admin_token(store: MockStore) -> None:
+    app = MockApplication(store, discover(), admin_token="s3cret", rng=random.Random(7))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8212") as http:
+        client_id = await _register(http)
+        devices = [(await _device(http, client_id)).json() for _ in range(3)]
+        first, second, third = [{"user_code": item["user_code"]} for item in devices]
+        page = await http.get("/_mock/parallel/oauth/device", params=first)
+        refused = await http.post("/_mock/parallel/oauth/approve", data=first)
+        posted = await http.post(
+            "/_mock/parallel/oauth/approve", data={**first, "admin_token": "s3cret"}
+        )
+        remembered = await http.post("/_mock/parallel/oauth/deny", data=second)
+        http.cookies.clear()
+        linked = await http.get(
+            "/_mock/parallel/oauth/device", params={**third, "admin_token": "s3cret"}
+        )
+        by_cookie = await http.post("/_mock/parallel/oauth/approve", data=third)
+        http.cookies.clear()
+        wrong = await http.get("/_mock/parallel/oauth/device", params={"admin_token": "nope"})
+        overview = await http.get("/_mock/parallel/oauth")
+
+    assert page.status_code == 200 and 'name="admin_token"' in page.text
+    assert refused.status_code == 401
+    assert posted.status_code == 200 and "approved" in posted.text
+    assert "polyweb_mock_admin" in posted.headers["set-cookie"]
+    assert remembered.status_code == 200 and "denied" in remembered.text
+    assert linked.status_code == 200 and 'name="admin_token"' not in linked.text
+    assert "httponly" in linked.headers["set-cookie"].lower()
+    assert by_cookie.status_code == 200
+    assert "set-cookie" not in wrong.headers and 'name="admin_token"' in wrong.text
+    assert overview.status_code == 401
+    assert all("s3cret" not in json.dumps(item) for item in devices)
+
+
+async def test_oauth_and_minted_key_secrets_never_reach_the_request_log(
+    client: httpx.AsyncClient, store: MockStore, clock: Clock
+) -> None:
+    client_id, tokens = await _connect(client, store, clock, scope="apps:read keys:create")
+    bearer = {**API, "Authorization": f"Bearer {tokens['access_token']}"}
+    app_id = (await client.get("/account/service/v1/apps", headers=bearer)).json()["apps"][0]
+    minted = await client.post(
+        f"/account/service/v1/apps/{app_id['app_id']}/keys",
+        json={"api_key_name": "ci"},
+        headers=bearer,
+    )
+    rotated = (await _refresh(client, client_id, tokens["refresh_token"])).json()
+    token_key = {**API, "x-api-key": rotated["access_token"]}
+    assert (await client.post("/v1/search", json=_SEARCH, headers=token_key)).status_code == 200
+    raw_key = minted.json()["raw_api_key"]
+    await client.post("/v1/search", json=_SEARCH, headers={**API, "x-api-key": raw_key})
+
+    with sqlite3.connect(store.db.path) as conn:
+        dumped = json.dumps(conn.execute("SELECT * FROM request_log").fetchall())
+    secrets = [
+        tokens["access_token"],
+        tokens["refresh_token"],
+        rotated["access_token"],
+        rotated["refresh_token"],
+        raw_key,
+    ]
+    assert all(secret not in dumped for secret in secrets)
+    assert "eyJ" not in dumped
+    token_rows = [entry for entry in store.log_tail("parallel", 50) if entry.operation == "token"]
+    assert token_rows
+    assert all(entry.request_summary["body"]["logged"] is False for entry in token_rows)
+    with_bodies = store.log_tail("parallel", 50, with_bodies=True)
+    assert all(
+        entry.response_body is None
+        for entry in with_bodies
+        if entry.operation in {"register", "device_code", "token", "revoke", "create_key"}
+    )
+    assert any(entry.response_body for entry in with_bodies if entry.operation == "search")
 
 
 class _Cli:

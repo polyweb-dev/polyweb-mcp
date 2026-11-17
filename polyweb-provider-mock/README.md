@@ -1,59 +1,264 @@
 # Polyweb provider mock
 
-A development-only FastAPI app that impersonates the provider APIs Polyweb
-calls. It keeps accounts, keys, credits, pricing, keyless budgets, a usage
-ledger, a request log, fault rules, and saved fixtures in SQLite. The admin
-CLI `polyweb-mock` changes that state while the server runs.
+A development-only FastAPI app that impersonates every provider API Polyweb
+calls: Exa, Tavily, Firecrawl, Parallel, You.com, Brave, Keenable, and
+Tinyfish. Each provider answers on its real paths with its real status codes,
+headers, JSON bodies, error envelopes, authentication, and usage or balance
+endpoints. Polyweb does not know that it talks to a mock.
 
-> Status: phase 1. Tavily is complete; the other providers follow the same
-> plugin interface. The integration phase finishes this document.
+State lives in SQLite: accounts, keys, credits, pricing, keyless budgets, a
+usage ledger, a request log, fault rules, and saved fixtures. The admin CLI
+`polyweb-mock` (and the `/_mock` admin API) changes that state while the
+server runs; the next request sees the change.
+
+The mock is never part of the production stack. It has its own
+`pyproject.toml` and `uv.lock`, it is not a workspace member of the root
+project, and the production image does not contain it.
 
 ## Run it
 
 ```bash
 cd polyweb-provider-mock
 uv sync
-uv run polyweb-provider-mock            # 127.0.0.1:8212, state in ./mock.db
-uv run polyweb-mock seed                # default accounts, keys, and prices
-uv run polyweb-mock export-keys         # POLYWEB_<PROVIDER>_API_KEY=... lines
+uv run polyweb-provider-mock            # 127.0.0.1:8212, state in ./mock.db (seeded on first start)
+uv run polyweb-mock seed                # default accounts, keys, and prices (idempotent)
+uv run polyweb-mock export-keys         # POLYWEB_<PROVIDER>_API_KEY=... lines for Polyweb
 ```
 
-Then start Polyweb with `POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:8212`
-(never in production; startup refuses it). Polyweb's shared HTTP client
-factory reroutes every known provider host to the mock and keeps the real
-`Host` header, which the mock routes by.
+Then start Polyweb with `POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:8212`.
+Seeded keys are fake but match each provider's real format (`tvly-dev-mock...`,
+`fc-mock...`, `BSAmock...`, `keen_mock...`).
 
-Settings: `POLYWEB_PROVIDER_MOCK_HOST`, `POLYWEB_PROVIDER_MOCK_PORT` (8212),
-`POLYWEB_PROVIDER_MOCK_DB`, `POLYWEB_PROVIDER_MOCK_ADMIN_TOKEN` (protects
-`/_mock/*`), `POLYWEB_PROVIDER_MOCK_AUTO_SEED` (default on),
-`POLYWEB_PROVIDER_MOCK_RANDOM_SEED`.
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `POLYWEB_PROVIDER_MOCK_HOST` | `127.0.0.1` | bind host (also an admin host name) |
+| `POLYWEB_PROVIDER_MOCK_PORT` | `8212` | bind port |
+| `POLYWEB_PROVIDER_MOCK_DB` | `polyweb-provider-mock/mock.db` | state database (WAL) |
+| `POLYWEB_PROVIDER_MOCK_ADMIN_TOKEN` | unset | protects `/_mock/*` (see below) |
+| `POLYWEB_PROVIDER_MOCK_AUTO_SEED` | on | seed a database that was never seeded |
+| `POLYWEB_PROVIDER_MOCK_RANDOM_SEED` | unset | repeatable fault probabilities and jitter |
+
+## How routing works
+
+1. **Polyweb side.** With `POLYWEB_PROVIDER_MOCK_URL` set, Polyweb's startup
+   calls `install_provider_mock` once (`src/polyweb/infrastructure/provider_mock.py`).
+   It wraps the HTTPX transport classes, so a request to a known provider
+   host (`api.exa.ai`, `admin-api.exa.ai`, `api.tavily.com`,
+   `api.firecrawl.dev`, `api.parallel.ai`, `platform.parallel.ai`,
+   `api.you.com`, `ydc-index.io`, `api.ydc-index.io`, `api.search.brave.com`,
+   `api.keenable.ai`, `api.search.tinyfish.ai`, `api.fetch.tinyfish.ai`) goes
+   to the mock origin with the same method, path, query, body, and headers,
+   including the original `Host`. This one branch covers the shared client,
+   borrowed transports, and the SDK-owned clients of Exa and Firecrawl. A blank
+   value turns it off; `environment=production` refuses to start with it.
+2. **Mock side.** The mock dispatches by the `Host` header (port stripped) to
+   the provider plugin that claims the host; an operation can be scoped to
+   one host (Tinyfish serves search and fetch on `/` of two hosts). The mock's
+   own names (`localhost`, `127.0.0.1`, `::1`, `0.0.0.0`, `provider-mock`,
+   `polyweb-provider-mock`, the bind host) reach the `/_mock` admin API and
+   `/_mock/health`. Any other host gets `421 Misdirected Request`.
+3. **Headers.** uvicorn sends no `Server` header; each plugin sends the
+   provider's recorded one (`cloudflare`, `awselb/2.0`, `uvicorn`, ...) or none.
+
+Proxy caveat: a client that uses a proxy transport (`HTTPS_PROXY`,
+`HTTP_PROXY`, or an SDK proxy mount) sends the rerouted request through that
+proxy. Unset the proxy variables, or add the mock host to `NO_PROXY`.
+
+Try it by hand:
+
+```bash
+key=$(uv run polyweb-mock export-keys --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["POLYWEB_TAVILY_API_KEY"])')
+curl -s http://127.0.0.1:8212/search -H 'Host: api.tavily.com' \
+  -H "Authorization: Bearer $key" -H 'Content-Type: application/json' -d '{"query": "polyweb"}'
+```
+
+## Admin API and token
+
+`/_mock/docs` lists the admin API; every CLI command has a route. Without
+`POLYWEB_PROVIDER_MOCK_ADMIN_TOKEN` the admin API is open (bind it to
+loopback). With a token, every `/_mock` route needs `Authorization: Bearer
+<token>`, except `/_mock/health` and plugin pages. The CLI writes the
+database directly and needs no token.
+
+Plugin pages render forms only. The Parallel device page
+`/_mock/parallel/oauth/device?user_code=ABCD-EFGH` (the `verification_uri`
+that Polyweb shows) stays usable behind the token: its form asks for the
+token, or open it once with `&admin_token=<token>` to keep the token in an
+HttpOnly, `SameSite=Strict` cookie for `/_mock`. The approve and deny routes it
+posts to stay guarded. The token never appears in a provider response.
+
+<!-- DEV-STACK START -->
+_The dev-stack section (Compose, scripts, and CI wiring) is filled in by the integration phase._
+<!-- DEV-STACK END -->
+
+## CLI reference (`polyweb-mock`)
+
+Every command prints JSON and takes `--db PATH` (default
+`POLYWEB_PROVIDER_MOCK_DB`). `PROVIDER` is a plugin name (`polyweb-mock
+scenario list` shows them all); fault and latency commands also accept `*`.
+
+```bash
+polyweb-mock seed [--reset]                         # default accounts, keys, keyless settings, prices
+polyweb-mock reset                                  # delete all state (then seed again)
+polyweb-mock keys list [--provider tavily]
+polyweb-mock keys create tavily --label ci [--scope search] [--limit 50] [--env-var NAME] [--key VALUE] [--account ID]
+polyweb-mock keys revoke tavily ci                  # by label or key value; `keys restore` undoes it
+polyweb-mock credits show [tavily]
+polyweb-mock credits add tavily 500                 # raise the allowance
+polyweb-mock credits set tavily 0                   # remaining balance; `unlimited` removes the cap; --used N
+polyweb-mock account show [keenable]
+polyweb-mock account set keenable reset_day=17      # JSON attribute values; NAME= removes one
+polyweb-mock account set tinyfish search_per_minute=5 wallet_balance='"10.00"'
+polyweb-mock pricing show [exa]
+polyweb-mock pricing set tavily search.basic --credits 2 --usd 0.016 [--unit request] [--rule per_unit|accumulate]
+polyweb-mock keyless show [firecrawl]
+polyweb-mock keyless set tavily --enable --per-day 500 --per-minute none   # or --disable
+polyweb-mock fault list
+polyweb-mock fault add tavily --op search --kind rate_limit --probability 0.5 --count 10 --duration 10m --retry-after 30
+polyweb-mock fault add exa --kind timeout --seconds 45                      # hold, then close
+polyweb-mock fault add '*' --kind malformed --variant truncated
+polyweb-mock fault disable 3 && polyweb-mock fault enable 3
+polyweb-mock fault clear [--id 3] [--provider tavily] [--scenario NAME] [--kind latency]
+polyweb-mock latency set brave --ms 800 --jitter 200 [--op web_search]
+polyweb-mock latency clear brave
+polyweb-mock scenario list
+polyweb-mock scenario apply tavily-down
+polyweb-mock scenario clear [tavily-down]           # all presets without a name
+polyweb-mock fixtures list [--provider tavily]
+polyweb-mock fixtures save tavily search "polyweb test" --file body.json [--status 200]
+polyweb-mock fixtures save --from-log 42            # the logged response, under its match key
+polyweb-mock fixtures delete 7
+polyweb-mock log tail [--provider tavily] [--limit 50] [--bodies]
+polyweb-mock export-keys [--format dotenv|json]
+polyweb-mock parallel oauth show                    # settings, device codes, sessions (no secrets)
+polyweb-mock parallel oauth approve ABCD-EFGH [--account parallel-org]
+polyweb-mock parallel oauth deny ABCD-EFGH          # or: expire ABCD-EFGH
+polyweb-mock parallel oauth revoke-sessions
+polyweb-mock parallel oauth set --auto-approve on --token-product-access off --access-ttl 60
+polyweb-mock parallel balance show [--account ID]
+polyweb-mock parallel balance set --pending-cents 250 --will-invoice off
+```
+
+Fixtures replace synthetic content for `(provider, operation, match key)`:
+the normalized query for searches, the normalized URL for fetches. The
+request log never holds a presented key, an auth or cookie header, a token,
+secret, or key field, or a JWT; operations that carry tokens or minted keys
+(Parallel OAuth and key minting) log no bodies at all.
 
 ## Faults
 
-```bash
-uv run polyweb-mock fault add tavily --op search --kind rate_limit \
-    --probability 0.5 --count 10 --duration 10m
-uv run polyweb-mock latency set tavily --ms 800 --jitter 200
-uv run polyweb-mock scenario list
-uv run polyweb-mock scenario apply tavily-down
-uv run polyweb-mock scenario clear
-```
+A rule targets a provider (or `*`) and an operation (or `*`), fires with
+`--probability`, at most `--count` times, until `--duration` ends. Every
+firing `latency` rule adds its delay; the first firing rule of another kind
+decides the outcome. Rules apply live, in creation order.
 
-Kinds: `latency`, `timeout`, `http_error`, `outage`, `rate_limit`,
-`quota_exhausted`, `auth_invalid`, `malformed`, `connection_drop`.
+| Kind | Parameters | Effect |
+| --- | --- | --- |
+| `latency` | `--ms`, `--jitter` | adds delay; stacks with every other rule |
+| `timeout` | `--seconds` (30), `--status` | holds the request, then closes the connection without a response; with `--status` (for example 504) answers that status after the hold |
+| `http_error` | `--status` (500), `--message` | the provider's error for that status |
+| `outage` | `--status` (503) | the provider's 503 (or 502) |
+| `rate_limit` | `--retry-after` (60), `--no-retry-after-header` | the provider's 429 with its rate headers |
+| `quota_exhausted` | `--status`, `--scope` | the provider's credit exhaustion; billed operations only |
+| `auth_invalid` | `--status` | the provider's wrong-key answer |
+| `malformed` | `--variant` `invalid_json`, `truncated`, `wrong_content_type`, `missing_field` | damages a success response |
+| `connection_drop` | none | aborts the TCP connection before any byte |
+
+Per provider, the faults render as the real provider does:
+
+| Provider | `auth_invalid` | `rate_limit` | `quota_exhausted` | `outage` / 5xx |
+| --- | --- | --- | --- | --- |
+| Tavily | 401 `{"detail": {"error"}}` | 429 + `Retry-After`; keyless 429 `daily_cap_reached` | 432; `--scope paygo` 433; `--status 402` | `{"detail": {"error"}}` |
+| Exa | 401 `INVALID_API_KEY` (no key: 402 x402 challenge); admin API 401 | 429 `RATE_LIMIT_EXCEEDED` | 402 `NO_MORE_CREDITS`; `--scope key`/`team` budgets | 503 `SERVICE_OVERLOADED`, tagged 5xx |
+| Firecrawl | 401 `Unauthorized: Invalid token` | 429 + `Retry-After` | 402 | `{"success": false}`; `http_error --status 408 --scope processing_continues` = scrape resume |
+| Parallel | 401 `{"code": 16}` (C.0/C.1); Account API gateway 401; OAuth `invalid_client` | v1 envelope 429 + `Retry-After` | 402 v1 envelope (OAuth: 500) | v1 envelope; OAuth errors on `platform.parallel.ai` |
+| You.com | gateway 403 `Forbidden` (no key: 402); `api.you.com` 401 | gateway 429 + `X-RateLimit-*` | 402 `payment_required`; `--scope key` 429 `spend_cap_exceeded` | AWS gateway or FastAPI bodies |
+| Brave | edge 422 `SUBSCRIPTION_TOKEN_INVALID` | 429 `RATE_LIMITED` + ledger `X-RateLimit-*` | 429 `QUOTA_LIMITED`; `--scope credits` 402; `--scope spend_cap` 429 | 502/503/504 AWS ELB HTML page |
+| Keenable | 401 `invalid_api_key` (`Malformed API key` without `keen_`) | 429 `rate_limit_per_second`; keyless `public_rate_limit_*` | 402 `insufficient_credits` | 500, 503 `auth_unavailable`, 529 `search_overloaded`, fetch 502/504 |
+| Tinyfish | 401 `INVALID_API_KEY` / `MISSING_API_KEY` | 429 `RATE_LIMIT_EXCEEDED` + `X-RateLimit-*` | 402 `INSUFFICIENT_CREDITS` (plan `beta`: `FREE_ALLOWANCE_EXHAUSTED`) | 503 `BACKEND_UNAVAILABLE`, 500 `INTERNAL_ERROR` |
+
+**Timeouts and SDK-owned clients.** The default hold (30 s) is longer than
+Polyweb's default `POLYWEB_HTTP_TIMEOUT_SECONDS` (20 s), so adapters on the
+shared client time out first (`timeout_error` or `transport_error`, both
+retryable). The Exa SDK (`AsyncExa`) owns an HTTPX client with a 600 s
+timeout, and the Firecrawl SDK sets no timeout at all: they wait for the
+whole hold and then see the connection close, which Polyweb reports as a
+retryable `transport_error`. A timeout never becomes a 504 by itself; add
+`--status 504` to model an upstream gateway timeout. The end-to-end tests
+`tests/e2e/test_{tavily,exa,firecrawl}_polyweb.py` cover each case.
+
+## Scenario presets
+
+`polyweb-mock scenario apply NAME` adds the preset's rules tagged with its
+name; `scenario clear NAME` removes exactly those rules.
+
+| Preset | Rules |
+| --- | --- |
+| `all-providers-down` | every operation answers 503 in its provider's format |
+| `<provider>-down` | the same for one provider (one preset per plugin) |
+| `slow-network` | +1.5 s latency plus up to 1 s jitter on every call |
+| `flaky-10pct` | 5% HTTP 500, 3% HTTP 502, 2% dropped connections |
+| `credits-exhausted` | every billed operation answers its credit exhaustion error |
+| `rate-limit-storm` | half of all calls answer 429 with `Retry-After: 5` |
+
+Add a preset as `src/polyweb_provider_mock/scenarios/<name>.json`:
+`{"description": "...", "faults": [FaultSpec, ...]}`.
 
 ## Add a provider
 
-Create `src/polyweb_provider_mock/providers/<name>.py` that exports
-`PLUGIN`, an instance of a `ProviderPlugin` subclass. See the interface in
-`providers/base.py` and the reference implementation in `providers/tavily.py`.
-Put sanitized recordings in `tests/contract/recordings/<name>/` and add a
-contract test like `tests/contract/test_tavily_contract.py`.
+1. Create `src/polyweb_provider_mock/providers/<name>.py` that exports
+   `PLUGIN`, an instance of a `ProviderPlugin` subclass (discovery needs no
+   central edit; modules whose name starts with `_` are helpers). Implement
+   `operations()` (real method and path, operation name, `billable`,
+   `keyless`, `scopes`, `hosts`, `log_body`), `credentials(request, store)`,
+   `default_seed()`, `default_pricing()`, and `error(kind, context)` for every
+   `ErrorKind` in the provider's real format. Optional hooks:
+   `response_headers()` (include the real `Server` header), `not_found()`,
+   `drop_required_field()`, `admin_routes()`, `admin_pages()`, `cli_commands()`.
+2. In handlers, validate the request, bill with `context.charge()` (or
+   `context.charge_all()` for a request billed in parts, all or nothing),
+   spend provider rate windows with `context.admit()`, honour saved fixtures
+   with `context.fixture()`, and set `context.match_key`. Keep extra state
+   in `store.state(namespace)` and account facts in
+   `store.set_account_attributes()`; never write SQL in a plugin.
+3. Add the host to `PROVIDER_API_HOSTS` in Polyweb's
+   `src/polyweb/infrastructure/provider_mock.py`.
+4. Put sanitized recordings in `tests/contract/recordings/<name>/`, scrub the
+   success bodies with `uv run python -m tests._support.scrub
+   tests/contract/recordings/<name>/*.json`, and add a contract test like
+   `tests/contract/test_tavily_contract.py` (shape helper:
+   `tests._support.shape.assert_same_shape`). Add unit tests and an
+   end-to-end test that drives the real Polyweb adapter through the shared
+   `mock_server` fixture (`tests/conftest.py`).
+
+`providers/base.py` documents the interface; `providers/tavily.py` is the
+reference implementation.
+
+## Fidelity
+
+**Recorded**: live exchanges of 2026-11-17 in `tests/contract/recordings`;
+the contract tests replay each one and check the status, the important
+headers, and the JSON shape. Success bodies are scrubbed (Brave's terms forbid
+storing results): values are synthetic, the structure is real.
+**Documented**: from the provider's public reference, without a capture.
+**Inferred**: neither; chosen to be plausible and documented in the plugin.
+
+| Provider | Recorded | Documented only | Inferred, known gaps |
+| --- | --- | --- | --- |
+| Tavily | search, extract, usage, keyless, 401/422/400 errors (15) | 432/433 exhaustion, 429 | keyed 429 body; extract credit carry as observed |
+| Exa | search, contents, usage, x402 402 challenge, 401/400 (14) | budgets, 503, 429 tags | 429/5xx/budget/revoked-key messages; synthetic company `entities` |
+| Firecrawl | search, scrape, credit usage, 401/400 (12) | 402, 429, scrape resume (408) | 402/429/5xx/keyless-cap/DNS messages; keyless cap 50/day; `branding`/`product`/`menu`/`attributes` formats return no content |
+| Parallel | search, extract, 401/422, balance 401 (10) | Account API, OAuth device flow, key minting, 402/403/429/5xx | no live device flow; expired-token gateway wording; OAuth token as `x-api-key` accepted (unverified, toggle `--token-product-access`) |
+| You.com | search, contents, balance, 401/402/403/422 (14) | live-page pricing, spend cap | revoked keys, 429 and spend-cap bodies, exhausted-wallet body, 5xx bodies |
+| Brave | web search, LLM context, 400/422 (10) | rate-limit headers, plans | revoked key, every 429/402 body, prepaid exhaustion status, outage pages; Answers key on Web Search |
+| Keenable | keyless search and fetch, 400s (8) | keyed paths, 401/402/403, retryable 5xx | keyed rate headers; allowance resets on the UTC month unless `account set keenable reset_day=N` (real: organization creation day); purchased credits reset monthly |
+| Tinyfish | 401 missing and bogus key on both hosts (4) | search, fetch, usage, limits, 402/429 | every success shape; JSON `format` tree; invalid-request and usage-read limits not modelled |
 
 ## Checks
 
 ```bash
-uv run pytest -q
+uv sync
+uv run pytest -q -n auto            # unit, contract, and end-to-end tests
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src
 ```

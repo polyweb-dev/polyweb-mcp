@@ -16,11 +16,15 @@ import httpx
 import pytest
 
 from polyweb_provider_mock.store import MockStore
-from tests.contract._exa_firecrawl_shape import assert_same_shape
+from tests._support.shape import assert_same_shape
 
 _RECORDINGS = sorted((Path(__file__).parent / "recordings" / "firecrawl").glob("*.json"))
 _WRONG_KEY = "fc-00000000000000000000000000000000"
 _PRESENCE = ("www-authenticate", "x-response-time", "access-control-allow-origin", "retry-after")
+
+
+def _same_shape(recorded: Any, mocked: Any) -> None:
+    assert_same_shape(recorded, mocked, lists="pairwise")
 
 
 def _headers(name: str, recording: dict[str, Any], key: str) -> dict[str, str]:
@@ -69,7 +73,7 @@ async def test_mock_matches_recorded_exchange(
             response.headers["www-authenticate"]
             == (recording["response_headers"]["www-authenticate"])
         )
-    assert_same_shape(recording["response_body"], response.json())
+    _same_shape(recording["response_body"], response.json())
 
 
 async def test_bad_format_union_lists_every_format_branch(

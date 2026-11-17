@@ -9,8 +9,8 @@ import httpx
 import pytest
 
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
-from polyweb_provider_mock.providers._rate_windows import WindowSpec, add
 from polyweb_provider_mock.store import MockStore
+from polyweb_provider_mock.windows import WindowSpec
 
 _SEARCH_HOST = {"Host": "api.search.tinyfish.ai"}
 _FETCH_HOST = {"Host": "api.fetch.tinyfish.ai"}
@@ -285,7 +285,7 @@ async def test_minute_limit_is_per_account(
 ) -> None:
     store.now = lambda: datetime(2026, 11, 17, 12, 0, 30, tzinfo=UTC)
     account = store.account("tinyfish").id
-    add(store, WindowSpec(f"tinyfish:{account}:search:minute", 30, 60, aligned=True), 30)
+    store.count_window(WindowSpec(f"tinyfish:{account}:search:minute", 30, 60, aligned=True), 30)
 
     response = await client.get("/", params=_QUERY, headers=search_headers)
 
@@ -308,7 +308,7 @@ async def test_fetch_minute_limit_counts_urls(
 ) -> None:
     store.now = lambda: datetime(2026, 11, 17, 12, 0, 0, tzinfo=UTC)
     account = store.account("tinyfish").id
-    add(store, WindowSpec(f"tinyfish:{account}:fetch:minute", 150, 60, aligned=True), 149)
+    store.count_window(WindowSpec(f"tinyfish:{account}:fetch:minute", 150, 60, aligned=True), 149)
     two = {"urls": ["https://a.example.org/x", "https://b.example.org/y"]}
 
     response = await client.post("/", json=two, headers=fetch_headers)
@@ -321,7 +321,7 @@ async def test_daily_allowance_then_empty_wallet_is_402(
     client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
 ) -> None:
     account = store.account("tinyfish").id
-    add(store, WindowSpec(f"tinyfish:{account}:fetch:day", 1000, 86400, aligned=True), 1000)
+    store.count_window(WindowSpec(f"tinyfish:{account}:fetch:day", 1000, 86400, aligned=True), 1000)
 
     response = await client.post("/", json=_FETCH, headers=fetch_headers)
 

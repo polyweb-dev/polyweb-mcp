@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from polyweb_provider_mock.store import MockStore
+from tests._support.shape import assert_same_shape
 
 _RECORDINGS = sorted((Path(__file__).parent / "recordings" / "tavily").glob("*.json"))
 _FORWARDED = {"content-type", "x-client-source", "x-tavily-access-mode", "user-agent"}
@@ -30,28 +31,8 @@ _SETUP: dict[str, Callable[[MockStore], object]] = {
 }
 
 
-def _kind(value: Any) -> str:
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, (int, float)):
-        return "number"
-    if value is None:
-        return "null"
-    return type(value).__name__
-
-
-def assert_same_shape(recorded: Any, mocked: Any, path: str = "$") -> None:
-    """Assert equal keys and value types recursively; list items match the first item."""
-
-    assert _kind(mocked) == _kind(recorded), f"{path}: {_kind(mocked)} != {_kind(recorded)}"
-    if isinstance(recorded, dict):
-        assert set(mocked) == set(recorded), f"{path}: keys {sorted(mocked)} != {sorted(recorded)}"
-        for key, value in recorded.items():
-            assert_same_shape(value, mocked[key], f"{path}.{key}")
-    elif isinstance(recorded, list) and recorded:
-        assert mocked, f"{path}: the mock returned an empty list"
-        for index, item in enumerate(mocked):
-            assert_same_shape(recorded[0], item, f"{path}[{index}]")
+def _same_shape(recorded: Any, mocked: Any) -> None:
+    assert_same_shape(recorded, mocked)
 
 
 def _headers(name: str, recording: dict[str, Any], key: str) -> dict[str, str]:
@@ -61,22 +42,6 @@ def _headers(name: str, recording: dict[str, Any], key: str) -> dict[str, str]:
     if "authorization" in recorded:
         headers["authorization"] = f"Bearer {_WRONG_KEY if 'invalid_key' in name else key}"
     return headers
-
-
-@pytest.mark.parametrize(
-    ("recorded", "mocked"),
-    [
-        ({"a": 1, "b": None}, {"a": 1}),
-        ({"a": 1}, {"a": "1"}),
-        ({"a": None}, {"a": "x"}),
-        ({"a": [{"x": 1}]}, {"a": [{"y": 1}]}),
-        ({"a": [{"x": 1}]}, {"a": []}),
-        ({"a": True}, {"a": 1}),
-    ],
-)
-def test_shape_comparison_rejects_mismatches(recorded: Any, mocked: Any) -> None:
-    with pytest.raises(AssertionError):
-        assert_same_shape(recorded, mocked)
 
 
 def test_every_recording_is_sanitized() -> None:
@@ -113,4 +78,4 @@ async def test_mock_matches_recorded_exchange(
     assert ("retry-after" in response.headers) == ("retry-after" in recording["response_headers"])
     if "retry-after" in response.headers:
         assert int(response.headers["retry-after"]) >= 0
-    assert_same_shape(recording["response_body"], response.json())
+    _same_shape(recording["response_body"], response.json())

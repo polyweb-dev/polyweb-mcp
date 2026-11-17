@@ -17,7 +17,7 @@ import httpx
 import pytest
 
 from polyweb_provider_mock.store import MockStore
-from tests.contract.test_tavily_contract import assert_same_shape
+from tests._support.shape import assert_same_shape
 
 _RECORDINGS = sorted((Path(__file__).parent / "recordings" / "tinyfish").glob("*.json"))
 _FORWARDED = {"content-type", "user-agent", "accept"}
@@ -45,6 +45,10 @@ _FETCH_ITEM = {
     "latency_ms": "int|float|NoneType",
     "format": "str",
 }
+
+
+def _same_shape(recorded: Any, mocked: Any) -> None:
+    assert_same_shape(recorded, mocked)
 
 
 def _assert_documented(body: dict[str, Any], fields: dict[str, str]) -> None:
@@ -87,7 +91,7 @@ async def test_mock_matches_recorded_exchange(path: Path, client: httpx.AsyncCli
     assert "retry-after" not in response.headers
     mocked = response.json()
     assert mocked == {**recording["response_body"], "request_id": response.headers["x-request-id"]}
-    assert_same_shape(recording["response_body"], mocked)
+    _same_shape(recording["response_body"], mocked)
 
 
 async def test_search_success_has_the_documented_fields(

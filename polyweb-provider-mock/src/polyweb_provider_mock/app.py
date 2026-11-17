@@ -64,9 +64,8 @@ class MockApplication:
         generator = rng or random.Random()
         self.routes: dict[str, ASGIApp] = {}
         for plugin in self.plugins.values():
-            app = build_provider_app(plugin, store, generator)
             for host in plugin.hosts:
-                self.routes[host] = app
+                self.routes[host] = build_provider_app(plugin, store, generator, host)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":

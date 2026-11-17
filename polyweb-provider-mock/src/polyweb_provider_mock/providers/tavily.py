@@ -52,7 +52,7 @@ from polyweb_provider_mock.providers.base import (
     bearer_token,
     header_value,
 )
-from polyweb_provider_mock.store import Charge
+from polyweb_provider_mock.store import Charge, MockStore
 
 __all__ = ["PLUGIN", "TavilyPlugin"]
 
@@ -235,7 +235,7 @@ class TavilyPlugin(ProviderPlugin):
             Operation("usage", "GET", "/usage", self._usage, billable=False),
         )
 
-    def credentials(self, request: Request) -> Credentials:
+    def credentials(self, request: Request, store: MockStore) -> Credentials:
         mode = (header_value(request, "x-tavily-access-mode") or "").lower()
         return Credentials(key=bearer_token(request), keyless=mode == "keyless")
 

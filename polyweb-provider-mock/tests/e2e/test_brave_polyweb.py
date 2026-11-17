@@ -9,96 +9,28 @@ adapter's unit tests assert for the matching real Brave payload, and the
 ledger-derived ``X-RateLimit-*`` pairs must drive the adapter's quota state.
 """
 
-import socket
-import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import httpx
 import pytest
-import uvicorn
 from polyweb.adapters.brave import BraveAdapter
-from polyweb.configuration.config import Settings
 from polyweb.infrastructure.http import create_async_client
-from polyweb.infrastructure.provider_mock import install_provider_mock, provider_mock_origin
 from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
 from polyweb.models.contracts import SearchRequest
 from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 from pydantic import SecretStr
 
-from polyweb_provider_mock.app import create_app
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
-from polyweb_provider_mock.providers import discover
-from polyweb_provider_mock.settings import MockSettings
 from polyweb_provider_mock.store import MockStore
+from tests._support.live_server import LiveMock, polyweb_settings
 
+MOCK_RANDOM_SEED = 17
 _PROJECT = UUID("00000000-0000-4000-8000-0000000000cc")
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _settings(origin: str) -> Settings:
-    return Settings(
-        _env_file=None,
-        provider_mock_url=origin,
-        http_timeout_seconds=1.5,
-        http_connect_timeout_seconds=1.5,
-    )
-
-
-@pytest.fixture(scope="module")
-def mock_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, MockStore]]:
-    """Serve the mock on a free port and route Polyweb's HTTPX transports to it."""
-
-    db = Path(tmp_path_factory.mktemp("mock")) / "mock.db"
-    port = _free_port()
-    app = create_app(MockSettings(port=port, db_path=db, random_seed=17))
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-            proxy_headers=False,
-            timeout_graceful_shutdown=1,
-        )
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started:
-        assert time.monotonic() < deadline, "the mock server did not start"
-        time.sleep(0.02)
-    origin = f"http://127.0.0.1:{port}"
-    with pytest.MonkeyPatch.context() as patch:
-        # The context restores both HTTPX handlers, which removes the routing.
-        patch.setattr(
-            httpx.AsyncHTTPTransport,
-            "handle_async_request",
-            httpx.AsyncHTTPTransport.handle_async_request,
-        )
-        patch.setattr(httpx.HTTPTransport, "handle_request", httpx.HTTPTransport.handle_request)
-        assert install_provider_mock(_settings(origin)) is True
-        yield origin, app.store
-        server.should_exit = True
-        thread.join(timeout=10)
-
-
-@pytest.fixture
-def store(mock_server: tuple[str, MockStore]) -> MockStore:
-    origin, state = mock_server
-    assert provider_mock_origin() == origin
-    state.seed(discover().values(), reset=True)
-    return state
 
 
 @pytest.fixture
@@ -112,7 +44,7 @@ class _Adapters:
         self.clients: list[httpx.AsyncClient] = []
 
     def __call__(self, key: str) -> BraveAdapter:
-        client = create_async_client(_settings(self.origin))
+        client = create_async_client(polyweb_settings(self.origin))
         self.clients.append(client)
         return BraveAdapter(
             client, api_key=SecretStr(key), runner=ResilientRunner(client, max_attempts=1)
@@ -120,7 +52,7 @@ class _Adapters:
 
 
 @pytest.fixture
-async def adapters(mock_server: tuple[str, MockStore]) -> AsyncIterator[_Adapters]:
+async def adapters(mock_server: LiveMock) -> AsyncIterator[_Adapters]:
     factory = _Adapters(mock_server[0])
     yield factory
     for client in factory.clients:

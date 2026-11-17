@@ -3,101 +3,34 @@
 The mock runs under uvicorn on a free loopback port and Polyweb's startup
 interception (``install_provider_mock`` through ``create_async_client``)
 reroutes ``https://api.keenable.ai`` to it. Each fault must surface with the
+MOCK_RANDOM_SEED = 11
+
 classification that ``tests/unit/adapters/test_keenable*.py`` in Polyweb
 asserts for real payloads: the adapter maps by HTTP status only (402
 ``quota_exhausted``, everything else ``http_error``, retryable for
 429/500/502/503/504 and *not* for Keenable's retryable 529).
 """
 
-import socket
-import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from decimal import Decimal
-from pathlib import Path
 from uuid import UUID
 
 import httpx
 import pytest
-import uvicorn
 from polyweb.adapters.keenable import KeenableAdapter
-from polyweb.configuration.config import Settings
 from polyweb.infrastructure.http import create_async_client
-from polyweb.infrastructure.provider_mock import install_provider_mock, provider_mock_origin
 from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
 from polyweb.models.contracts import FetchRequest, SearchRequest
 from pydantic import SecretStr
 
-from polyweb_provider_mock.app import create_app
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
-from polyweb_provider_mock.providers import discover
-from polyweb_provider_mock.providers._rate_windows import WindowSpec, add
-from polyweb_provider_mock.settings import MockSettings
 from polyweb_provider_mock.store import MockStore
+from polyweb_provider_mock.windows import WindowSpec
+from tests._support.live_server import LiveMock, polyweb_settings
 
 _PROJECT = UUID("00000000-0000-4000-8000-0000000000aa")
 _URL = "https://docs.python.org/3/library/json.html"
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _settings(origin: str) -> Settings:
-    return Settings(
-        _env_file=None,
-        provider_mock_url=origin,
-        http_timeout_seconds=1.5,
-        http_connect_timeout_seconds=1.5,
-    )
-
-
-@pytest.fixture(scope="module")
-def mock_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, MockStore]]:
-    """Serve the mock on a free port and route Polyweb's HTTPX transports to it."""
-
-    db = Path(tmp_path_factory.mktemp("mock")) / "mock.db"
-    port = _free_port()
-    app = create_app(MockSettings(port=port, db_path=db, random_seed=11))
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-            proxy_headers=False,
-            timeout_graceful_shutdown=1,
-        )
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started:
-        assert time.monotonic() < deadline, "the mock server did not start"
-        time.sleep(0.02)
-    origin = f"http://127.0.0.1:{port}"
-    with pytest.MonkeyPatch.context() as patch:
-        # The context restores both HTTPX handlers, which removes the routing.
-        patch.setattr(
-            httpx.AsyncHTTPTransport,
-            "handle_async_request",
-            httpx.AsyncHTTPTransport.handle_async_request,
-        )
-        patch.setattr(httpx.HTTPTransport, "handle_request", httpx.HTTPTransport.handle_request)
-        assert install_provider_mock(_settings(origin)) is True
-        yield origin, app.store
-        server.should_exit = True
-        thread.join(timeout=10)
-
-
-@pytest.fixture
-def store(mock_server: tuple[str, MockStore]) -> MockStore:
-    origin, state = mock_server
-    assert provider_mock_origin() == origin
-    state.seed(discover().values(), reset=True)
-    return state
 
 
 @pytest.fixture
@@ -115,7 +48,7 @@ class _Adapters:
         self.delays.append(delay)
 
     def __call__(self, key: str | None, *, attempts: int = 1) -> KeenableAdapter:
-        client = create_async_client(_settings(self.origin))
+        client = create_async_client(polyweb_settings(self.origin))
         self.clients.append(client)
         runner = ResilientRunner(client, max_attempts=attempts, sleeper=self._sleep)
         return KeenableAdapter(
@@ -124,7 +57,7 @@ class _Adapters:
 
 
 @pytest.fixture
-async def adapters(mock_server: tuple[str, MockStore]) -> AsyncIterator[_Adapters]:
+async def adapters(mock_server: LiveMock) -> AsyncIterator[_Adapters]:
     factory = _Adapters(mock_server[0])
     yield factory
     for client in factory.clients:
@@ -186,7 +119,7 @@ async def test_keyless_hourly_pool_exhaustion_is_retryable(
     store: MockStore, adapters: _Adapters
 ) -> None:
     await adapters(None).search(_search())
-    add(store, WindowSpec("keenable:public:search:hour", 1000, 3600), 1000)
+    store.count_window(WindowSpec("keenable:public:search:hour", 1000, 3600), 1000)
 
     error = (await _error(adapters(None).search(_search()))).error
 

@@ -59,7 +59,7 @@ from polyweb_provider_mock.models import (
     PriceRule,
     ProviderSeed,
 )
-from polyweb_provider_mock.providers._exa_firecrawl_common import charge_all, iso_ms, schema_value
+from polyweb_provider_mock.providers._exa_firecrawl_common import iso_ms, schema_value
 from polyweb_provider_mock.providers.base import (
     Credentials,
     ErrorContext,
@@ -71,11 +71,13 @@ from polyweb_provider_mock.providers.base import (
     bearer_token,
     header_value,
 )
+from polyweb_provider_mock.store import MockStore
 
 __all__ = ["PLUGIN", "ExaPlugin"]
 
 _API_HOST: Final = "api.exa.ai"
 _ADMIN_HOST: Final = "admin-api.exa.ai"
+_API_ONLY: Final = frozenset({_API_HOST})
 _SERVICE_SCOPE: Final = "team_management"
 _JSON: Final = "application/json; charset=utf-8"
 _MISSING: Final[Any] = object()
@@ -339,8 +341,8 @@ class ExaPlugin(ProviderPlugin):
 
     def operations(self) -> Sequence[Operation]:
         return (
-            Operation("search", "POST", "/search", self._search),
-            Operation("contents", "POST", "/contents", self._contents),
+            Operation("search", "POST", "/search", self._search, hosts=_API_ONLY),
+            Operation("contents", "POST", "/contents", self._contents, hosts=_API_ONLY),
             Operation(
                 "usage",
                 "GET",
@@ -348,10 +350,11 @@ class ExaPlugin(ProviderPlugin):
                 self._usage,
                 billable=False,
                 scopes=frozenset({_SERVICE_SCOPE}),
+                hosts=frozenset({_ADMIN_HOST}),
             ),
         )
 
-    def credentials(self, request: Request) -> Credentials:
+    def credentials(self, request: Request, store: MockStore) -> Credentials:
         return Credentials(key=header_value(request, "x-api-key") or bearer_token(request))
 
     def default_seed(self) -> ProviderSeed:
@@ -392,6 +395,9 @@ class ExaPlugin(ProviderPlugin):
         if (request.url.hostname or "") == _ADMIN_HOST:
             return _admin_error(status, phrase)
         return _api_error(status, phrase.upper().replace(" ", "_"), phrase)
+
+    def response_headers(self) -> dict[str, str]:
+        return {"server": "cloudflare"}
 
     def drop_required_field(self, operation: str, body: Any) -> Any:
         if operation == "usage" and isinstance(body, dict):
@@ -486,12 +492,6 @@ class ExaPlugin(ProviderPlugin):
         return _api_error(402, "X402_PAYMENT_REQUIRED", message, headers=headers, extra=challenge)
 
     # ---------------------------------------------------------------- shared
-
-    @staticmethod
-    def _wrong_host(context: OperationContext, host: str) -> MockResponse | None:
-        if (context.request.url.hostname or "") == host:
-            return None
-        return context.plugin.not_found(context.request, 404)
 
     @staticmethod
     def _success(context: OperationContext, body: dict[str, Any]) -> MockResponse:
@@ -670,8 +670,6 @@ class ExaPlugin(ProviderPlugin):
         return query, count, str(kind), contents
 
     async def _search(self, context: OperationContext) -> MockResponse:
-        if (wrong := self._wrong_host(context, _API_HOST)) is not None:
-            return wrong
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request
@@ -693,8 +691,7 @@ class ExaPlugin(ProviderPlugin):
             1 for item in results if isinstance(item, dict) and bool(item.get("summary"))
         )
         extra = max(0, len(results) - _INCLUDED_RESULTS)
-        charges = charge_all(
-            context,
+        charges = context.charge_all(
             [
                 (_SEARCH_TYPES[kind], 1),
                 ("search.extra_result", extra),
@@ -759,8 +756,6 @@ class ExaPlugin(ProviderPlugin):
     # ------------------------------------------------------------- contents
 
     async def _contents(self, context: OperationContext) -> MockResponse:
-        if (wrong := self._wrong_host(context, _API_HOST)) is not None:
-            return wrong
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request
@@ -786,7 +781,7 @@ class ExaPlugin(ProviderPlugin):
                 results.append(item)
         selected = [name for name in _CONTENT_TYPES if _selected(options.get(name))]
         per_type = {name: sum(1 for item in results if name in item) for name in selected}
-        charges = charge_all(context, [(f"contents.{name}", n) for name, n in per_type.items()])
+        charges = context.charge_all([(f"contents.{name}", n) for name, n in per_type.items()])
         spent = {charge.operation.removeprefix("contents."): charge.credits for charge in charges}
         body: dict[str, Any] = {"results": results, "statuses": statuses}
         total = sum(spent.values(), Decimal(0))
@@ -835,8 +830,6 @@ class ExaPlugin(ProviderPlugin):
     # ---------------------------------------------------------------- usage
 
     async def _usage(self, context: OperationContext) -> MockResponse:
-        if (wrong := self._wrong_host(context, _ADMIN_HOST)) is not None:
-            return wrong
         principal = context.principal
         if principal.account is None:
             return context.error(ErrorKind.AUTH_INVALID)

@@ -23,6 +23,10 @@ and the official API reference:
   calls in one second is 429 ``RATE_LIMITED`` with ``Retry-After: 1``.
 - Validation errors are 422 ``VALIDATION`` with pydantic items in
   ``error.meta.errors``.
+- Fault-injected 429s carry the same ledger-based ``X-RateLimit-*`` pairs as
+  the real ones (the pipeline passes the account in the error context). The
+  edge-layer answers (422 auth, ELB pages) send ``Server: awselb/2.0``; the
+  application answers send no ``Server`` header, as recorded.
 
 Unverified (no live sample): the revoked-key answer (rendered as a wrong
 key), every 429 and 402 body (``meta`` is a guess), the prepaid-exhaustion
@@ -358,7 +362,7 @@ class BravePlugin(ProviderPlugin):
             ),
         )
 
-    def credentials(self, request: Request) -> Credentials:
+    def credentials(self, request: Request, store: MockStore) -> Credentials:
         return Credentials(key=header_value(request, "x-subscription-token"))
 
     def default_seed(self) -> ProviderSeed:
@@ -409,6 +413,9 @@ class BravePlugin(ProviderPlugin):
     def error(self, kind: ErrorKind, context: ErrorContext) -> MockResponse:
         status = context.status
         headers = dict(context.details.get(_HEADERS, {}))
+        limited = kind in {ErrorKind.RATE_LIMITED, ErrorKind.QUOTA_EXHAUSTED}
+        if limited and not headers and context.store is not None and context.account is not None:
+            headers = self._rate_headers(context.store, context.account.id)
         if kind in {ErrorKind.AUTH_INVALID, ErrorKind.AUTH_REVOKED}:
             return self._edge_auth(context)
         if kind is ErrorKind.FORBIDDEN:
@@ -435,7 +442,9 @@ class BravePlugin(ProviderPlugin):
                 f"<html>\r\n<head><title>{title}</title></head>\r\n<body>\r\n"
                 f"<center><h1>{title}</h1></center>\r\n</body>\r\n</html>\r\n"
             )
-            return MockResponse(status, page.encode(), media_type="text/html")
+            return MockResponse(
+                status, page.encode(), {"server": "awselb/2.0"}, media_type="text/html"
+            )
         detail = context.message or "An internal error occurred. Please try again later."
         return self._app_error(status, "INTERNAL", detail, None)
 
@@ -483,7 +492,9 @@ class BravePlugin(ProviderPlugin):
                 "meta": {"component": "authentication"},
                 "status": status,
             }
-        return MockResponse(status, {"error": error, "type": "ErrorResponse"})
+        return MockResponse(
+            status, {"error": error, "type": "ErrorResponse"}, {"server": "awselb/2.0"}
+        )
 
     @staticmethod
     def _app_error(

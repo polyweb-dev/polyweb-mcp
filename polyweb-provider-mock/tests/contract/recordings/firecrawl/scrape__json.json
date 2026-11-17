@@ -52,8 +52,8 @@
     "success": true,
     "data": {
       "metadata": {
-        "viewport": "width=device-width,initial-scale=1",
-        "title": "Example Domain",
+        "viewport": "Synthetic viewport 5a634dc3.",
+        "title": "Synthetic title 162b8154.",
         "language": "en",
         "favicon": "data:,",
         "scrapeId": "71b0b43a-bc26-28a0-fe96-e580539e14dd",
@@ -68,7 +68,7 @@
         "concurrencyLimited": false
       },
       "json": {
-        "title": "This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes."
+        "title": "Synthetic title 0a080719."
       }
     }
   },

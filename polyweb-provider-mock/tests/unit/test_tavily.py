@@ -271,7 +271,7 @@ async def test_bearer_key_wins_over_keyless_header(
         ),
         (FaultSpec(kind=FaultKind.AUTH_INVALID), 401, lambda r: "Unauthorized" in r.text),
         (
-            FaultSpec(kind=FaultKind.TIMEOUT, params=FaultParams(seconds=0)),
+            FaultSpec(kind=FaultKind.TIMEOUT, params=FaultParams(seconds=0, status=504)),
             504,
             lambda r: "Gateway Timeout" in r.text,
         ),

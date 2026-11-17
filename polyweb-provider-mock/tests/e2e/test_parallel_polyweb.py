@@ -15,8 +15,6 @@ tests (``tests/unit/adapters/test_parallel.py``) assert for real payloads.
 """
 
 import os
-import socket
-import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
@@ -28,14 +26,12 @@ from uuid import UUID
 
 import httpx
 import pytest
-import uvicorn
 from fastapi_users.password import PasswordHelper
 from polyweb.adapters.parallel import ParallelAdapter
-from polyweb.configuration.config import Settings
 from polyweb.infrastructure.cryptography import MasterKey, SecretCodec
 from polyweb.infrastructure.encrypted_store import EncryptedDbSecretStore
 from polyweb.infrastructure.http import create_async_client
-from polyweb.infrastructure.provider_mock import install_provider_mock, provider_mock_origin
+from polyweb.infrastructure.provider_mock import provider_mock_origin
 from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
 from polyweb.models.contracts import FetchRequest, SearchRequest
 from polyweb.models.credentials import CredentialCreate
@@ -57,13 +53,12 @@ from polyweb.services.parallel_oauth import (
 from polyweb.services.parallel_oauth_adapter import ParallelOAuthAdapter
 from pydantic import SecretStr
 
-from polyweb_provider_mock.app import create_app
 from polyweb_provider_mock.cli import main
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
 from polyweb_provider_mock.providers import discover
 from polyweb_provider_mock.providers._parallel_account import bridge_label
-from polyweb_provider_mock.settings import MockSettings
 from polyweb_provider_mock.store import MockStore
+from tests._support.live_server import polyweb_settings, serve_mock
 
 _PROJECT = UUID("00000000-0000-4000-8000-0000000000bb")
 _SYSTEM = OAuthTarget()
@@ -79,21 +74,6 @@ class _Clock:
         return self.now
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _settings(origin: str) -> Settings:
-    return Settings(
-        _env_file=None,
-        provider_mock_url=origin,
-        http_timeout_seconds=1.5,
-        http_connect_timeout_seconds=1.5,
-    )
-
-
 @dataclass
 class _Mock:
     origin: str
@@ -103,42 +83,13 @@ class _Mock:
 
 @pytest.fixture(scope="module")
 def mock_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Mock]:
-    """Serve the mock on a free port and route Polyweb's HTTPX transports to it."""
+    """Serve the mock on a free port with a movable clock; route Polyweb to it."""
 
-    db = Path(tmp_path_factory.mktemp("mock")) / "mock.db"
-    port = _free_port()
+    folder = Path(tmp_path_factory.mktemp("mock"))
     clock = _Clock()
-    store = MockStore(db, now=clock)
-    app = create_app(MockSettings(port=port, db_path=db, random_seed=13), store=store)
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-            proxy_headers=False,
-            timeout_graceful_shutdown=1,
-        )
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started:
-        assert time.monotonic() < deadline, "the mock server did not start"
-        time.sleep(0.02)
-    origin = f"http://127.0.0.1:{port}"
-    with pytest.MonkeyPatch.context() as patch:
-        # The context restores both HTTPX handlers, which removes the routing.
-        patch.setattr(
-            httpx.AsyncHTTPTransport,
-            "handle_async_request",
-            httpx.AsyncHTTPTransport.handle_async_request,
-        )
-        patch.setattr(httpx.HTTPTransport, "handle_request", httpx.HTTPTransport.handle_request)
-        assert install_provider_mock(_settings(origin)) is True
-        yield _Mock(origin, store, clock)
-        server.should_exit = True
-        thread.join(timeout=10)
+    store = MockStore(folder / "mock.db", now=clock)
+    with serve_mock(folder, random_seed=13, store=store) as served:
+        yield _Mock(served.origin, store, clock)
 
 
 @pytest.fixture
@@ -157,7 +108,7 @@ def key(mock: _Mock) -> str:
 @pytest.fixture
 async def http(mock: _Mock) -> AsyncIterator[httpx.AsyncClient]:
     # The real factory installs the routing too; the install is idempotent.
-    client = create_async_client(_settings(mock.origin))
+    client = create_async_client(polyweb_settings(mock.origin))
     yield client
     await client.aclose()
 

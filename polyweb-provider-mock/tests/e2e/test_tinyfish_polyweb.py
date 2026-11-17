@@ -10,96 +10,28 @@ other statuses ``http_error`` (retryable only for 500/502/503/504), and
 per-URL fetch errors inside an HTTP 200 mapped by their ``error`` code.
 """
 
-import socket
-import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 from uuid import UUID
 
 import httpx
 import pytest
-import uvicorn
 from polyweb.adapters.tinyfish import TinyfishAdapter
-from polyweb.configuration.config import Settings
 from polyweb.infrastructure.http import create_async_client
-from polyweb.infrastructure.provider_mock import install_provider_mock, provider_mock_origin
 from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
 from polyweb.models.contracts import FetchRequest, SearchRequest
 from pydantic import SecretStr
 
-from polyweb_provider_mock.app import create_app
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
-from polyweb_provider_mock.providers import discover
-from polyweb_provider_mock.providers._rate_windows import WindowSpec, add
-from polyweb_provider_mock.settings import MockSettings
 from polyweb_provider_mock.store import MockStore
+from polyweb_provider_mock.windows import WindowSpec
+from tests._support.live_server import LiveMock, polyweb_settings
 
+MOCK_RANDOM_SEED = 11
 _PROJECT = UUID("00000000-0000-4000-8000-0000000000aa")
 _URL = "https://docs.python.org/3/library/json.html"
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def _settings(origin: str) -> Settings:
-    return Settings(
-        _env_file=None,
-        provider_mock_url=origin,
-        http_timeout_seconds=1.5,
-        http_connect_timeout_seconds=1.5,
-    )
-
-
-@pytest.fixture(scope="module")
-def mock_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, MockStore]]:
-    """Serve the mock on a free port and route Polyweb's HTTPX transports to it."""
-
-    db = Path(tmp_path_factory.mktemp("mock")) / "mock.db"
-    port = _free_port()
-    app = create_app(MockSettings(port=port, db_path=db, random_seed=11))
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-            proxy_headers=False,
-            timeout_graceful_shutdown=1,
-        )
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started:
-        assert time.monotonic() < deadline, "the mock server did not start"
-        time.sleep(0.02)
-    origin = f"http://127.0.0.1:{port}"
-    with pytest.MonkeyPatch.context() as patch:
-        # The context restores both HTTPX handlers, which removes the routing.
-        patch.setattr(
-            httpx.AsyncHTTPTransport,
-            "handle_async_request",
-            httpx.AsyncHTTPTransport.handle_async_request,
-        )
-        patch.setattr(httpx.HTTPTransport, "handle_request", httpx.HTTPTransport.handle_request)
-        assert install_provider_mock(_settings(origin)) is True
-        yield origin, app.store
-        server.should_exit = True
-        thread.join(timeout=10)
-
-
-@pytest.fixture
-def store(mock_server: tuple[str, MockStore]) -> MockStore:
-    origin, state = mock_server
-    assert provider_mock_origin() == origin
-    state.seed(discover().values(), reset=True)
-    return state
 
 
 @pytest.fixture
@@ -117,14 +49,14 @@ class _Adapters:
         self.delays.append(delay)
 
     def __call__(self, key: str, *, attempts: int = 1) -> TinyfishAdapter:
-        client = create_async_client(_settings(self.origin))
+        client = create_async_client(polyweb_settings(self.origin))
         self.clients.append(client)
         runner = ResilientRunner(client, max_attempts=attempts, sleeper=self._sleep)
         return TinyfishAdapter(client, api_key=SecretStr(key), runner=runner)
 
 
 @pytest.fixture
-async def adapters(mock_server: tuple[str, MockStore]) -> AsyncIterator[_Adapters]:
+async def adapters(mock_server: LiveMock) -> AsyncIterator[_Adapters]:
     factory = _Adapters(mock_server[0])
     yield factory
     for client in factory.clients:
@@ -200,7 +132,7 @@ async def test_minute_limit_is_rate_limited_and_retried(
     frozen = datetime(2026, 11, 17, 12, 0, 15, tzinfo=UTC)
     monkeypatch.setattr(store, "now", lambda: frozen)
     account = store.account("tinyfish").id
-    add(store, WindowSpec(f"tinyfish:{account}:search:minute", 30, 60, aligned=True), 30)
+    store.count_window(WindowSpec(f"tinyfish:{account}:search:minute", 30, 60, aligned=True), 30)
 
     error = (await _error(adapters(key, attempts=2).search(_search()))).error
 
@@ -251,7 +183,9 @@ async def test_exhaustion_is_terminal_quota_exhausted(
         store.set_credits("tinyfish", Decimal(0))
     elif how == "allowance":
         account = store.account("tinyfish").id
-        add(store, WindowSpec(f"tinyfish:{account}:fetch:day", 1000, 86400, aligned=True), 1000)
+        store.count_window(
+            WindowSpec(f"tinyfish:{account}:fetch:day", 1000, 86400, aligned=True), 1000
+        )
     else:
         store.add_fault(FaultSpec(provider="tinyfish", kind=FaultKind.QUOTA_EXHAUSTED))
 

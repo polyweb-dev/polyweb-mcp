@@ -1,7 +1,8 @@
 """Tinyfish Search on ``api.search.tinyfish.ai`` and Fetch on ``api.fetch.tinyfish.ai``.
 
 Both products serve their main operation on the root path, so the plugin
-claims both hosts and each handler checks the ``Host`` it was called on:
+claims both hosts and scopes each operation to its host (another host
+answers 404 ``UNKNOWN_ROUTE``):
 
 - ``GET /`` on the search host: query parameters ``query`` (required),
   ``page`` (0..10), domain filters, location/language, date and
@@ -72,7 +73,6 @@ from polyweb_provider_mock.models import (
     PriceRule,
     ProviderSeed,
 )
-from polyweb_provider_mock.providers._rate_windows import Window, WindowSpec, add, admit, peek
 from polyweb_provider_mock.providers.base import (
     Credentials,
     ErrorContext,
@@ -83,6 +83,8 @@ from polyweb_provider_mock.providers.base import (
     ProviderPlugin,
     header_value,
 )
+from polyweb_provider_mock.store import MockStore
+from polyweb_provider_mock.windows import Window, WindowSpec
 
 __all__ = ["PLUGIN", "TinyfishPlugin"]
 
@@ -136,6 +138,7 @@ def _cdn_headers(*, error: bool) -> dict[str, str]:
         "x-cache": "Error from cloudfront" if error else "Miss from cloudfront",
         "via": f"1.1 {edge.hex}.cloudfront.net (CloudFront)",
         "x-amz-cf-pop": "DFW57-P8",
+        "server": "uvicorn",
         "x-amz-cf-id": base64.urlsafe_b64encode(secrets.token_bytes(40)).decode(),
     }
 
@@ -511,12 +514,12 @@ class TinyfishPlugin(ProviderPlugin):
 
     def operations(self) -> Sequence[Operation]:
         return (
-            Operation("search", "GET", "/", self._search),
-            Operation("fetch", "POST", "/", self._fetch),
+            Operation("search", "GET", "/", self._search, hosts=frozenset({_SEARCH_HOST})),
+            Operation("fetch", "POST", "/", self._fetch, hosts=frozenset({_FETCH_HOST})),
             Operation("usage", "GET", "/usage", self._usage, billable=False),
         )
 
-    def credentials(self, request: Request) -> Credentials:
+    def credentials(self, request: Request, store: MockStore) -> Credentials:
         return Credentials(key=header_value(request, "x-api-key"))
 
     def default_seed(self) -> ProviderSeed:
@@ -667,12 +670,6 @@ class TinyfishPlugin(ProviderPlugin):
 
     # ------------------------------------------------------------ helpers
 
-    def _wrong_host(self, context: OperationContext, host: str) -> MockResponse | None:
-        if _request_host(context.request) == host:
-            return None
-        request = context.request
-        return _error(404, "UNKNOWN_ROUTE", f"Route {request.method} {request.url.path} not found")
-
     @staticmethod
     def _account(context: OperationContext) -> Account:
         account = context.principal.account
@@ -704,10 +701,10 @@ class TinyfishPlugin(ProviderPlugin):
             f"{prefix}:day", self._limit(account, f"{product}_daily_free"), 86400, aligned=True
         )
         now = context.store.now()
-        if peek(context.store, daily).remaining <= 0 and not self._wallet_funded(account):
+        if context.store.peek_window(daily).remaining <= 0 and not self._wallet_funded(account):
             scope = "beta" if account.plan == "beta" else None
             return self._exhausted(product, scope, None, None)
-        refused, windows = admit(context.store, specs, units)
+        refused, windows = context.admit(specs, units)
         if refused is not None:
             return self._rate_limited(ErrorContext(operation=product), window=refused, now=now)
         minute = windows[0]
@@ -735,9 +732,6 @@ class TinyfishPlugin(ProviderPlugin):
     # --------------------------------------------------------------- search
 
     async def _search(self, context: OperationContext) -> MockResponse:
-        wrong = self._wrong_host(context, _SEARCH_HOST)
-        if wrong is not None:
-            return wrong
         try:
             request = _search_request(context.request.query_params)
         except _Rejected as rejected:
@@ -751,7 +745,7 @@ class TinyfishPlugin(ProviderPlugin):
         if fixture is not None and fixture.status != 200:
             return MockResponse(status=fixture.status, body=fixture.body, headers=headers)
         context.charge("search")
-        add(context.store, daily, 1)
+        context.store.count_window(daily, 1)
         if fixture is not None and isinstance(fixture.body, dict):
             return self._ok(fixture.body, headers)
         results = self._results(request)
@@ -806,9 +800,6 @@ class TinyfishPlugin(ProviderPlugin):
     # ---------------------------------------------------------------- fetch
 
     async def _fetch(self, context: OperationContext) -> MockResponse:
-        wrong = self._wrong_host(context, _FETCH_HOST)
-        if wrong is not None:
-            return wrong
         try:
             request = _fetch_request(context.raw_body)
         except _Rejected as rejected:
@@ -831,7 +822,7 @@ class TinyfishPlugin(ProviderPlugin):
             (errors if "error" in item and "text" not in item else results).append(item)
         if results:
             context.charge("fetch", units=len(results))
-            add(context.store, daily, len(results))
+            context.store.count_window(daily, len(results))
         return self._ok({"results": results, "errors": errors}, headers)
 
     def _fetched(

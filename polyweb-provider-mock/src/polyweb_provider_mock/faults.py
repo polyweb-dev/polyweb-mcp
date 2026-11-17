@@ -47,7 +47,10 @@ class FaultParams(BaseModel):
     """Kind-specific parameters. Unused fields are ignored by other kinds.
 
     - ``latency``: ``ms`` plus a uniform ``jitter_ms``.
-    - ``timeout``: hold the response for ``seconds`` (default 30), then 504.
+    - ``timeout``: hold the request for ``seconds`` (default 30, longer than
+      Polyweb's default client timeout), then close the connection without a
+      response. With ``status`` (for example 504) it answers that status in
+      the provider's format after the hold instead.
     - ``http_error`` / ``outage``: ``status`` (defaults 500 / 503) and ``message``.
     - ``rate_limit``: ``retry_after`` seconds (default 60). ``retry_after_header``
       false keeps the delay in the body only, where the provider format has one.

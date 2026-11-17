@@ -8,6 +8,7 @@ import pytest
 
 from polyweb_provider_mock.cli import main
 from polyweb_provider_mock.faults import FaultKind
+from polyweb_provider_mock.providers import discover
 from polyweb_provider_mock.store import MockStore
 
 
@@ -30,10 +31,15 @@ class _Cli:
         return self.capsys.readouterr().err
 
 
+def _seeded_counts() -> dict[str, int]:
+    return {name: len(item.default_seed().keys) for name, item in discover().items()}
+
+
 @pytest.fixture
 def cli(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> _Cli:
     runner = _Cli(tmp_path / "mock.db", capsys)
-    assert runner("seed") == {"tavily": 2}
+    seeded = runner("seed")
+    assert seeded == _seeded_counts() and seeded["tavily"] == 2
     return runner
 
 
@@ -63,6 +69,16 @@ def test_credits_pricing_and_keyless(cli: _Cli) -> None:
     setting = cli("keyless", "set", "tavily", "--disable", "--per-minute", "5")
     assert setting == {"provider": "tavily", "enabled": False, "per_day": 500, "per_minute": 5}
     assert cli("keyless", "set", "tavily", "--enable", "--per-day", "none")["per_day"] is None
+
+
+def test_account_show_and_attribute_set(cli: _Cli) -> None:
+    account = cli("account", "set", "keenable", "reset_day=17", "plan_note=beta", "free_allowance=")
+    assert account["attributes"] == {"reset_day": 17, "plan_note": "beta"}
+    assert account["period_start"].split("T")[0].endswith("-17")
+    shown = cli("account", "show", "tinyfish")
+    assert [item["id"] for item in shown] == ["tinyfish-personal"]
+    assert "reset_day must be 1..31" in cli.fails("account", "set", "keenable", "reset_day=40")
+    assert "unknown provider" in cli.fails("account", "set", "nobody", "x=1")
 
 
 def test_fault_add_list_clear(cli: _Cli) -> None:
@@ -150,11 +166,15 @@ def test_fixtures_from_file_and_log(cli: _Cli, tmp_path: Path) -> None:
 
 def test_export_keys_and_reset(cli: _Cli) -> None:
     dotenv = cli("export-keys", "--format", "dotenv")
-    assert dotenv.startswith("POLYWEB_TAVILY_API_KEY=tvly-dev-mock") and dotenv.endswith("\n")
-    assert list(cli("export-keys", "--format", "json")) == ["POLYWEB_TAVILY_API_KEY"]
+    lines = dotenv.splitlines()
+    assert any(line.startswith("POLYWEB_TAVILY_API_KEY=tvly-dev-mock") for line in lines)
+    assert dotenv.endswith("\n") and lines == sorted(lines)
+    names = list(cli("export-keys", "--format", "json"))
+    assert "POLYWEB_TAVILY_API_KEY" in names
+    assert names == [line.split("=", 1)[0] for line in lines]
     cli("reset")
     assert cli("keys", "list") == []
-    assert cli("seed", "--reset") == {"tavily": 2}
+    assert cli("seed", "--reset") == _seeded_counts()
 
 
 def test_fault_kinds_cover_the_cli_choices() -> None:

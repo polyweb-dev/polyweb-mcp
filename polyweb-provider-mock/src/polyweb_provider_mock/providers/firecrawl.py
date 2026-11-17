@@ -58,7 +58,7 @@ from polyweb_provider_mock.models import (
     PriceRule,
     ProviderSeed,
 )
-from polyweb_provider_mock.providers._exa_firecrawl_common import charge_all, iso_ms, schema_value
+from polyweb_provider_mock.providers._exa_firecrawl_common import iso_ms, schema_value
 from polyweb_provider_mock.providers.base import (
     Credentials,
     ErrorContext,
@@ -69,6 +69,7 @@ from polyweb_provider_mock.providers.base import (
     ProviderPlugin,
     bearer_token,
 )
+from polyweb_provider_mock.store import MockStore
 
 __all__ = ["PLUGIN", "FirecrawlPlugin"]
 
@@ -314,7 +315,7 @@ class FirecrawlPlugin(ProviderPlugin):
             ),
         )
 
-    def credentials(self, request: Request) -> Credentials:
+    def credentials(self, request: Request, store: MockStore) -> Credentials:
         key = bearer_token(request)
         return Credentials(key=key, keyless=key is None)
 
@@ -702,7 +703,7 @@ class FirecrawlPlugin(ProviderPlugin):
             data = self._search_data(context, query, limit, channels, request, formats)
             if formats:
                 parts += self._scrape_parts(formats, scrape, 0) * len(data.get("web", []))
-        charges = charge_all(context, parts)
+        charges = context.charge_all(parts)
         credits = sum((charge.credits for charge in charges), Decimal(0))
         body = {
             "success": True,
@@ -815,7 +816,7 @@ class FirecrawlPlugin(ProviderPlugin):
         else:
             document = self._document(context, url, formats, request, pdf_pages=pdf_pages)
             metadata = document["metadata"]
-        charges = charge_all(context, self._scrape_parts(formats, request, pdf_pages))
+        charges = context.charge_all(self._scrape_parts(formats, request, pdf_pages))
         metadata["creditsUsed"] = _number(sum((c.credits for c in charges), Decimal(0)))
         metadata["concurrencyLimited"] = False
         document["metadata"] = metadata

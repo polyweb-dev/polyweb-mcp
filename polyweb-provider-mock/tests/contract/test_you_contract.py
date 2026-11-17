@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from polyweb_provider_mock.store import MockStore
+from tests._support.shape import assert_same_shape
 
 _RECORDINGS = sorted((Path(__file__).parent / "recordings" / "you").glob("*.json"))
 _WRONG_KEY = "ydc-sk-0000000000000000000000000000000000000000000000000000000000"
@@ -34,35 +35,8 @@ _PRESENCE = (
 )
 
 
-def _kind(value: Any) -> str:
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, (int, float)):
-        return "number"
-    if value is None:
-        return "null"
-    return type(value).__name__
-
-
-def assert_same_shape(recorded: Any, mocked: Any, path: str = "$") -> None:
-    """Assert equal keys and value types recursively; a list item must match a recorded item."""
-
-    assert _kind(mocked) == _kind(recorded), f"{path}: {_kind(mocked)} != {_kind(recorded)}"
-    if isinstance(recorded, dict):
-        assert set(mocked) == set(recorded), f"{path}: keys {sorted(mocked)} != {sorted(recorded)}"
-        for key, value in recorded.items():
-            assert_same_shape(value, mocked[key], f"{path}.{key}")
-    elif isinstance(recorded, list) and recorded:
-        assert mocked, f"{path}: the mock returned an empty list"
-        for index, item in enumerate(mocked):
-            for candidate in recorded[1:]:
-                try:
-                    assert_same_shape(candidate, item, f"{path}[{index}]")
-                except AssertionError:
-                    continue
-                break
-            else:
-                assert_same_shape(recorded[0], item, f"{path}[{index}]")
+def _same_shape(recorded: Any, mocked: Any) -> None:
+    assert_same_shape(recorded, mocked, lists="any")
 
 
 def _headers(name: str, recording: dict[str, Any], key: str) -> dict[str, str]:
@@ -84,23 +58,6 @@ def test_every_recording_is_sanitized() -> None:
             assert recording["request_headers"].get(name, "<REDACTED>") == "<REDACTED>"
         assert recording["response_headers"].get("set-cookie", "<REDACTED>") == "<REDACTED>"
         assert "ydc-sk-" not in text
-
-
-@pytest.mark.parametrize(
-    ("recorded", "mocked"),
-    [
-        ({"a": [{"x": 1}, {"y": 1}]}, {"a": [{"z": 1}]}),
-        ({"a": [{"x": 1}]}, {"a": []}),
-        ({"a": 1.5}, {"a": "1.5"}),
-    ],
-)
-def test_shape_comparison_rejects_mismatches(recorded: Any, mocked: Any) -> None:
-    with pytest.raises(AssertionError):
-        assert_same_shape(recorded, mocked)
-
-
-def test_shape_comparison_accepts_any_recorded_item_shape() -> None:
-    assert_same_shape({"a": [{"x": 1}, {"y": 1}]}, {"a": [{"y": 2}, {"x": 3}]})
 
 
 @pytest.mark.parametrize("path", _RECORDINGS, ids=[path.stem for path in _RECORDINGS])
@@ -125,4 +82,4 @@ async def test_mock_matches_recorded_exchange(
     for header in _PRESENCE:
         assert (header in response.headers) == (header in recorded_headers), header
     assert "content-encoding" not in response.headers
-    assert_same_shape(recording["response_body"], response.json())
+    _same_shape(recording["response_body"], response.json())

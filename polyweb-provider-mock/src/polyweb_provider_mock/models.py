@@ -3,6 +3,7 @@
 import hashlib
 import secrets
 import string
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
@@ -24,6 +25,7 @@ __all__ = [
     "PricingRule",
     "ProviderSeed",
     "ResetRule",
+    "reset_anchor",
 ]
 
 #: When an account's used credits return to zero.
@@ -64,8 +66,28 @@ class KeyFormat(_Record):
         return f"{self.prefix}mock{body}"
 
 
+def reset_anchor(attributes: Mapping[str, Any]) -> int:
+    """Return the day of month (1..31) on which a monthly period starts.
+
+    The ``reset_day`` account attribute sets it; without it the period follows
+    the UTC calendar month. A day past the month's end means its last day.
+    """
+
+    value = attributes.get("reset_day")
+    if value is None:
+        return 1
+    day = int(value)
+    if not 1 <= day <= 31:
+        raise ValueError(f"reset_day must be 1..31, not {value!r}")
+    return day
+
+
 class Account(_Record):
-    """A provider account: plan, credit allowance, and billing period."""
+    """A provider account: plan, credit allowance, and billing period.
+
+    ``attributes`` holds provider-specific facts; ``reset_day`` anchors the
+    monthly period (see :func:`reset_anchor`).
+    """
 
     provider: str
     id: str

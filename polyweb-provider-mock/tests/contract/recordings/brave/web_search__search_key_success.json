@@ -43,27 +43,27 @@
       "more_results_available": true,
       "state": "",
       "related_queries": [
-        "domain example science",
-        "domain examples for business",
-        "domain example sentence",
-        "domain example email address",
-        "domain example in computer",
-        "domain example math",
-        "free domain name example list",
-        "domain name example list",
-        "domain meaning",
-        "domain example website"
+        "Synthetic related_queries 564bd763.",
+        "Synthetic related_queries 28dd93f3.",
+        "Synthetic related_queries 64426668.",
+        "Synthetic related_queries bc93acc2.",
+        "Synthetic related_queries 971ddbcc.",
+        "Synthetic related_queries 471391d6.",
+        "Synthetic related_queries a40509fa.",
+        "Synthetic related_queries 72debac3.",
+        "Synthetic related_queries a2815060.",
+        "Synthetic related_queries ef6ea7e3."
       ]
     },
     "discussions": {
       "type": "search",
       "results": [
         {
-          "title": "knowledge nugget: example.com",
-          "url": "https://www.reddit.com/r/webdev/comments/mld1fu/knowledge_nugget_examplecom/",
+          "title": "Synthetic title 23cebd27.",
+          "url": "https://example.com/synthetic/faa564bdb9",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "Plot twist: this is a complex prank and there's a guy getting mailed for years with testing content, regretting he bought these domains. Seriously now: thanks for this advice. Have been using my own inbox for this in the past years",
+          "description": "Synthetic description e0849298.",
           "fetched_content_timestamp": 1794818288,
           "language": "en",
           "family_friendly": true,
@@ -72,27 +72,27 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "reddit.com",
-            "hostname": "www.reddit.com",
-            "favicon": "https://imgs.search.brave.com/U-eHNCapRHVNWWCVPPMTIvOofZULh0_A_FQKe8xTE4I/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2ZiNTU0M2Nj/MTFhZjRiYWViZDlk/MjJiMjBjMzFjMDRk/Y2IzYWI0MGI0MjVk/OGY5NzQzOGQ5NzQ5/NWJhMWI0NC93d3cu/cmVkZGl0LmNvbS8",
-            "path": "\u203a r  \u203a webdev  \u203a comments  \u203a mld1fu  \u203a knowledge_nugget_examplecom"
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 099c9e05."
           },
           "age": "April 6, 2021",
           "data": {
-            "forum_name": "r/webdev",
+            "forum_name": "Synthetic forum_name 899bfc13.",
             "num_answers": 70,
             "score": "577",
-            "title": "knowledge nugget: example.com",
-            "question": "<p>\n      I see a lot of dev examples that use contrived email addresses. Instead, Simply use @example.com (et al) for your development purposes. It\u2019s a special reserved domain and if you fired off an email it goes into limbo, nothing will read it.\n    </p><p>\n      All these are safe\n    </p><ul>\n        <li>\n      <p>\n      example.com\n    </p>\n    </li><li>\n      <p>\n      example.net\n    </p>\n    </li><li>\n      <p>\n      example.org\n    </p>\n    </li><li>\n      <p>\n      example.edu\n    </p>\n    </li>\n      </ul><p>\n      Eg.\n    </p><ul>\n        <li>\n      <p>\n      <a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:<REDACTED>\" rel=\"noopener nofollow ugc\" target=\"_blank\"><REDACTED></a>\n    </p>\n    </li><li>\n      <p>\n      <a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:<REDACTED>\" rel=\"noopener nofollow ugc\" target=\"_blank\"><REDACTED></a>\n    </p>\n    </li>\n      </ul><p>\n      So on. One less thing to think about.\n    </p><p>\n      <a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"https://en.wikipedia.org/wiki/Example.com\" rel=\"noopener nofollow ugc\" target=\"_blank\">https://en.wikipedia.org/wiki/Example.com</a>\n    </p>",
-            "top_comment": "Plot twist: this is a complex prank and there's a guy getting mailed for years with testing content, regretting he bought these domains. Seriously now: thanks for this advice. Have been using my own inbox for this in the past years"
+            "title": "Synthetic title 23cebd27.",
+            "question": "Synthetic question e171326d.",
+            "top_comment": "Synthetic top_comment e0849298."
           }
         },
         {
-          "title": "never knew https://www.example.com/ actually told you it's for exampling",
-          "url": "https://www.reddit.com/r/ProgrammerHumor/comments/w726ri/never_knew_httpswwwexamplecom_actually_told_you/",
+          "title": "Synthetic title 0f0bfccb.",
+          "url": "https://example.com/synthetic/1ab9a994af",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "Around 2000 we often used the German equivalent test.de, including for emails, until we got a friendly email from the domain owner to stop doing so.",
+          "description": "Synthetic description 9c42f3f3.",
           "fetched_content_timestamp": 1794399789,
           "language": "en",
           "family_friendly": true,
@@ -101,26 +101,26 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "reddit.com",
-            "hostname": "www.reddit.com",
-            "favicon": "https://imgs.search.brave.com/U-eHNCapRHVNWWCVPPMTIvOofZULh0_A_FQKe8xTE4I/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2ZiNTU0M2Nj/MTFhZjRiYWViZDlk/MjJiMjBjMzFjMDRk/Y2IzYWI0MGI0MjVk/OGY5NzQzOGQ5NzQ5/NWJhMWI0NC93d3cu/cmVkZGl0LmNvbS8",
-            "path": "\u203a r  \u203a ProgrammerHumor  \u203a comments  \u203a w726ri  \u203a never_knew_httpswwwexamplecom_actually_told_you"
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path c1007284."
           },
           "age": "July 24, 2022",
           "data": {
-            "forum_name": "r/ProgrammerHumor",
+            "forum_name": "Synthetic forum_name 1ebee14e.",
             "num_answers": 41,
             "score": "455",
-            "title": "never knew https://www.example.com/ actually told you it's for exampling",
-            "top_comment": "Around 2000 we often used the German equivalent test.de, including for emails, until we got a friendly email from the domain owner to stop doing so."
+            "title": "Synthetic title 0f0bfccb.",
+            "top_comment": "Synthetic top_comment 9c42f3f3."
           }
         },
         {
-          "title": "What do you all put before the @ for your personal domain?",
-          "url": "https://www.reddit.com/r/selfhosted/comments/1f495jv/what_do_you_all_put_before_the_for_your_personal/",
+          "title": "Synthetic title bd166e36.",
+          "url": "https://example.com/synthetic/9473ce32b9",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "I use me@ for personal contact. For any online account, I just let Bitwarden generate a new random alias. (Example: 1jntosa6@)",
+          "description": "Synthetic description 9de890ae.",
           "fetched_content_timestamp": 1794576513,
           "language": "en",
           "family_friendly": true,
@@ -129,27 +129,27 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "reddit.com",
-            "hostname": "www.reddit.com",
-            "favicon": "https://imgs.search.brave.com/U-eHNCapRHVNWWCVPPMTIvOofZULh0_A_FQKe8xTE4I/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2ZiNTU0M2Nj/MTFhZjRiYWViZDlk/MjJiMjBjMzFjMDRk/Y2IzYWI0MGI0MjVk/OGY5NzQzOGQ5NzQ5/NWJhMWI0NC93d3cu/cmVkZGl0LmNvbS8",
-            "path": "\u203a r  \u203a selfhosted  \u203a comments  \u203a 1f495jv  \u203a what_do_you_all_put_before_the_for_your_personal"
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 68ed5914."
           },
           "age": "August 29, 2024",
           "data": {
-            "forum_name": "r/selfhosted",
+            "forum_name": "Synthetic forum_name f52a9861.",
             "num_answers": 156,
             "score": "89",
-            "title": "What do you all put before the @ for your personal domain?",
-            "question": "<p>\n      I have one which is <a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:<REDACTED>\" rel=\"noopener nofollow ugc\" target=\"_blank\"><REDACTED></a> for strictly communication.\n    </p><p>\n      However, what should I do for a personal domain that\u2019s used for signing up for things like my bank app, social media etc?\n    </p><p>\n      <a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:<REDACTED>\" rel=\"noopener nofollow ugc\" target=\"_blank\"><REDACTED></a>??\n    </p><p>\n      All ideas welcome!\n    </p>",
-            "top_comment": "I use me@ for personal contact. For any online account, I just let Bitwarden generate a new random alias. (Example: 1jntosa6@)"
+            "title": "Synthetic title bd166e36.",
+            "question": "Synthetic question bea1f2e8.",
+            "top_comment": "Synthetic top_comment 9de890ae."
           }
         },
         {
-          "title": "How to make a domain like api.example.com",
-          "url": "https://www.reddit.com/r/aws/comments/1bfvwtu/how_to_make_a_domain_like_apiexamplecom/",
+          "title": "Synthetic title 4b0cc51d.",
+          "url": "https://example.com/synthetic/d5fe338966",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "You\u2019re looking at a cname dns record to whatever service is your backend, if it is a server you can cname to the server dns name or use an A record to point at the IP. You seem pretty green so I\u2019m going to give you the warning most of us wish we got: Set an AWS budget in budgets and watch it like a hawk Take the free education AWS provides, even if you are not going to take the cloud practitioner, the training is a great way to get your feet wet in AWS and understand how not to get stuck with a MASSIVE bill, also the training is 100% free.",
+          "description": "Synthetic description a37bbdeb.",
           "fetched_content_timestamp": 1762356488,
           "language": "en",
           "family_friendly": true,
@@ -158,27 +158,27 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "reddit.com",
-            "hostname": "www.reddit.com",
-            "favicon": "https://imgs.search.brave.com/U-eHNCapRHVNWWCVPPMTIvOofZULh0_A_FQKe8xTE4I/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2ZiNTU0M2Nj/MTFhZjRiYWViZDlk/MjJiMjBjMzFjMDRk/Y2IzYWI0MGI0MjVk/OGY5NzQzOGQ5NzQ5/NWJhMWI0NC93d3cu/cmVkZGl0LmNvbS8",
-            "path": "\u203a r  \u203a aws  \u203a comments  \u203a 1bfvwtu  \u203a how_to_make_a_domain_like_apiexamplecom"
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path f55aba0f."
           },
           "age": "March 16, 2024",
           "data": {
-            "forum_name": "r/aws",
+            "forum_name": "Synthetic forum_name cabb634c.",
             "num_answers": 22,
             "score": "0",
-            "title": "How to make a domain like api.example.com",
-            "question": "<p>\n      Hi, If domain name is example.com, I want to use it for frontend and api.example.com for  backend, how to create api.example.com??\n    </p><p>\n      I have created a record api.example with ip4 and alias elastic beanstalk ebs but when I send a request using <a rpl class=\"relative pointer-events-auto a cursor-pointer\n  \n  \n  \n  \n  underline\n  \" href=\"https://api.example.com/api/main\" rel=\"noopener nofollow noreferrer ugc\" target=\"_blank\">https://api.example.com/api/main</a> doesnt work..\n    </p><p>\n      What should I do\n    </p>",
-            "top_comment": "You\u2019re looking at a cname dns record to whatever service is your backend, if it is a server you can cname to the server dns name or use an A record to point at the IP. You seem pretty green so I\u2019m going to give you the warning most of us wish we got: Set an AWS budget in budgets and watch it like a hawk Take the free education AWS provides, even if you are not going to take the cloud practitioner, the training is a great way to get your feet wet in AWS and understand how not to get stuck with a MASSIVE bill, also the training is 100% free."
+            "title": "Synthetic title 4b0cc51d.",
+            "question": "Synthetic question e6096aa7.",
+            "top_comment": "Synthetic top_comment a37bbdeb."
           }
         },
         {
-          "title": "Suggestions for personal domain name",
-          "url": "https://www.reddit.com/r/webhosting/comments/8h6scg/suggestions_for_personal_domain_name/",
+          "title": "Synthetic title 3a390e47.",
+          "url": "https://example.com/synthetic/e223a72d50",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "I'd probably go for a domain name that uses a different TLD. As nice as .com and .net are, with the new TLDs you might be able to get something that suits your portfolio. For example if you are into photography, there is a .photography TLD. I've got a .click domain that I am planning to use for my own site (I'm a programmer so .click works well for me)",
+          "description": "Synthetic description 3c612f8a.",
           "fetched_content_timestamp": 1792321769,
           "language": "en",
           "family_friendly": true,
@@ -187,27 +187,27 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "reddit.com",
-            "hostname": "www.reddit.com",
-            "favicon": "https://imgs.search.brave.com/U-eHNCapRHVNWWCVPPMTIvOofZULh0_A_FQKe8xTE4I/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2ZiNTU0M2Nj/MTFhZjRiYWViZDlk/MjJiMjBjMzFjMDRk/Y2IzYWI0MGI0MjVk/OGY5NzQzOGQ5NzQ5/NWJhMWI0NC93d3cu/cmVkZGl0LmNvbS8",
-            "path": "\u203a r  \u203a webhosting  \u203a comments  \u203a 8h6scg  \u203a suggestions_for_personal_domain_name"
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 1557fb4f."
           },
           "age": "May 5, 2018",
           "data": {
-            "forum_name": "r/webhosting",
+            "forum_name": "Synthetic forum_name eeb7b5ef.",
             "num_answers": 24,
             "score": "10",
-            "title": "Suggestions for personal domain name",
-            "question": "<p>\n      I am a student looking to put up my portfolio on my site but while searching for appropriate domain names I realized I have very limited options since I have an apparently common name.\n    </p><p>\n      <em>FirstNameLastName.com</em> is taken\n    </p><p>\n      <em>FirstName.com</em> / <em>FirstName.Net</em> is taken\n    </p><p>\n      <em>LastName.com</em> / <em>LastName.Net</em> is taken\n    </p><p>\n      <em>FirstNameLastName.Net</em> is available but doesn&#39;t sound fine.\n    </p><p>\n      I have no middle name/initial, so that is also out the window. Also, I can&#39;t shorten my First name or last name because either they don&#39;t exist or are only a secondary level domain. I also don&#39;t want to keep a word after my name because I&#39;m still in business school and want to have an open option for career choices.\n    </p>",
-            "top_comment": "I'd probably go for a domain name that uses a different TLD. As nice as .com and .net are, with the new TLDs you might be able to get something that suits your portfolio. For example if you are into photography, there is a .photography TLD. I've got a .click domain that I am planning to use for my own site (I'm a programmer so .click works well for me)"
+            "title": "Synthetic title 3a390e47.",
+            "question": "Synthetic question cc4eb558.",
+            "top_comment": "Synthetic top_comment 3c612f8a."
           }
         },
         {
-          "title": "If I have a domain example.com, how can I add pages to blog.example.com?",
-          "url": "https://www.reddit.com/r/webdev/comments/q5cxmr/if_i_have_a_domain_examplecom_how_can_i_add_pages/",
+          "title": "Synthetic title 5827267a.",
+          "url": "https://example.com/synthetic/a671e88eae",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "You have to create a sub domain blog.example.com on your host dashboard and redirect it to the page you want .",
+          "description": "Synthetic description 6d02ff09.",
           "fetched_content_timestamp": 1793248597,
           "language": "en",
           "family_friendly": true,
@@ -216,27 +216,27 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "reddit.com",
-            "hostname": "www.reddit.com",
-            "favicon": "https://imgs.search.brave.com/U-eHNCapRHVNWWCVPPMTIvOofZULh0_A_FQKe8xTE4I/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2ZiNTU0M2Nj/MTFhZjRiYWViZDlk/MjJiMjBjMzFjMDRk/Y2IzYWI0MGI0MjVk/OGY5NzQzOGQ5NzQ5/NWJhMWI0NC93d3cu/cmVkZGl0LmNvbS8",
-            "path": "\u203a r  \u203a webdev  \u203a comments  \u203a q5cxmr  \u203a if_i_have_a_domain_examplecom_how_can_i_add_pages"
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 741ccaba."
           },
           "age": "October 10, 2021",
           "data": {
-            "forum_name": "r/webdev",
+            "forum_name": "Synthetic forum_name 899bfc13.",
             "num_answers": 5,
             "score": "10",
-            "title": "If I have a domain example.com, how can I add pages to blog.example.com?",
-            "question": "<p>\n      Hi everyone, my apologies if this is a beginner question but I do not know where to look or how to word this sort of question to search on google.\n    </p><p>\n      I have a website hosted on <code>example.com</code>. I would like to add a blog to my personal website that users can navigate to by going on <code>blog.example.com</code>.\n    </p><p>\n      Do I need to purchase a new domain to do this?\n    </p>",
-            "top_comment": "You have to create a sub domain blog.example.com on your host dashboard and redirect it to the page you want ."
+            "title": "Synthetic title 5827267a.",
+            "question": "Synthetic question 58c44a58.",
+            "top_comment": "Synthetic top_comment 6d02ff09."
           }
         },
         {
-          "title": "Big Sheets: a real example of Domain Driven Design with a hexagonal architecture in python",
-          "url": "https://www.reddit.com/r/Python/comments/kl3atw/big_sheets_a_real_example_of_domain_driven_design/",
+          "title": "Synthetic title 931ce720.",
+          "url": "https://example.com/synthetic/67be5558bc",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "Big Sheets (link) is my attempt to build a software using concepts of clean architecture, hexagonal architecture, Domain Driven Design (DDD) , and a\u2026",
+          "description": "Synthetic description 06e9b3ea.",
           "fetched_content_timestamp": 1775826047,
           "language": "en",
           "family_friendly": true,
@@ -245,27 +245,27 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "reddit.com",
-            "hostname": "www.reddit.com",
-            "favicon": "https://imgs.search.brave.com/U-eHNCapRHVNWWCVPPMTIvOofZULh0_A_FQKe8xTE4I/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2ZiNTU0M2Nj/MTFhZjRiYWViZDlk/MjJiMjBjMzFjMDRk/Y2IzYWI0MGI0MjVk/OGY5NzQzOGQ5NzQ5/NWJhMWI0NC93d3cu/cmVkZGl0LmNvbS8",
-            "path": "\u203a r  \u203a Python  \u203a comments  \u203a kl3atw  \u203a big_sheets_a_real_example_of_domain_driven_design"
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path ed9b90b6."
           },
           "age": "December 27, 2020",
           "data": {
-            "forum_name": "r/Python",
+            "forum_name": "Synthetic forum_name 40706b58.",
             "num_answers": 1,
             "score": "15",
-            "title": "Big Sheets: a real example of Domain Driven Design with a hexagonal architecture in python",
-            "question": "<p>\n      <a rpl class=\"relative pointer-events-auto a cursor-pointer\n  \n  \n  \n  \n  underline\n  \" href=\"https://www.bustawin.com/big-sheets/\" rel=\"noopener nofollow ugc\" target=\"_blank\">Big Sheets (link)</a> is my attempt to build a software using concepts of <a rpl class=\"relative pointer-events-auto a cursor-pointer\n  \n  \n  \n  \n  underline\n  \" href=\"https://herbertograca.com/2017/11/16/explicit-architecture-01-ddd-hexagonal-onion-clean-cqrs-how-i-put-it-all-together/\" rel=\"noopener nofollow ugc\" target=\"_blank\">clean architecture, hexagonal architecture, Domain Driven Design (DDD)</a>, and a bit of event-driven programming; by following the amazing <a rpl class=\"relative pointer-events-auto a cursor-pointer\n  \n  \n  \n  \n  underline\n  \" href=\"https://www.cosmicpython.com/\" rel=\"noopener nofollow ugc\" target=\"_blank\">book Architecture Patterns with Python</a>.\n    </p><p>\n      The twist is that this is not a web API, but a desktop application, which forced me (a fullstack guy) to think out of my personal box \u2014web servers.\n    </p><p>\n      If you want to learn Domain Driven Design and are looking for a real-enough example in Python, or you want to help me by criticizing it, take a look :-)\n    </p><p>\n      <a rpl class=\"relative pointer-events-auto a cursor-pointer\n  \n  \n  \n  \n  underline\n  \" href=\"https://busta.win/posts/big-sheets\" rel=\"noopener nofollow ugc\" target=\"_blank\">https://busta.win/posts/big-sheets</a> &amp; <a rpl class=\"relative pointer-events-auto a cursor-pointer\n  \n  \n  \n  \n  underline\n  \" href=\"https://github.com/bustawin/big-sheets\" rel=\"noopener nofollow ugc\" target=\"_blank\">https://github.com/bustawin/big-sheets</a>\n    </p>",
-            "top_comment": "Big Sheets (link) is my attempt to build a software using concepts of clean architecture, hexagonal architecture, Domain Driven Design (DDD) , and a\u2026"
+            "title": "Synthetic title 931ce720.",
+            "question": "Synthetic question c2b83b92.",
+            "top_comment": "Synthetic top_comment 06e9b3ea."
           }
         },
         {
-          "title": "A good \"name\" for your personal email with your custom domain?",
-          "url": "https://www.reddit.com/r/selfhosted/comments/wu50wp/a_good_name_for_your_personal_email_with_your/",
+          "title": "Synthetic title 1ede190e.",
+          "url": "https://example.com/synthetic/76c228dfc7",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "For me <first-name>@<surname>.com",
+          "description": "Synthetic description 61b2d8ae.",
           "fetched_content_timestamp": 1794765279,
           "language": "en",
           "family_friendly": true,
@@ -274,27 +274,27 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "reddit.com",
-            "hostname": "www.reddit.com",
-            "favicon": "https://imgs.search.brave.com/U-eHNCapRHVNWWCVPPMTIvOofZULh0_A_FQKe8xTE4I/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2ZiNTU0M2Nj/MTFhZjRiYWViZDlk/MjJiMjBjMzFjMDRk/Y2IzYWI0MGI0MjVk/OGY5NzQzOGQ5NzQ5/NWJhMWI0NC93d3cu/cmVkZGl0LmNvbS8",
-            "path": "\u203a r  \u203a selfhosted  \u203a comments  \u203a wu50wp  \u203a a_good_name_for_your_personal_email_with_your"
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path b2572050."
           },
           "age": "August 22, 2022",
           "data": {
-            "forum_name": "r/selfhosted",
+            "forum_name": "Synthetic forum_name f52a9861.",
             "num_answers": 68,
             "score": "47",
-            "title": "A good \"name\" for your personal email with your custom domain?",
-            "question": "<p>\n      Hi! I don&#39;t know if this is the correct place, but is the /r that can be most close.\n    </p><p>\n      I&#39;ve my custom domain, and suppose that is &quot;myname.com&quot;. Furthermore, I&#39;ve some self-hosted services, like a blog, my webpage, n8n, Plausible, Home Assistant... and the idea is that this services use a specific email to send emails. My domain provider gets me only 1 custom email for free, but as you can send an email &quot;as another email&quot;, my idea is to configure the SMTP with this main free email, and set &quot;from:&quot; in every service. For example, for my blog, I send emails as &quot;<a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:<REDACTED>\" rel=\"noopener nofollow ugc\" target=\"_blank\"><REDACTED></a>&quot;, for my HA, &quot;<a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:<REDACTED>\" rel=\"noopener nofollow ugc\" target=\"_blank\"><REDACTED></a>&quot; ... Of course, this emails only can send emails, but not receive.\n    </p><p>\n      But... I want to use the main email for my personal communication, mostly for &quot;serious&quot; emails like work or professional stuff. So, my question is, taking into account that the domain have my name, and I&#39;m not a company, but just a person, what would be a good &quot;name&quot; for this email? <a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:<REDACTED>\" rel=\"noopener nofollow ugc\" target=\"_blank\"><REDACTED></a>, <a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:<REDACTED>\" rel=\"noopener nofollow ugc\" target=\"_blank\"><REDACTED></a>, <a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:<REDACTED>\" rel=\"noopener nofollow ugc\" target=\"_blank\"><REDACTED></a>...\n    </p><p>\n      Thanks in advance for your ideas!\n    </p><p>\n      Edit: thanks to all for your comments! I think the best way will be use &quot;<a rpl class=\"relative pointer-events-auto a\n  \n  \n  \n  \n  underline\n  \n  cursor-pointer\" href=\"mailto:contact@\" rel=\"noopener nofollow ugc\" target=\"_blank\">contact@</a>...&quot; as main address (more general) and then maybe just pay for a dedicated email server to use all the other addresses.\n    </p><p>\n      Edit2: after all the comments, I checked the options for my mail service, and I found that I can create &quot;redirects&quot;, that is a new email address but without dedicated space, so with this I can redirect this addresses to my main address. I didn&#39;t know this functionality, and I though to receive (accept) emails to an address you need to have a dedicated space. So, many thanks again to all :)\n    </p>",
-            "top_comment": "For me <first-name>@<surname>.com"
+            "title": "Synthetic title 1ede190e.",
+            "question": "Synthetic question 77206113.",
+            "top_comment": "Synthetic top_comment 61b2d8ae."
           }
         },
         {
-          "title": "Guide for NGINX Reverse Proxy with Subdomains?",
-          "url": "https://www.reddit.com/r/homelab/comments/7w9vcj/guide_for_nginx_reverse_proxy_with_subdomains/",
+          "title": "Synthetic title f01cd4c7.",
+          "url": "https://example.com/synthetic/b39bcc59f0",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "This site can help you build your nginx config: https://nginxconfig.io",
+          "description": "Synthetic description b1b34c09.",
           "fetched_content_timestamp": 1788029621,
           "language": "en",
           "family_friendly": true,
@@ -303,19 +303,19 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "reddit.com",
-            "hostname": "www.reddit.com",
-            "favicon": "https://imgs.search.brave.com/U-eHNCapRHVNWWCVPPMTIvOofZULh0_A_FQKe8xTE4I/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2ZiNTU0M2Nj/MTFhZjRiYWViZDlk/MjJiMjBjMzFjMDRk/Y2IzYWI0MGI0MjVk/OGY5NzQzOGQ5NzQ5/NWJhMWI0NC93d3cu/cmVkZGl0LmNvbS8",
-            "path": "\u203a r  \u203a homelab  \u203a comments  \u203a 7w9vcj  \u203a guide_for_nginx_reverse_proxy_with_subdomains"
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 3576bd56."
           },
           "age": "February 9, 2018",
           "data": {
-            "forum_name": "r/homelab",
+            "forum_name": "Synthetic forum_name 13afbe77.",
             "num_answers": 21,
             "score": "23",
-            "title": "Guide for NGINX Reverse Proxy with Subdomains?",
-            "question": "<p>\n      I am trying to setup a NGINX Reverse proxy. However instead of using the same domain with different page under the same domain name, I am wanting to use sub domains. Does anyone have any full guides on how to configure a NGINX to do this?(I have found  info on how to do the server blocks, but I would like a full guide on how to set it up). I am the type of person who needs a full guide on how to do something so if I mess something up I can go directly back to the guide and trouble shoot. Any advice or guidance would be much appreciated!\n    </p>",
-            "top_comment": "This site can help you build your nginx config: https://nginxconfig.io"
+            "title": "Synthetic title f01cd4c7.",
+            "question": "Synthetic question aaa9dfc2.",
+            "top_comment": "Synthetic top_comment b1b34c09."
           }
         }
       ],
@@ -325,42 +325,42 @@
       "type": "faq",
       "results": [
         {
-          "question": "Do I need a website to buy a domain?",
-          "answer": "No, you can buy a <strong>domain</strong> name without having a website ready. Many people purchase <strong>domains</strong> to park them and save the name for a future project. This prevents anyone else from taking your idea while you get your business plan together.",
-          "title": "What is an example of a domain name?",
-          "url": "https://www.wix.com/blog/what-is-an-example-of-a-domain-name",
+          "question": "Synthetic question 106ff91d.",
+          "answer": "Synthetic answer 00e4aaa9.",
+          "title": "Synthetic title 43beb68f.",
+          "url": "https://example.com/synthetic/333773b5af",
           "meta_url": {
             "scheme": "https",
-            "netloc": "wix.com",
-            "hostname": "www.wix.com",
-            "favicon": "https://imgs.search.brave.com/CPcMvQzgJnm7ow_GXFHaYuGlJJqIoNPKD9p32T8j7GQ/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvYzMzZjkyYzM1/MjlmM2MwYWNkZTU5/N2FiMGNiNDhjOTIy/NTQxOTQ4NGNhNTZl/YWM3ZjE2MGEwNDU5/MjIxMmVkYi93d3cu/d2l4LmNvbS8",
-            "path": "\u203a blog  \u203a what-is-an-example-of-a-domain-name"
+            "netloc": "site-53e179.example.com",
+            "hostname": "site-cdee92.example.com",
+            "favicon": "https://example.com/synthetic/10dceec9e0",
+            "path": "Synthetic path cb14639f."
           }
         },
         {
-          "question": "What's the difference between a URL and a domain?",
-          "answer": "A <strong>domain</strong> is the main address of your site (e.g., wix.com). A URL (Uniform Resource Locator) is the full specific address that leads to a specific page on that site (e.g., https://www.wix.com/blog). The <strong>domain</strong> is a part of the URL.",
-          "title": "What is an example of a domain name?",
-          "url": "https://www.wix.com/blog/what-is-an-example-of-a-domain-name",
+          "question": "Synthetic question ff9a7df3.",
+          "answer": "Synthetic answer 7f9ff36e.",
+          "title": "Synthetic title 43beb68f.",
+          "url": "https://example.com/synthetic/333773b5af",
           "meta_url": {
             "scheme": "https",
-            "netloc": "wix.com",
-            "hostname": "www.wix.com",
-            "favicon": "https://imgs.search.brave.com/CPcMvQzgJnm7ow_GXFHaYuGlJJqIoNPKD9p32T8j7GQ/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvYzMzZjkyYzM1/MjlmM2MwYWNkZTU5/N2FiMGNiNDhjOTIy/NTQxOTQ4NGNhNTZl/YWM3ZjE2MGEwNDU5/MjIxMmVkYi93d3cu/d2l4LmNvbS8",
-            "path": "\u203a blog  \u203a what-is-an-example-of-a-domain-name"
+            "netloc": "site-53e179.example.com",
+            "hostname": "site-cdee92.example.com",
+            "favicon": "https://example.com/synthetic/10dceec9e0",
+            "path": "Synthetic path cb14639f."
           }
         },
         {
-          "question": "Can I change my domain name later if I need or want to?",
-          "answer": "Technically, yes, you can switch to a new <strong>domain</strong> name later. However, it can hurt your search engine rankings and confuse regular visitors who know your old address. It's much better to take the time to choose a name you will be happy with for a long time.",
-          "title": "What is an example of a domain name?",
-          "url": "https://www.wix.com/blog/what-is-an-example-of-a-domain-name",
+          "question": "Synthetic question 394fec7f.",
+          "answer": "Synthetic answer beaeb0cc.",
+          "title": "Synthetic title 43beb68f.",
+          "url": "https://example.com/synthetic/333773b5af",
           "meta_url": {
             "scheme": "https",
-            "netloc": "wix.com",
-            "hostname": "www.wix.com",
-            "favicon": "https://imgs.search.brave.com/CPcMvQzgJnm7ow_GXFHaYuGlJJqIoNPKD9p32T8j7GQ/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvYzMzZjkyYzM1/MjlmM2MwYWNkZTU5/N2FiMGNiNDhjOTIy/NTQxOTQ4NGNhNTZl/YWM3ZjE2MGEwNDU5/MjIxMmVkYi93d3cu/d2l4LmNvbS8",
-            "path": "\u203a blog  \u203a what-is-an-example-of-a-domain-name"
+            "netloc": "site-53e179.example.com",
+            "hostname": "site-cdee92.example.com",
+            "favicon": "https://example.com/synthetic/10dceec9e0",
+            "path": "Synthetic path cb14639f."
           }
         }
       ]
@@ -370,64 +370,64 @@
       "results": [
         {
           "title": "Example.com",
-          "url": "https://en.wikipedia.org/wiki/Example.com",
+          "url": "https://example.com/synthetic/256fbe104a",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "domain name reserved for documentation purposes and as an example of the use of domain names",
+          "description": "Synthetic description fe2d9d94.",
           "family_friendly": true,
           "type": "infobox",
           "position": 2,
-          "long_desc": "The domain names example.com, example.net, example.org, and example.edu are second-level domain names in the Domain Name System of the Internet. They are reserved by the Internet Assigned Numbers Authority (IANA) at the direction of the Internet Engineering Task Force (IETF) as special-use ...",
+          "long_desc": "Synthetic long_desc 6be524d7.",
           "attributes": [
             [
-              "Website type",
-              "Reserved domain"
+              "Synthetic attributes ad9c15c9.",
+              "Synthetic attributes 3c62b94b."
             ],
             [
-              "Available in",
-              "English"
+              "Synthetic attributes 59e5d85f.",
+              "Synthetic attributes ba118bf7."
             ],
             [
-              "Owner",
-              "Internet Assigned Numbers Authority"
+              "Synthetic attributes 4b1b8aa3.",
+              "Synthetic attributes 2918703a."
             ],
             [
-              "IPv6 support",
-              "Yes"
+              "Synthetic attributes 7ff87333.",
+              "Synthetic attributes 85a39ab3."
             ],
             [
-              "Launched",
-              "1 January 1999; 27 years ago"
+              "Synthetic attributes cf55727a.",
+              "Synthetic attributes 73725867."
             ],
             [
-              "Current status",
-              "Online"
+              "Synthetic attributes 2f5d50ad.",
+              "Synthetic attributes 0d21bd52."
             ]
           ],
           "profiles": [
             {
-              "name": "Wikipedia",
-              "url": "https://en.wikipedia.org/wiki/Example.com",
-              "long_name": "en.wikipedia.org",
-              "img": "https://imgs.search.brave.com/m6XxME4ek8DGIUcEPCqjRoDjf2e54EwL9pQzyzogLYk/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvNjQwNGZhZWY0/ZTQ1YWUzYzQ3MDUw/MmMzMGY3NTQ0ZjNj/NDUwMDk5ZTI3MWRk/NWYyNTM4N2UwOTE0/NTI3ZDQzNy9lbi53/aWtpcGVkaWEub3Jn/Lw"
+              "name": "Synthetic name d38b38a2.",
+              "url": "https://example.com/synthetic/256fbe104a",
+              "long_name": "site-b71288.example.com",
+              "img": "https://example.com/synthetic/5ca84e6a43"
             },
             {
-              "name": "Wikidata",
-              "url": "http://www.wikidata.org/entity/Q306656",
-              "long_name": "wikidata.org",
-              "img": "https://imgs.search.brave.com/8vIq-V97PH8S0N-pyaeHgq_gFHOA8hXjBunynHio-Uw/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvYzdkMGIyYTky/OTJjN2RjNDEyNWYx/MGQxNjAzNmZlNDk4/ZTRmNDczNjk0ZTZl/N2IxZjI0NTVkMGE3/YTBiYjEzYi93d3cu/d2lraWRhdGEub3Jn/Lw"
+              "name": "Synthetic name a8269b65.",
+              "url": "https://example.com/synthetic/11fe57517c",
+              "long_name": "site-e28c70.example.com",
+              "img": "https://example.com/synthetic/a565c5a638"
             },
             {
-              "name": "Namu",
-              "url": "https://namu.wiki/w/example.com",
-              "long_name": "namu.wiki",
-              "img": "https://imgs.search.brave.com/ASqhh3dK7hFX53bmp7XVZpSxqVtrrhYb5NAiPa7b2QU/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvZjY4MDQzMTIz/ZjZmOGYxZjdhYjkw/ODEwZTVjNjBlYWYy/M2JkZTkxNDIxNDZk/M2Y0NTg4MjhmMDg2/NjBjYTE4YS9uYW11/Lndpa2kv"
+              "name": "Synthetic name 9ef7e70e.",
+              "url": "https://example.com/synthetic/dc38ad4420",
+              "long_name": "site-fe9774.example.com",
+              "img": "https://example.com/synthetic/47bc0b6b7d"
             },
             {
-              "name": "ICANN",
-              "url": "https://lookup.icann.org/whois/en?q=example.com",
-              "long_name": "lookup.icann.org",
-              "img": "https://imgs.search.brave.com/iMQ07jE58PEiY22HeOnB8IUj-yaTI-TozueQ_gGs2Ak/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvZWQzNDZiOWVm/ZjI1NGVjMjc5YjRm/NmFmODQ1YjQ2OTEw/MjhiNTNmYTM4MTI2/YmJjNWIwNWM5YjBk/YTdiMGEyZC9sb29r/dXAuaWNhbm4ub3Jn/Lw"
+              "name": "Synthetic name aa91f9d4.",
+              "url": "https://example.com/synthetic/d0d38c0af5",
+              "long_name": "site-fbbfdf.example.com",
+              "img": "https://example.com/synthetic/e621d07d83"
             }
           ],
           "website_url": "https://example.com",
@@ -435,41 +435,41 @@
           "providers": [
             {
               "type": "external",
-              "name": "Wikipedia",
-              "url": "https://en.wikipedia.org/wiki/Example.com",
-              "img": "https://imgs.search.brave.com/m6XxME4ek8DGIUcEPCqjRoDjf2e54EwL9pQzyzogLYk/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvNjQwNGZhZWY0/ZTQ1YWUzYzQ3MDUw/MmMzMGY3NTQ0ZjNj/NDUwMDk5ZTI3MWRk/NWYyNTM4N2UwOTE0/NTI3ZDQzNy9lbi53/aWtpcGVkaWEub3Jn/Lw"
+              "name": "Synthetic name d38b38a2.",
+              "url": "https://example.com/synthetic/256fbe104a",
+              "img": "https://example.com/synthetic/5ca84e6a43"
             }
           ],
           "images": [
             {
-              "src": "https://imgs.search.brave.com/CmqR0vgMgfwJtv4GkmoKqX-dSDDIr5uF1XlS0MJQl_U/rs:fit:500:0:0:0/g:ce/aHR0cHM6Ly91cGxv/YWQud2lraW1lZGlh/Lm9yZy93aWtpcGVk/aWEvY29tbW9ucy9j/L2MxL0V4YW1wbGVk/b3Rjb21fc2NyZWVu/c2hvdCUyQ18zX09j/dG9iZXJfMjAyNl8l/MjhsaWdodF90aGVt/ZSUyOS5wbmc_dXRt/X3NvdXJjZT1lbi53/aWtpcGVkaWEub3Jn/JmFtcDt1dG1fY2Ft/cGFpZ249aW5kZXgm/YW1wO3V0bV9jb250/ZW50PXRodW1ibmFp/bF91bnNjYWxlZA",
-              "alt": "example.com - Wikipedia",
-              "original": "https://upload.wikimedia.org/wikipedia/commons/c/c1/Exampledotcom_screenshot%2C_3_October_2026_%28light_theme%29.png?utm_source=en.wikipedia.org&amp;utm_campaign=index&amp;utm_content=thumbnail_unscaled",
+              "src": "https://example.com/synthetic/69d564fc58",
+              "alt": "Synthetic alt 25335a0c.",
+              "original": "https://example.com/synthetic/a9c1d5693f",
               "logo": false
             },
             {
-              "src": "https://imgs.search.brave.com/kF5a3tXqEfP3K8E1G4r9SSoknUL5gO81seyVPLbhj3A/rs:fit:500:0:0:0/g:ce/aHR0cHM6Ly9pLm5h/bXUud2lraS9pL0pG/d3NzMGxvTnQ2d2Fx/eURBNVl3V3ZwQmhE/dV8zTEFnZ3NBZGdu/Q3hfdjhxemRkV3Fi/aUdneTZZVHBKVmlL/a1JRN2h4TDVFTVBZ/ZWhCVVUzUVJaaVJE/VUFic0lvRDM4a2dr/akwzNXBSdDhpYlE1/ZjhndWhuaDE0LWUx/VGJCeTFJTkpsZkN5/RVkteDJ6T1RiOU5Y/Z0NaZy5wbmc",
-              "alt": "example.org",
-              "original": "https://i.namu.wiki/i/JFwss0loNt6waqyDA5YwWvpBhDu_3LAggsAdgnCx_v8qzddWqbiGgy6YTpJViKkRQ7hxL5EMPYehBUU3QRZiRDUAbsIoD38kgkjL35pRt8ibQ5f8guhnh14-e1TbBy1INJlfCyEY-x2zOTb9NXgCZg.png",
+              "src": "https://example.com/synthetic/7b92acc627",
+              "alt": "site-bfabc3.example.com",
+              "original": "https://example.com/synthetic/b125ec12a4",
               "logo": false
             },
             {
-              "src": "https://imgs.search.brave.com/0w9G-T734RUMZ1pD_Ub5W5lbi_5pl49nAC9ip9JDRDo/rs:fit:500:0:0:0/g:ce/aHR0cHM6Ly9pLm5h/bXUud2lraS9pL2pz/Sm5NeGQ1VEVEM2c5/UDN2MmFRVDJOREpk/ZWp2WDVFQ2lNWkli/dngyR0lrcUxYVmNn/NlNVNEpUZ1lRTTND/M2drYWRFV2NEUFF2/QjZmck9GQ1B6LWJT/OHNnWGFaMUI4d0Yy/ODduY3ZNcjg4OGRt/YkZ0QTIxdV9LaHRn/bnVRUm9JVlZnQmU3/RFRIcXc0ck9SeGVa/VUEzZy53ZWJw",
+              "src": "https://example.com/synthetic/8d7d154f3a",
               "alt": "example.com",
-              "original": "https://i.namu.wiki/i/jsJnMxd5TED3g9P3v2aQT2NDJdejvX5ECiMZIbvx2GIkqLXVcg6SU4JTgYQM3C3gkadEWcDPQvB6frOFCPz-bS8sgXaZ1B8wF287ncvMr888dmbFtA21u_KhtgnuQRoIVVgBe7DTHqw4rORxeZUA3g.webp",
+              "original": "https://example.com/synthetic/f8f6128f6e",
               "logo": false
             },
             {
-              "src": "https://imgs.search.brave.com/OFPbBt_YIktOxKYr2TqmiHvP4zMixEeuaQiAyPBnUU0/rs:fit:500:0:0:0/g:ce/aHR0cHM6Ly9pLm5h/bXUud2lraS9pL0xR/VDRhQW0xNE55ZDRh/QzRnN1o0bkRxYWNB/SnZNQjBqYUZrUjBK/T1NNWTJQakxsMkVa/QVdlZE1idENScDhr/dDExSnV0V3BHbE1L/cUZSQURhZFk0N2Qy/cGZSeFgtanJoRy1N/czRKU2twRXJ0aGl0/YUppb3lXT3hsUUdD/RjRlcmRTRU5ZVGd0/d3UzOHg3TWhTU2lv/TlA0Zy53ZWJw",
-              "alt": "examplecom",
-              "original": "https://i.namu.wiki/i/LQT4aAm14Nyd4aC4g7Z4nDqacAJvMB0jaFkR0JOSMY2PjLl2EZAWedMbtCRp8kt11JutWpGlMKqFRADadY47d2pfRxX-jrhG-Ms4JSkpErthitaJioyWOxlQGCF4erdSENYTgtwu38x7MhSSioNP4g.webp",
+              "src": "https://example.com/synthetic/c11e0b52e6",
+              "alt": "Synthetic alt 5b2f818e.",
+              "original": "https://example.com/synthetic/cda7c57c3d",
               "logo": false
             }
           ],
           "subtype": "generic",
           "found_in_urls": [
             "https://example.com/",
-            "https://en.wikipedia.org/wiki/Example.com"
+            "https://example.com/synthetic/256fbe104a"
           ]
         }
       ]
@@ -593,127 +593,127 @@
       "results": [
         {
           "type": "video_result",
-          "url": "https://www.facebook.com/61587496103252/videos/domain-the-unique-name-used-to-access-a-website-on-the-internetexample-googlecom/1829155588538258/",
-          "title": "Domain: The unique name used to access a website on ...",
-          "description": "Logged in on your phone \u00b7 Scan the QR code with your phone\u2019s camera and enter this code \u00b7 VTP-XBW-TDXC \u00b7 Log into Facebook \u00b7 English (US) \u00b7 \u0641\u0627\u0631\u0633\u06cc \u00b7 \u0627\u0644\u0639\u0631\u0628\u064a\u0629 \u00b7 T\u00fcrk\u00e7e \u00b7 Deutsch \u00b7 Fran\u00e7ais (France)",
+          "url": "https://example.com/synthetic/6645836cbf",
+          "title": "Synthetic title 167b5eea.",
+          "description": "Synthetic description f80890db.",
           "fetched_content_timestamp": 1794875331,
           "video": {},
           "meta_url": {
             "scheme": "https",
-            "netloc": "facebook.com",
-            "hostname": "www.facebook.com",
-            "favicon": "https://imgs.search.brave.com/UPSLokJBKWPdNzHbqH5o3CgD13zMvR3pUTn8bk7hmPM/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvOWM3NjZkMmE4/MTU1MTk4ZDU5YzU3/NjUxY2ExZTdjNWQx/NjJlNTY1Y2VlODM4/MmRmMDgzZDBiMmI3/YzU4NmU4ZS93d3cu/ZmFjZWJvb2suY29t/Lw",
-            "path": "\u203a 61587496103252  \u203a videos  \u203a domain-the-unique-name-used-to-access-a-website-on-the-internetexample-googlecom  \u203a 1829155588538258"
+            "netloc": "site-311933.example.com",
+            "hostname": "site-3e723b.example.com",
+            "favicon": "https://example.com/synthetic/e5f8387d16",
+            "path": "Synthetic path be1297e2."
           }
         },
         {
           "type": "video_result",
-          "url": "https://study.com/academy/lesson/video/what-is-a-web-domain-definition-lesson-quiz.html",
-          "title": "Web Domain | Definition & Examples - Video | Study.com",
-          "description": "Understand the importance of web domains in this engaging video lesson. Discover how they function through real-world examples, followed by a quiz to test your knowledge.",
+          "url": "https://example.com/synthetic/9d890ff9c5",
+          "title": "Synthetic title 52f81ca0.",
+          "description": "Synthetic description 60fea414.",
           "age": "September 10, 2020",
           "page_age": "2020-09-10T15:20:46",
           "fetched_content_timestamp": 1794836630,
           "video": {
             "duration": "07:27",
-            "publisher": "Study"
+            "publisher": "Synthetic publisher 3ff5620b."
           },
           "meta_url": {
             "scheme": "https",
-            "netloc": "study.com",
-            "hostname": "study.com",
-            "favicon": "https://imgs.search.brave.com/SEoqTBl9g6Uo9OOQqfWZwI6VedTuVlXzph4Rb4WXsrk/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvN2M0MWVjZDZi/NGZmODdmNzY0OGVi/NzRiNGM4MWNjZTNm/N2YzNWQ0OGYxZjhi/ZjQ4YTFlMDVmMTE3/ZTkwZTFkYi9zdHVk/eS5jb20v",
-            "path": "\u203a academy  \u203a lesson  \u203a video  \u203a what-is-a-web-domain-definition-lesson-quiz.html"
+            "netloc": "site-f2ddf0.example.com",
+            "hostname": "site-f2ddf0.example.com",
+            "favicon": "https://example.com/synthetic/30df09fa8f",
+            "path": "Synthetic path 5847b1db."
           },
           "thumbnail": {
-            "src": "https://imgs.search.brave.com/THgMQPWhqVqGVXVSgNK_6uZL2Jt1RS4TmLFHqNtwt_Q/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9zdHVk/eS5jb20vY2ltYWdl/cy92aWRlb3ByZXZp/ZXcvd283NHBwbHV2/cC5qcGc",
-            "original": "https://study.com/cimages/videopreview/wo74ppluvp.jpg"
+            "src": "https://example.com/synthetic/751eb744ab",
+            "original": "https://example.com/synthetic/7102cee294"
           }
         },
         {
           "type": "video_result",
-          "url": "https://www.facebook.com/61560047101036/videos/20-types-of-domain-names/1322522046279087/",
-          "title": "20 Types of Domain Names: .com to .blog Explained | Learn Daily",
-          "description": "Logged in on your phone \u00b7 Scan the QR code with your phone\u2019s camera and enter this code \u00b7 VTP-XBW-TDXC \u00b7 Log into Facebook \u00b7 English (US) \u00b7 \u0641\u0627\u0631\u0633\u06cc \u00b7 \u0627\u0644\u0639\u0631\u0628\u064a\u0629 \u00b7 T\u00fcrk\u00e7e \u00b7 Deutsch \u00b7 Fran\u00e7ais (France)",
+          "url": "https://example.com/synthetic/62af05cce7",
+          "title": "Synthetic title 5f430b42.",
+          "description": "Synthetic description f80890db.",
           "fetched_content_timestamp": 1794875331,
           "video": {},
           "meta_url": {
             "scheme": "https",
-            "netloc": "facebook.com",
-            "hostname": "www.facebook.com",
-            "favicon": "https://imgs.search.brave.com/UPSLokJBKWPdNzHbqH5o3CgD13zMvR3pUTn8bk7hmPM/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvOWM3NjZkMmE4/MTU1MTk4ZDU5YzU3/NjUxY2ExZTdjNWQx/NjJlNTY1Y2VlODM4/MmRmMDgzZDBiMmI3/YzU4NmU4ZS93d3cu/ZmFjZWJvb2suY29t/Lw",
-            "path": "\u203a 61560047101036  \u203a videos  \u203a 20-types-of-domain-names  \u203a 1322522046279087"
+            "netloc": "site-311933.example.com",
+            "hostname": "site-3e723b.example.com",
+            "favicon": "https://example.com/synthetic/e5f8387d16",
+            "path": "Synthetic path 0c2bc6f0."
           }
         },
         {
           "type": "video_result",
-          "url": "https://www.youtube.com/watch?v=j9I_ju7qTIM",
-          "title": "\ud83d\udd35 Domain Meaning - Domain Examples - Domain Definition - Domain ...",
-          "description": "Domain Meaning - Domain Examples - Domain Definition - DomainWhat does domain mean? What is domain? What is the meaning of domain? A definition of domain. Th...",
+          "url": "https://example.com/synthetic/f5eaca00ed",
+          "title": "Synthetic title 47a9d23e.",
+          "description": "Synthetic description 3746abf0.",
           "age": "June 14, 2025",
           "page_age": "2025-06-14T13:01:17",
           "fetched_content_timestamp": 1794569357,
           "video": {},
           "meta_url": {
             "scheme": "https",
-            "netloc": "youtube.com",
-            "hostname": "www.youtube.com",
-            "favicon": "https://imgs.search.brave.com/Wg4wjE5SHAargkzePU3eSLmWgVz84BEZk1SjSglJK_U/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvOTkyZTZiMWU3/YzU3Nzc5YjExYzUy/N2VhZTIxOWNlYjM5/ZGVjN2MyZDY4Nzdh/ZDYzMTYxNmI5N2Rk/Y2Q3N2FkNy93d3cu/eW91dHViZS5jb20v",
-            "path": "\u203a watch"
+            "netloc": "site-4dc3a7.example.com",
+            "hostname": "site-686077.example.com",
+            "favicon": "https://example.com/synthetic/598ee352f8",
+            "path": "Synthetic path 4fff6968."
           },
           "thumbnail": {
-            "src": "https://imgs.search.brave.com/d3qIErpW6Tnt3mLSC6KbfkEeURxKUPJBE9YYw0_bUGc/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9pLnl0/aW1nLmNvbS92aS9q/OUlfanU3cVRJTS9t/YXhyZXNkZWZhdWx0/LmpwZw",
-            "original": "https://i.ytimg.com/vi/j9I_ju7qTIM/maxresdefault.jpg"
+            "src": "https://example.com/synthetic/7183fc92fb",
+            "original": "https://example.com/synthetic/3961b73ec9"
           }
         },
         {
           "type": "video_result",
-          "url": "https://www.youtube.com/watch?v=DoxYsMAHsgo",
-          "title": "Let\u2019s pick a domain name | Search Off the Record - YouTube",
-          "description": "A top-level domain (TLD) is the last part of a domain name, after the dot, and identifies the type of organization the domain belongs to, or the country the ...",
+          "url": "https://example.com/synthetic/00be096774",
+          "title": "Synthetic title 75038fdd.",
+          "description": "Synthetic description 7a5cf986.",
           "age": "July 20, 2023",
           "page_age": "2023-07-20T13:12:24",
           "fetched_content_timestamp": 1793606119,
           "video": {
             "duration": "26:42",
-            "creator": "Google Search Central",
-            "publisher": "YouTube"
+            "creator": "Synthetic creator 05d5ad90.",
+            "publisher": "Synthetic publisher fb7accff."
           },
           "meta_url": {
             "scheme": "https",
-            "netloc": "youtube.com",
-            "hostname": "www.youtube.com",
-            "favicon": "https://imgs.search.brave.com/Wg4wjE5SHAargkzePU3eSLmWgVz84BEZk1SjSglJK_U/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvOTkyZTZiMWU3/YzU3Nzc5YjExYzUy/N2VhZTIxOWNlYjM5/ZGVjN2MyZDY4Nzdh/ZDYzMTYxNmI5N2Rk/Y2Q3N2FkNy93d3cu/eW91dHViZS5jb20v",
-            "path": "\u203a watch"
+            "netloc": "site-4dc3a7.example.com",
+            "hostname": "site-686077.example.com",
+            "favicon": "https://example.com/synthetic/598ee352f8",
+            "path": "Synthetic path 4fff6968."
           },
           "thumbnail": {
-            "src": "https://imgs.search.brave.com/quij17cDwMqNbKj8NPaeGF1e4OwJ6DkkQypMMTq-ZRk/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9pLnl0/aW1nLmNvbS92aS9E/b3hZc01BSHNnby9t/YXhyZXNkZWZhdWx0/LmpwZz9zcXA9LW9h/eW13RW1DSUFLRU5B/RjhxdUtxUU1hOEFF/Qi1BSC1DWUFDMEFX/S0Fnd0lBQkFCR0dV/Z1pTaGxNQTg9JmFt/cDtycz1BT240Q0xB/YThlTF9fNHRaT2dq/SWhrbkdySWdlOFUt/M3RR",
-            "original": "https://i.ytimg.com/vi/DoxYsMAHsgo/maxresdefault.jpg?sqp=-oaymwEmCIAKENAF8quKqQMa8AEB-AH-CYAC0AWKAgwIABABGGUgZShlMA8=&amp;rs=AOn4CLAa8eL__4tZOgjIhknGrIge8U-3tQ"
+            "src": "https://example.com/synthetic/206f912e6c",
+            "original": "https://example.com/synthetic/c9bc7ec970"
           }
         },
         {
           "type": "video_result",
-          "url": "https://www.youtube.com/watch?v=kXump59mXf4",
-          "title": "Know about example domains - YouTube",
-          "description": "Know about example domains.example.com | example.org | example.net | example.eduCheck out the article on our website for more details.Website: https://random...",
+          "url": "https://example.com/synthetic/f5d22c9cb3",
+          "title": "Synthetic title b3e401a6.",
+          "description": "Synthetic description 941e4b7c.",
           "age": "September 29, 2021",
           "page_age": "2021-09-29T23:35:03",
           "fetched_content_timestamp": 1794158062,
           "video": {
             "duration": "02:29",
-            "creator": "Random Codez",
-            "publisher": "YouTube"
+            "creator": "Synthetic creator 0651e6dc.",
+            "publisher": "Synthetic publisher fb7accff."
           },
           "meta_url": {
             "scheme": "https",
-            "netloc": "youtube.com",
-            "hostname": "www.youtube.com",
-            "favicon": "https://imgs.search.brave.com/Wg4wjE5SHAargkzePU3eSLmWgVz84BEZk1SjSglJK_U/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvOTkyZTZiMWU3/YzU3Nzc5YjExYzUy/N2VhZTIxOWNlYjM5/ZGVjN2MyZDY4Nzdh/ZDYzMTYxNmI5N2Rk/Y2Q3N2FkNy93d3cu/eW91dHViZS5jb20v",
-            "path": "\u203a watch"
+            "netloc": "site-4dc3a7.example.com",
+            "hostname": "site-686077.example.com",
+            "favicon": "https://example.com/synthetic/598ee352f8",
+            "path": "Synthetic path 4fff6968."
           },
           "thumbnail": {
-            "src": "https://imgs.search.brave.com/zom0xkP0odhtT7aYsoIC4UYY_iutPtKSGwaV79YYvDk/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9pLnl0/aW1nLmNvbS92aS9r/WHVtcDU5bVhmNC9t/YXhyZXNkZWZhdWx0/LmpwZw",
-            "original": "https://i.ytimg.com/vi/kXump59mXf4/maxresdefault.jpg"
+            "src": "https://example.com/synthetic/d86c47ba10",
+            "original": "https://example.com/synthetic/b1b644641d"
           }
         }
       ],
@@ -723,18 +723,18 @@
       "type": "search",
       "results": [
         {
-          "title": "Example Domain",
+          "title": "Synthetic title 162b8154.",
           "url": "https://example.com/",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "This domain is for use in documentation examples without needing permission.",
+          "description": "Synthetic description d2429afa.",
           "page_age": "2026-11-16T14:41:23",
           "fetched_content_timestamp": 1794876922,
           "profile": {
-            "name": "Example Domain",
+            "name": "Synthetic name 162b8154.",
             "url": "https://example.com/",
             "long_name": "example.com",
-            "img": "https://imgs.search.brave.com/tLnWTP3G5nX9cDT14W_gBbc7Y7SlsM1DUXlqwApjOh0/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvNjg2YmQ5YThj/OGQ4OWZhMDYzYzcw/MTg1N2VlMDNlMmY1/NzA2MWQxMjM1Y2M4/NjVjNTFhN2RjY2Ni/ODU1YzBhYi9leGFt/cGxlLmNvbS8"
+            "img": "https://example.com/synthetic/5fdd610603"
           },
           "language": "en",
           "family_friendly": true,
@@ -745,27 +745,27 @@
             "scheme": "https",
             "netloc": "example.com",
             "hostname": "example.com",
-            "favicon": "https://imgs.search.brave.com/tLnWTP3G5nX9cDT14W_gBbc7Y7SlsM1DUXlqwApjOh0/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvNjg2YmQ5YThj/OGQ4OWZhMDYzYzcw/MTg1N2VlMDNlMmY1/NzA2MWQxMjM1Y2M4/NjVjNTFhN2RjY2Ni/ODU1YzBhYi9leGFt/cGxlLmNvbS8",
+            "favicon": "https://example.com/synthetic/5fdd610603",
             "path": ""
           },
           "age": "11 hours ago",
           "extra_snippets": [
-            "L\u2019usage de ce domaine est r\u00e9serv\u00e9 \u00e0 des exemples de documentation, sans autorisation pr\u00e9alable."
+            "Synthetic extra_snippets 53fafb96."
           ]
         },
         {
-          "title": "Example Domains",
-          "url": "https://www.iana.org/help/example-domains",
+          "title": "Synthetic title 8d7e39b4.",
+          "url": "https://example.com/synthetic/7630c14a6e",
           "is_source_local": false,
           "is_source_both": false,
-          "description": "A number of domains such as <strong>example.com and example.org</strong> are maintained for documentation purposes. These domains may be used as illustrative examples in documents without prior coordination with us.",
+          "description": "Synthetic description 970a413d.",
           "page_age": "2026-09-27T00:00:00",
           "fetched_content_timestamp": 1794841303,
           "profile": {
-            "name": "IANA",
-            "url": "https://www.iana.org/help/example-domains",
-            "long_name": "iana.org",
-            "img": "https://imgs.search.brave.com/LSnV-TNWELVeLOwdv4Kmn9ovO8NPgoSIjBvid6b2PzM/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvM2YwZmYxYjRm/NjZhNjI5Y2JlNjJh/YzBiYTg1MWZiZWE5/MDIzOWM3ZjFlY2Fl/ZjcwNTBmMzg2OTY3/Mzc4Yjc1ZS93d3cu/aWFuYS5vcmcv"
+            "name": "Synthetic name 6cc2f04c.",
+            "url": "https://example.com/synthetic/7630c14a6e",
+            "long_name": "site-60fb8a.example.com",
+            "img": "https://example.com/synthetic/3a659f50ce"
           },
           "language": "en",
           "family_friendly": true,
@@ -774,15 +774,15 @@
           "is_live": false,
           "meta_url": {
             "scheme": "https",
-            "netloc": "iana.org",
-            "hostname": "www.iana.org",
-            "favicon": "https://imgs.search.brave.com/LSnV-TNWELVeLOwdv4Kmn9ovO8NPgoSIjBvid6b2PzM/rs:fit:32:32:1:0/g:ce/aHR0cDovL2Zhdmlj/b25zLnNlYXJjaC5i/cmF2ZS5jb20vaWNv/bnMvM2YwZmYxYjRm/NjZhNjI5Y2JlNjJh/YzBiYTg1MWZiZWE5/MDIzOWM3ZjFlY2Fl/ZjcwNTBmMzg2OTY3/Mzc4Yjc1ZS93d3cu/aWFuYS5vcmcv",
-            "path": "\u203a help  \u203a example-domains"
+            "netloc": "site-60fb8a.example.com",
+            "hostname": "site-60ec59.example.com",
+            "favicon": "https://example.com/synthetic/3a659f50ce",
+            "path": "Synthetic path 1342f555."
           },
           "age": "September 27, 2026",
           "extra_snippets": [
-            "A number of domains such as example.com and example.org are maintained for documentation purposes. These domains may be used as illustrative examples in documents without prior coordination with us.",
-            "We strongly recommend you do not design applications that require the example domains to have operating HTTP service."
+            "Synthetic extra_snippets 57085063.",
+            "Synthetic extra_snippets e337f1c6."
           ]
         }
       ],

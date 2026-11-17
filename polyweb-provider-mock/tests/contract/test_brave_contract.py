@@ -20,12 +20,16 @@ import httpx
 import pytest
 
 from polyweb_provider_mock.store import MockStore
-from tests.contract.test_you_contract import assert_same_shape
+from tests._support.shape import assert_same_shape
 
 _RECORDINGS = sorted((Path(__file__).parent / "recordings" / "brave").glob("*.json"))
 _WRONG_KEY = "BSA0000000000000000000000000000"
 _RATE_HEADERS = ("x-ratelimit-limit", "x-ratelimit-policy", "x-ratelimit-remaining")
 _PRESENCE = (*_RATE_HEADERS, "x-ratelimit-reset", "retry-after", "server-timing", "vary")
+
+
+def _same_shape(recorded: Any, mocked: Any) -> None:
+    assert_same_shape(recorded, mocked, lists="any")
 
 
 def _headers(name: str, recording: dict[str, Any], keys: dict[str, str]) -> dict[str, str]:
@@ -71,7 +75,7 @@ async def test_mock_matches_recorded_exchange(
             assert response.headers[header] == recorded_headers[header], header
     if "x-ratelimit-reset" in recorded_headers:
         assert re.fullmatch(r"1, \d+", response.headers["x-ratelimit-reset"])
-    assert_same_shape(_by_url(recording["response_body"]), _by_url(response.json()))
+    _same_shape(_by_url(recording["response_body"]), _by_url(response.json()))
 
 
 def _by_url(body: Any) -> Any:

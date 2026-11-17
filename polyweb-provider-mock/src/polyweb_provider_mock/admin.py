@@ -2,10 +2,11 @@
 
 Every route calls the same :class:`~polyweb_provider_mock.store.MockStore`
 methods as ``polyweb-mock``. When ``POLYWEB_PROVIDER_MOCK_ADMIN_TOKEN`` is set,
-every route except ``/_mock/health`` needs ``Authorization: Bearer <token>``.
+every route except ``/_mock/health`` and the plugin pages needs the token:
+``Authorization: Bearer <token>``, an ``admin_token`` form field, or the admin
+cookie (see :mod:`polyweb_provider_mock.access`).
 """
 
-import hmac
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Annotated, Any
@@ -14,6 +15,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from polyweb_provider_mock.access import AdminAccess
 from polyweb_provider_mock.faults import FaultKind, FaultRule, FaultSpec
 from polyweb_provider_mock.models import (
     Account,
@@ -66,6 +68,12 @@ class PriceBody(BaseModel):
     rule: PricingRule = "per_unit"
 
 
+class AttributesBody(BaseModel):
+    provider: str
+    attributes: dict[str, Any]
+    account_id: str | None = None
+
+
 class KeylessBody(BaseModel):
     provider: str
     enabled: bool | None = None
@@ -99,12 +107,9 @@ def dotenv_lines(store: MockStore) -> str:
     return "".join(f"{name}={value}\n" for name, value in store.export_keys())
 
 
-def _guard(token: str | None) -> Any:
-    def check(request: Request) -> None:
-        if token is None:
-            return
-        presented = request.headers.get("authorization", "")
-        if not hmac.compare_digest(presented.encode(), f"Bearer {token}".encode()):
+def _guard(access: AdminAccess) -> Any:
+    async def check(request: Request) -> None:
+        if not await access.allowed(request):
             raise HTTPException(status_code=401, detail="admin token required")
 
     return Depends(check)
@@ -160,6 +165,11 @@ def _state_routes(
     @router.post("/credits/set")
     async def set_credits(body: CreditsBody) -> Account:
         return store.set_credits(body.provider, body.amount, body.account_id, used=body.used)
+
+    @router.put("/accounts/attributes")
+    async def set_attributes(body: AttributesBody) -> Account:
+        _known(plugins, body.provider)
+        return store.set_account_attributes(body.provider, body.attributes, body.account_id)
 
     @router.get("/pricing")
     async def pricing(provider: str | None = None) -> list[PriceRule]:
@@ -243,7 +253,13 @@ def _data_routes(
                 "name": plugin.name,
                 "hosts": sorted(plugin.hosts),
                 "operations": [
-                    {"name": op.name, "method": op.method, "path": op.path, "billable": op.billable}
+                    {
+                        "name": op.name,
+                        "method": op.method,
+                        "path": op.path,
+                        "billable": op.billable,
+                        "hosts": sorted(op.hosts or plugin.hosts),
+                    }
                     for op in plugin.operations()
                 ],
             }
@@ -320,10 +336,14 @@ def build_admin_app(
     async def health() -> dict[str, Any]:
         return {"status": "ok", "providers": sorted(plugins), "seeded": store.is_seeded()}
 
-    router = APIRouter(prefix="/_mock", dependencies=[_guard(admin_token)])
+    access = AdminAccess(admin_token)
+    router = APIRouter(prefix="/_mock", dependencies=[_guard(access)])
     for register in (_state_routes, _fault_routes, _data_routes):
         register(router, store, plugins)
+    pages = APIRouter(prefix="/_mock")
     for plugin in plugins.values():
-        plugin.admin_routes(router, store)
+        plugin.admin_routes(router, store, access)
+        plugin.admin_pages(pages, store, access)
+    app.include_router(pages)
     app.include_router(router)
     return app

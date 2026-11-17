@@ -19,6 +19,7 @@ import httpx
 import pytest
 
 from polyweb_provider_mock.store import MockStore
+from tests._support.shape import assert_same_shape
 
 _RECORDINGS = sorted((Path(__file__).parent / "recordings" / "parallel").glob("*.json"))
 _FORWARDED = {"content-type", "user-agent", "accept"}
@@ -26,30 +27,8 @@ _HEX_ID = re.compile(r"^[0-9a-f]{32}$")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
-def _kind(value: Any) -> str:
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, (int, float)):
-        return "number"
-    if value is None:
-        return "null"
-    return type(value).__name__
-
-
-def assert_same_shape(recorded: Any, mocked: Any, path: str = "$") -> None:
-    """Assert equal keys and value types recursively; list items match the first item."""
-
-    if recorded is None and isinstance(mocked, str):
-        return
-    assert _kind(mocked) == _kind(recorded), f"{path}: {_kind(mocked)} != {_kind(recorded)}"
-    if isinstance(recorded, dict):
-        assert set(mocked) == set(recorded), f"{path}: keys {sorted(mocked)} != {sorted(recorded)}"
-        for key, value in recorded.items():
-            assert_same_shape(value, mocked[key], f"{path}.{key}")
-    elif isinstance(recorded, list) and recorded:
-        assert mocked, f"{path}: the mock returned an empty list"
-        for index, item in enumerate(mocked):
-            assert_same_shape(recorded[0], item, f"{path}[{index}]")
+def _same_shape(recorded: Any, mocked: Any) -> None:
+    assert_same_shape(recorded, mocked, null_accepts_str=True)
 
 
 def _headers(name: str, recording: dict[str, Any], key: str) -> dict[str, str]:
@@ -62,22 +41,6 @@ def _headers(name: str, recording: dict[str, Any], key: str) -> dict[str, str]:
     if "authorization" in recorded:
         headers["authorization"] = "Bearer bogus"
     return headers
-
-
-@pytest.mark.parametrize(
-    ("recorded", "mocked"),
-    [
-        ({"a": 1, "b": None}, {"a": 1}),
-        ({"a": 1}, {"a": "1"}),
-        ({"a": "x"}, {"a": None}),
-        ({"a": [{"x": 1}]}, {"a": [{"y": 1}]}),
-        ({"a": [{"x": 1}]}, {"a": []}),
-        ({"a": True}, {"a": 1}),
-    ],
-)
-def test_shape_comparison_rejects_mismatches(recorded: Any, mocked: Any) -> None:
-    with pytest.raises(AssertionError):
-        assert_same_shape(recorded, mocked)
 
 
 def test_every_recording_is_sanitized() -> None:
@@ -115,7 +78,7 @@ async def test_mock_matches_recorded_exchange(
         pattern = _UUID if path.stem.startswith("balance") else _HEX_ID
         assert pattern.match(request_id), request_id
     payload = response.json()
-    assert_same_shape(recording["response_body"], payload)
+    _same_shape(recording["response_body"], payload)
     if isinstance(payload.get("error"), dict) and "ref_id" in payload["error"]:
         assert payload["error"]["ref_id"] == request_id
     for field, prefix in (("search_id", "search_"), ("extract_id", "extract_")):
