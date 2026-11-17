@@ -1,11 +1,11 @@
 ---
 id: TASK-000096
 title: Show a USD cost for every priced provider on the Usage page
-status: In Progress
+status: Testing
 assignee:
   - '@devin'
 created_date: '2026-11-17T01:21:00Z'
-updated_date: '2026-11-17T02:25:00Z'
+updated_date: '2026-11-17T03:08:00Z'
 labels:
   - backend
   - frontend
@@ -49,4 +49,6 @@ The project Usage page (Totals by provider) shows a Cost only for providers that
 
 <!-- SECTION:NOTES:BEGIN -->
 Dev E2E round 1: Brave/Exa/Parallel/Tavily/You.com costs correct, aggregated row excluded. Found: Firecrawl search succeeds with usage=None (firecrawl-py 4.41 SearchData drops creditsUsed) so no usage row; overview card showed ~$0.030000000000000002 (float sum). Added AC for a catalog fallback event; float fixed by rounding running sums in usageTotalsView (regression test in usageFigures.test.ts failed before: received 0.030000000000000002).
+
+Round 2 (commit 76f8c95, not pushed). Catalog fallback added (usage_cost.catalog_usage_event); Firecrawl now records 2 CREDIT ~$0.0076. Failing-before: usageTotalsView.test.ts new cases failed on main (Brave expected "~$0.005", received "—"); test_monitoring::test_unmetered_catalog_success_records_one_estimated_catalog_event failed before fix (assert [] == [firecrawl 2 CREDIT]); usageFigures float test received 0.030000000000000002. Passing: backend unit 2368 passed; integration files run singly: aggregates 3, migrations 70, monitoring 47, keyless_owned 17 incl budget_period, quota_units 138, control_api 74, fanout+genuine proofs 45, provider limits files 43+184, trace files 34. Known unrelated: test_a3_mcp_authority_forwarding::test_forwarded_fetch_has_one_global_root fails with queue_expired even without the fallback (not checked on main). mypy: only 7 pre-existing msvcrt errors. UI: vitest 2720 cases (2719 passed + 1 fixed afterwards and re-run green), depcruise/knip/lint (0 errors)/typecheck/build pass. Dev E2E (seed_dev.py DB at ~/.local/share/polyweb-t96, API 8201, UI 5174): Usage page Brave ~$0.01, Exa $0.014, Firecrawl ~$0.0152, Parallel ~$0.01, Tavily ~$0.016, You.com ~$0.01, Total ~$0.0752, no All Providers row; overview Provider cost ~$0.0752. Not done: Woodpecker CI (branch not pushed), Behave, ui-bdd @stub scenario edited in project-activity-usage.feature; Free path for Keenable/Tinyfish only unit-tested (not enabled in seeded Alpha). Legacy non-USD rows stay unpriced (no catalog backfill in migration).
 <!-- SECTION:NOTES:END -->
