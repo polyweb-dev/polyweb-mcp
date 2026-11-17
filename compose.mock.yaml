@@ -1,0 +1,80 @@
+# Polyweb provider mock overlay. DEVELOPMENT ONLY, never auto-loaded.
+#
+# Use the helper scripts, not bare `docker compose`:
+#   scripts/linux/mock_stack.sh up|down|logs|seed|cli <polyweb-mock args>
+#   scripts\windows\mock_stack.bat up|down|logs|seed|cli <polyweb-mock args>
+# compose.yaml sets `name: polyweb`, which is the live stack. The scripts pass a
+# worktree-unique project (for example `-p polyweb-wt1-mock`) and the worktree
+# ports. This file replaces the project name with POLYWEB_MOCK_STACK_PROJECT,
+# which only the scripts set, so a command without it stops before it can
+# address the live project.
+#
+# Layering: compose.yaml + compose.dev.yaml + compose.mock.yaml. The api and mcp
+# send every provider API call to the provider-mock service, keep the real Host
+# header, and use a disposable database (polyweb.mock-dev.db) on this project's
+# own volume. Real provider keys from .env are blanked here, so they never enter
+# the mock stack. The ui service starts only with `--profile ui`.
+
+name: ${POLYWEB_MOCK_STACK_PROJECT:?use scripts/linux/mock_stack.sh or scripts/windows/mock_stack.bat}
+
+services:
+  provider-mock:
+    build:
+      context: polyweb-provider-mock
+    image: ${POLYWEB_MOCK_STACK_PROJECT:?use the mock_stack script}-provider-mock:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${POLYWEB_PROVIDER_MOCK_PORT:?set POLYWEB_PROVIDER_MOCK_PORT}:8212"
+    volumes:
+      - provider-mock-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/app/.venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8212/_mock/health', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  api:
+    image: ${POLYWEB_MOCK_STACK_PROJECT:?use the mock_stack script}-backend-dev:latest
+    ports: !override
+      - "127.0.0.1:${POLYWEB_API_PORT:?set POLYWEB_API_PORT}:8001"
+    environment: &mock-environment
+      POLYWEB_DB: /data/polyweb.mock-dev.db
+      POLYWEB_PROVIDER_MOCK_URL: http://provider-mock:8212
+      POLYWEB_EXA_API_KEY: ""
+      POLYWEB_FIRECRAWL_API_KEY: ""
+      POLYWEB_TAVILY_API_KEY: ""
+      POLYWEB_PARALLEL_API_KEY: ""
+      POLYWEB_YOU_API_KEY: ""
+      POLYWEB_BRAVE_SEARCH_API_KEY: ""
+      POLYWEB_BRAVE_ANSWERS_API_KEY: ""
+      POLYWEB_KEENABLE_API_KEY: ""
+      POLYWEB_TINYFISH_API_KEY: ""
+      TINYFISH_API_KEY: ""
+    volumes:
+      # dev-only: scripts/seed_dev.py seeds the mock dev database in a one-off api run.
+      - ./scripts:/app/scripts:ro
+    depends_on:
+      provider-mock:
+        condition: service_healthy
+
+  mcp:
+    image: ${POLYWEB_MOCK_STACK_PROJECT:?use the mock_stack script}-backend-dev:latest
+    ports: !override
+      - "127.0.0.1:${POLYWEB_MCP_PORT:?set POLYWEB_MCP_PORT}:8000"
+    environment: *mock-environment
+    depends_on:
+      provider-mock:
+        condition: service_healthy
+
+  ui:
+    profiles: ["ui"]
+
+volumes:
+  provider-mock-data:

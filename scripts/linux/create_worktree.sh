@@ -25,6 +25,7 @@ Modes:
 Options:
   --base <ref>   Base ref for a NEW branch (default: main; ignored if the branch exists)
   --slot <N>     Worktree slot 1-9; sets .env ports MCP 82N0 / API 82N1 / VITE 5174+N
+                 / provider mock 82N2
   --copy-db      Copy the main checkout's polyweb.db (contains credentials/history).
                  A copy works only if the main database is already at the alpha
                  baseline; otherwise the new worktree refuses it with reset steps.
@@ -162,8 +163,12 @@ fi
 # Preserves a UTF-8 BOM and CRLF line endings if present.
 set_env_var() {
     local file="$1" key="$2" value="$3"
+    # Escape sed replacement metacharacters; URL values contain slashes.
+    local escaped="${value//\\/\\\\}"
+    escaped="${escaped//\//\\/}"
+    escaped="${escaped//&/\\&}"
     if grep -qE "^(\xEF\xBB\xBF)?${key}=" "$file"; then
-        sed -i -E "s/^(\xEF\xBB\xBF)?${key}=[^\r]*/\1${key}=${value}/" "$file"
+        sed -i -E "s/^(\xEF\xBB\xBF)?${key}=[^\r]*/\1${key}=${escaped}/" "$file"
     else
         if [[ -s "$file" && -n "$(tail -c1 "$file")" ]]; then
             printf '\n' >>"$file"
@@ -210,14 +215,22 @@ if [[ -f ".env" ]]; then
         MCP_PORT=$((8200 + SLOT * 10))
         API_PORT=$((8200 + SLOT * 10 + 1))
         VITE_PORT=$((5174 + SLOT))
-        echo "[2/6] Assigning slot $SLOT ports: POLYWEB_MCP_PORT=$MCP_PORT, POLYWEB_API_PORT=$API_PORT, VITE_PORT=$VITE_PORT"
+        MOCK_PORT=$((8200 + SLOT * 10 + 2))
+        echo "[2/6] Assigning slot $SLOT ports: POLYWEB_MCP_PORT=$MCP_PORT, POLYWEB_API_PORT=$API_PORT, VITE_PORT=$VITE_PORT, POLYWEB_PROVIDER_MOCK_PORT=$MOCK_PORT"
         if ! { set_env_var "$TARGET_PATH/.env" POLYWEB_MCP_PORT "$MCP_PORT" &&
                set_env_var "$TARGET_PATH/.env" POLYWEB_API_PORT "$API_PORT" &&
-               set_env_var "$TARGET_PATH/.env" VITE_PORT "$VITE_PORT"; }; then
+               set_env_var "$TARGET_PATH/.env" VITE_PORT "$VITE_PORT" &&
+               set_env_var "$TARGET_PATH/.env" POLYWEB_PROVIDER_MOCK_PORT "$MOCK_PORT"; }; then
             echo "[ERROR] Failed to write worktree ports into '$TARGET_PATH/.env'."
             exit 1
         fi
-        PORTS_USED="MCP=$MCP_PORT, API=$API_PORT, VITE=$VITE_PORT"
+        # A copied mock origin points at the main checkout's mock; move it to this slot.
+        if grep -qE "^(\xEF\xBB\xBF)?POLYWEB_PROVIDER_MOCK_URL=." "$TARGET_PATH/.env" &&
+           ! set_env_var "$TARGET_PATH/.env" POLYWEB_PROVIDER_MOCK_URL "http://127.0.0.1:$MOCK_PORT"; then
+            echo "[ERROR] Failed to write the provider mock origin into '$TARGET_PATH/.env'."
+            exit 1
+        fi
+        PORTS_USED="MCP=$MCP_PORT, API=$API_PORT, VITE=$VITE_PORT, MOCK=$MOCK_PORT"
     else
         echo "[WARNING] No slot resolved for folder '$FOLDER': .env ports were copied"
         echo "          unchanged from the main checkout and will collide if both run at once."

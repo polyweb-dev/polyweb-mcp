@@ -205,7 +205,8 @@ if exist ".env" (
         set /a "MCP_PORT=8200+SLOT*10"
         set /a "API_PORT=8200+SLOT*10+1"
         set /a "VITE_PORT=5174+SLOT"
-        echo [2/6] Assigning slot !SLOT! ports: POLYWEB_MCP_PORT=!MCP_PORT!, POLYWEB_API_PORT=!API_PORT!, VITE_PORT=!VITE_PORT!
+        set /a "MOCK_PORT=8200+SLOT*10+2"
+        echo [2/6] Assigning slot !SLOT! ports: POLYWEB_MCP_PORT=!MCP_PORT!, POLYWEB_API_PORT=!API_PORT!, VITE_PORT=!VITE_PORT!, POLYWEB_PROVIDER_MOCK_PORT=!MOCK_PORT!
         powershell -NoProfile -Command ^
             "$p = '!TARGET_PATH!\.env'; " ^
             "$b = [IO.File]::ReadAllBytes($p); " ^
@@ -213,7 +214,9 @@ if exist ".env" (
             "$t = [IO.File]::ReadAllText($p); " ^
             "$nl = [Environment]::NewLine; " ^
             "$caret = [char]94; " ^
-            "$map = [ordered]@{ POLYWEB_MCP_PORT = '!MCP_PORT!'; POLYWEB_API_PORT = '!API_PORT!'; VITE_PORT = '!VITE_PORT!' }; " ^
+            "$map = [ordered]@{ POLYWEB_MCP_PORT = '!MCP_PORT!'; POLYWEB_API_PORT = '!API_PORT!'; VITE_PORT = '!VITE_PORT!'; POLYWEB_PROVIDER_MOCK_PORT = '!MOCK_PORT!' }; " ^
+            "$urlPat = '(?m)' + $caret + 'POLYWEB_PROVIDER_MOCK_URL=[' + $caret + '\r\n]'; " ^
+            "if ([regex]::IsMatch($t, $urlPat)) { $map['POLYWEB_PROVIDER_MOCK_URL'] = 'http://127.0.0.1:!MOCK_PORT!' }; " ^
             "foreach ($k in $map.Keys) { " ^
             "  $pat = '(?m)' + $caret + $k + '=' + '[' + $caret + '\r\n]*'; " ^
             "  if ([regex]::IsMatch($t, $pat)) { " ^
@@ -229,7 +232,7 @@ if exist ".env" (
             echo [ERROR] Failed to write worktree ports into '%TARGET_PATH%\.env'.
             exit /b 1
         )
-        set "PORTS_USED=MCP=!MCP_PORT!, API=!API_PORT!, VITE=!VITE_PORT!"
+        set "PORTS_USED=MCP=!MCP_PORT!, API=!API_PORT!, VITE=!VITE_PORT!, MOCK=!MOCK_PORT!"
     ) else (
         echo [WARNING] No slot resolved for folder '%TARGET_FOLDER%': .env ports were copied
         echo           unchanged from the main checkout and will collide if both run at once.
@@ -355,6 +358,7 @@ echo.
 echo Options:
 echo   --base ^<ref^>   Base ref for a NEW branch (default: main; ignored if the branch exists)
 echo   --slot ^<N^>     Worktree slot 1-9; sets .env ports MCP 82N0 / API 82N1 / VITE 5174+N
+echo                  / provider mock 82N2
 echo   --copy-db      Copy the main checkout's polyweb.db (contains credentials/history).
 echo                  A copy works only if the main database is already at the alpha
 echo                  baseline; otherwise the new worktree refuses it with reset steps.

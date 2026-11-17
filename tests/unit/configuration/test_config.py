@@ -1,11 +1,13 @@
 """Unit tests for account settings and transport ports (P6, PLAN Section 11)."""
 
 import os
+from pathlib import Path
 
 import pytest
 from pydantic import SecretStr, ValidationError
 
 from polyweb.configuration.config import Settings, get_settings, require_transport_port
+from tests.fixtures.provider_mock_isolation import isolate_provider_mock
 
 
 def test_missing_secret_blocks_authentication() -> None:
@@ -169,3 +171,46 @@ def test_provider_mock_url_refuses_production() -> None:
             _env_file=None, environment="production", provider_mock_url="http://127.0.0.1:8212"
         )
     assert Settings(_env_file=None, environment="production").provider_mock_url is None
+
+
+def test_a_dotenv_provider_mock_origin_does_not_reach_test_settings(tmp_path: Path) -> None:
+    """A developer's ``.env`` mock origin must not reroute provider calls in tests.
+
+    The root ``tests/conftest.py`` masks the variable for every pytest run that
+    does not opt in with ``POLYWEB_TEST_PROVIDER_MOCK=1``.
+    """
+
+    if os.environ.get("POLYWEB_TEST_PROVIDER_MOCK") == "1":
+        pytest.skip("this run opted in to the provider mock")
+    env_file = tmp_path / ".env"
+    env_file.write_text("POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:8212\n", encoding="utf-8")
+
+    assert Settings(_env_file=env_file).provider_mock_url is None
+
+
+def test_provider_mock_isolation_masks_the_origin_without_the_opt_in() -> None:
+    environ = {"POLYWEB_PROVIDER_MOCK_URL": "http://127.0.0.1:8212"}
+
+    assert isolate_provider_mock(environ) is None
+    assert environ["POLYWEB_PROVIDER_MOCK_URL"] == ""
+    assert isolate_provider_mock({}) is None
+
+
+def test_provider_mock_isolation_keeps_an_opted_in_process_origin() -> None:
+    environ = {
+        "POLYWEB_TEST_PROVIDER_MOCK": "1",
+        "POLYWEB_PROVIDER_MOCK_URL": " http://127.0.0.1:8212 ",
+    }
+
+    assert isolate_provider_mock(environ) == "http://127.0.0.1:8212"
+    assert environ["POLYWEB_PROVIDER_MOCK_URL"] == " http://127.0.0.1:8212 "
+
+
+@pytest.mark.parametrize("origin", [None, "", "  "])
+def test_provider_mock_isolation_refuses_an_opt_in_without_an_origin(origin: str | None) -> None:
+    environ = {"POLYWEB_TEST_PROVIDER_MOCK": "1"}
+    if origin is not None:
+        environ["POLYWEB_PROVIDER_MOCK_URL"] = origin
+
+    with pytest.raises(RuntimeError, match="needs POLYWEB_PROVIDER_MOCK_URL"):
+        isolate_provider_mock(environ)

@@ -88,7 +88,77 @@ HttpOnly, `SameSite=Strict` cookie for `/_mock`. The approve and deny routes it
 posts to stay guarded. The token never appears in a provider response.
 
 <!-- DEV-STACK START -->
-_The dev-stack section (Compose, scripts, and CI wiring) is filled in by the integration phase._
+## Run Polyweb against the mock
+
+Each worktree uses mock port `82N2` (main checkout `8202`, `polyweb_wt_1`
+`8212`); see the port table in the root `AGENTS.md`. Run the commands below
+from the repository root. Never use a production database or real keys.
+
+### Docker stack
+
+`compose.mock.yaml` adds a `provider-mock` service to `compose.yaml` and
+`compose.dev.yaml`. The api and mcp send all provider traffic to it, use a
+disposable `polyweb.mock-dev.db` on the project's own volume, and get blank
+provider key variables. Always use the helper script. It sets a
+worktree-unique Compose project (`polyweb_wt_1` gives `polyweb-wt1-mock`) and
+publishes the worktree ports on `127.0.0.1` only. A bare `docker compose` with
+the overlay stops, because the overlay needs `POLYWEB_MOCK_STACK_PROJECT`.
+
+```bash
+scripts/linux/mock_stack.sh up        # build, start the mock, seed once, start api + mcp
+scripts/linux/mock_stack.sh cli scenario apply tavily-down
+scripts/linux/mock_stack.sh logs api
+scripts/linux/mock_stack.sh down      # add -v to delete this project's volumes
+```
+
+Windows: `scripts\windows\mock_stack.bat` takes the same commands. The first
+`up` seeds the mock and the Polyweb database. After `cli reset` or
+`cli seed --reset`, the mock keys change: run `down -v`, then `up`.
+
+### Processes with uv
+
+```bash
+POLYWEB_PROVIDER_MOCK_PORT=8212 uv run --project polyweb-provider-mock polyweb-provider-mock &
+uv run python scripts/seed_dev.py --keys-from-mock http://127.0.0.1:8212
+export POLYWEB_DB=polyweb.mock-dev.db POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:8212
+uv run polyweb-api &
+POLYWEB_EXECUTION_AUTHORITY_URL=http://127.0.0.1:8211 uv run polyweb-mcp &
+cd polyweb-ui && pnpm dev               # VITE_PORT from .env, proxies to the API port
+```
+
+`seed_dev.py --keys-from-mock` seeds the running mock, reads its fake keys
+through the admin API, and creates `polyweb.mock-dev.db`. It never reads
+provider keys from `.env` or the process. The five dev accounts use the
+password `PolywebDev123!`. Alpha has one keyed pool per provider. Beta
+(admin2) has the keyless Keenable and Tavily pools. Brave Answers has no
+Polyweb adapter, so its key is not imported. Polyweb has no keyless Firecrawl
+mode.
+
+Parallel OAuth: as admin1, create a Parallel vault key with `auth_mode`
+`oauth` (UI vault page or `POST /api/v1/account/vault/keys`), start the
+device flow, then approve the shown code:
+
+```bash
+uv run --project polyweb-provider-mock polyweb-mock parallel oauth approve ABCD-EFGH
+```
+
+The next poll connects the key; pool it into a project without a Parallel
+pool (Gamma).
+
+### Behave live suite against the mock
+
+The root test suites ignore `POLYWEB_PROVIDER_MOCK_URL` unless
+`POLYWEB_TEST_PROVIDER_MOCK=1` is in the process environment.
+
+```bash
+set -a; eval "$(uv run --project polyweb-provider-mock polyweb-mock export-keys)"; set +a
+export POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:8212 POLYWEB_TEST_PROVIDER_MOCK=1 POLYWEB_RUN_LIVE=1
+uv run --no-sync behave --tags="@live and not @latency"
+```
+
+CI: the manual Woodpecker workflow `provider-mock` runs the mock checks, then
+this Behave run against a mock in the same step. Reports go to the Gitea
+package `polyweb-provider-mock`.
 <!-- DEV-STACK END -->
 
 ## CLI reference (`polyweb-mock`)

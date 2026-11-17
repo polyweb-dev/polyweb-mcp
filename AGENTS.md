@@ -77,19 +77,27 @@ The orchestrator picks the model and reasoning effort for each subagent by the k
 
 Each workspace/worktree has fixed, isolated ports defined in its root `.env` to prevent port collisions between concurrently running agents:
 
-| Workspace | Worktree Directory | MCP Server (`POLYWEB_MCP_PORT`) | Backend API (`POLYWEB_API_PORT`) | UI Dev (`VITE_PORT`) |
-| :--- | :--- | :--- | :--- | :--- |
-| **Main** | `polyweb-mcp` | `8200` | `8201` | `5174` |
-| **WT 1** | `polyweb_wt_1` | `8210` | `8211` | `5175` |
-| **WT 2** | `polyweb_wt_2` | `8220` | `8221` | `5176` |
-| **WT 3** | `polyweb_wt_3` | `8230` | `8231` | `5177` |
-| **WT 4** | `polyweb_wt_4` | `8240` | `8241` | `5178` |
-| **WT N** (1-9) | `polyweb_wt_N` | `82N0` | `82N1` | `5174+N` |
+| Workspace | Worktree Directory | MCP Server (`POLYWEB_MCP_PORT`) | Backend API (`POLYWEB_API_PORT`) | UI Dev (`VITE_PORT`) | Provider mock (`POLYWEB_PROVIDER_MOCK_PORT`) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Main** | `polyweb-mcp` | `8200` | `8201` | `5174` | `8202` |
+| **WT 1** | `polyweb_wt_1` | `8210` | `8211` | `5175` | `8212` |
+| **WT 2** | `polyweb_wt_2` | `8220` | `8221` | `5176` | `8222` |
+| **WT 3** | `polyweb_wt_3` | `8230` | `8231` | `5177` | `8232` |
+| **WT 4** | `polyweb_wt_4` | `8240` | `8241` | `5178` | `8242` |
+| **WT N** (1-9) | `polyweb_wt_N` | `82N0` | `82N1` | `5174+N` | `82N2` |
 
 - **Why 82xx**: the dev host already uses 8000/8001 (other services), 8080, 8090, 8100/8101 (the production Polyweb stack), 9000 and 9090, so local development keeps to 8200-8291. The application defaults (8000/8001 in code, Compose and docs) are for end users and are unchanged.
 - **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run polyweb-api`, `uv run polyweb-mcp`, `pnpm dev`). They automatically read from the local `.env`.
 - **Landing app** (`polyweb-landing/`): the marketing site's Vite dev server reads `POLYWEB_LANDING_PORT` from the root `.env` and defaults to `5274` when unset.
 - **Zero merge conflicts**: Port configurations live in the local `.env` (gitignored), keeping committed files identical across all branches.
+
+### Provider mock dev environment
+
+`polyweb-provider-mock/` is a development-only server that answers as every provider (Exa, Tavily, Firecrawl, Parallel, You.com, Brave, Keenable, Tinyfish), with fake keys, credits and fault scenarios. Use it to run the app or the `@live` suites without real keys or provider cost. Its README (section "Run Polyweb against the mock") has the full steps.
+- **Docker**: `scripts/linux/mock_stack.sh up|down|logs|seed|cli <polyweb-mock args>` (Windows: `scripts\windows\mock_stack.bat`). The script sets a worktree-unique Compose project (`polyweb-wt1-mock`) and the worktree ports. Never run `docker compose` with `compose.mock.yaml` by hand: `compose.yaml` names the live `polyweb` project. Run `down` only for your own `-mock` project.
+- **uv**: start the mock on `POLYWEB_PROVIDER_MOCK_PORT`, then `uv run python scripts/seed_dev.py --keys-from-mock http://127.0.0.1:<port>`, then start the API and MCP with `POLYWEB_DB=polyweb.mock-dev.db` and `POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:<port>`.
+- **Live suite against the mock**: export the keys from `polyweb-mock export-keys`, plus `POLYWEB_PROVIDER_MOCK_URL`, `POLYWEB_TEST_PROVIDER_MOCK=1` and `POLYWEB_RUN_LIVE=1`, then run `uv run --no-sync behave --tags="@live and not @latency"`. CI runs the same in the manual `provider-mock` workflow.
+- **Safety**: `POLYWEB_PROVIDER_MOCK_URL` is refused in production. Tests ignore it unless `POLYWEB_TEST_PROVIDER_MOCK=1` is set. Never put real keys into the mock or into `polyweb.mock-dev.db`.
 
 ### Creating worktrees
 
