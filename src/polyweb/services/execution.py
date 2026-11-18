@@ -922,6 +922,7 @@ class ExecutionService:
                 if rollout_state is not None
                 else get_settings().projects_rollout_state
             ),
+            http_client=client,
         )
         self._authorization = ScopedAuthorizationService(repository, account_id=account_id)
         self._adapter_cache = CredentialAdapterCache(max_entries=max_cache_adapters)
