@@ -14,11 +14,10 @@ from polyweb.models.contracts import (
     ProviderError,
     SearchRequest,
     SearchResponse,
-    UnitKind,
 )
 from polyweb.models.provider_limits import AuthMode, ProviderLimitRecord
 from polyweb.services.credit_units import request_cost_crd
-from polyweb.services.provider_limits import _debit_crd, _reported_native
+from polyweb.services.provider_limits import _debit_crd, _reported_native, _reported_usd
 
 _DAY = 86400
 _WEEK = 604800
@@ -39,11 +38,9 @@ def actual_price(
     record: ProviderLimitRecord, response: SearchResponse | FetchResponse
 ) -> Decimal | None:
     """Return only a vendor-reported charge that can be converted to USD."""
-    usage = response.usage
-    if usage is None:
-        return None
-    if usage.unit_kind is UnitKind.USD:
-        return usage.units
+    reported = _reported_usd(response)
+    if reported is not None:
+        return reported
     native = _reported_native(response, record)
     crd = _debit_crd(record, native)
     return None if crd is None else crd * record.conversion_profile.reference_usd_per_crd

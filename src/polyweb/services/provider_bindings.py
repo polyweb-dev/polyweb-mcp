@@ -18,7 +18,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
 from uuid import UUID
 
 from sqlalchemy import select
@@ -29,7 +28,6 @@ from polyweb.infrastructure.secrets import ProviderName
 from polyweb.models.contracts import UsageOperation
 from polyweb.models.credentials import (
     ALL_CREDENTIAL_OPERATIONS,
-    CredentialAuthMode,
     CredentialOperation,
 )
 from polyweb.models.projects import (
@@ -68,10 +66,6 @@ from polyweb.services.control_access import (
 )
 from polyweb.services.routing_order import catalog_call_costs
 
-#: Operations an OAuth credential supports for execution. The Parallel OAuth
-#: grant is scoped to account balance reads, so it serves no search or fetch.
-_OAUTH_SUPPORTED_OPERATIONS: Final[frozenset[CredentialOperation]] = frozenset()
-
 ProviderConfigLookup = Callable[[str], Awaitable[ProviderConfig]]
 
 
@@ -98,8 +92,6 @@ def provider_capability(provider_type: str) -> frozenset[CredentialOperation]:
 def supported_operations(credential: CredentialInstanceRead) -> frozenset[CredentialOperation]:
     """Return the execution operations one credential can serve."""
 
-    if credential.auth_mode == CredentialAuthMode.OAUTH.value:
-        return _OAUTH_SUPPORTED_OPERATIONS
     return provider_capability(credential.provider_type)
 
 

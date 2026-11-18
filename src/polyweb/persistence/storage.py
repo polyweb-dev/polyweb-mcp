@@ -1462,6 +1462,18 @@ class SQLiteRepository:
             row = await session.scalar(statement)
         return self._quota_from_row(row) if row is not None else None
 
+    async def latest_quota_any_scope(self, provider: str) -> QuotaSnapshot | None:
+        """Return the newest quota snapshot for one provider regardless of credential scope."""
+        statement = (
+            select(QuotaSnapshotRow)
+            .where(QuotaSnapshotRow.provider == provider)
+            .order_by(QuotaSnapshotRow.observed_at.desc(), QuotaSnapshotRow.id.desc())
+            .limit(1)
+        )
+        async with self._session_factory() as session:
+            row = await session.scalar(statement)
+        return self._quota_from_row(row) if row is not None else None
+
     async def latest_quota_batch(self, providers: Sequence[str]) -> dict[str, QuotaSnapshot]:
         """Return the newest quota snapshot for each requested provider.
 

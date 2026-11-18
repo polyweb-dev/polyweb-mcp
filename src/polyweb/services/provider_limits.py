@@ -2066,6 +2066,14 @@ def _reported_native(
         and usage.unit_kind is UnitKind.CREDIT
     ):
         return usage.units
+    if (
+        record.provider == "parallel"
+        and record.native_unit is UnitKind.USD
+        and usage.unit_kind is UnitKind.REQUEST
+    ):
+        from polyweb.adapters.parallel import ParallelAdapter
+
+        return ParallelAdapter._event_spend(usage)
     return None
 
 
@@ -2073,9 +2081,15 @@ def _reported_usd(response: SearchResponse | FetchResponse) -> Decimal | None:
     """Return a vendor-reported USD cost for one response, when present."""
 
     usage = response.usage
-    if usage is None or usage.unit_kind is not UnitKind.USD:
+    if usage is None:
         return None
-    return usage.units
+    if usage.unit_kind is UnitKind.USD:
+        return usage.units
+    if usage.provider == "parallel" and usage.unit_kind is UnitKind.REQUEST:
+        from polyweb.adapters.parallel import ParallelAdapter
+
+        return ParallelAdapter._event_spend(usage)
+    return None
 
 
 def _reported_usd_or_none(error: ProviderError) -> Decimal | None:
