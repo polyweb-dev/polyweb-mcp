@@ -309,3 +309,96 @@ def test_reset_deletes_everything(store: MockStore) -> None:
     store.add_fault(FaultSpec(kind=FaultKind.OUTAGE))
     store.reset()
     assert store.keys() == [] and store.faults() == [] and not store.is_seeded()
+
+
+def test_grant_then_prepaid_then_refusal_and_only_the_grant_resets(tmp_path: Path) -> None:
+    clock = _Clock(datetime(2026, 11, 17, 12, tzinfo=UTC))
+    store = MockStore(tmp_path / "mock.db", now=clock)
+    store.seed(discover().values())
+    store.set_credits("tavily", Decimal(1), used=Decimal(0))
+    account = store.add_prepaid("tavily", Decimal(2))
+    assert (account.grant_remaining, account.prepaid_remaining, account.remaining) == (1, 2, 3)
+
+    for _ in range(3):
+        store.charge(_principal(store), "search.basic")
+    spent = store.account("tavily")
+    assert (spent.credits_used, spent.prepaid_used, spent.remaining) == (1, 2, 0)
+    with pytest.raises(QuotaExhausted) as refused:
+        store.charge(_principal(store), "search.basic")
+    assert refused.value.scope == "account"
+
+    store.add_prepaid("tavily", Decimal(1))
+    clock.now = datetime(2026, 12, 1, 1, tzinfo=UTC)
+    rolled = store.account("tavily")
+    assert (rolled.credits_used, rolled.prepaid_used, rolled.remaining) == (0, 2, 2)
+
+
+def test_a_debit_spanning_grant_and_prepaid_is_split(store: MockStore) -> None:
+    store.set_credits("tavily", Decimal(1), used=Decimal(0))
+    store.add_prepaid("tavily", Decimal(5))
+    store.charge(_principal(store), "search.advanced")  # 2 credits
+
+    account = store.account("tavily")
+    assert (account.credits_used, account.prepaid_used, account.remaining) == (1, 1, 4)
+
+
+def test_postpaid_bills_overage_up_to_its_cap_and_resets_it(tmp_path: Path) -> None:
+    clock = _Clock(datetime(2026, 11, 17, 12, tzinfo=UTC))
+    store = MockStore(tmp_path / "mock.db", now=clock)
+    store.seed(discover().values())
+    store.set_credits("tavily", Decimal(0))
+    store.set_funding("tavily", "postpaid", overage_limit=Decimal(3))
+
+    store.charge(_principal(store), "search.advanced")
+    store.charge(_principal(store), "search.basic")
+    assert store.account("tavily").overage_used == 3
+    with pytest.raises(QuotaExhausted) as capped:
+        store.charge(_principal(store), "search.basic")
+    assert capped.value.scope == "overage"
+
+    clock.now = datetime(2026, 12, 1, 1, tzinfo=UTC)
+    assert store.account("tavily").overage_used == 0
+    uncapped = store.set_funding("tavily", "postpaid")
+    assert uncapped.overage_limit is None
+
+
+def test_an_expiring_grant_is_forfeited_but_prepaid_is_kept(tmp_path: Path) -> None:
+    from polyweb_provider_mock.models import AccountSeed, ProviderSeed
+
+    clock = _Clock(datetime(2026, 11, 17, 12, tzinfo=UTC))
+    store = MockStore(tmp_path / "mock.db", now=clock)
+    tavily = plugin("tavily")
+    seed = tavily.default_seed()
+    account = seed.accounts[0].model_copy(
+        update={"reset_rule": "none", "grant_expires_days": 60, "prepaid_credits": Decimal(5)}
+    )
+    expiring = ProviderSeed(accounts=(account,), keys=seed.keys, keyless=seed.keyless)
+    tavily_type = type(tavily)
+
+    class _Expiring(tavily_type):  # type: ignore[misc, valid-type]
+        def default_seed(self) -> ProviderSeed:
+            return expiring
+
+    store.seed([_Expiring()])
+    assert isinstance(account, AccountSeed)
+    assert store.account("tavily").grant_expires_at == clock.now + timedelta(days=60)
+
+    clock.now += timedelta(days=60)
+    forfeited = store.account("tavily")
+    assert (forfeited.grant_remaining, forfeited.prepaid_remaining) == (0, 5)
+
+
+def test_old_state_files_gain_the_funding_columns(tmp_path: Path) -> None:
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE accounts (provider TEXT NOT NULL, id TEXT NOT NULL, plan TEXT NOT NULL"
+            " DEFAULT '', credit_limit TEXT, credits_used TEXT NOT NULL DEFAULT '0', reset_rule"
+            " TEXT NOT NULL DEFAULT 'monthly', period_start TEXT NOT NULL, period_reset TEXT,"
+            " attributes TEXT NOT NULL DEFAULT '{}', PRIMARY KEY (provider, id))"
+        )
+    store = MockStore(path)
+    store.seed(discover().values())
+    assert store.account("tavily").funding == "prepaid"

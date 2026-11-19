@@ -31,6 +31,7 @@ from polyweb_provider_mock.models import (
     Account,
     ApiKey,
     Fixture,
+    Funding,
     KeyFormat,
     KeylessSetting,
     LedgerEntry,
@@ -66,7 +67,7 @@ class NotFoundError(LookupError):
 class QuotaExhausted(Exception):
     """A billed operation exceeds the account or key allowance."""
 
-    def __init__(self, scope: Literal["account", "key"]) -> None:
+    def __init__(self, scope: Literal["account", "key", "overage"]) -> None:
         super().__init__(f"{scope} credits exhausted")
         self.scope = scope
 
@@ -206,6 +207,12 @@ def _account(row: sqlite3.Row) -> Account:
         period_start=datetime.fromisoformat(row["period_start"]),
         period_reset=_dt(row["period_reset"]),
         attributes=json.loads(row["attributes"]),
+        prepaid_credits=Decimal(row["prepaid_credits"]),
+        prepaid_used=Decimal(row["prepaid_used"]),
+        grant_expires_at=_dt(row["grant_expires_at"]),
+        funding=row["funding"],
+        overage_limit=_dec(row["overage_limit"]),
+        overage_used=Decimal(row["overage_used"]),
     )
 
 
@@ -329,9 +336,15 @@ class MockStore:
         for account in seed.accounts:
             anchor = reset_anchor(account.attributes)
             start = period_start(account.reset_rule, now, anchor)
+            expires = (
+                None
+                if account.grant_expires_days is None
+                else now + timedelta(days=account.grant_expires_days)
+            )
             conn.execute(
                 "INSERT OR IGNORE INTO accounts (provider, id, plan, credit_limit, reset_rule,"
-                " period_start, period_reset, attributes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " period_start, period_reset, attributes, prepaid_credits, grant_expires_at,"
+                " funding, overage_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     plugin.name,
                     account.id,
@@ -341,6 +354,10 @@ class MockStore:
                     _ts(start),
                     _ts(next_reset(account.reset_rule, start, anchor)),
                     json.dumps(account.attributes),
+                    _text(account.prepaid_credits),
+                    _ts(expires),
+                    account.funding,
+                    _text(account.overage_limit),
                 ),
             )
         for key in seed.keys:
@@ -397,6 +414,7 @@ class MockStore:
             raise NotFoundError(f"no {provider} account {account_id!r}")
         account = _account(row)
         now = self.now()
+        account = self._expire_grant(conn, account, now)
         start, reset = account.period_start, account.period_reset
         if reset is None or now < reset:
             return account
@@ -404,8 +422,8 @@ class MockStore:
         while reset is not None and now >= reset:
             start, reset = reset, next_reset(account.reset_rule, reset, anchor)
         conn.execute(
-            "UPDATE accounts SET credits_used = '0', period_start = ?, period_reset = ?"
-            " WHERE provider = ? AND id = ?",
+            "UPDATE accounts SET credits_used = '0', overage_used = '0', period_start = ?,"
+            " period_reset = ? WHERE provider = ? AND id = ?",
             (_ts(start), _ts(reset), provider, account_id),
         )
         conn.execute(
@@ -417,8 +435,26 @@ class MockStore:
             (provider, account_id),
         )
         return account.model_copy(
-            update={"credits_used": Decimal(0), "period_start": start, "period_reset": reset}
+            update={
+                "credits_used": Decimal(0),
+                "overage_used": Decimal(0),
+                "period_start": start,
+                "period_reset": reset,
+            }
         )
+
+    @staticmethod
+    def _expire_grant(conn: sqlite3.Connection, account: Account, now: datetime) -> Account:
+        """Forfeit the unspent grant once ``grant_expires_at`` has passed."""
+
+        expires, limit = account.grant_expires_at, account.credit_limit
+        if expires is None or now < expires or limit is None or account.credits_used >= limit:
+            return account
+        conn.execute(
+            "UPDATE accounts SET credits_used = credit_limit WHERE provider = ? AND id = ?",
+            (account.provider, account.id),
+        )
+        return account.model_copy(update={"credits_used": limit})
 
     def _account_id(self, conn: sqlite3.Connection, provider: str, account_id: str | None) -> str:
         if account_id is not None:
@@ -458,6 +494,35 @@ class MockStore:
             )
             return self._rolled(conn, provider, current.id)
 
+    def add_prepaid(self, provider: str, amount: Decimal, account_id: str | None = None) -> Account:
+        """Add one-time (prepaid) credit, which never resets or expires."""
+
+        with self.db.transaction() as conn:
+            current = self._rolled(conn, provider, self._account_id(conn, provider, account_id))
+            conn.execute(
+                "UPDATE accounts SET prepaid_credits = ? WHERE provider = ? AND id = ?",
+                (_text(current.prepaid_credits + amount), provider, current.id),
+            )
+            return self._rolled(conn, provider, current.id)
+
+    def set_funding(
+        self,
+        provider: str,
+        funding: Funding,
+        account_id: str | None = None,
+        *,
+        overage_limit: Decimal | None = None,
+    ) -> Account:
+        """Make the account prepaid (refused at zero) or postpaid (billed after use)."""
+
+        with self.db.transaction() as conn:
+            current = self._rolled(conn, provider, self._account_id(conn, provider, account_id))
+            conn.execute(
+                "UPDATE accounts SET funding = ?, overage_limit = ? WHERE provider = ? AND id = ?",
+                (funding, _text(overage_limit), provider, current.id),
+            )
+            return self._rolled(conn, provider, current.id)
+
     def set_credits(
         self,
         provider: str,
@@ -466,16 +531,21 @@ class MockStore:
         *,
         used: Decimal | None = None,
     ) -> Account:
-        """Set the remaining balance (``None`` = unlimited) and optionally the used credits."""
+        """Set the remaining balance (``None`` = unlimited) and optionally the used credits.
+
+        The balance becomes the grant; any prepaid balance is used up, so the
+        account has exactly ``balance`` left.
+        """
 
         with self.db.transaction() as conn:
             current = self._rolled(conn, provider, self._account_id(conn, provider, account_id))
             spent = current.credits_used if used is None else used
             limit = None if balance is None else spent + balance
+            prepaid_used = current.prepaid_used if balance is None else current.prepaid_credits
             conn.execute(
-                "UPDATE accounts SET credit_limit = ?, credits_used = ?"
+                "UPDATE accounts SET credit_limit = ?, credits_used = ?, prepaid_used = ?"
                 " WHERE provider = ? AND id = ?",
-                (_text(limit), _text(spent), provider, current.id),
+                (_text(limit), _text(spent), _text(prepaid_used), provider, current.id),
             )
             return self._rolled(conn, provider, current.id)
 
@@ -893,13 +963,30 @@ class MockStore:
         return debit
 
     @staticmethod
+    def _split(account: Account, debit: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+        """Split a debit into its grant, prepaid, and overage parts (in spend order)."""
+
+        grant_left = account.grant_remaining
+        if grant_left is None:
+            return debit, Decimal(0), Decimal(0)
+        grant = min(debit, grant_left)
+        prepaid = min(debit - grant, account.prepaid_remaining)
+        return grant, prepaid, debit - grant - prepaid
+
+    @classmethod
     def _check_funds(
-        conn: sqlite3.Connection, account: Account, key: ApiKey | None, debit: Decimal
+        cls, conn: sqlite3.Connection, account: Account, key: ApiKey | None, debit: Decimal
     ) -> None:
-        if account.credit_limit is not None:
-            left = account.credit_limit - account.credits_used
-            if left <= 0 or debit > left:
+        left = account.remaining
+        if left is not None and (left <= 0 or debit > left):
+            if account.funding != "postpaid":
                 raise QuotaExhausted("account")
+            overage = cls._split(account, debit)[2]
+            cap = account.overage_limit
+            if cap is not None and (
+                account.overage_used >= cap or account.overage_used + overage > cap
+            ):
+                raise QuotaExhausted("overage")
         if key is None:
             return
         row = conn.execute(
@@ -912,15 +999,23 @@ class MockStore:
             if left <= 0 or debit > left:
                 raise QuotaExhausted("key")
 
-    @staticmethod
+    @classmethod
     def _debit(
-        conn: sqlite3.Connection, account: Account, key: ApiKey | None, debit: Decimal
+        cls, conn: sqlite3.Connection, account: Account, key: ApiKey | None, debit: Decimal
     ) -> None:
         if not debit:
             return
+        grant, prepaid, overage = cls._split(account, debit)
         conn.execute(
-            "UPDATE accounts SET credits_used = ? WHERE provider = ? AND id = ?",
-            (_text(account.credits_used + debit), account.provider, account.id),
+            "UPDATE accounts SET credits_used = ?, prepaid_used = ?, overage_used = ?"
+            " WHERE provider = ? AND id = ?",
+            (
+                _text(account.credits_used + grant),
+                _text(account.prepaid_used + prepaid),
+                _text(account.overage_used + overage),
+                account.provider,
+                account.id,
+            ),
         )
         if key is not None:
             row = conn.execute(

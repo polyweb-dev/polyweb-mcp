@@ -21,6 +21,7 @@ from polyweb_provider_mock.models import (
     Account,
     ApiKey,
     Fixture,
+    Funding,
     KeylessSetting,
     LogEntry,
     PriceRule,
@@ -57,6 +58,15 @@ class CreditsBody(BaseModel):
     amount: Decimal | None
     account_id: str | None = None
     used: Decimal | None = None
+    #: ``add`` only: add one-time (prepaid) credit instead of raising the grant.
+    prepaid: bool = False
+
+
+class FundingBody(BaseModel):
+    provider: str
+    funding: Funding
+    account_id: str | None = None
+    overage_limit: Decimal | None = None
 
 
 class PriceBody(BaseModel):
@@ -121,6 +131,24 @@ def _known(plugins: Mapping[str, ProviderPlugin], provider: str) -> ProviderPlug
     return plugins[provider]
 
 
+def _credit_routes(router: APIRouter, store: MockStore) -> None:
+    """Register the routes that add credit or change how an account is funded."""
+
+    @router.post("/credits/add")
+    async def add_credits(body: CreditsBody) -> Account:
+        if body.amount is None:
+            raise HTTPException(status_code=400, detail="amount is required")
+        if body.prepaid:
+            return store.add_prepaid(body.provider, body.amount, body.account_id)
+        return store.add_credits(body.provider, body.amount, body.account_id)
+
+    @router.post("/credits/funding")
+    async def set_funding(body: FundingBody) -> Account:
+        return store.set_funding(
+            body.provider, body.funding, body.account_id, overage_limit=body.overage_limit
+        )
+
+
 def _state_routes(
     router: APIRouter, store: MockStore, plugins: Mapping[str, ProviderPlugin]
 ) -> None:
@@ -152,15 +180,11 @@ def _state_routes(
     async def restore_key(body: KeyRefBody) -> ApiKey:
         return store.set_key_status(body.provider, body.key, "active")
 
+    _credit_routes(router, store)
+
     @router.get("/credits")
     async def credits(provider: str | None = None) -> list[Account]:
         return store.accounts(provider)
-
-    @router.post("/credits/add")
-    async def add_credits(body: CreditsBody) -> Account:
-        if body.amount is None:
-            raise HTTPException(status_code=400, detail="amount is required")
-        return store.add_credits(body.provider, body.amount, body.account_id)
 
     @router.post("/credits/set")
     async def set_credits(body: CreditsBody) -> Account:

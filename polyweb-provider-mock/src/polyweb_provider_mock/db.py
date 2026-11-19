@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS accounts (
     period_start TEXT NOT NULL,
     period_reset TEXT,
     attributes TEXT NOT NULL DEFAULT '{}',
+    prepaid_credits TEXT NOT NULL DEFAULT '0',
+    prepaid_used TEXT NOT NULL DEFAULT '0',
+    grant_expires_at TEXT,
+    funding TEXT NOT NULL DEFAULT 'prepaid',
+    overage_limit TEXT,
+    overage_used TEXT NOT NULL DEFAULT '0',
     PRIMARY KEY (provider, id)
 );
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -134,6 +140,27 @@ CREATE TABLE IF NOT EXISTS fixtures (
 """
 
 
+#: Columns added after the first release; older state files gain them on open.
+_ADDED_COLUMNS = {
+    "accounts": (
+        ("prepaid_credits", "TEXT NOT NULL DEFAULT '0'"),
+        ("prepaid_used", "TEXT NOT NULL DEFAULT '0'"),
+        ("grant_expires_at", "TEXT"),
+        ("funding", "TEXT NOT NULL DEFAULT 'prepaid'"),
+        ("overage_limit", "TEXT"),
+        ("overage_used", "TEXT NOT NULL DEFAULT '0'"),
+    ),
+}
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, columns in _ADDED_COLUMNS.items():
+        present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, ddl in columns:
+            if name not in present:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
 class Database:
     """One SQLite file; the schema is created when the object is built."""
 
@@ -143,6 +170,7 @@ class Database:
         with self.connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            _add_missing_columns(conn)
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:

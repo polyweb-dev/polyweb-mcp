@@ -106,8 +106,14 @@ def _keys(args: argparse.Namespace, store: MockStore) -> Any:
 def _credits(args: argparse.Namespace, store: MockStore) -> Any:
     if args.action == "show":
         return store.accounts(args.provider)
+    if args.action == "add" and args.prepaid:
+        return store.add_prepaid(args.provider, args.amount, args.account)
     if args.action == "add":
         return store.add_credits(args.provider, args.amount, args.account)
+    if args.action == "funding":
+        return store.set_funding(
+            args.provider, args.funding, args.account, overage_limit=args.overage_limit
+        )
     return store.set_credits(args.provider, args.amount, args.account, used=args.used)
 
 
@@ -273,6 +279,18 @@ def _credits_parser(groups: Any) -> None:
     add.add_argument("provider")
     add.add_argument("amount", type=_decimal)
     add.add_argument("--account")
+    add.add_argument(
+        "--prepaid",
+        action="store_true",
+        help="add one-time credit that never resets (spent after the grant)",
+    )
+    funding = actions.add_parser(
+        "funding", help="prepaid (refused at zero) or postpaid (billed after use)"
+    )
+    funding.add_argument("provider")
+    funding.add_argument("funding", choices=("prepaid", "postpaid"))
+    funding.add_argument("--account")
+    funding.add_argument("--overage-limit", type=_decimal, help="postpaid spend cap")
     put = actions.add_parser("set", help="set the remaining balance (or 'unlimited')")
     put.add_argument("provider")
     put.add_argument("amount", type=_balance)

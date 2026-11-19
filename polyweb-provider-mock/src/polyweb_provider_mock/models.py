@@ -15,6 +15,7 @@ __all__ = [
     "AccountSeed",
     "ApiKey",
     "Fixture",
+    "Funding",
     "KeyFormat",
     "KeySeed",
     "KeylessSeed",
@@ -82,8 +83,22 @@ def reset_anchor(attributes: Mapping[str, Any]) -> int:
     return day
 
 
+Funding = Literal["prepaid", "postpaid"]
+
+
 class Account(_Record):
     """A provider account: plan, credit allowance, and billing period.
+
+    Funds are spent in this order:
+
+    1. the **grant** (``credit_limit`` minus ``credits_used``), which the
+       ``reset_rule`` refills and which is forfeited at ``grant_expires_at``;
+    2. the **prepaid** balance (``prepaid_credits`` minus ``prepaid_used``):
+       one-time credit (a signup bonus, purchased credits) that never resets
+       or expires;
+    3. for a ``postpaid`` account, **overage** billed after use
+       (``overage_used``, reset with the period), capped by ``overage_limit``
+       when one is set. A ``prepaid`` account is refused instead.
 
     ``attributes`` holds provider-specific facts; ``reset_day`` anchors the
     monthly period (see :func:`reset_anchor`).
@@ -98,14 +113,33 @@ class Account(_Record):
     period_start: datetime
     period_reset: datetime | None
     attributes: dict[str, Any] = Field(default_factory=dict)
+    prepaid_credits: Decimal = Decimal(0)
+    prepaid_used: Decimal = Decimal(0)
+    grant_expires_at: datetime | None = None
+    funding: Funding = "prepaid"
+    overage_limit: Decimal | None = None
+    overage_used: Decimal = Decimal(0)
 
     @property
-    def remaining(self) -> Decimal | None:
-        """Return the unspent allowance, or ``None`` for an unlimited account."""
+    def grant_remaining(self) -> Decimal | None:
+        """Return the unspent grant, or ``None`` for an unlimited grant."""
 
         if self.credit_limit is None:
             return None
         return max(Decimal(0), self.credit_limit - self.credits_used)
+
+    @property
+    def prepaid_remaining(self) -> Decimal:
+        """Return the unspent one-time (prepaid) balance."""
+
+        return max(Decimal(0), self.prepaid_credits - self.prepaid_used)
+
+    @property
+    def remaining(self) -> Decimal | None:
+        """Return the unspent grant plus prepaid balance; ``None`` when unlimited."""
+
+        grant = self.grant_remaining
+        return None if grant is None else grant + self.prepaid_remaining
 
 
 class ApiKey(_Record):
@@ -188,13 +222,18 @@ class Fixture(_Record):
 
 
 class AccountSeed(_Record):
-    """An account that ``seed`` creates."""
+    """An account that ``seed`` creates (see :class:`Account` for the funds)."""
 
     id: str
     plan: str
     credit_limit: Decimal | None
     reset_rule: ResetRule = "monthly"
     attributes: dict[str, Any] = Field(default_factory=dict)
+    prepaid_credits: Decimal = Decimal(0)
+    #: Days after seeding at which the unspent grant is forfeited.
+    grant_expires_days: int | None = None
+    funding: Funding = "prepaid"
+    overage_limit: Decimal | None = None
 
 
 class KeySeed(_Record):
