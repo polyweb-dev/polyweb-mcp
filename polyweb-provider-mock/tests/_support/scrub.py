@@ -44,7 +44,9 @@ KEEP = frozenset(
         "dateTo",
         "description_source",
         "duration",
+        "error",
         "extract_id",
+        "format",
         "id",
         "language",
         "message",
@@ -67,6 +69,7 @@ KEEP = frozenset(
         "subtype",
         "type",
         "unit",
+        "unmatched_selectors",
     }
 )
 #: Fields kept under a parent field: the echoed query object, usage SKU names.

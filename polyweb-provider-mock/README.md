@@ -339,7 +339,7 @@ storing results): values are synthetic, the structure is real.
 | You.com | search, contents, balance, 401/402/403/422 (14) | live-page pricing, spend cap | revoked keys, 429 and spend-cap bodies, exhausted-wallet body, 5xx bodies |
 | Brave | web search, LLM context, 400/422 (10) | rate-limit headers, plans, 429/402 envelope and codes (TASK-000101) | 429/402 `detail`/`meta` text, prepaid exhaustion status, revoked key, outage pages; Answers key on Web Search |
 | Keenable | keyless search and fetch, 400s (8) | keyed paths, 401/402/403, retryable 5xx (TASK-000100) | keyed rate headers; allowance resets on the UTC month unless `account set keenable reset_day=N` (real: organization creation day); purchased credits reset monthly |
-| Tinyfish | 401 missing and bogus key on both hosts (4) | search, fetch, usage, limits, 402/429 | every success shape; JSON `format` tree; invalid-request and usage-read limits not modelled |
+| Tinyfish | 401 missing and bogus key on both hosts; search (web, news, research, filters), fetch (3 formats, options, per-URL errors), 400/403/405/422 (41); `/usage` fields and minute-slot accounting (2026-11-19, history not stored) | 402/429, 5xx, highlights success, `iframe_links`, conditional fetch, daily allowance | 402/429/5xx bodies; JSON `format` heading/list nodes; 405 lacks `X-TF-User-ID`; invalid-request and usage-read limits not modelled |
 
 ## Checks
 

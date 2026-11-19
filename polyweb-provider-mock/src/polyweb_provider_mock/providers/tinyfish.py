@@ -1,8 +1,8 @@
 """Tinyfish Search on ``api.search.tinyfish.ai`` and Fetch on ``api.fetch.tinyfish.ai``.
 
 Both products serve their main operation on the root path, so the plugin
-claims both hosts and scopes each operation to its host (another host
-answers 404 ``UNKNOWN_ROUTE``):
+claims both hosts and scopes each operation to its host (the other host
+answers 405, as a wrong method does):
 
 - ``GET /`` on the search host: query parameters ``query`` (required),
   ``page`` (0..10), domain filters, location/language, date and
@@ -14,15 +14,27 @@ answers 404 ``UNKNOWN_ROUTE``):
 - ``GET /usage`` on either host: the documented usage history, built from
   this mock's request log. Polyweb does not call it.
 
-The only recordings are the four 401 responses (missing and bogus key on both
-hosts). Success shapes and every other error come from the public docs and
-from what Polyweb's adapter parses; no authenticated capture confirms them.
+Recorded: the four 401 responses (2026-11-17) and an authenticated capture
+(2026-11-19, ``tests/contract/recordings/tinyfish``): search on every domain
+type, fetch in all three formats with options and per-URL failures, every
+validation error below, ``/usage`` on both hosts, and the 404/405 routes.
+Unrecorded, from the docs: 402, 429, 5xx, ``iframe_links``, conditional
+fetches, ``etag``/``last_modified`` (example.com sent none), and highlights
+on an account that has them (the recorded account got 403).
 
 Authentication is ``X-API-Key`` only. A missing key is 401
 ``MISSING_API_KEY``; an unknown or revoked key is 401 ``INVALID_API_KEY``
 (the docs give revoked keys the same answer). Every error is
 ``{"error": {"code", "message", "details"?}, "request_id"}`` with the same
-``X-Request-ID`` header.
+``X-Request-ID`` header. Only the 401s, which an edge layer answers, carry
+``Cache-Control: no-store`` and ``WWW-Authenticate``; everything past
+authentication carries the application's headers instead, among them
+``X-TF-User-ID`` (a fake Clerk-style id per account) and
+``X-Middleware-Rewrite``. Validation errors follow Zod's issue format except
+the CSS-selector check, a 422 with a Pydantic-style message and no
+``details``. A wrong method on ``/`` is 405 with an empty body (without
+the real ``X-TF-User-ID``: the mock routes before it authenticates); an
+unknown path is the site's HTML 404.
 
 Limits follow Polyweb's catalog and the public pricing page, per account
 (person): Search 30 requests per minute and 500 per hour, Fetch 150 URLs per
@@ -36,16 +48,27 @@ wallet. Account attributes override any limit (``search_per_minute``,
 ``search_per_hour``, ``search_daily_free``, ``fetch_per_minute``,
 ``fetch_daily_free``). ``credits set tinyfish 0`` also forces the 402.
 
-Invalid requests are rejected before any rate slot is spent; the documented
-60-per-minute limit on invalid requests and usage reads is not modelled.
+As recorded, every search request spends a minute slot, an invalid one too
+(its 400 carries the ``X-RateLimit-*`` headers). Fetch spends one slot per
+URL, failed URLs included, but a request that fails schema validation (400)
+or asks for highlights without access (403) spends none; the selector 422
+comes after the slots are spent. The documented 60-per-minute limit on
+invalid requests and usage reads is not modelled.
+
+Search results list their fields in alphabetical order. Web results carry
+``date`` on some hits in mixed forms (ISO 8601, ``Oct 18, 2020``,
+``4 days ago``); news dates are RFC 2822 (``Wed, 11 Nov 2026 23:13:16 GMT``).
+A fetch response that has ``errors`` also carries ``request_id``.
 
 Synthetic fetch targets (first host label): ``blocked`` ``bot_blocked``,
 ``login`` ``login_required``, ``empty`` ``empty_content``, ``timeout``
-``timeout``, ``proxy`` ``proxy_error``, ``missing`` ``page_not_found`` 404,
-``gone`` 410, ``status-503`` ``target_http_error`` 503 (any status), a
-``.invalid`` host ``target_unreachable``, private or loopback hosts
-``invalid_url``, a ``/404`` path ``page_not_found``. The JSON ``format``
-document tree is a plausible shape; the docs do not define it.
+``timeout``, ``proxy`` ``proxy_error``, ``unreachable``
+``target_unreachable``, ``missing`` ``page_not_found`` 404, ``gone`` 410,
+``status-503`` ``target_http_error`` 503 (any status), a ``.invalid`` host or
+a private or loopback host ``invalid_url`` (as recorded for an unresolvable
+host), a ``/404`` path ``page_not_found``. The JSON ``format`` document is
+``{"type": "document", "children": [...]}``; only ``paragraph`` nodes were
+recorded, so the ``heading`` and ``list`` nodes are a guess.
 """
 
 import base64
@@ -115,9 +138,38 @@ _FAILURES: Final[dict[str, dict[str, Any]]] = {
     "empty": {"error": "empty_content"},
     "timeout": {"error": "timeout"},
     "proxy": {"error": "proxy_error"},
+    "unreachable": {"error": "target_unreachable"},
     "missing": {"error": "page_not_found", "status": 404},
     "gone": {"error": "page_not_found", "status": 410},
 }
+#: Headers the application sends on every response past authentication (recorded).
+_APP_HEADERS: Final = {
+    "strict-transport-security": "max-age=63072000; includeSubDomains",
+    "x-frame-options": "DENY",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "access-control-allow-headers": (
+        "Content-Type, X-API-Key, Authorization, X-TF-Request-Origin, X-TF-Client-Name, "
+        "X-TF-Client-Version, X-TF-API-Source, X-TF-API-Example, X-TF-Setup-Attempt-Id, "
+        "X-TF-Connect-Source, X-TF-Connect-Client, X-TF-Connect-Attempt-Id, Payment-Authorization"
+    ),
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": (
+        "Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Request-ID, "
+        "X-TF-Notice, X-TF-Notice-Level, X-TF-Notice-Latest, X-TF-Notice-Package, "
+        "WWW-Authenticate, Payment-Receipt"
+    ),
+    "x-clerk-auth-reason": "session-token-and-uat-missing",
+    "x-clerk-auth-status": "signed-out",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+}
+_BASE62: Final = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+_NOT_FOUND_PAGE: Final = (
+    b'<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/>'
+    b"<title>404: This page could not be found.</title></head><body>"
+    b"<h1>404</h1><h2>This page could not be found.</h2></body></html>"
+)
 
 
 class _Rejected(Exception):
@@ -157,19 +209,41 @@ def _error(
     error: dict[str, Any] = {"code": code, "message": message}
     if details is not None:
         error["details"] = details
+    # The edge answers 401s; everything else comes from the application.
+    edge = {"cache-control": "no-store", "www-authenticate": "ApiKey"}
     out = {
+        **(edge if status == 401 else _APP_HEADERS),
         **_cdn_headers(error=True),
-        "cache-control": "no-store",
         **(headers or {}),
         "x-request-id": request_id,
     }
-    if status == 401:
-        out["www-authenticate"] = "ApiKey"
     return MockResponse(status=status, body={"error": error, "request_id": request_id}, headers=out)
+
+
+def _user_id(account_id: str) -> str:
+    """Return a stable Clerk-style ``user_`` id (27 base-62 characters) for an account."""
+
+    rng = content.rng("tinyfish-user", account_id)
+    return "user_3" + "".join(rng.choice(_BASE62) for _ in range(26))
 
 
 def _issue(path: Sequence[str | int], code: str, message: str, **extra: Any) -> dict[str, Any]:
     return {**extra, "code": code, "path": list(path), "message": message}
+
+
+def _bound(
+    path: Sequence[str | int],
+    origin: str,
+    *,
+    low: int | None = None,
+    high: int | None = None,
+    message: str,
+) -> dict[str, Any]:
+    """Return Zod's ``too_small``/``too_big`` issue, as recorded."""
+
+    if high is not None:
+        return _issue(path, "too_big", message, origin=origin, maximum=high, inclusive=True)
+    return _issue(path, "too_small", message, origin=origin, minimum=low, inclusive=True)
 
 
 def _input_error(*issues: dict[str, Any], status: int = 400) -> _Rejected:
@@ -183,8 +257,19 @@ def _custom(path: Sequence[str | int], message: str) -> _Rejected:
     return _input_error(_issue(path, "custom", message))
 
 
-def _int_param(params: Mapping[str, str], name: str, low: int, high: int) -> int | None:
-    """Parse an integer query parameter in ``low..high``; raise on a bad value."""
+def _int_param(
+    params: Mapping[str, str],
+    name: str,
+    low: int,
+    high: int,
+    *,
+    messages: tuple[str, str] | None = None,
+) -> int | None:
+    """Parse an integer query parameter in ``low..high``; raise on a bad value.
+
+    ``messages`` replaces Zod's default too-small and too-big wording, as the
+    search ``page`` parameter does (``page must be <= 10``).
+    """
 
     raw = params.get(name)
     if raw is None:
@@ -198,16 +283,17 @@ def _int_param(params: Mapping[str, str], name: str, low: int, high: int) -> int
                 "invalid_type",
                 "Invalid input: expected number, received NaN",
                 expected="number",
+                received="NaN",
             )
         ) from None
+    small, big = messages or (
+        f"Too small: expected number to be >={low}",
+        f"Too big: expected number to be <={high}",
+    )
     if value < low:
-        raise _input_error(
-            _issue([name], "too_small", f"Too small: expected number to be >={low}", minimum=low)
-        )
+        raise _input_error(_bound([name], "number", low=low, message=small))
     if value > high:
-        raise _input_error(
-            _issue([name], "too_big", f"Too big: expected number to be <={high}", maximum=high)
-        )
+        raise _input_error(_bound([name], "number", high=high, message=big))
     return value
 
 
@@ -220,7 +306,7 @@ def _date_param(params: Mapping[str, str], name: str) -> date | None:
             raise ValueError(raw)
         return date.fromisoformat(raw)
     except ValueError:
-        raise _custom([name], "Invalid date, expected YYYY-MM-DD") from None
+        raise _custom([name], f"{name} must be YYYY-MM-DD") from None
 
 
 def _domains(raw: str | None) -> list[str]:
@@ -228,7 +314,7 @@ def _domains(raw: str | None) -> list[str]:
 
 
 def _search_request(params: Mapping[str, str]) -> dict[str, Any]:
-    """Validate search query parameters as the Search reference documents."""
+    """Validate search query parameters with the recorded messages."""
 
     query = params.get("query")
     if query is None:
@@ -241,10 +327,8 @@ def _search_request(params: Mapping[str, str]) -> dict[str, Any]:
             )
         )
     if not query.strip():
-        raise _input_error(
-            _issue(["query"], "too_small", "Too small: expected string to have >=1 characters")
-        )
-    page = _int_param(params, "page", 0, 10) or 0
+        raise _input_error(_bound(["query"], "string", low=1, message="query is required"))
+    page = _int_param(params, "page", 0, 10, messages=("page must be >= 0", "page must be <= 10"))
     domain_type = params.get("domain_type") or "web"
     if domain_type not in _DOMAIN_TYPES:
         raise _input_error(
@@ -255,21 +339,24 @@ def _search_request(params: Mapping[str, str]) -> dict[str, Any]:
                 values=list(_DOMAIN_TYPES),
             )
         )
+    # A blank purpose is accepted (recorded); only the documented length is checked.
     purpose = params.get("purpose")
-    if purpose is not None and (not purpose.strip() or len(purpose) > 2000):
-        raise _custom(["purpose"], "purpose must be 1 to 2000 non-blank characters")
+    if purpose is not None and len(purpose) > 2000:
+        raise _custom(["purpose"], "purpose must be at most 2000 characters")
     _search_filters(params, domain_type)
     return {
         "query": query,
-        "page": page,
+        "page": page or 0,
         "domain_type": domain_type,
         "include": _domains(params.get("include_domains")),
         "exclude": _domains(params.get("exclude_domains")),
+        # Recorded: with a recency or date filter every web result is dated.
+        "dated": any(params.get(name) for name in ("recency_minutes", "after_date", "before_date")),
     }
 
 
 def _search_filters(params: Mapping[str, str], domain_type: str) -> None:
-    """Check the date, recency, and academic-year rules."""
+    """Check the date, recency, and academic-year rules (recorded wording and paths)."""
 
     recency = _int_param(params, "recency_minutes", 1, 5_256_000)
     after, before = _date_param(params, "after_date"), _date_param(params, "before_date")
@@ -281,37 +368,49 @@ def _search_filters(params: Mapping[str, str], domain_type: str) -> None:
             ["recency_minutes"], "recency_minutes cannot be combined with after_date or before_date"
         )
     if after is not None and before is not None and after > before:
-        raise _custom(["after_date"], "after_date must be less than or equal to before_date")
+        raise _custom(["before_date"], "after_date must be on or before before_date")
     if domain_type == "research_paper" and (dated or recency is not None):
         raise _custom(
             ["domain_type"],
-            "after_date, before_date and recency_minutes are not supported for research_paper; "
-            "use pub_year_min / pub_year_max",
+            "date and recency filters are not supported for domain_type=research_paper",
         )
     if (year_min is not None or year_max is not None) and domain_type != "research_paper":
         raise _custom(
-            ["pub_year_min"], "pub_year_min and pub_year_max require domain_type=research_paper"
+            ["domain_type"],
+            "pub_year_min and pub_year_max are only supported for domain_type=research_paper",
         )
     if year_min is not None and year_max is not None and year_min > year_max:
-        raise _custom(["pub_year_min"], "pub_year_min must be less than or equal to pub_year_max")
+        # Unrecorded; worded like the recorded date-order check.
+        raise _custom(["pub_year_max"], "pub_year_min must be on or before pub_year_max")
+
+
+def _json_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, list):
+        return "array"
+    return "string" if isinstance(value, str) else "object"
 
 
 def _json_object(raw: bytes) -> dict[str, Any]:
     try:
         body = json.loads(raw or b"null")
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise _Rejected(_error(400, "INVALID_INPUT", "Invalid JSON body")) from None
+        raise _Rejected(_error(400, "INVALID_INPUT", "Invalid JSON in request body")) from None
     if not isinstance(body, dict):
-        raise _input_error(
-            _issue([], "invalid_type", "Invalid input: expected object", expected="object")
-        )
+        message = f"Invalid input: expected object, received {_json_type(body)}"
+        raise _input_error(_issue([], "invalid_type", message, expected="object"))
     return body
 
 
 def _fetch_urls(body: Mapping[str, Any]) -> list[str]:
     urls = body.get("urls")
     if not isinstance(urls, list):
-        received = "undefined" if urls is None else type(urls).__name__
+        received = "undefined" if "urls" not in body else _json_type(urls)
         raise _input_error(
             _issue(
                 ["urls"],
@@ -321,13 +420,11 @@ def _fetch_urls(body: Mapping[str, Any]) -> list[str]:
             )
         )
     if not urls:
-        raise _input_error(
-            _issue(["urls"], "too_small", "Too small: expected array to have >=1 items")
-        )
+        message = "Too small: expected array to have >=1 items"
+        raise _input_error(_bound(["urls"], "array", low=1, message=message))
     if len(urls) > 10:
-        raise _input_error(
-            _issue(["urls"], "too_big", "Too big: expected array to have <=10 items")
-        )
+        message = "Too big: expected array to have <=10 items"
+        raise _input_error(_bound(["urls"], "array", high=10, message=message))
     for index, url in enumerate(urls):
         parts = urlsplit(url) if isinstance(url, str) else None
         if parts is None or parts.scheme not in ("http", "https") or not parts.hostname:
@@ -346,17 +443,20 @@ def _check_type(
     numeric = kind is int
     if not isinstance(value, kind) or (numeric and isinstance(value, bool)):
         expected = "number" if numeric else kind.__name__.replace("bool", "boolean")
-        raise _input_error(
-            _issue([name], "invalid_type", f"Invalid input: expected {expected}", expected=expected)
-        )
+        message = f"Invalid input: expected {expected}, received {_json_type(value)}"
+        raise _input_error(_issue([name], "invalid_type", message, expected=expected))
     number = int(body[name]) if numeric else 0
     if numeric and low is not None and number < low:
-        raise _input_error(_issue([name], "too_small", f"Too small: expected number to be >={low}"))
+        message = f"Too small: expected number to be >={low}"
+        raise _input_error(_bound([name], "number", low=low, message=message))
     if numeric and high is not None and number > high:
-        raise _input_error(_issue([name], "too_big", f"Too big: expected number to be <={high}"))
+        message = f"Too big: expected number to be <={high}"
+        raise _input_error(_bound([name], "number", high=high, message=message))
 
 
 def _selectors(body: Mapping[str, Any], name: str) -> list[str]:
+    """Check the selector list's documented size limits (the 400 part)."""
+
     value = body.get(name)
     if value is None:
         return []
@@ -369,15 +469,49 @@ def _selectors(body: Mapping[str, Any], name: str) -> list[str]:
         raise _custom(
             [name], f"{name} must be 1 to 20 non-blank selectors of at most 1000 characters"
         )
-    for selector in value:
-        balanced = selector.count("[") == selector.count("]") and selector.count(
-            "("
-        ) == selector.count(")")
-        if not balanced or "{" in selector or selector.strip()[0] in "0123456789>+~,":
-            raise _input_error(
-                _issue([name], "custom", f'Invalid CSS selector "{selector}"'), status=422
-            )
     return list(value)
+
+
+def _selector_problem(selector: str) -> tuple[str, int] | None:
+    """Return ``(reason, position)`` for a selector the CSS parser rejects.
+
+    The recorded reasons are ``Invalid character '{' position 0``,
+    ``Malformed attribute selector at position 0`` and ``Malformed
+    pseudo-class selector at position 1``; other malformed selectors reuse them.
+    """
+
+    for index, char in enumerate(selector):
+        if char in "{}":
+            return f"Invalid character '{char}' position {index}", index
+    bracket = selector.find("[")
+    if selector.count("[") != selector.count("]") and bracket >= 0:
+        return f"Malformed attribute selector at position {bracket}", bracket
+    if selector.count("(") != selector.count(")"):
+        colon = selector.rfind(":", 0, max(0, selector.find("(")) or len(selector))
+        at = max(colon, 0)
+        return f"Malformed pseudo-class selector at position {at}", at
+    first = selector.strip()[0]
+    if first in "0123456789>+~,":
+        index = selector.index(first)
+        return f"Invalid character '{first}' position {index}", index
+    return None
+
+
+def _selector_error(request: Mapping[str, Any]) -> MockResponse | None:
+    """Return the recorded 422 for the first selector the CSS parser rejects."""
+
+    for name in ("include_selectors", "exclude_selectors"):
+        for selector in request[name]:
+            problem = _selector_problem(selector)
+            if problem is None:
+                continue
+            reason, at = problem
+            message = (
+                f"body.{name}: Value error, {name} contains an unsupported CSS selector "
+                f"('{selector}'): {reason}\n  line 1:\n{selector}\n{' ' * at}^"
+            )
+            return _error(422, "INVALID_INPUT", message)
+    return None
 
 
 def _highlights(body: Mapping[str, Any], fmt: str) -> dict[str, Any] | None:
@@ -394,7 +528,7 @@ def _highlights(body: Mapping[str, Any], fmt: str) -> dict[str, Any] | None:
     _check_type(value, "max_characters", int, 100, 20_000)
     _check_type(value, "include_full_page_text", bool)
     if fmt != "markdown":
-        raise _custom(["highlights"], 'highlights requires format "markdown"')
+        raise _custom(["highlights"], "highlights is only valid when format is 'markdown'")
     return value
 
 
@@ -452,10 +586,8 @@ def _failure(url: str, request: Mapping[str, Any]) -> dict[str, Any] | None:
     host = (parts.hostname or "").lower()
     first = host.split(".")[0]
     status = _STATUS_HOST.match(first)
-    if _private(host):
+    if _private(host) or host.endswith(".invalid"):
         return {"url": url, "error": "invalid_url"}
-    if host.endswith(".invalid"):
-        return {"url": url, "error": "target_unreachable"}
     if status is not None:
         return {"url": url, "error": "target_http_error", "status": int(status.group(1))}
     if first in _FAILURES:
@@ -488,15 +620,40 @@ def _html(page: content.Page) -> str:
 
 
 def _tree(page: content.Page) -> dict[str, Any]:
-    sections: list[dict[str, Any]] = []
+    """Return the JSON ``format`` document: typed nodes under ``children``.
+
+    Recorded: ``{"type": "document", "children": [{"type": "paragraph",
+    "text": ...}]}``, without the page title. Heading and list nodes are a guess.
+    """
+
+    children: list[dict[str, Any]] = []
     for block in page.markdown.split("\n\n")[1:]:
-        if block.startswith("## "):
-            sections.append({"heading": block[3:], "paragraphs": []})
-        elif sections:
-            sections[-1]["paragraphs"].append(block)
+        if block.startswith("#"):
+            level = len(block) - len(block.lstrip("#"))
+            children.append({"type": "heading", "level": level, "text": block[level:].strip()})
+        elif block.startswith("- "):
+            items = [line[2:] for line in block.split("\n") if line.startswith("- ")]
+            children.append({"type": "list", "items": items})
         else:
-            sections.append({"heading": None, "paragraphs": [block]})
-    return {"title": page.title, "sections": sections}
+            children.append({"type": "paragraph", "text": block})
+    return {"type": "document", "children": children}
+
+
+def _web_date(published: datetime, now: datetime, turn: int) -> str:
+    """Return a web result's ``date`` in one of the recorded forms, by turn."""
+
+    age = (now - published).days
+    if turn % 3 == 1:
+        return f"{published:%b} {published.day}, {published.year}"
+    if turn % 3 == 2 and 1 < age < 30:
+        return f"{age} days ago"
+    return published.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _usage_time(moment: datetime) -> str:
+    """Return a usage ``created_at``: UTC ``YYYY-MM-DD HH:MM:SS`` (recorded)."""
+
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _final_url(url: str) -> str:
@@ -561,7 +718,24 @@ class TinyfishPlugin(ProviderPlugin):
         )
 
     def not_found(self, request: Request, status: int) -> MockResponse:
-        return _error(404, "UNKNOWN_ROUTE", f"Route {request.method} {request.url.path} not found")
+        """A wrong method is an empty 405; an unknown path is the site's HTML 404 (recorded)."""
+
+        if status == 405:
+            headers = {
+                **_APP_HEADERS,
+                **_cdn_headers(error=True),
+                "x-request-id": str(uuid.uuid4()),
+            }
+            return MockResponse(status=405, body=b"", headers=headers, media_type=None)
+        return MockResponse(
+            status=404,
+            body=_NOT_FOUND_PAGE,
+            headers={
+                "cache-control": "private, no-cache, no-store, max-age=0, must-revalidate",
+                **_cdn_headers(error=True),
+            },
+            media_type="text/html; charset=utf-8",
+        )
 
     # --------------------------------------------------------------- errors
 
@@ -582,7 +756,7 @@ class TinyfishPlugin(ProviderPlugin):
             return self._exhausted(context.operation, context.scope, status, context.message)
         if kind is ErrorKind.FORBIDDEN:
             message = (
-                "Highlights are not enabled for this account. Contact support for access."
+                "highlights is not enabled for this account"
                 if product == "Fetch"
                 else "Search request forbidden by the upstream service"
             )
@@ -703,13 +877,15 @@ class TinyfishPlugin(ProviderPlugin):
         now = context.store.now()
         if context.store.peek_window(daily).remaining <= 0 and not self._wallet_funded(account):
             scope = "beta" if account.plan == "beta" else None
-            return self._exhausted(product, scope, None, None)
+            exhausted = self._exhausted(product, scope, None, None)
+            return self._rejected(exhausted, self._app_headers(context))
         refused, windows = context.admit(specs, units)
         if refused is not None:
-            return self._rate_limited(ErrorContext(operation=product), window=refused, now=now)
+            limited = self._rate_limited(ErrorContext(operation=product), window=refused, now=now)
+            return self._rejected(limited, self._app_headers(context))
         minute = windows[0]
         headers = {
-            **_cdn_headers(error=False),
+            **self._app_headers(context),
             "x-ratelimit-limit": str(minute.spec.limit),
             "x-ratelimit-remaining": str(minute.remaining),
             "x-ratelimit-reset": str(int(minute.reset.timestamp())),
@@ -723,32 +899,64 @@ class TinyfishPlugin(ProviderPlugin):
         except ArithmeticError:
             return False
 
+    def _app_headers(self, context: OperationContext) -> dict[str, str]:
+        """Return the application headers, with this account's id and the internal path."""
+
+        product = "search" if _request_host(context.request) == _SEARCH_HOST else "fetch"
+        path = context.request.url.path.rstrip("/")
+        query = context.request.url.query
+        rewrite = f"/v1/{product}{path}" + (f"?{query}" if query else "")
+        return {
+            **_APP_HEADERS,
+            "x-middleware-rewrite": rewrite,
+            "x-tf-user-id": _user_id(self._account(context).id),
+        }
+
     @staticmethod
-    def _ok(body: Any, headers: Mapping[str, str]) -> MockResponse:
+    def _rejected(response: MockResponse, headers: Mapping[str, str]) -> MockResponse:
+        """Add the application (and any rate-limit) headers to an error response."""
+
+        response.headers.update({k: v for k, v in headers.items() if k not in response.headers})
+        return response
+
+    @staticmethod
+    def _ok(
+        body: Any, headers: Mapping[str, str], *, echo_request_id: bool = False
+    ) -> MockResponse:
+        request_id = str(uuid.uuid4())
+        if echo_request_id:
+            body = {**body, "request_id": request_id}
         return MockResponse(
-            status=200, body=body, headers={**headers, "x-request-id": str(uuid.uuid4())}
+            status=200,
+            body=body,
+            headers={**headers, **_cdn_headers(error=False), "x-request-id": request_id},
         )
 
     # --------------------------------------------------------------- search
 
     async def _search(self, context: OperationContext) -> MockResponse:
-        try:
-            request = _search_request(context.request.query_params)
-        except _Rejected as rejected:
-            return rejected.response
+        # Recorded: an invalid search spends a minute slot too.
         gate = self._gate(context, "search", 1)
         if isinstance(gate, MockResponse):
             return gate
         headers, daily = gate
+        try:
+            request = _search_request(context.request.query_params)
+        except _Rejected as rejected:
+            return self._rejected(rejected.response, headers)
         context.match_key = content.normalize_query(request["query"])
         fixture = context.fixture(context.match_key)
         if fixture is not None and fixture.status != 200:
-            return MockResponse(status=fixture.status, body=fixture.body, headers=headers)
+            return MockResponse(
+                status=fixture.status,
+                body=fixture.body,
+                headers={**headers, **_cdn_headers(error=True)},
+            )
         context.charge("search")
         context.store.count_window(daily, 1)
         if fixture is not None and isinstance(fixture.body, dict):
             return self._ok(fixture.body, headers)
-        results = self._results(request)
+        results = self._results(request, context.store.now())
         body = {
             "query": request["query"],
             "results": results,
@@ -758,7 +966,7 @@ class TinyfishPlugin(ProviderPlugin):
         return self._ok(body, headers)
 
     @staticmethod
-    def _results(request: Mapping[str, Any]) -> list[dict[str, Any]]:
+    def _results(request: Mapping[str, Any], now: datetime) -> list[dict[str, Any]]:
         page, kind = request["page"], request["domain_type"]
         include = request["include"] or (list(_ACADEMIC) if kind == "research_paper" else [])
         hits = content.search_hits(
@@ -777,9 +985,10 @@ class TinyfishPlugin(ProviderPlugin):
                 "snippet": hit.snippet,
                 "url": hit.url,
             }
-            stamp = hit.published.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            published = hit.published.astimezone(UTC)
             if kind == "news":
-                item.update({"date": stamp, "publisher": site.split(".")[0].title()})
+                news_date = format_datetime(published, usegmt=True)
+                item.update({"date": news_date, "publisher": site.split(".")[0].title()})
             elif kind == "research_paper":
                 rng = content.rng("tinyfish-paper", hit.url)
                 item.update(
@@ -790,30 +999,41 @@ class TinyfishPlugin(ProviderPlugin):
                         "cited_by_count": rng.randrange(0, 900),
                     }
                 )
-                if site == "arxiv.org":
-                    item["pdf_url"] = hit.url.replace("arxiv.org/", "arxiv.org/pdf/", 1)
-            elif index % 3 == 0:
-                item["date"] = stamp
-            results.append(item)
+                # Recorded: every research result had a ``pdf_url``.
+                item["pdf_url"] = (
+                    hit.url.replace("arxiv.org/", "arxiv.org/pdf/", 1)
+                    if site == "arxiv.org"
+                    else f"{hit.url.rstrip('/')}.pdf"
+                )
+            elif request["dated"] or index % 3 == 0:
+                item["date"] = _web_date(published, now, index)
+            results.append(dict(sorted(item.items())))
         return results
 
     # ---------------------------------------------------------------- fetch
 
     async def _fetch(self, context: OperationContext) -> MockResponse:
+        # Recorded order: schema 400 and highlights 403 spend no slot; the
+        # selector 422 comes after the URLs are counted.
+        app = self._app_headers(context)
         try:
             request = _fetch_request(context.raw_body)
         except _Rejected as rejected:
-            return rejected.response
+            return self._rejected(rejected.response, app)
         account = self._account(context)
         if (
             request["highlights"] is not None
             and account.attributes.get("highlights_beta") is not True
         ):
-            return self.error(ErrorKind.FORBIDDEN, ErrorContext(operation="fetch"))
+            forbidden = self.error(ErrorKind.FORBIDDEN, ErrorContext(operation="fetch"))
+            return self._rejected(forbidden, app)
         gate = self._gate(context, "fetch", len(request["urls"]))
         if isinstance(gate, MockResponse):
             return gate
         headers, daily = gate
+        invalid = _selector_error(request)
+        if invalid is not None:
+            return self._rejected(invalid, headers)
         results: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         for url in request["urls"]:
@@ -823,7 +1043,8 @@ class TinyfishPlugin(ProviderPlugin):
         if results:
             context.charge("fetch", units=len(results))
             context.store.count_window(daily, len(results))
-        return self._ok({"results": results, "errors": errors}, headers)
+        body = {"results": results, "errors": errors}
+        return self._ok(body, headers, echo_request_id=bool(errors))
 
     def _fetched(
         self, context: OperationContext, url: str, request: Mapping[str, Any]
@@ -870,17 +1091,17 @@ class TinyfishPlugin(ProviderPlugin):
         host = (urlsplit(url).hostname or "").lower()
         reserved = page.images == ()
         rng = content.rng("tinyfish-fetch", content.normalize_url(url))
+        # Field order as recorded: the option fields sit between the page
+        # fields and ``latency_ms``; ``unmatched_selectors`` comes last.
         item: dict[str, Any] = {
             "url": url,
             "final_url": _final_url(url),
             "title": page.title,
             "description": None if reserved else page.text.split("\n")[2][:160],
             "language": "en",
+            "text": text,
             "author": None,
             "published_date": None if reserved else page.published.date().isoformat(),
-            "text": text,
-            "latency_ms": 150 + rng.randrange(2400),
-            "format": fmt,
         }
         if request.get("links") is True:
             item["links"] = [] if reserved else [f"https://{host}/about", f"https://{host}/contact"]
@@ -888,9 +1109,12 @@ class TinyfishPlugin(ProviderPlugin):
             item["image_links"] = list(page.images)
         if request.get("iframe_links") is True:
             item["iframe_links"] = []
-        if request.get("include_etag_and_last_modified") is True:
+        # The recorded reserved page (example.com) sent no validators.
+        if request.get("include_etag_and_last_modified") is True and not reserved:
             item["etag"] = f'"{content.hex_id(16, url)}"'
             item["last_modified"] = format_datetime(page.published, usegmt=True)
+        item["latency_ms"] = round(30 + rng.random() * 2400, 6)
+        item["format"] = fmt
         highlights = request["highlights"]
         if highlights is not None:
             paragraphs = [
@@ -922,7 +1146,7 @@ class TinyfishPlugin(ProviderPlugin):
                     )
                 )
         except _Rejected as rejected:
-            return rejected.response
+            return self._rejected(rejected.response, self._app_headers(context))
         account = self._account(context)
         labels = {
             key.label for key in context.store.keys(self.name) if key.account_id == account.id
@@ -955,7 +1179,7 @@ class TinyfishPlugin(ProviderPlugin):
             "total_pages": max(1, -(-total // limit)),
             "has_more": page * limit < total,
         }
-        return self._ok(body, _cdn_headers(error=False))
+        return self._ok(body, self._app_headers(context))
 
     @staticmethod
     def _parsed(entry: LogEntry) -> Any:
@@ -967,18 +1191,20 @@ class TinyfishPlugin(ProviderPlugin):
     def _search_items(self, entry: LogEntry) -> list[dict[str, Any]]:
         body = self._parsed(entry)
         results = body.get("results") if isinstance(body, dict) else None
-        ok = entry.status == 200
+        ok = entry.status == 200 and isinstance(results, list)
+        # Recorded: a failed search has no count or size and an empty list;
+        # ``cached`` was null on every recorded item.
         return [
             {
-                "id": entry.id,
+                "id": content.stable_uuid("tinyfish", "search", entry.id),
                 "request_id": content.stable_uuid("tinyfish", "log", entry.id),
                 "query": str(entry.request_summary.get("query", {}).get("query", "")),
                 "status_code": entry.status,
-                "result_count": len(results) if isinstance(results, list) else 0,
-                "results": results if isinstance(results, list) else None,
-                "cached": False,
-                "response_size_bytes": len((entry.response_body or "").encode()) or None,
-                "created_at": entry.ts.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                "result_count": len(results) if ok and results is not None else None,
+                "results": results if ok and results is not None else [],
+                "cached": None,
+                "response_size_bytes": len((entry.response_body or "").encode()) if ok else None,
+                "created_at": _usage_time(entry.ts),
                 "_status": "completed" if ok else "failed",
             }
         ]
@@ -987,7 +1213,7 @@ class TinyfishPlugin(ProviderPlugin):
         body = self._parsed(entry)
         if not isinstance(body, dict):
             return []
-        created = entry.ts.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        created = _usage_time(entry.ts)
         items: list[dict[str, Any]] = []
         for index, item in enumerate([*body.get("results", []), *body.get("errors", [])]):
             if not isinstance(item, dict):

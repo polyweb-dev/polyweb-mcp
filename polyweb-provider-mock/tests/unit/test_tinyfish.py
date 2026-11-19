@@ -37,7 +37,13 @@ def _assert_error(response: httpx.Response, status: int, code: str) -> dict[str,
     body = response.json()
     assert response.status_code == status
     assert response.headers["content-type"] == "application/json"
-    assert response.headers["cache-control"] == "no-store"
+    # Recorded: only the edge's 401s say no-store; the application's errors do not.
+    if status == 401:
+        assert response.headers["cache-control"] == "no-store"
+    else:
+        assert "cache-control" not in response.headers
+        assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["x-cache"] == "Error from cloudfront"
     assert body["error"]["code"] == code
     assert body["request_id"] == response.headers["x-request-id"]
     UUID(body["request_id"])
@@ -102,12 +108,12 @@ async def test_search_pages_news_and_research(
         ({**_QUERY, "domain_type": "images"}, ["domain_type"]),
         ({**_QUERY, "after_date": "2026/01/01"}, ["after_date"]),
         ({**_QUERY, "recency_minutes": "60", "after_date": "2026-01-01"}, ["recency_minutes"]),
-        ({**_QUERY, "after_date": "2026-02-01", "before_date": "2026-01-01"}, ["after_date"]),
-        ({**_QUERY, "pub_year_min": "2020"}, ["pub_year_min"]),
+        ({**_QUERY, "after_date": "2026-02-01", "before_date": "2026-01-01"}, ["before_date"]),
+        ({**_QUERY, "pub_year_min": "2020"}, ["domain_type"]),
         ({**_QUERY, "domain_type": "research_paper", "recency_minutes": "5"}, ["domain_type"]),
     ],
 )
-async def test_search_validation_is_free(
+async def test_search_validation_spends_a_slot_not_a_credit(
     client: httpx.AsyncClient,
     store: MockStore,
     search_headers: dict[str, str],
@@ -119,6 +125,8 @@ async def test_search_validation_is_free(
     error = _assert_error(response, 400, "INVALID_INPUT")
     assert error["details"][0]["path"] == path
     assert error["message"].startswith(f'Field "{path[0]}"')
+    assert response.headers["x-ratelimit-remaining"] == "29"
+    assert response.headers["x-tf-user-id"].startswith("user_")
     assert store.ledger("tinyfish") == []
 
 
@@ -188,7 +196,8 @@ async def test_fetch_highlights_and_selectors(
         ("https://timeout.example.org/a", {"error": "timeout"}),
         ("https://missing.example.org/a", {"error": "page_not_found", "status": 404}),
         ("https://status-503.example.org/a", {"error": "target_http_error", "status": 503}),
-        ("https://site.invalid/a", {"error": "target_unreachable"}),
+        ("https://unreachable.example.org/a", {"error": "target_unreachable"}),
+        ("https://site.invalid/a", {"error": "invalid_url"}),
         ("http://10.0.0.1/", {"error": "invalid_url"}),
     ],
 )
@@ -202,7 +211,11 @@ async def test_fetch_target_failures_are_200_errors(
     response = await client.post("/", json={"urls": [url]}, headers=fetch_headers)
 
     assert response.status_code == 200
-    assert response.json() == {"results": [], "errors": [{"url": url, **entry}]}
+    assert response.json() == {
+        "results": [],
+        "errors": [{"url": url, **entry}],
+        "request_id": response.headers["x-request-id"],
+    }
     assert store.ledger("tinyfish") == []
 
 
@@ -275,9 +288,11 @@ async def test_routing_is_by_host(
     post_on_search = await client.post("/", json=_FETCH, headers=search_headers)
     unknown = await client.get("/v1/other", headers=search_headers)
 
-    _assert_error(wrong, 404, "UNKNOWN_ROUTE")
-    _assert_error(post_on_search, 404, "UNKNOWN_ROUTE")
-    _assert_error(unknown, 404, "UNKNOWN_ROUTE")
+    for refused in (wrong, post_on_search):
+        assert (refused.status_code, refused.content) == (405, b"")
+        assert "content-type" not in refused.headers
+    assert unknown.status_code == 404
+    assert unknown.headers["content-type"] == "text/html; charset=utf-8"
 
 
 async def test_minute_limit_is_per_account(
@@ -409,6 +424,7 @@ async def test_fixtures_override_search_and_fetch(
     fetch = (await client.post("/", json=_FETCH, headers=fetch_headers)).json()
 
     assert search == saved
+    assert fetch.pop("request_id")
     assert fetch == {"results": [], "errors": [{"url": url, "error": "empty_content"}]}
 
 
