@@ -79,3 +79,35 @@ async def test_mock_matches_recorded_exchange(
     if "retry-after" in response.headers:
         assert int(response.headers["retry-after"]) >= 0
     _same_shape(recording["response_body"], response.json())
+
+
+async def test_default_account_reports_the_recorded_free_plan_values(
+    client: httpx.AsyncClient, tavily_key: str
+) -> None:
+    """The seeded Researcher account is prepaid with no PAYGO and no key limit, as recorded."""
+
+    recording = json.loads((_RECORDINGS[0].parent / "usage__keyed.json").read_text("utf-8"))
+    recorded = recording["response_body"]
+    response = await client.get(
+        "/usage", headers={"host": "api.tavily.com", "authorization": f"Bearer {tavily_key}"}
+    )
+
+    mocked = response.json()
+    assert mocked["key"]["limit"] == recorded["key"]["limit"]
+    for field in ("current_plan", "plan_limit", "paygo_usage", "paygo_limit"):
+        assert mocked["account"][field] == recorded["account"][field], field
+
+
+async def test_postpaid_usage_keeps_the_recorded_shape(
+    client: httpx.AsyncClient, store: MockStore, tavily_key: str
+) -> None:
+    """PAYGO numbers replace the recorded nulls; every other field keeps its type."""
+
+    recording = json.loads((_RECORDINGS[0].parent / "usage__keyed.json").read_text("utf-8"))
+    store.set_funding("tavily", "postpaid", overage_limit=None)
+    response = await client.get(
+        "/usage", headers={"host": "api.tavily.com", "authorization": f"Bearer {tavily_key}"}
+    )
+
+    assert response.status_code == recording["status"]
+    _same_shape(recording["response_body"], response.json())

@@ -303,16 +303,116 @@ async def test_paths_answer_only_on_their_real_host(
     assert (wrong_host.status_code, oauth_on_api.status_code) == (404, 404)
 
 
-async def test_credit_exhaustion_is_402(
+def _label_key(store: MockStore, label: str) -> dict[str, str]:
+    key = next(item.key for item in store.keys("parallel") if item.label == label)
+    return {**API, "x-api-key": key}
+
+
+async def test_no_card_account_is_402_until_credit_is_added(
+    client: httpx.AsyncClient, store: MockStore
+) -> None:
+    """Documented: without a card or paid balance a call gets 402."""
+
+    no_card = _label_key(store, "no-card")
+    refused = await client.post("/v1/search", json=_SEARCH, headers=no_card)
+    store.add_prepaid("parallel", Decimal("0.001"), "parallel-no-card")
+    paid = await client.post("/v1/search", json=_SEARCH, headers=no_card)
+    spent = await client.post("/v1/search", json=_SEARCH, headers=no_card)
+
+    assert refused.status_code == 402
+    assert refused.json()["type"] == "error"
+    assert refused.json()["error"]["ref_id"] == refused.headers["x-request-id"]
+    assert refused.json()["error"]["message"].startswith("Insufficient credit in account")
+    assert (paid.status_code, spent.status_code) == (200, 402)
+    assert store.account("parallel", "parallel-no-card").reset_rule == "none"
+    # The default card-on-file org is untouched.
+    assert store.account("parallel").credits_used == 0
+
+
+async def test_card_on_file_org_spends_the_free_credit_then_bills_the_card(
+    client: httpx.AsyncClient, store: MockStore, clock: Clock, headers: dict[str, str]
+) -> None:
+    """Documented: free credit first, then the card; spend limits never block."""
+
+    store.set_credits("parallel", Decimal("0.002"), used=Decimal("4.998"))
+    store.add_prepaid("parallel", Decimal("0.001"))
+    statuses = [
+        (await client.post("/v1/search", json=_SEARCH, headers=headers)).status_code
+        for _ in range(4)
+    ]
+    basic = await client.post("/v1/search", json={**_SEARCH, "mode": "basic"}, headers=headers)
+    spent = store.account("parallel")
+    balance = ParallelAccount(store).balance("parallel-org")
+
+    assert statuses == [200, 200, 200, 200] and basic.status_code == 200
+    # The grant went first, then the prepaid tenth of a cent, then the card.
+    assert (spent.credits_used, spent.prepaid_remaining) == (Decimal(5), Decimal(0))
+    assert spent.overage_used == Decimal("0.006")
+    # Guessed: credit is gone; the card charges are pending (0.6 cents, rounded up).
+    assert balance["credit_balance_cents"] == 0.0
+    assert balance["pending_debit_balance_cents"] == 1.0
+    assert balance["will_invoice"] is False
+
+    clock.now = datetime(2026, 12, 1, 0, 0, tzinfo=UTC)
+    renewed = store.account("parallel")
+    fresh = ParallelAccount(store).balance("parallel-org")
+
+    # The calendar month refills only the grant and clears the accrued charges.
+    assert (renewed.credits_used, renewed.overage_used) == (Decimal(0), Decimal(0))
+    assert renewed.prepaid_remaining == Decimal(0) and renewed.remaining == Decimal(5)
+    assert (fresh["credit_balance_cents"], fresh["pending_debit_balance_cents"]) == (500, 0)
+
+
+async def test_free_credit_is_spent_before_prepaid_credit(
     client: httpx.AsyncClient, store: MockStore, headers: dict[str, str]
 ) -> None:
-    store.set_credits("parallel", Decimal("0.0005"))
-    response = await client.post("/v1/search", json=_SEARCH, headers=headers)
+    store.add_prepaid("parallel", Decimal(1))
+    await client.post("/v1/search", json={**_SEARCH, "mode": "basic"}, headers=headers)
+    account = store.account("parallel")
+    balance = ParallelAccount(store).balance("parallel-org")
 
-    assert response.status_code == 402
-    assert response.json()["type"] == "error"
-    assert response.json()["error"]["ref_id"] == response.headers["x-request-id"]
-    assert "credit" in response.json()["error"]["message"].lower()
+    assert (account.credits_used, account.prepaid_used) == (Decimal("0.005"), Decimal(0))
+    assert account.remaining == Decimal("5.995")
+    assert balance["credit_balance_cents"] == 599.0
+
+
+async def test_search_and_extract_are_limited_per_key_and_minute(
+    client: httpx.AsyncClient, store: MockStore, clock: Clock, headers: dict[str, str]
+) -> None:
+    """Documented: 600 per minute each; the mock counts per key (scope undocumented)."""
+
+    store.set_account_attributes("parallel", {"search_per_minute": 2})
+    first = [
+        (await client.post("/v1/search", json=_SEARCH, headers=headers)).status_code
+        for _ in range(2)
+    ]
+    limited = await client.post("/v1/search", json=_SEARCH, headers=headers)
+    extract = await client.post("/v1/extract", json=_EXTRACT, headers=headers)
+    other_key = await client.post(
+        "/v1/search", json=_SEARCH, headers=_label_key(store, "secondary")
+    )
+    clock.advance(60)
+    later = await client.post("/v1/search", json=_SEARCH, headers=headers)
+
+    assert first == [200, 200]
+    assert limited.status_code == 429
+    assert limited.json()["error"]["ref_id"] == limited.headers["x-request-id"]
+    assert 1 <= int(limited.headers["retry-after"]) <= 60
+    assert (extract.status_code, other_key.status_code, later.status_code) == (200, 200, 200)
+
+
+async def test_default_limits_allow_600_per_minute(
+    client: httpx.AsyncClient, headers: dict[str, str]
+) -> None:
+    bad = {"urls": "not-a-list"}
+    codes = [
+        (await client.post("/v1/extract", json=bad, headers=headers)).status_code
+        for _ in range(600)
+    ]
+    over = await client.post("/v1/extract", json=bad, headers=headers)
+
+    assert set(codes) == {422}
+    assert over.status_code == 429
 
 
 @pytest.mark.parametrize(

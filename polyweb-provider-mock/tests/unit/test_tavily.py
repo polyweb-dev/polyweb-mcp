@@ -1,12 +1,15 @@
 """Tavily plugin wire behavior through the in-process app."""
 
 import json
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import httpx
 import pytest
 
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
+from polyweb_provider_mock.providers import discover
+from polyweb_provider_mock.providers.base import ErrorContext, ErrorKind
 from polyweb_provider_mock.store import MockStore
 from tests.conftest import TAVILY
 
@@ -390,3 +393,163 @@ async def test_logged_response_can_become_a_fixture(
     second = (await client.post("/search", json=_SEARCH, headers=tavily_headers)).json()
     assert second["results"] == first["results"][:1]
     assert json.loads(store.log_entry(entry.id).response_body or "{}")["query"] == "polyweb test"  # type: ignore[union-attr]
+
+
+class _Clock:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+def _freeze(store: MockStore, now: datetime) -> _Clock:
+    clock = _Clock(now)
+    store.now = clock  # type: ignore[method-assign]
+    return clock
+
+
+def _headers_for(store: MockStore, label: str) -> dict[str, str]:
+    key = next(item.key for item in store.keys("tavily") if item.label == label)
+    return {**TAVILY, "Authorization": f"Bearer {key}"}
+
+
+async def test_researcher_rpm_is_shared_by_every_key_of_the_account(
+    client: httpx.AsyncClient, store: MockStore, tavily_headers: dict[str, str]
+) -> None:
+    clock = _freeze(store, datetime(2026, 11, 19, 12, 0, 0, tzinfo=UTC))
+    secondary = _headers_for(store, "secondary")
+    bad = {"query": "x", "search_depth": "deep"}  # free, but still a request
+    for index in range(100):
+        headers = tavily_headers if index % 2 else secondary
+        assert (await client.post("/search", json=bad, headers=headers)).status_code == 400
+
+    clock.now += timedelta(seconds=15)
+    limited = await client.post("/extract", json=_EXTRACT, headers=secondary)
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"] == "45"
+    assert limited.json() == {
+        "detail": {
+            "error": "Your request has been blocked due to excessive requests. "
+            "Please reduce the rate of requests."
+        }
+    }
+    assert (await client.get("/usage", headers=tavily_headers)).status_code == 200
+    assert store.account("tavily").credits_used == 0
+
+    clock.now += timedelta(seconds=45)
+    assert (await client.post("/search", json=_SEARCH, headers=tavily_headers)).status_code == 200
+
+
+async def test_paid_plan_rpm_comes_from_the_account_attribute(
+    client: httpx.AsyncClient, store: MockStore, tavily_headers: dict[str, str]
+) -> None:
+    _freeze(store, datetime(2026, 11, 19, 12, 0, 0, tzinfo=UTC))
+    store.set_account_attributes("tavily", {"requests_per_minute": 1000})
+    bad = {"query": "x", "search_depth": "deep"}
+    for _ in range(101):
+        response = await client.post("/search", json=bad, headers=tavily_headers)
+    assert response.status_code == 400
+
+    store.set_account_attributes("tavily", {"requests_per_minute": 101})
+    limited = await client.post("/search", json=bad, headers=tavily_headers)
+    assert limited.status_code == 429 and limited.headers["retry-after"] == "60"
+
+
+async def test_usage_allows_ten_calls_per_ten_minutes(
+    client: httpx.AsyncClient, store: MockStore, tavily_headers: dict[str, str]
+) -> None:
+    clock = _freeze(store, datetime(2026, 11, 19, 12, 0, 0, tzinfo=UTC))
+    secondary = _headers_for(store, "secondary")
+    for index in range(10):
+        headers = tavily_headers if index % 2 else secondary
+        assert (await client.get("/usage", headers=headers)).status_code == 200
+
+    clock.now += timedelta(minutes=4)
+    limited = await client.get("/usage", headers=tavily_headers)
+    assert limited.status_code == 429 and limited.headers["retry-after"] == "360"
+    assert "excessive requests" in limited.json()["detail"]["error"]
+    assert (await client.post("/search", json=_SEARCH, headers=tavily_headers)).status_code == 200
+
+    clock.now += timedelta(minutes=6)
+    assert (await client.get("/usage", headers=tavily_headers)).status_code == 200
+
+
+async def test_spent_plan_is_432_on_a_prepaid_account(
+    client: httpx.AsyncClient, store: MockStore, tavily_headers: dict[str, str]
+) -> None:
+    store.set_credits("tavily", Decimal(1))
+    assert (await client.post("/search", json=_SEARCH, headers=tavily_headers)).status_code == 200
+
+    refused = await client.post("/search", json=_SEARCH, headers=tavily_headers)
+
+    assert refused.status_code == 432
+    assert "plan's set usage limit" in refused.json()["detail"]["error"]
+    usage = (await client.get("/usage", headers=tavily_headers)).json()["account"]
+    assert (usage["plan_usage"], usage["paygo_usage"], usage["paygo_limit"]) == (1, 0, None)
+
+
+async def test_paygo_bills_overage_then_433_at_its_limit(
+    client: httpx.AsyncClient, store: MockStore, tavily_headers: dict[str, str]
+) -> None:
+    store.set_credits("tavily", Decimal(1))
+    store.set_funding("tavily", "postpaid", overage_limit=Decimal(3))
+    advanced = {**_SEARCH, "search_depth": "advanced"}
+
+    first = await client.post("/search", json=_SEARCH, headers=tavily_headers)
+    second = await client.post("/search", json=advanced, headers=tavily_headers)
+    over = await client.post("/search", json=advanced, headers=tavily_headers)
+
+    assert (first.status_code, second.status_code) == (200, 200)
+    assert second.json()["usage"] == {"credits": 2}
+    assert over.status_code == 433
+    assert "pay-as-you-go limit" in over.json()["detail"]["error"]
+    usage = (await client.get("/usage", headers=tavily_headers)).json()
+    assert usage["account"]["plan_usage"] == 1 and usage["account"]["plan_limit"] == 1
+    assert (usage["account"]["paygo_usage"], usage["account"]["paygo_limit"]) == (2, 3)
+    assert usage["key"]["usage"] == 3
+
+    store.set_funding("tavily", "postpaid", overage_limit=None)
+    assert (await client.post("/search", json=advanced, headers=tavily_headers)).status_code == 200
+    account = (await client.get("/usage", headers=tavily_headers)).json()["account"]
+    assert (account["paygo_usage"], account["paygo_limit"]) == (4, None)
+
+
+async def test_key_credit_limit_is_432_and_spares_other_keys(
+    client: httpx.AsyncClient, store: MockStore, tavily_headers: dict[str, str]
+) -> None:
+    plugin = discover()["tavily"]
+    capped = store.create_key(
+        "tavily", plugin.key_format, label="capped", credit_limit=Decimal(200)
+    )
+    headers = {**TAVILY, "Authorization": f"Bearer {capped.key}"}
+    store.charge(store.resolve("tavily", capped.key), "search.basic", Decimal(199))  # type: ignore[arg-type]
+
+    advanced = {**_SEARCH, "search_depth": "advanced"}
+    refused = await client.post("/search", json=advanced, headers=headers)
+    assert refused.status_code == 432
+    assert "plan's set usage limit" in refused.json()["detail"]["error"]
+    assert (await client.post("/search", json=_SEARCH, headers=headers)).status_code == 200
+    assert (await client.post("/search", json=_SEARCH, headers=headers)).status_code == 432
+
+    usage = (await client.get("/usage", headers=headers)).json()
+    assert (usage["key"]["usage"], usage["key"]["limit"]) == (200, 200)
+    assert (await client.post("/search", json=_SEARCH, headers=tavily_headers)).status_code == 200
+
+
+async def test_keyless_daily_cap_waits_until_the_window_frees(
+    client: httpx.AsyncClient, store: MockStore
+) -> None:
+    assert store.keyless("tavily").per_day == 500  # type: ignore[union-attr]
+    _freeze(store, datetime(2026, 11, 19, 23, 46, 16, tzinfo=UTC))
+    keyless = {**TAVILY, "X-Tavily-Access-Mode": "keyless"}
+    store.set_keyless("tavily", per_day=0)
+
+    capped = await client.post("/search", json=_SEARCH, headers=keyless)
+
+    assert capped.status_code == 429 and capped.headers["retry-after"] == "824"
+    assert capped.json()["error"]["retry_after_seconds"] == 824
+    built = discover()["tavily"].error(
+        ErrorKind.RATE_LIMITED, ErrorContext(operation="search", keyless=True, store=store)
+    )
+    assert built.headers["Retry-After"] == "824"

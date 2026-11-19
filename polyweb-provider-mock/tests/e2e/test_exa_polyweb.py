@@ -155,6 +155,21 @@ async def test_credit_exhaustion_is_terminal_quota_exhausted(
     assert snapshot is not None and snapshot.remaining == 0
 
 
+async def test_seeded_budgeted_key_exhausts_its_own_budget(
+    store: MockStore, adapters: _Adapters
+) -> None:
+    budgeted = next(item.key for item in store.keys("exa") if item.label == "budgeted")
+    principal = store.resolve("exa", budgeted)
+    assert principal is not None
+    store.charge(principal, "search.auto", Decimal(7))  # $0.049 of the $0.05 budget
+
+    error = await _error(adapters(budgeted).search(_search()))
+
+    assert (error.code, error.status_code, error.retryable) == ("quota_exhausted", 402, False)
+    assert error.details == {"error_code": "API_KEY_BUDGET_EXCEEDED"}
+    assert store.account("exa").remaining == Decimal("19.951")
+
+
 @pytest.mark.parametrize(
     ("spec", "expected"),
     [

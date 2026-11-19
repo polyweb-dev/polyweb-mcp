@@ -171,10 +171,11 @@ async def test_empty_wallet_is_insufficient_credits(
 async def test_key_spend_cap_surfaces_as_a_rate_limit(
     store: MockStore, adapters: _Adapters
 ) -> None:
-    capped = store.create_key(
-        "you", plugin("you").key_format, label="capped", credit_limit=Decimal(0)
-    )
-    error = (await _error(adapters(capped.key).search(_search()))).error
+    capped = next(item.key for item in store.keys("you") if item.label == "capped")
+    principal = store.resolve("you", capped)
+    assert principal is not None
+    store.charge(principal, "search", Decimal(200))
+    error = (await _error(adapters(capped).search(_search()))).error
 
     assert (error.code, error.status_code, error.retryable) == ("rate_limited", 429, True)
 

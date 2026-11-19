@@ -1,12 +1,12 @@
 """You.com plugin wire behavior through the in-process app."""
 
+from datetime import timedelta
 from decimal import Decimal
 
 import httpx
 import pytest
 
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
-from polyweb_provider_mock.providers import plugin
 from polyweb_provider_mock.store import MockStore
 
 GATEWAY = {"Host": "ydc-index.io"}
@@ -248,23 +248,98 @@ async def test_wrong_host_and_unknown_path(
     assert on_api.status_code == 404 and unknown.status_code == 404
 
 
-async def test_empty_wallet_is_402_and_key_spend_cap_is_429(
-    client: httpx.AsyncClient, store: MockStore, gateway: dict[str, str]
+def _key(store: MockStore, label: str) -> str:
+    return next(key.key for key in store.keys("you") if key.label == label)
+
+
+async def test_seeded_accounts_are_the_verified_and_unverified_signup_grants(
+    client: httpx.AsyncClient, store: MockStore
 ) -> None:
-    capped = store.create_key(
-        "you", plugin("you").key_format, label="capped", credit_limit=Decimal("0.5")
-    )
-    headers = {**GATEWAY, "X-API-Key": capped.key}
+    verified, unverified = store.account("you"), store.account("you", "you-unverified")
+    headers = {**API, "X-API-Key": _key(store, "unverified")}
+
+    assert (verified.credit_limit, verified.reset_rule) == (Decimal(10_000), "none")
+    assert (unverified.credit_limit, unverified.reset_rule) == (Decimal(1_000), "none")
+    for account in (verified, unverified):
+        assert account.grant_expires_at is not None
+        assert account.grant_expires_at - account.period_start == timedelta(days=60)
+    assert await _balance(client, headers) == 1_000.0
+    exported = [item for item in store.export_keys() if item[0].startswith("POLYWEB_YOU")]
+    assert exported == [("POLYWEB_YOU_API_KEY", _key(store, "default"))]
+
+
+async def test_signup_credit_expires_after_60_days_leaving_prepaid(
+    client: httpx.AsyncClient, store: MockStore, gateway: dict[str, str], api: dict[str, str]
+) -> None:
+    store.add_prepaid("you", Decimal(200))
+    assert await _balance(client, api) == 10_200.0
+    seeded = store.now()
+
+    store.now = lambda: seeded + timedelta(days=59)
+    assert await _balance(client, api) == 10_200.0
+    store.now = lambda: seeded + timedelta(days=60, seconds=1)
+    assert await _balance(client, api) == 200.0
+    assert (await client.post("/v1/search", json=_SEARCH, headers=gateway)).status_code == 200
+
+    assert await _balance(client, api) == 199.5
+    assert store.account("you").prepaid_used == Decimal("0.5")
+
+
+async def test_empty_wallet_is_402_insufficient_credits(
+    client: httpx.AsyncClient, store: MockStore, gateway: dict[str, str], api: dict[str, str]
+) -> None:
+    store.set_credits("you", Decimal(0))
+
+    search = await client.post("/v1/search", json=_SEARCH, headers=gateway)
+    contents = await client.post("/v1/contents", json=_CONTENTS, headers=gateway)
+
+    for response in (search, contents):
+        assert (response.status_code, response.json()) == (402, {"detail": "Insufficient credits"})
+    assert await _balance(client, api) == 0.0
+    assert store.account("you").credits_used == store.account("you").credit_limit
+
+
+async def test_key_spend_cap_is_429_and_retry_does_not_clear_it(
+    client: httpx.AsyncClient, store: MockStore, api: dict[str, str]
+) -> None:
+    capped = _key(store, "capped")
+    principal = store.resolve("you", capped)
+    assert principal is not None and principal.key is not None
+    assert principal.key.credit_limit == Decimal(100)
+    store.charge(principal, "search", Decimal(199))
+    headers = {**GATEWAY, "X-API-Key": capped}
     assert (await client.post("/v1/search", json=_SEARCH, headers=headers)).status_code == 200
 
-    cap = await client.post("/v1/search", json=_SEARCH, headers=headers)
-    store.set_credits("you", Decimal(0))
-    empty = await client.post("/v1/search", json=_SEARCH, headers=gateway)
+    first = await client.post("/v1/search", json=_SEARCH, headers=headers)
+    again = await client.post("/v1/search", json=_SEARCH, headers=headers)
+    other = await client.post("/v1/search", json=_SEARCH, headers={**api, **GATEWAY})
 
-    assert (cap.status_code, cap.json()["error"]) == (429, "spend_cap_exceeded")
-    assert "retry-after" not in cap.headers
-    assert (empty.status_code, empty.json()["error"]) == (402, "payment_required")
-    assert store.account("you").credits_used == Decimal("0.5")
+    for response in (first, again):
+        assert (response.status_code, response.json()["error"]) == (429, "spend_cap_exceeded")
+        assert "retry-after" not in response.headers
+    assert other.status_code == 200
+    assert store.account("you").credits_used == Decimal(100) + Decimal("0.5")
+
+
+async def test_search_and_contents_allow_10_requests_per_second_each(
+    client: httpx.AsyncClient, store: MockStore, gateway: dict[str, str]
+) -> None:
+    frozen = store.now()
+    store.now = lambda: frozen
+    for _ in range(10):
+        assert (await client.post("/v1/search", json=_SEARCH, headers=gateway)).status_code == 200
+
+    limited = await client.post("/v1/search", json=_SEARCH, headers=gateway)
+    contents = await client.post("/v1/contents", json=_CONTENTS, headers=gateway)
+    store.now = lambda: frozen + timedelta(seconds=1)
+    later = await client.post("/v1/search", json=_SEARCH, headers=gateway)
+
+    assert (limited.status_code, limited.json()) == (429, {"message": "Too Many Requests"})
+    assert limited.headers["x-amzn-errortype"] == "TooManyRequestsException"
+    assert limited.headers["retry-after"] == "1"
+    assert limited.headers["x-ratelimit-limit"] == "10"
+    assert contents.status_code == 200 and later.status_code == 200
+    assert store.account("you").credits_used == Decimal("5.5") + Decimal("0.1")
 
 
 async def test_rate_limit_fault_has_retry_after_and_rate_headers(

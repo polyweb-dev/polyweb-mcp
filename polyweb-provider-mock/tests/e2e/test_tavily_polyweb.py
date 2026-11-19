@@ -24,6 +24,7 @@ from polyweb.models.provider_limits import AuthMode, UsageSyncRequest
 from pydantic import SecretStr
 
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
+from polyweb_provider_mock.providers.tavily import TavilyPlugin
 from polyweb_provider_mock.store import MockStore
 from tests._support.live_server import LiveMock, polyweb_settings
 
@@ -273,3 +274,40 @@ async def test_malformed_body_is_not_accepted(
 
     assert (search.code, search.retryable) == ("tavily_error", False)
     assert fetch.code == "fetch_failed"
+
+
+async def test_account_rpm_limit_is_a_retryable_rate_limit(
+    store: MockStore, key: str, adapters: _Adapters
+) -> None:
+    store.set_account_attributes("tavily", {"requests_per_minute": 1})
+    secondary = next(item.key for item in store.keys("tavily") if item.label == "secondary")
+    await adapters(key).search(_search())
+
+    error = (await _error(adapters(secondary).search(_search()))).error
+
+    assert (error.code, error.status_code, error.retryable) == ("rate_limited", 429, True)
+    assert 0 < error.details["retry_after_seconds"] <= 60
+
+
+async def test_paygo_limit_and_key_limit_are_terminal_quota_exhausted(
+    store: MockStore, key: str, adapters: _Adapters
+) -> None:
+    capped = store.create_key(
+        "tavily", TavilyPlugin.key_format, label="capped", credit_limit=Decimal(1)
+    )
+    await adapters(capped.key).search(_search())
+    by_key = (await _error(adapters(capped.key).search(_search()))).error
+
+    store.set_credits("tavily", Decimal(0))
+    store.set_funding("tavily", "postpaid", overage_limit=Decimal(1))
+    adapter = adapters(key)
+    await adapter.search(_search())
+    by_paygo = (await _error(adapter.search(_search()))).error
+    snapshot = await adapter.usage_snapshot(
+        UsageSyncRequest(provider="tavily", auth_mode=AuthMode.KEYED, observed_at=datetime.now(UTC))
+    )
+
+    for error in (by_key, by_paygo):
+        assert (error.code, error.status_code, error.retryable) == ("quota_exhausted", 402, False)
+    assert store.log_tail("tavily")[-2].status == 433
+    assert snapshot is not None

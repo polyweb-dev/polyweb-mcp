@@ -332,17 +332,110 @@ async def test_fetch_minute_limit_counts_urls(
     assert (await client.post("/", json=_FETCH, headers=fetch_headers)).status_code == 200
 
 
-async def test_daily_allowance_then_empty_wallet_is_402(
+def _use_allowance(store: MockStore, product: str, limit: int) -> None:
+    account = store.account("tinyfish").id
+    spec = WindowSpec(f"tinyfish:{account}:{product}:day", limit, 86400, aligned=True)
+    store.count_window(spec, limit)
+
+
+async def test_used_allowance_without_wallet_spending_is_429(
     client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
 ) -> None:
-    account = store.account("tinyfish").id
-    store.count_window(WindowSpec(f"tinyfish:{account}:fetch:day", 1000, 86400, aligned=True), 1000)
+    store.now = lambda: datetime(2026, 11, 17, 23, 0, 0, tzinfo=UTC)
+    # Documented: adding funds alone does not enable wallet spending.
+    store.set_account_attributes("tinyfish", {"wallet_balance": "25.00"})
+    _use_allowance(store, "fetch", 1000)
 
     response = await client.post("/", json=_FETCH, headers=fetch_headers)
 
+    error = _assert_error(response, 429, "RATE_LIMIT_EXCEEDED")
+    details = error["details"]
+    assert details["reason"] == "free_allowance_exhausted"
+    assert (details["limit"], details["unit"], details["window_seconds"]) == (1000, "urls", 86400)
+    assert details["reset_at"] == "2026-11-18T00:00:00Z"
+    assert response.headers["retry-after"] == "3600"
+    assert response.headers["x-ratelimit-remaining"] == "0"
+    assert response.headers["x-tf-user-id"].startswith("user_")
+    assert store.ledger("tinyfish") == []
+
+
+async def test_used_allowance_with_spending_and_empty_wallet_is_402(
+    client: httpx.AsyncClient, store: MockStore, search_headers: dict[str, str]
+) -> None:
+    store.set_account_attributes("tinyfish", {"wallet_spending": True})
+    _use_allowance(store, "search", 12_000)
+
+    response = await client.get("/", params=_QUERY, headers=search_headers)
+
     error = _assert_error(response, 402, "INSUFFICIENT_CREDITS")
     assert set(error) == {"code", "message"}
-    assert "Daily free Fetch allowance used" in error["message"]
+    assert "Daily free Search allowance used" in error["message"]
+
+
+async def test_used_allowance_with_spending_and_funds_is_served(
+    client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
+) -> None:
+    store.set_account_attributes("tinyfish", {"wallet_spending": "true", "wallet_balance": "5"})
+    _use_allowance(store, "fetch", 1000)
+
+    response = await client.post("/", json=_FETCH, headers=fetch_headers)
+
+    assert response.status_code == 200
+    # The overage price is undocumented: nothing draws the wallet.
+    assert store.account("tinyfish").attributes["wallet_balance"] == "5"
+    assert store.ledger("tinyfish")[-1].usd == Decimal(0)
+
+
+async def test_failed_urls_do_not_use_the_allowance(
+    client: httpx.AsyncClient, store: MockStore, fetch_headers: dict[str, str]
+) -> None:
+    store.set_account_attributes("tinyfish", {"fetch_daily_free": 1})
+    blocked = {"urls": ["https://blocked.example.org/a"]}
+
+    assert (await client.post("/", json=blocked, headers=fetch_headers)).status_code == 200
+    assert (await client.post("/", json=_FETCH, headers=fetch_headers)).status_code == 200
+    assert (await client.post("/", json=_FETCH, headers=fetch_headers)).status_code == 429
+
+
+async def test_invalid_requests_and_usage_reads_share_a_minute_limit(
+    client: httpx.AsyncClient,
+    store: MockStore,
+    search_headers: dict[str, str],
+    fetch_headers: dict[str, str],
+) -> None:
+    store.now = lambda: datetime(2026, 11, 17, 12, 0, 20, tzinfo=UTC)
+    store.set_account_attributes("tinyfish", {"invalid_per_minute": 3})
+
+    statuses = [
+        (await client.get("/", params={"query": " "}, headers=search_headers)).status_code,
+        (await client.post("/", json={"urls": []}, headers=fetch_headers)).status_code,
+        (await client.get("/usage", headers=search_headers)).status_code,
+    ]
+    over = await client.get("/usage", headers=fetch_headers)
+    invalid = await client.get("/", params={"query": " "}, headers=search_headers)
+    valid = await client.get("/", params=_QUERY, headers=search_headers)
+
+    assert statuses == [400, 400, 200]
+    for response in (over, invalid):
+        error = _assert_error(response, 429, "RATE_LIMIT_EXCEEDED")
+        assert error["details"]["reason"] == "invalid_or_usage_limit"
+        assert error["details"]["limit"] == 3
+        assert response.headers["retry-after"] == "40"
+    # Valid Search and Fetch requests are outside the combined limit.
+    assert valid.status_code == 200
+
+
+async def test_invalid_limit_defaults_to_sixty(
+    client: httpx.AsyncClient, store: MockStore, search_headers: dict[str, str]
+) -> None:
+    store.now = lambda: datetime(2026, 11, 17, 12, 0, 0, tzinfo=UTC)
+    account = store.account("tinyfish").id
+    spec = WindowSpec(f"tinyfish:{account}:invalid:minute", 60, 60, aligned=True)
+    store.count_window(spec, 59)
+
+    assert (await client.get("/usage", headers=search_headers)).status_code == 200
+    response = await client.get("/usage", headers=search_headers)
+    assert _assert_error(response, 429, "RATE_LIMIT_EXCEEDED")["details"]["limit"] == 60
 
 
 async def test_zero_credits_is_402(
@@ -378,8 +471,23 @@ async def test_zero_credits_is_402(
                 kind=FaultKind.QUOTA_EXHAUSTED,
                 params=FaultParams(scope="free_allowance"),
             ),
+            429,
+            "RATE_LIMIT_EXCEEDED",
+        ),
+        (
+            FaultSpec(
+                provider="tinyfish",
+                kind=FaultKind.QUOTA_EXHAUSTED,
+                params=FaultParams(scope="wallet"),
+            ),
             402,
-            "FREE_ALLOWANCE_EXHAUSTED",
+            "INSUFFICIENT_CREDITS",
+        ),
+        # Without a scope the account decides; wallet spending is off by default.
+        (
+            FaultSpec(provider="tinyfish", kind=FaultKind.QUOTA_EXHAUSTED),
+            429,
+            "RATE_LIMIT_EXCEEDED",
         ),
         (FaultSpec(provider="tinyfish", kind=FaultKind.AUTH_INVALID), 401, "INVALID_API_KEY"),
     ],

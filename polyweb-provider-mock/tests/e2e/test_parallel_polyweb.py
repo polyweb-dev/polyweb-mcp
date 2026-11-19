@@ -270,9 +270,16 @@ async def test_rate_limit_retry_after_reaches_the_runner(
 async def test_credit_exhaustion_is_insufficient_balance(
     mock: _Mock, key: str, http: httpx.AsyncClient, adapters: list[ParallelAdapter]
 ) -> None:
-    mock.store.set_credits("parallel", Decimal(0))
-    error = (await _error(_adapter(http, key, adapters).search(_search()))).error
+    """A no-card org is refused at $0; the card-on-file default keeps serving."""
+
+    no_card = next(item.key for item in mock.store.keys("parallel") if item.label == "no-card")
+    error = (await _error(_adapter(http, no_card, adapters).search(_search()))).error
     assert (error.code, error.status_code, error.retryable) == ("insufficient_balance", 402, False)
+
+    mock.store.set_credits("parallel", Decimal(0))
+    result = await _adapter(http, key, adapters).search(_search())
+    assert len(result.results) == 3
+    assert mock.store.account("parallel").overage_used == Decimal("0.005")
 
 
 async def test_invalid_and_revoked_keys(

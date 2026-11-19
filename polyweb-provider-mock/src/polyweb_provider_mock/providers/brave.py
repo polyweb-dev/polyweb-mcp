@@ -1,45 +1,70 @@
 """Brave Search on ``api.search.brave.com``: ``GET /res/v1/web/search`` and ``/res/v1/llm/context``.
 
 Formats follow the live recordings of 2026-11-17 (``tests/contract/recordings/brave``)
-and the official API reference:
+and the official API reference (brave.com/search/api, api-dashboard.search.brave.com).
+
+Recorded:
 
 - Authentication is the raw key in ``X-Subscription-Token``. Brave sells
   separate plans with separate keys: a **Search** key (scope ``search``) serves
   both endpoints; an **Answers** key (scope ``answers``) gets 400
   ``OPTION_NOT_IN_PLAN``. A wrong key is 422 ``SUBSCRIPTION_TOKEN_INVALID`` and a
   missing key is 422 ``VALIDATION`` on the header, both from the edge layer
-  (no ``error.id`` or ``time``). There is no keyless mode.
+  (no ``error.id`` or ``time``).
 - Every success carries ``X-RateLimit-Limit``, ``-Policy``, ``-Remaining``, and
-  ``-Reset`` as ``<per second>, <per month>`` pairs, derived from the mock state:
-  the burst limit is the account attribute ``rate_per_second`` (Search 50) and
-  the burst remaining counts the account's billed calls of the last second
-  (a sliding window shared by all keys of the plan). The monthly element is
-  the account credit limit in requests, where **0 means unlimited** (then the
-  monthly remaining is 0 too, as live). The resets are seconds from now, not
-  timestamps; the policy window is 2592000 seconds.
-- Each success costs 1 credit (one request, $0.005). The seeded plans have no
-  monthly cap, as the recorded account; ``credits set brave <n>`` gives one.
-  A spent monthly cap is 429 ``QUOTA_LIMITED``; more than ``rate_per_second``
-  calls in one second is 429 ``RATE_LIMITED`` with ``Retry-After: 1``.
+  ``-Reset`` as ``<per second>, <per month>`` pairs. The burst limit is the
+  account attribute ``rate_per_second`` (Search 50) and the burst remaining
+  counts the account's billed calls of the last second (a sliding window
+  shared by all keys of the plan). The live account, which had the $5 free
+  credit, showed a monthly element of **0** ("0 for unlimited") with remaining
+  0: the headers do not track the free credit. The resets are seconds from now,
+  not timestamps; the policy window is 2592000 seconds. The recorded monthly
+  reset (1204364 s at 01:27:14 UTC on 17 Nov) points at 1 Dec 00:00 UTC, a
+  calendar month in UTC.
 - Validation errors are 422 ``VALIDATION`` with pydantic items in
-  ``error.meta.errors``.
+  ``error.meta.errors``. The edge-layer answers (422 auth, ELB pages) send
+  ``Server: awselb/2.0``; the application answers send no ``Server`` header.
+
+Documented:
+
+- Each plan gets **$5 in free credits every month**, applied automatically per
+  plan and replaced each month (no rollover). Search costs $5 per 1,000
+  requests, so the seeded Search account has a monthly grant
+  (``credit_limit``) of **1,000 requests** (1 credit = 1 request = $0.005).
+  Purchased credits never expire: ``credits add brave <n> --prepaid``
+  (``MockStore.add_prepaid``) adds them, spent after the monthly grant.
+- Answers costs $4 per 1,000 requests plus $5 per 1M tokens. The mock serves
+  no Answers endpoint, so the Answers account counts requests only: its grant
+  is **1,250 requests** ($5 / $0.004), tokens not modelled.
+- Rates: Search 50 per second, Answers 2 per second; more than
+  ``rate_per_second`` calls in one second is 429 ``RATE_LIMITED`` with
+  ``Retry-After: 1`` and ``X-RateLimit-*``.
+- Once the balance reaches $0 "service pauses". The ``ErrorResponse`` envelope
+  and the codes ``RATE_LIMITED``, ``QUOTA_LIMITED``, ``USAGE_LIMIT_EXCEEDED``
+  and ``CREDIT_EXHAUSTED`` are documented. Keyless use exists only as x402
+  pay-per-request ($0.005 a call, no account), which the mock does not serve.
+
+Guessed (no live sample, TASK-000101):
+
+- The grant resets monthly on the 1st (``reset_day`` 1, UTC), matching the
+  recorded header reset and the docs' "calendar month" usage limits; the
+  docs do not state the free-credit anchor.
+- Exhausting grant and prepaid credit (store scope ``account``) is 402
+  ``CREDIT_EXHAUSTED`` without debit; the docs give no status. A
+  ``quota_exhausted`` fault with status 402 or scope ``credits`` gives the same;
+  scope ``spend_cap`` (or a spent ``overage_limit``) gives 429
+  ``USAGE_LIMIT_EXCEEDED``; no scope (or a key cap) gives 429 ``QUOTA_LIMITED``.
+  The ``detail`` and ``meta`` texts are guesses.
+- The account attribute ``monthly_request_limit`` (default absent: the
+  recorded 0) models a plan whose headers carry a monthly request quota: the
+  monthly element shows it, remaining counts the period's billed requests,
+  and a spent quota is 429 ``QUOTA_LIMITED`` (``account set brave
+  monthly_request_limit=<n>``). It is independent of the credit.
 - Fault-injected 429s carry the same ledger-based ``X-RateLimit-*`` pairs as
-  the real ones (the pipeline passes the account in the error context). The
-  edge-layer answers (422 auth, ELB pages) send ``Server: awselb/2.0``; the
-  application answers send no ``Server`` header, as recorded.
-
-The 429 and 402 bodies follow the docs, without a live sample (TASK-000101):
-the ``ErrorResponse`` envelope (``type``, ``error.id/status/code/detail/meta``,
-``time``), the ``error.code`` values ``RATE_LIMITED``, ``QUOTA_LIMITED``,
-``USAGE_LIMIT_EXCEEDED`` and ``CREDIT_EXHAUSTED``, and 429 with ``X-RateLimit-*``
-on a rate breach are documented. The ``detail`` and ``meta`` text is a guess, and so
-is the prepaid-exhaustion status, which the docs do not give (a ``quota_exhausted``
-fault with status 402 or scope ``credits`` gives 402 ``CREDIT_EXHAUSTED``; scope
-``spend_cap`` gives 429 ``USAGE_LIMIT_EXCEEDED``).
-
-Unverified (no live sample): the revoked-key answer (rendered as a wrong
-key) and outage bodies (502/503/504 use the AWS load balancer HTML page). An
-Answers key on Web Search is assumed to fail like it does on LLM Context.
+  the real ones (the pipeline passes the account in the error context).
+- The revoked-key answer (rendered as a wrong key) and outage bodies (502/503/
+  504 use the AWS load balancer HTML page). An Answers key on Web Search is
+  assumed to fail like it does on LLM Context.
 """
 
 import base64
@@ -82,6 +107,11 @@ __all__ = ["PLUGIN", "BravePlugin"]
 _SEARCH_SCOPE: Final = frozenset({"search"})
 _MONTH_WINDOW: Final = 2_592_000
 _DEFAULT_RATE: Final = 50
+#: The monthly $5 free credit in requests: Search $0.005, Answers $0.004 each.
+_SEARCH_FREE_REQUESTS: Final = 1_000
+_ANSWERS_FREE_REQUESTS: Final = 1_250
+#: Account attribute: a monthly request quota shown in ``X-RateLimit-*``.
+_MONTHLY_LIMIT: Final = "monthly_request_limit"
 #: Private ``ErrorContext.details`` key that carries ledger-derived headers.
 _HEADERS: Final = "_headers"
 
@@ -377,13 +407,15 @@ class BravePlugin(ProviderPlugin):
                 AccountSeed(
                     id="brave-search",
                     plan="Search",
-                    credit_limit=None,
+                    credit_limit=Decimal(_SEARCH_FREE_REQUESTS),
+                    reset_rule="monthly",
                     attributes={"rate_per_second": _DEFAULT_RATE, "free_credits_usd": 5},
                 ),
                 AccountSeed(
                     id="brave-answers",
                     plan="Answers",
-                    credit_limit=None,
+                    credit_limit=Decimal(_ANSWERS_FREE_REQUESTS),
+                    reset_rule="monthly",
                     attributes={"rate_per_second": 2, "free_credits_usd": 5},
                 ),
             ),
@@ -455,11 +487,11 @@ class BravePlugin(ProviderPlugin):
         return self._app_error(status, "INTERNAL", detail, None)
 
     def _quota_error(self, context: ErrorContext, headers: dict[str, str]) -> MockResponse:
-        if context.status == 402 or context.scope in {"credits", "prepaid"}:
+        if context.status == 402 or context.scope in {"account", "credits", "prepaid"}:
             detail = "Your prepaid credits are exhausted. Add funds to continue."
             meta = {"component": "billing"}
             return self._app_error(context.status or 402, "CREDIT_EXHAUSTED", detail, meta, headers)
-        if context.scope in {"spend_cap", "usage"}:
+        if context.scope in {"spend_cap", "usage", "overage"}:
             detail = "The monthly spending limit of your plan has been reached."
             meta = {"component": "billing"}
             return self._app_error(
@@ -551,15 +583,31 @@ class BravePlugin(ProviderPlugin):
         entries = store.ledger("brave", limit=max(4 * rate, 64))
         return sum(1 for entry in entries if entry.account_id == account.id and entry.ts > since)
 
-    def _rate_headers(self, store: MockStore, account_id: str) -> dict[str, str]:
-        """Return the four ``X-RateLimit-*`` pairs from the account and its ledger."""
+    def _monthly_used(self, store: MockStore, account: Account) -> int:
+        """Return the account's billed requests in the current period."""
+
+        totals = store.usage_by_operation(
+            self.name, account_id=account.id, since=account.period_start
+        )
+        return int(sum(totals.values()))
+
+    def _rate_headers(
+        self, store: MockStore, account_id: str, burst_used: int | None = None
+    ) -> dict[str, str]:
+        """Return the four ``X-RateLimit-*`` pairs from the account and its ledger.
+
+        The monthly element is the ``monthly_request_limit`` attribute, not the
+        credit: live, an account with the $5 free credit shows ``0`` (unlimited).
+        """
 
         account = store.account(self.name, account_id)
         now = store.now()
         rate = int(account.attributes.get("rate_per_second", _DEFAULT_RATE))
-        burst_left = max(0, rate - self._burst_used(store, account, now))
-        monthly = 0 if account.credit_limit is None else int(account.credit_limit)
-        left = 0 if account.remaining is None else int(account.remaining)
+        if burst_used is None:
+            burst_used = self._burst_used(store, account, now)
+        burst_left = max(0, rate - burst_used)
+        monthly = int(account.attributes.get(_MONTHLY_LIMIT) or 0)
+        left = max(0, monthly - self._monthly_used(store, account)) if monthly else 0
         reset = account.period_reset
         monthly_reset = 0 if reset is None else max(0, int((reset - now).total_seconds()))
         return {
@@ -577,17 +625,22 @@ class BravePlugin(ProviderPlugin):
             return context.error(ErrorKind.AUTH_INVALID, missing_key=True)
         store = context.store
         rate = int(account.attributes.get("rate_per_second", _DEFAULT_RATE))
-        if self._burst_used(store, account, store.now()) >= rate:
-            headers = self._rate_headers(store, account.id)
+        burst = self._burst_used(store, account, store.now())
+        if burst >= rate:
+            headers = self._rate_headers(store, account.id, burst)
             return context.error(ErrorKind.RATE_LIMITED, retry_after=1, details={_HEADERS: headers})
+        monthly = int(account.attributes.get(_MONTHLY_LIMIT) or 0)
+        if monthly and self._monthly_used(store, account) >= monthly:
+            headers = self._rate_headers(store, account.id, burst)
+            return context.error(ErrorKind.QUOTA_EXHAUSTED, details={_HEADERS: headers})
         try:
             context.charge(context.operation.name)
         except QuotaExhausted as exc:
-            headers = self._rate_headers(store, account.id)
+            headers = self._rate_headers(store, account.id, burst)
             return context.error(
                 ErrorKind.QUOTA_EXHAUSTED, scope=exc.scope, details={_HEADERS: headers}
             )
-        return self._rate_headers(store, account.id)
+        return self._rate_headers(store, account.id, burst + 1)
 
     def _validated(
         self,

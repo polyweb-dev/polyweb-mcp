@@ -24,6 +24,26 @@ Formats follow the live recordings of 2026-11-17 (``exa-py`` 2.18.1,
   wrong, and missing keys all get ``401 {"error": "Unauthorized"}``. The
   report is built from the usage ledger of the target key.
 
+Free tier and limits:
+
+- Recorded: per-response ``costDollars`` (an estimate); nothing in any
+  response reports the remaining balance.
+- Documented (exa.ai billing, pricing, rate-limit and error-code pages):
+  the team gets $10 of credit every month, reset to $10 on the first day
+  of each calendar month with no carry-over (the account's monthly grant,
+  ``reset_day`` 1), plus a one-time $10 onboarding bonus that never
+  expires (the account's prepaid balance). The prices per 1,000 above.
+  Team-wide rate limits: ``/search`` 10 QPS, deep search types 5 QPS,
+  ``/contents`` 100 QPS. A key's own budget (``API_KEY_BUDGET_EXCEEDED``)
+  and the team budget (``TEAM_BUDGET_EXCEEDED``) apply per billing period,
+  so a key budget resets with the month. The seeded ``budgeted`` key has a
+  $0.05 budget so that path is reachable without faults.
+- Guessed: the spend order. The grant is spent before the bonus (it
+  expires; the bonus does not). Rate limits use one-second windows per
+  team, are checked after the body validates, and a deep search spends a
+  slot in both the ``/search`` and the deep window; ``Retry-After`` is the
+  rest of the window.
+
 Synthetic contents targets: a host whose first label is ``blocked`` fails
 with ``CRAWL_HTTP_403``, ``timeout`` fails with ``CRAWL_LIVECRAWL_TIMEOUT``,
 and a ``notfound`` label or a ``.invalid`` host fails with
@@ -72,6 +92,7 @@ from polyweb_provider_mock.providers.base import (
     header_value,
 )
 from polyweb_provider_mock.store import MockStore
+from polyweb_provider_mock.windows import WindowSpec
 
 __all__ = ["PLUGIN", "ExaPlugin"]
 
@@ -85,6 +106,13 @@ _MAX_RESULTS: Final = 100
 _INCLUDED_RESULTS: Final = 10
 _USAGE_LOOKBACK: Final = timedelta(days=180)
 _USAGE_DEFAULT: Final = timedelta(days=30)
+_MONTHLY_GRANT: Final = Decimal(10)
+_ONBOARDING_BONUS: Final = Decimal(10)
+_KEY_BUDGET: Final = Decimal("0.05")
+#: Team-wide requests per second.
+_SEARCH_QPS: Final = 10
+_DEEP_QPS: Final = 5
+_CONTENTS_QPS: Final = 100
 
 #: Search ``type`` -> priced operation. ``neural``/``keyword`` are legacy names.
 _SEARCH_TYPES: Final = {
@@ -362,9 +390,11 @@ class ExaPlugin(ProviderPlugin):
             accounts=(
                 AccountSeed(
                     id="exa-team",
-                    plan="Free $10 monthly grant + bonus",
-                    # USD: the $10 monthly grant plus the one-time $10 bonus.
-                    credit_limit=Decimal(20),
+                    plan="Free $10 monthly grant + $10 onboarding bonus",
+                    # USD: $10 refilled on the 1st of each calendar month (default
+                    # reset_day 1); the one-time $10 bonus is prepaid and never resets.
+                    credit_limit=_MONTHLY_GRANT,
+                    prepaid_credits=_ONBOARDING_BONUS,
                     attributes={
                         "currency": "USD",
                         "team_id": content.stable_uuid("exa", "team", "exa-team"),
@@ -375,6 +405,7 @@ class ExaPlugin(ProviderPlugin):
                 KeySeed(label="default", account_id="exa-team", env_var="POLYWEB_EXA_API_KEY"),
                 KeySeed(label="secondary", account_id="exa-team"),
                 KeySeed(label="service", account_id="exa-team", scopes=(_SERVICE_SCOPE,)),
+                KeySeed(label="budgeted", account_id="exa-team", credit_limit=_KEY_BUDGET),
             ),
         )
 
@@ -492,6 +523,21 @@ class ExaPlugin(ProviderPlugin):
         return _api_error(402, "X402_PAYMENT_REQUIRED", message, headers=headers, extra=challenge)
 
     # ---------------------------------------------------------------- shared
+
+    @staticmethod
+    def _admit(context: OperationContext, limits: Sequence[tuple[str, int]]) -> MockResponse | None:
+        """Spend one slot in each team-wide per-second window; return the 429 if one is full."""
+
+        account = context.principal.account
+        if account is None or context.principal.keyless:
+            return None
+        specs = [WindowSpec(f"exa:{account.id}:{name}:second", qps, 1) for name, qps in limits]
+        refused, _ = context.admit(specs)
+        if refused is None:
+            return None
+        return context.error(
+            ErrorKind.RATE_LIMITED, retry_after=refused.retry_after(context.store.now())
+        )
 
     @staticmethod
     def _success(context: OperationContext, body: dict[str, Any]) -> MockResponse:
@@ -677,6 +723,12 @@ class ExaPlugin(ProviderPlugin):
         if isinstance(checked, MockResponse):
             return checked
         query, count, kind, contents = checked
+        limits = [("search", _SEARCH_QPS)]
+        if kind.startswith("deep"):
+            limits.append(("deep", _DEEP_QPS))
+        refused = self._admit(context, limits)
+        if refused is not None:
+            return refused
         context.match_key = content.normalize_query(query)
         fixture = context.fixture(context.match_key)
         if fixture is not None and fixture.status != 200:
@@ -768,6 +820,9 @@ class ExaPlugin(ProviderPlugin):
             return _invalid_body(
                 context, f'Invalid input: expected array, received {_js_type(urls)} at "urls"'
             )
+        refused = self._admit(context, [("contents", _CONTENTS_QPS)])
+        if refused is not None:
+            return refused
         options = dict(request)
         if not any(name in options for name in _CONTENT_TYPES):
             options["text"] = True

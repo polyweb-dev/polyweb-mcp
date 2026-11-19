@@ -20,7 +20,9 @@ type, fetch in all three formats with options and per-URL failures, every
 validation error below, ``/usage`` on both hosts, and the 404/405 routes.
 Unrecorded, from the docs: 402, 429, 5xx, ``iframe_links``, conditional
 fetches, ``etag``/``last_modified`` (example.com sent none), and highlights
-on an account that has them (the recorded account got 403).
+on an account that has them (the recorded account got 403). Guessed (neither
+recorded nor documented): the bodies and headers of the three 429s below
+that carry a ``details.reason``, and the default of ``wallet_spending``.
 
 Authentication is ``X-API-Key`` only. A missing key is 401
 ``MISSING_API_KEY``; an unknown or revoked key is 401 ``INVALID_API_KEY``
@@ -36,24 +38,44 @@ the CSS-selector check, a 422 with a Pydantic-style message and no
 the real ``X-TF-User-ID``: the mock routes before it authenticates); an
 unknown path is the site's HTML 404.
 
-Limits follow Polyweb's catalog and the public pricing page, per account
-(person): Search 30 requests per minute and 500 per hour, Fetch 150 URLs per
-minute (429 ``RATE_LIMIT_EXCEEDED`` with ``details``, ``Retry-After``, and
+Limits, documented per person (or per organization; the mock keeps them per
+account): Search 30 requests per minute (the personal default) and 500 per
+hour (the pricing page only), Fetch 150 URLs per minute (429
+``RATE_LIMIT_EXCEEDED`` with ``details``, ``Retry-After``, and
 ``X-RateLimit-*`` headers; the reset header is Unix seconds). The daily free
-allowance resets at 00:00 UTC: 12,000 Search requests and 1,000 successful
-Fetch URLs. Beyond it, an account whose ``wallet_balance`` attribute is not
-positive gets 402 ``INSUFFICIENT_CREDITS`` (``FREE_ALLOWANCE_EXHAUSTED`` for
-plan ``beta``). The docs publish no overage price, so nothing draws the
-wallet. Account attributes override any limit (``search_per_minute``,
-``search_per_hour``, ``search_daily_free``, ``fetch_per_minute``,
-``fetch_daily_free``). ``credits set tinyfish 0`` also forces the 402.
+allowance resets at 00:00 UTC: 12,000 Search requests and 1,000 Fetch URLs,
+counted per successfully fetched URL. There is no ``beta`` plan for Search
+or Fetch.
+
+Documented exhaustion: with wallet spending disabled (account attribute
+``wallet_spending``, default false: the docs say adding funds alone does not
+enable it, and leave the default unstated) the next request is 429
+``RATE_LIMIT_EXCEEDED`` with ``details.reason`` ``free_allowance_exhausted``
+(``FREE_ALLOWANCE_EXHAUSTED`` is the Research API's code, not these). With
+spending enabled and ``wallet_balance`` at or below zero it is 402
+``INSUFFICIENT_CREDITS``; with a positive balance the request is served. The
+price beyond the allowance is undocumented (the pricing page says $0.00, no
+wallet draw), so nothing draws the wallet and the USD price stays 0.
+Guessed: the 429's other ``details`` (the daily limit, unit, window, reset
+instant, wallet URL), its ``X-RateLimit-*`` headers describing the daily
+window, and ``Retry-After`` counting down to 00:00 UTC.
+``credits set tinyfish 0`` forces the 402 (a mock control).
+
+Also documented: a combined limit of 60 per minute on invalid requests and
+usage reads (attribute ``invalid_per_minute``). Every ``GET /usage`` spends
+one slot before it is validated; a Search or Fetch request that fails
+validation (400, or the selector 422) spends one and still answers its 400
+until the window is full, then 429. That 429's body is undocumented; the
+mock reuses the rate-limit envelope with ``details.reason``
+``invalid_or_usage_limit`` (a guess).
 
 As recorded, every search request spends a minute slot, an invalid one too
 (its 400 carries the ``X-RateLimit-*`` headers). Fetch spends one slot per
 URL, failed URLs included, but a request that fails schema validation (400)
 or asks for highlights without access (403) spends none; the selector 422
-comes after the slots are spent. The documented 60-per-minute limit on
-invalid requests and usage reads is not modelled.
+comes after the slots are spent. Account attributes override any limit
+(``search_per_minute``, ``search_per_hour``, ``search_daily_free``,
+``fetch_per_minute``, ``fetch_daily_free``, ``invalid_per_minute``).
 
 Search results list their fields in alphabetical order. Web results carry
 ``date`` on some hits in mixed forms (ISO 8601, ``Oct 18, 2020``,
@@ -74,11 +96,12 @@ recorded, so the ``heading`` and ``list`` nodes are a guess.
 import base64
 import ipaddress
 import json
+import math
 import re
 import secrets
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from email.utils import format_datetime
 from typing import Any, ClassVar, Final
@@ -131,7 +154,12 @@ _DEFAULT_LIMITS: Final = {
     "search_daily_free": 12_000,
     "fetch_per_minute": 150,
     "fetch_daily_free": 1_000,
+    "invalid_per_minute": 60,
 }
+#: Fault and store quota scopes that mean the daily free allowance (429).
+_ALLOWANCE_SCOPES: Final = frozenset({"free_allowance", "allowance", "day", "daily"})
+#: Fault and store quota scopes that mean an empty wallet (402).
+_WALLET_SCOPES: Final = frozenset({"wallet", "paygo", "account", "key", "overage"})
 _FAILURES: Final[dict[str, dict[str, Any]]] = {
     "blocked": {"error": "bot_blocked"},
     "login": {"error": "login_required"},
@@ -661,6 +689,22 @@ def _final_url(url: str) -> str:
     return parts._replace(path=parts.path or "/").geturl()
 
 
+def _wallet_spending(account: Account) -> bool:
+    """Return the ``wallet_spending`` attribute (default off; the docs leave it unstated)."""
+
+    value = account.attributes.get("wallet_spending", False)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return value is True
+
+
+def _wallet_funded(account: Account) -> bool:
+    try:
+        return Decimal(str(account.attributes.get("wallet_balance", "0"))) > 0
+    except ArithmeticError:
+        return False
+
+
 class TinyfishPlugin(ProviderPlugin):
     """Tinyfish Search and Fetch."""
 
@@ -753,7 +797,7 @@ class TinyfishPlugin(ProviderPlugin):
         if kind is ErrorKind.RATE_LIMITED:
             return self._rate_limited(context)
         if kind is ErrorKind.QUOTA_EXHAUSTED:
-            return self._exhausted(context.operation, context.scope, status, context.message)
+            return self._quota(context)
         if kind is ErrorKind.FORBIDDEN:
             message = (
                 "highlights is not enabled for this account"
@@ -783,14 +827,46 @@ class TinyfishPlugin(ProviderPlugin):
             status or 500, "INTERNAL_ERROR", context.message or "An unexpected error occurred"
         )
 
+    def _quota(self, context: ErrorContext) -> MockResponse:
+        """Render a ``quota_exhausted`` fault or the store's empty-credit refusal.
+
+        An allowance scope (``free_allowance``, ``day``) or status 429 gives the
+        documented 429; a wallet scope (``wallet``, ``paygo``, ``account``,
+        ``key``, ``overage``) or status 402 gives 402. Without either, the
+        account's ``wallet_spending`` decides, as a real exhaustion would.
+        """
+
+        scope, status = context.scope, context.status
+        if scope in _ALLOWANCE_SCOPES or status == 429:
+            allowance = True
+        elif scope in _WALLET_SCOPES or status == 402:
+            allowance = False
+        else:
+            allowance = context.account is None or not _wallet_spending(context.account)
+        if not allowance:
+            return self._insufficient(context.operation, status, context.message)
+        product = "fetch" if context.operation == "fetch" else "search"
+        limit = (
+            self._limit(context.account, f"{product}_daily_free")
+            if context.account is not None
+            else _DEFAULT_LIMITS[f"{product}_daily_free"]
+        )
+        now = context.store.now() if context.store is not None else datetime.now(UTC)
+        return self._allowance_exhausted(
+            product,
+            limit,
+            now,
+            status=status,
+            message=context.message,
+            retry_after=context.retry_after,
+            retry_after_header=context.retry_after_header,
+        )
+
     @staticmethod
-    def _exhausted(
-        operation: str, scope: str | None, status: int | None, message: str | None
-    ) -> MockResponse:
+    def _insufficient(operation: str, status: int | None, message: str | None) -> MockResponse:
+        """Return the documented 402: wallet spending on, wallet balance empty."""
+
         product = "Fetch" if operation == "fetch" else "Search"
-        if scope in ("free_allowance", "beta"):
-            text = f"Daily free {product} allowance used; it resets at 00:00 UTC."
-            return _error(status or 402, "FREE_ALLOWANCE_EXHAUSTED", message or text)
         campaign = product.lower()
         text = (
             f"Daily free {product} allowance used and your wallet balance is empty. Add funds at "
@@ -798,10 +874,73 @@ class TinyfishPlugin(ProviderPlugin):
         )
         return _error(status or 402, "INSUFFICIENT_CREDITS", message or text)
 
-    def _rate_limited(
-        self, context: ErrorContext, *, window: Window | None = None, now: datetime | None = None
+    @staticmethod
+    def _allowance_exhausted(
+        product: str,
+        limit: int,
+        now: datetime,
+        *,
+        status: int | None = None,
+        message: str | None = None,
+        retry_after: int | None = None,
+        retry_after_header: bool = True,
     ) -> MockResponse:
-        fetch = context.operation == "fetch"
+        """Return the documented 429 for a used daily allowance, wallet spending off.
+
+        The code and ``details.reason`` are documented; the other details, the
+        headers, and ``Retry-After`` until 00:00 UTC are a guess.
+        """
+
+        fetch = product == "fetch"
+        reset = datetime.combine(now.astimezone(UTC).date() + timedelta(days=1), time(), UTC)
+        retry = (
+            retry_after
+            if retry_after is not None
+            else max(1, math.ceil((reset - now).total_seconds()))
+        )
+        upgrade = (
+            f"{_WALLET_URL}?utm_source=api&utm_medium=free_allowance_exhausted"
+            f"&utm_campaign={product}"
+        )
+        noun = "URLs" if fetch else "requests"
+        name = "Fetch" if fetch else "Search"
+        headers = {
+            "x-ratelimit-limit": str(limit),
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": str(int(reset.timestamp())),
+        }
+        if retry_after_header:
+            headers["Retry-After"] = str(retry)
+        text = (
+            f"Daily free {name} allowance of {limit} {noun} used; it resets at 00:00 UTC. "
+            f"Enable wallet spending to continue at {upgrade}"
+        )
+        return _error(
+            status or 429,
+            "RATE_LIMIT_EXCEEDED",
+            message or text,
+            details={
+                "reason": "free_allowance_exhausted",
+                "limit": limit,
+                "unit": "urls" if fetch else "requests",
+                "window_seconds": 86400,
+                "reset_at": reset.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "upgrade_url": upgrade,
+            },
+            headers=headers,
+        )
+
+    def _rate_limited(
+        self,
+        context: ErrorContext,
+        *,
+        window: Window | None = None,
+        now: datetime | None = None,
+        reason: str | None = None,
+    ) -> MockResponse:
+        """Return the documented 429; ``reason`` marks the guessed invalid/usage variant."""
+
+        fetch = context.operation == "fetch" and reason is None
         unit = "urls" if fetch else "requests"
         limit = window.spec.limit if window is not None else (150 if fetch else 30)
         seconds_window = int(window.spec.seconds) if window is not None else 60
@@ -820,6 +959,8 @@ class TinyfishPlugin(ProviderPlugin):
             seconds_window, f"{seconds_window} seconds"
         )
         noun = "URLs" if fetch else "requests"
+        if reason is not None:
+            noun = "invalid or usage requests"
         headers = {
             "x-ratelimit-limit": str(limit),
             "x-ratelimit-remaining": "0",
@@ -827,18 +968,17 @@ class TinyfishPlugin(ProviderPlugin):
         }
         if context.retry_after_header:
             headers["Retry-After"] = str(retry)
+        details: dict[str, Any] = {} if reason is None else {"reason": reason}
+        details.update(
+            {"limit": limit, "unit": unit, "window_seconds": seconds_window, "upgrade_url": upgrade}
+        )
         return _error(
             429,
             "RATE_LIMIT_EXCEEDED",
             context.message
             or f"Rate limit exceeded. Limit: {limit} {noun} per {per}. "
             f"Request a higher limit at {upgrade}",
-            details={
-                "limit": limit,
-                "unit": unit,
-                "window_seconds": seconds_window,
-                "upgrade_url": upgrade,
-            },
+            details=details,
             headers=headers,
         )
 
@@ -875,10 +1015,15 @@ class TinyfishPlugin(ProviderPlugin):
             f"{prefix}:day", self._limit(account, f"{product}_daily_free"), 86400, aligned=True
         )
         now = context.store.now()
-        if context.store.peek_window(daily).remaining <= 0 and not self._wallet_funded(account):
-            scope = "beta" if account.plan == "beta" else None
-            exhausted = self._exhausted(product, scope, None, None)
-            return self._rejected(exhausted, self._app_headers(context))
+        if context.store.peek_window(daily).remaining <= 0:
+            # Documented: spending off is a 429; spending on with an empty wallet
+            # is a 402; spending on with funds is served (no documented price).
+            if not _wallet_spending(account):
+                exhausted = self._allowance_exhausted(product, daily.limit, now)
+                return self._rejected(exhausted, self._app_headers(context))
+            if not _wallet_funded(account):
+                insufficient = self._insufficient(product, None, None)
+                return self._rejected(insufficient, self._app_headers(context))
         refused, windows = context.admit(specs, units)
         if refused is not None:
             limited = self._rate_limited(ErrorContext(operation=product), window=refused, now=now)
@@ -892,12 +1037,35 @@ class TinyfishPlugin(ProviderPlugin):
         }
         return headers, daily
 
-    @staticmethod
-    def _wallet_funded(account: Account) -> bool:
-        try:
-            return Decimal(str(account.attributes.get("wallet_balance", "0"))) > 0
-        except ArithmeticError:
-            return False
+    def _invalid(
+        self, context: OperationContext, rejected: MockResponse, headers: Mapping[str, str]
+    ) -> MockResponse:
+        """Answer an invalid request: its 400 (or 422), or 429 once the
+        documented 60-per-minute invalid-and-usage window is full."""
+
+        limited = self._spend_invalid(context)
+        return limited if limited is not None else self._rejected(rejected, headers)
+
+    def _spend_invalid(self, context: OperationContext) -> MockResponse | None:
+        """Spend one slot of the combined invalid-request and usage-read window."""
+
+        account = self._account(context)
+        spec = WindowSpec(
+            f"tinyfish:{account.id}:invalid:minute",
+            self._limit(account, "invalid_per_minute"),
+            60,
+            aligned=True,
+        )
+        refused, _ = context.admit([spec])
+        if refused is None:
+            return None
+        limited = self._rate_limited(
+            ErrorContext(operation=context.operation.name),
+            window=refused,
+            now=context.store.now(),
+            reason="invalid_or_usage_limit",
+        )
+        return self._rejected(limited, self._app_headers(context))
 
     def _app_headers(self, context: OperationContext) -> dict[str, str]:
         """Return the application headers, with this account's id and the internal path."""
@@ -935,7 +1103,8 @@ class TinyfishPlugin(ProviderPlugin):
     # --------------------------------------------------------------- search
 
     async def _search(self, context: OperationContext) -> MockResponse:
-        # Recorded: an invalid search spends a minute slot too.
+        # Recorded: an invalid search spends a minute slot too (and, documented,
+        # a slot of the invalid-request limit).
         gate = self._gate(context, "search", 1)
         if isinstance(gate, MockResponse):
             return gate
@@ -943,7 +1112,7 @@ class TinyfishPlugin(ProviderPlugin):
         try:
             request = _search_request(context.request.query_params)
         except _Rejected as rejected:
-            return self._rejected(rejected.response, headers)
+            return self._invalid(context, rejected.response, headers)
         context.match_key = content.normalize_query(request["query"])
         fixture = context.fixture(context.match_key)
         if fixture is not None and fixture.status != 200:
@@ -1014,12 +1183,13 @@ class TinyfishPlugin(ProviderPlugin):
 
     async def _fetch(self, context: OperationContext) -> MockResponse:
         # Recorded order: schema 400 and highlights 403 spend no slot; the
-        # selector 422 comes after the URLs are counted.
+        # selector 422 comes after the URLs are counted. Both invalid answers
+        # also spend a slot of the documented invalid-request limit.
         app = self._app_headers(context)
         try:
             request = _fetch_request(context.raw_body)
         except _Rejected as rejected:
-            return self._rejected(rejected.response, app)
+            return self._invalid(context, rejected.response, app)
         account = self._account(context)
         if (
             request["highlights"] is not None
@@ -1033,7 +1203,7 @@ class TinyfishPlugin(ProviderPlugin):
         headers, daily = gate
         invalid = _selector_error(request)
         if invalid is not None:
-            return self._rejected(invalid, headers)
+            return self._invalid(context, invalid, headers)
         results: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
         for url in request["urls"]:
@@ -1131,6 +1301,10 @@ class TinyfishPlugin(ProviderPlugin):
     # ---------------------------------------------------------------- usage
 
     async def _usage(self, context: OperationContext) -> MockResponse:
+        # Documented: usage reads share the 60-per-minute invalid-request limit.
+        limited = self._spend_invalid(context)
+        if limited is not None:
+            return limited
         params = context.request.query_params
         try:
             limit = _int_param(params, "limit", 1, 1000) or 100

@@ -6,6 +6,8 @@ interception reroutes both ``https://api.search.tinyfish.ai`` and
 preserved ``Host``. Each fault must surface with the classification that
 Polyweb's ``tests/unit/adapters/test_tinyfish.py`` asserts for real payloads:
 401 ``invalid_api_key``, 402 ``quota_exhausted``, 429 ``rate_limited``,
+a 429 whose ``details.reason`` is ``free_allowance_exhausted`` (the documented
+answer when wallet spending is off) ``quota_exhausted`` and not retried,
 other statuses ``http_error`` (retryable only for 500/502/503/504), and
 per-URL fetch errors inside an HTTP 200 mapped by their ``error`` code.
 """
@@ -176,6 +178,11 @@ async def test_server_errors(
     assert (error.code, error.status_code, error.retryable) == ("http_error", status, retryable)
 
 
+def _use_fetch_allowance(store: MockStore) -> None:
+    account = store.account("tinyfish").id
+    store.count_window(WindowSpec(f"tinyfish:{account}:fetch:day", 1000, 86400, aligned=True), 1000)
+
+
 @pytest.mark.parametrize("how", ["credits", "allowance", "fault"])
 async def test_exhaustion_is_terminal_quota_exhausted(
     store: MockStore, key: str, adapters: _Adapters, how: str
@@ -183,16 +190,45 @@ async def test_exhaustion_is_terminal_quota_exhausted(
     if how == "credits":
         store.set_credits("tinyfish", Decimal(0))
     elif how == "allowance":
-        account = store.account("tinyfish").id
-        store.count_window(
-            WindowSpec(f"tinyfish:{account}:fetch:day", 1000, 86400, aligned=True), 1000
+        # Wallet spending on with an empty wallet: the documented 402.
+        store.set_account_attributes("tinyfish", {"wallet_spending": True})
+        _use_fetch_allowance(store)
+    else:
+        store.add_fault(
+            FaultSpec(
+                provider="tinyfish",
+                kind=FaultKind.QUOTA_EXHAUSTED,
+                params=FaultParams(scope="wallet"),
+            )
         )
+
+    error = (await _error(adapters(key, attempts=3).fetch(FetchRequest(url=_URL)))).error
+
+    assert (error.code, error.status_code, error.retryable) == ("quota_exhausted", 402, False)
+    assert len(store.log_tail("tinyfish")) == 1
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Polyweb bug: TinyfishAdapter._http_error maps every 429 to retryable rate_limited, "
+        "but Tinyfish answers a used daily free allowance (wallet spending off) with 429 "
+        "RATE_LIMIT_EXCEEDED and details.reason=free_allowance_exhausted, which should be "
+        "terminal quota_exhausted"
+    ),
+)
+@pytest.mark.parametrize("how", ["allowance", "fault"])
+async def test_free_allowance_429_is_terminal_quota_exhausted(
+    store: MockStore, key: str, adapters: _Adapters, how: str
+) -> None:
+    if how == "allowance":
+        _use_fetch_allowance(store)
     else:
         store.add_fault(FaultSpec(provider="tinyfish", kind=FaultKind.QUOTA_EXHAUSTED))
 
     error = (await _error(adapters(key, attempts=3).fetch(FetchRequest(url=_URL)))).error
 
-    assert (error.code, error.status_code, error.retryable) == ("quota_exhausted", 402, False)
+    assert (error.code, error.retryable) == ("quota_exhausted", False)
     assert len(store.log_tail("tinyfish")) == 1
 
 

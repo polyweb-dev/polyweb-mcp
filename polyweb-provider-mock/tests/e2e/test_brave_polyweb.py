@@ -76,7 +76,7 @@ async def _error(call: object) -> ProviderOperationError:
     return raised.value
 
 
-async def test_unlimited_plan_search_and_context_succeed(
+async def test_fresh_plan_search_and_context_succeed(
     store: MockStore, keys: dict[str, str], adapters: _Adapters
 ) -> None:
     adapter = adapters(keys["search"])
@@ -110,7 +110,7 @@ async def test_unlimited_plan_search_and_context_succeed(
 async def test_finite_monthly_cap_reaches_the_quota_snapshot(
     store: MockStore, keys: dict[str, str], adapters: _Adapters
 ) -> None:
-    store.set_credits("brave", Decimal(1000))
+    store.set_account_attributes("brave", {"monthly_request_limit": 1000})
     adapter = adapters(keys["search"])
 
     response = await adapter.search(_search())
@@ -129,11 +129,27 @@ async def test_finite_monthly_cap_reaches_the_quota_snapshot(
 async def test_spent_monthly_cap_is_a_final_quota_error(
     store: MockStore, keys: dict[str, str], adapters: _Adapters
 ) -> None:
-    store.set_credits("brave", Decimal(0))
-    error = (await _error(adapters(keys["search"]).search(_search()))).error
+    store.set_account_attributes("brave", {"monthly_request_limit": 1})
+    adapter = adapters(keys["search"])
+    await adapter.search(_search())
+    error = (await _error(adapter.search(_search()))).error
 
     assert (error.code, error.status_code, error.retryable) == ("quota_exhausted", 429, False)
     assert store.log_tail("brave")[-1].status == 429
+
+
+async def test_spent_free_credit_is_a_final_quota_error(
+    store: MockStore, keys: dict[str, str], adapters: _Adapters
+) -> None:
+    store.set_credits("brave", Decimal(0))
+    adapter = adapters(keys["search"])
+    error = (await _error(adapter.search(_search()))).error
+
+    assert (error.code, error.status_code, error.retryable) == ("quota_exhausted", 402, False)
+    assert store.log_tail("brave")[-1].status == 402
+    assert store.account("brave").credits_used == 0
+    snapshot = await adapter.quota_after_error(error.status_code)
+    assert snapshot is not None and snapshot.remaining == 0
 
 
 @pytest.mark.parametrize(

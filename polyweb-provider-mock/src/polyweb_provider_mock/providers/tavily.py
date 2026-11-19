@@ -1,22 +1,52 @@
 """Tavily on ``api.tavily.com``: ``POST /search``, ``POST /extract``, ``GET /usage``.
 
-The reference plugin. Formats follow the live recordings of 2026-11-17
-(``tests/contract/recordings/tavily``) and the official API reference:
+The reference plugin.
+
+Recorded (2026-11-17, ``tests/contract/recordings/tavily``): search and
+extract success bodies, the 422 schema errors, the 400 depth error, the 401s
+(missing, wrong key, keyless ``/usage``), the keyed ``/usage`` body (free
+Researcher plan: ``plan_limit`` 1000, ``paygo_usage`` 0, ``paygo_limit``
+null, ``key.limit`` null), and the keyless daily-cap 429 with its
+``error.code = daily_cap_reached`` envelope and a ``Retry-After`` of 824
+seconds, the time left until the window frees.
+
+Documented (docs.tavily.com api-credits, rate-limits, endpoint pages):
 
 - Authentication is ``Authorization: Bearer <key>``. A bearer key always
   wins. Without one, ``X-Tavily-Access-Mode: keyless`` selects the keyless
   rail on search and extract; ``/usage`` has no keyless mode. A missing,
   unknown, or revoked key gets 401 ``{"detail": {"error": ...}}``.
 - Errors use ``{"detail": {"error": message}}``; schema errors are FastAPI
-  422 arrays. Keyed rate limits are 429 with ``Retry-After``. Plan and key
-  exhaustion is 432 and the pay-as-you-go ceiling is 433, both documented;
-  a ``quota_exhausted`` fault can force the 402 compatibility status.
-- The keyless daily cap is 429 with the ``error.code = daily_cap_reached``
-  envelope and ``Retry-After``.
-- Search costs 1 credit (2 for advanced). Extract costs 1 credit per 5
+  422 arrays.
+- The free Researcher plan grants 1,000 credits a month, reset on the 1st
+  (the store's monthly grant, ``reset_day`` 1). Search costs 1 credit
+  (ultra-fast, fast, basic) or 2 (advanced). Extract costs 1 credit per 5
   successful URLs (2 for advanced): the account carries the fraction and a
   response reports only whole credits, so one basic URL reports 0, as live.
   Failed URLs are free. ``/usage`` is free.
+- Pay-as-you-go ($0.008 a credit) starts once the plan's credits are spent
+  and is billed after use, up to a user-set monthly limit. The mock models it
+  as the store's ``postpaid`` funding: ``paygo_usage``/``paygo_limit`` in
+  ``/usage`` are the account's ``overage_used``/``overage_limit``. A prepaid
+  account (the default) reports 0 and null, as recorded.
+- 432 is the plan limit (store scope ``account``) or a key's own monthly
+  limit (scope ``key``, set with ``KeySeed(credit_limit=...)`` or
+  ``keys create --limit``); 433 is the pay-as-you-go limit (scope
+  ``overage``, or a ``paygo`` fault scope). A ``quota_exhausted`` fault can
+  force the 402 compatibility status.
+- Rate limits are per account and shared by all its keys: 100 requests a
+  minute on Researcher (1,000 on PAYGO/Project and above; set the account
+  attribute ``requests_per_minute``) and 10 ``/usage`` calls per 10 minutes
+  (attribute ``usage_per_10_minutes``). Over the limit is 429 with
+  ``Retry-After``.
+- Keyless search and extract are free and rate-limited.
+
+Guessed: the account windows are fixed and start at the first request
+(Tavily does not say whether they roll); ``/usage`` does not count toward the
+RPM limit; the keyless budget of 500 calls a day is invented (Tavily
+publishes no number). The store counts it per UTC calendar day and the 429
+carries the seconds until that day ends; the live window freed 824 s after a
+01:27 UTC capture, so Tavily's real window is not the UTC day.
 
 Synthetic extract targets: a host whose first label is ``blocked`` fails
 with a 403 message, and a ``.invalid`` host fails to fetch.
@@ -24,6 +54,7 @@ with a 403 message, and a ``.invalid`` host fails to fetch.
 
 import json
 from collections.abc import Sequence
+from datetime import timedelta
 from decimal import Decimal
 from email.utils import format_datetime
 from http import HTTPStatus
@@ -53,6 +84,7 @@ from polyweb_provider_mock.providers.base import (
     header_value,
 )
 from polyweb_provider_mock.store import Charge, MockStore
+from polyweb_provider_mock.windows import WindowSpec
 
 __all__ = ["PLUGIN", "TavilyPlugin"]
 
@@ -63,6 +95,10 @@ _FORMATS: Final = ("markdown", "text")
 _MAX_RESULTS: Final = 20
 _MAX_EXTRACT_URLS: Final = 20
 _DEFAULT_RESULTS: Final = 5
+#: Researcher plan limits; account attributes override them (PAYGO: 1,000 RPM).
+_REQUESTS_PER_MINUTE: Final = 100
+_USAGE_PER_WINDOW: Final = 10
+_USAGE_WINDOW_SECONDS: Final = 600
 _MISSING: Final[Any] = object()
 _CSP: Final = (
     "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; "
@@ -149,6 +185,16 @@ def _message(kind: ErrorKind, status: int) -> str:
         return HTTPStatus(status).phrase
     except ValueError:
         return _MESSAGES[kind]
+
+
+def _seconds_to_midnight(context: ErrorContext) -> int:
+    """Return the seconds until the keyless UTC day ends (the window frees)."""
+
+    if context.store is None:
+        return 86400
+    now = context.store.now()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return max(1, int((midnight - now).total_seconds()))
 
 
 def _validation(kind: str, loc: Sequence[str | int], message: str, value: Any) -> MockResponse:
@@ -257,6 +303,7 @@ class TavilyPlugin(ProviderPlugin):
                 ),
                 KeySeed(label="secondary", account_id="tavily-researcher"),
             ),
+            # Invented: Tavily publishes no keyless numbers.
             keyless=KeylessSeed(enabled=True, per_day=500),
         )
 
@@ -293,7 +340,7 @@ class TavilyPlugin(ProviderPlugin):
             return self._keyless_limit(context)
         status = context.status or _DEFAULT_STATUS[kind]
         if kind is ErrorKind.QUOTA_EXHAUSTED:
-            if context.status is None and context.scope == "paygo":
+            if context.status is None and context.scope in {"paygo", "overage"}:
                 status = 433
             message = context.message or _QUOTA_MESSAGES.get(status, _QUOTA_MESSAGES[432])
         else:
@@ -309,8 +356,10 @@ class TavilyPlugin(ProviderPlugin):
 
     @staticmethod
     def _keyless_limit(context: ErrorContext) -> MockResponse:
-        seconds = context.retry_after if context.retry_after is not None else 60
         window = context.scope if context.scope in {"day", "minute"} else "day"
+        seconds = context.retry_after
+        if seconds is None:
+            seconds = 60 if window == "minute" else _seconds_to_midnight(context)
         envelope = {
             "error": {
                 "code": "daily_cap_reached" if window == "day" else "rate_limit_exceeded",
@@ -323,6 +372,31 @@ class TavilyPlugin(ProviderPlugin):
         headers = {"Retry-After": str(seconds)} if context.retry_after_header else {}
         return MockResponse(status=context.status or 429, body=envelope, headers=headers)
 
+    def _throttle(self, context: OperationContext) -> MockResponse | None:
+        """Spend the account's shared rate window; return the 429 when it is full."""
+
+        account = context.principal.account
+        if account is None:
+            return None
+        attributes = account.attributes
+        if context.operation.name == "usage":
+            spec = WindowSpec(
+                f"tavily:{account.id}:usage",
+                int(attributes.get("usage_per_10_minutes", _USAGE_PER_WINDOW)),
+                _USAGE_WINDOW_SECONDS,
+            )
+        else:
+            spec = WindowSpec(
+                f"tavily:{account.id}:minute",
+                int(attributes.get("requests_per_minute", _REQUESTS_PER_MINUTE)),
+                60,
+            )
+        now = context.store.now()
+        refused, _ = context.admit([spec])
+        if refused is None:
+            return None
+        return context.error(ErrorKind.RATE_LIMITED, retry_after=refused.retry_after(now))
+
     def drop_required_field(self, operation: str, body: Any) -> Any:
         if operation == "usage" and isinstance(body, dict):
             return {key: value for key, value in body.items() if key != "account"}
@@ -331,6 +405,9 @@ class TavilyPlugin(ProviderPlugin):
     # --------------------------------------------------------------- search
 
     async def _search(self, context: OperationContext) -> MockResponse:
+        limited = self._throttle(context)
+        if limited is not None:
+            return limited
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request
@@ -445,6 +522,9 @@ class TavilyPlugin(ProviderPlugin):
     # -------------------------------------------------------------- extract
 
     async def _extract(self, context: OperationContext) -> MockResponse:
+        limited = self._throttle(context)
+        if limited is not None:
+            return limited
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request
@@ -549,6 +629,9 @@ class TavilyPlugin(ProviderPlugin):
         account, key = principal.account, principal.key
         if account is None or key is None:
             return context.error(ErrorKind.AUTH_INVALID, missing_key=True)
+        limited = self._throttle(context)
+        if limited is not None:
+            return limited
         store = context.store
         since = account.period_start
         per_account = store.usage_by_operation(self.name, account_id=account.id, since=since)
@@ -566,6 +649,13 @@ class TavilyPlugin(ProviderPlugin):
 
         key_limit = key.credit_limit
         plan_limit = account.credit_limit
+        if account.funding == "postpaid":
+            cap = account.overage_limit
+            paygo_usage: Any = _number(account.overage_used)
+            paygo_limit: Any = None if cap is None else _number(cap)
+        else:
+            paygo_usage = account.attributes.get("paygo_usage", 0)
+            paygo_limit = account.attributes.get("paygo_limit")
         body = {
             "key": {
                 "usage": _number(key.credits_used),
@@ -577,8 +667,8 @@ class TavilyPlugin(ProviderPlugin):
                 "plan_usage": _number(account.credits_used),
                 "plan_limit": None if plan_limit is None else _number(plan_limit),
                 **kinds(per_account),
-                "paygo_usage": account.attributes.get("paygo_usage", 0),
-                "paygo_limit": account.attributes.get("paygo_limit"),
+                "paygo_usage": paygo_usage,
+                "paygo_limit": paygo_limit,
             },
         }
         return MockResponse(status=200, body=body)

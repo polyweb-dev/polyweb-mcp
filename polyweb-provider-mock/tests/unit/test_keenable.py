@@ -1,13 +1,15 @@
 """Keenable plugin wire behavior through the in-process app."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
 import httpx
 import pytest
 
+from polyweb_provider_mock.app import MockApplication
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
+from polyweb_provider_mock.providers.keenable import public_windows
 from polyweb_provider_mock.store import MockStore
 
 _HOST = {"Host": "api.keenable.ai"}
@@ -109,7 +111,8 @@ async def test_keyed_search_reports_usage_and_debits(
 async def test_keyed_fetch_live_sku_and_paid_after_free_allowance(
     client: httpx.AsyncClient, store: MockStore, keyed: dict[str, str]
 ) -> None:
-    store.set_credits("keenable", Decimal(5), used=Decimal(100_000))
+    store.set_credits("keenable", Decimal(0), used=Decimal(100_000))
+    store.add_prepaid("keenable", Decimal(5))
 
     body = (await client.get("/v1/fetch", params={**_FETCH, "live": "true"}, headers=keyed)).json()
 
@@ -267,6 +270,61 @@ async def test_exhausted_credits_are_402(
     assert {"billing_url", "auto_top_up_url"} <= set(body)
 
 
+async def test_free_allowance_resets_on_the_creation_day(store: MockStore) -> None:
+    account = store.account("keenable")
+    assert account.attributes["reset_day"] == 17
+    assert account.credit_limit == 100_000
+    assert account.period_start.day == 17
+    assert account.period_reset is not None and account.period_reset.day == 17
+
+
+async def test_free_spent_before_prepaid_which_survives_the_reset(
+    client: httpx.AsyncClient, store: MockStore, keyed: dict[str, str]
+) -> None:
+    reset = store.account("keenable").period_reset
+    assert reset is not None and reset.day == 17
+    clock = [reset - timedelta(hours=12)]
+    store.now = lambda: clock[0]
+    store.set_credits("keenable", Decimal(1), used=Decimal(99_999))
+    store.add_prepaid("keenable", Decimal(2))
+
+    free = (await client.post("/v1/search", json=_SEARCH, headers=keyed)).json()["usage"]
+    paid = (await client.post("/v1/search", json=_SEARCH, headers=keyed)).json()["usage"]
+
+    assert (free["paid"], free["credits_remaining"]) == (False, 2)
+    assert (paid["paid"], paid["credits_remaining"]) == (True, 1)
+    account = store.account("keenable")
+    assert (account.grant_remaining, account.prepaid_remaining) == (0, 1)
+
+    clock[0] = reset + timedelta(seconds=1)
+    after = (await client.post("/v1/search", json=_SEARCH, headers=keyed)).json()["usage"]
+
+    assert (after["paid"], after["credits_remaining"]) == (False, 100_000)
+    account = store.account("keenable")
+    assert (account.grant_remaining, account.prepaid_remaining) == (99_999, 1)
+
+
+async def test_402_only_when_free_and_prepaid_are_both_empty(
+    client: httpx.AsyncClient, store: MockStore, keyed: dict[str, str]
+) -> None:
+    store.set_credits("keenable", Decimal(0))
+    store.add_prepaid("keenable", Decimal(1))
+
+    ok = await client.get("/v1/fetch", params=_FETCH, headers=keyed)
+    refused = await client.get("/v1/fetch", params=_FETCH, headers=keyed)
+
+    assert ok.json()["usage"] == {
+        "sku": "fetch",
+        "amount": 1,
+        "credits": 1,
+        "paid": True,
+        "credits_remaining": 0,
+    }
+    body = _assert_envelope(refused, 402, "insufficient_credits")
+    assert body["billing_url"] == "https://app.keenable.ai/console/billing"
+    assert store.account("keenable").prepaid_remaining == 0
+
+
 async def test_keyed_per_second_limit_is_shared_by_the_organization(
     client: httpx.AsyncClient, store: MockStore, keyed: dict[str, str]
 ) -> None:
@@ -294,9 +352,7 @@ async def test_keyed_per_second_limit_is_shared_by_the_organization(
 async def test_public_hourly_pool_runs_out(client: httpx.AsyncClient, store: MockStore) -> None:
     clock = [datetime(2026, 11, 17, 1, 0, 0, tzinfo=UTC)]
     store.now = lambda: clock[0]
-    from polyweb_provider_mock.windows import WindowSpec
-
-    store.count_window(WindowSpec("keenable:public:fetch:hour", 1000, 3600), 1000)
+    store.count_window(public_windows("fetch", "127.0.0.1")[0], 1000)
     clock[0] = clock[0].replace(minute=30)
 
     response = await client.get("/v1/fetch/public", params=_FETCH, headers=_PUBLIC)
@@ -307,6 +363,55 @@ async def test_public_hourly_pool_runs_out(client: httpx.AsyncClient, store: Moc
     assert (
         await client.post("/v1/search/public", json=_SEARCH, headers=_PUBLIC)
     ).status_code == 200
+
+
+async def test_public_hourly_pool_is_per_endpoint_and_ip(
+    client: httpx.AsyncClient, store: MockStore, app: MockApplication
+) -> None:
+    clock = [datetime(2026, 11, 17, 1, 0, 0, tzinfo=UTC)]
+    store.now = lambda: clock[0]
+    assert (
+        await client.post("/v1/search/public", json=_SEARCH, headers=_PUBLIC)
+    ).status_code == 200
+    # Fill the rest of the hour without 999 more calls.
+    store.count_window(public_windows("search", "127.0.0.1")[0], 999)
+
+    clock[0] = datetime(2026, 11, 17, 1, 59, 0, tzinfo=UTC)
+    hourly = await client.post("/v1/search/public", json=_SEARCH, headers=_PUBLIC)
+    other_endpoint = await client.get("/v1/fetch/public", params=_FETCH, headers=_PUBLIC)
+    transport = httpx.ASGITransport(app=app, client=("203.0.113.9", 1))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as other:
+        other_ip = await other.post("/v1/search/public", json=_SEARCH, headers=_PUBLIC)
+
+    body = _assert_envelope(hourly, 429, "public_rate_limit_hourly")
+    assert body["limit"]["resets_at"] == "2026-11-17T02:00:00.000Z"
+    assert hourly.headers["x-ratelimit-reset"] == "2026-11-17T02:00:00.000Z"
+    assert body["retry_after_seconds"] == 60
+    assert other_endpoint.status_code == other_ip.status_code == 200
+    assert other_ip.headers["x-ratelimit-remaining"] == "999"
+
+    clock[0] = datetime(2026, 11, 17, 2, 0, 0, tzinfo=UTC)
+    fresh = await client.post("/v1/search/public", json=_SEARCH, headers=_PUBLIC)
+    assert fresh.headers["x-ratelimit-remaining"] == "999"
+
+
+async def test_public_per_second_limit_is_ten(client: httpx.AsyncClient, store: MockStore) -> None:
+    frozen = datetime(2026, 11, 17, 1, 0, 0, tzinfo=UTC)
+    store.now = lambda: frozen
+    for _ in range(10):
+        assert (
+            await client.get("/v1/fetch/public", params=_FETCH, headers=_PUBLIC)
+        ).status_code == 200
+
+    response = await client.get("/v1/fetch/public", params=_FETCH, headers=_PUBLIC)
+
+    body = _assert_envelope(response, 429, "public_rate_limit_per_second")
+    assert body["limit"] == {
+        "scope": "ip",
+        "window": "second",
+        "max": 10,
+        "resets_at": "2026-11-17T01:00:01.000Z",
+    }
 
 
 async def test_core_keyless_budget_and_disable(client: httpx.AsyncClient, store: MockStore) -> None:

@@ -6,8 +6,8 @@ replay sends the recorded path and query with the seeded Search key (the
 Answers key for the cross-product case, a wrong key for ``bogus_key``, none
 for ``missing_key``) and checks the status, the ``X-RateLimit-*`` headers,
 and the JSON shape: the same keys and value types, recursively. Values may
-differ, except the rate-limit pairs of a fresh unlimited Search plan, which
-must equal the live ``50, 0`` / ``49, 0``.
+differ, except the rate-limit pairs of a fresh Search plan (its $5 free
+credit does not show in them), which must equal the live ``50, 0`` / ``49, 0``.
 """
 
 import json

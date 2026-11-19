@@ -2,7 +2,7 @@
 
 import random
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -81,10 +81,31 @@ async def test_web_search_offset_filter_and_plain_text(
     assert all("<strong>" not in r["description"] for r in body["web"]["results"])
 
 
-async def test_rate_limit_headers_follow_a_finite_monthly_cap(
+def test_seeded_plans_get_the_monthly_free_credit(store: MockStore) -> None:
+    search = store.account("brave", "brave-search")
+    answers = store.account("brave", "brave-answers")
+
+    assert (search.credit_limit, answers.credit_limit) == (Decimal(1000), Decimal(1250))
+    assert search.reset_rule == answers.reset_rule == "monthly"
+    assert search.prepaid_credits == 0 and search.funding == "prepaid"
+    reset = search.period_reset
+    assert reset is not None and (reset.day, reset.hour, reset.minute) == (1, 0, 0)
+
+
+async def test_free_credit_does_not_show_in_the_rate_headers(
     client: httpx.AsyncClient, store: MockStore, search: dict[str, str]
 ) -> None:
-    store.set_credits("brave", Decimal(1000))
+    response = await client.get(_WEB, params={"q": "x"}, headers=search)
+
+    assert response.headers["x-ratelimit-limit"] == "50, 0"
+    assert response.headers["x-ratelimit-remaining"] == "49, 0"
+    assert store.account("brave").remaining == 999
+
+
+async def test_monthly_request_limit_drives_the_rate_headers(
+    client: httpx.AsyncClient, store: MockStore, search: dict[str, str]
+) -> None:
+    store.set_account_attributes("brave", {"monthly_request_limit": 1000})
     response = await client.get(_WEB, params={"q": "x"}, headers=search)
 
     assert response.headers["x-ratelimit-limit"] == "50, 1000"
@@ -97,18 +118,122 @@ async def test_rate_limit_headers_follow_a_finite_monthly_cap(
     assert burst == "1" and abs(int(monthly) - expected) < 5
 
 
-async def test_spent_monthly_cap_is_429_quota_limited_without_debit(
+async def test_spent_monthly_request_limit_is_429_quota_limited_without_debit(
+    client: httpx.AsyncClient, store: MockStore, search: dict[str, str]
+) -> None:
+    store.set_account_attributes("brave", {"monthly_request_limit": 1})
+    assert (await client.get(_WEB, params={"q": "x"}, headers=search)).status_code == 200
+    response = await client.get(_WEB, params={"q": "x"}, headers=search)
+
+    error = response.json()["error"]
+    assert response.status_code == 429
+    assert error["code"] == "QUOTA_LIMITED" and error["status"] == 429
+    assert response.headers["x-ratelimit-limit"] == "50, 1"
+    assert response.headers["x-ratelimit-remaining"].endswith(", 0")
+    assert "retry-after" not in response.headers
+    assert store.account("brave").credits_used == 1
+
+
+async def test_spent_credit_is_402_credit_exhausted_without_debit(
     client: httpx.AsyncClient, store: MockStore, search: dict[str, str]
 ) -> None:
     store.set_credits("brave", Decimal(0))
     response = await client.get(_WEB, params={"q": "x"}, headers=search)
 
     error = response.json()["error"]
-    assert response.status_code == 429
-    assert error["code"] == "QUOTA_LIMITED" and error["status"] == 429
+    assert response.status_code == 402
+    assert error["code"] == "CREDIT_EXHAUSTED" and error["status"] == 402
     assert response.headers["x-ratelimit-remaining"] == "50, 0"
-    assert "retry-after" not in response.headers
     assert store.account("brave").credits_used == 0
+    assert store.ledger("brave") == []
+
+
+class _Clock:
+    def __init__(self, moment: datetime) -> None:
+        self.moment = moment
+
+    def __call__(self) -> datetime:
+        return self.moment
+
+
+@pytest.fixture
+async def clocked(tmp_path: Path) -> AsyncIterator[tuple[httpx.AsyncClient, MockStore, _Clock]]:
+    """An app whose store clock the test moves."""
+
+    clock = _Clock(datetime(2026, 11, 17, 12, 0, tzinfo=UTC))
+    state = MockStore(tmp_path / "clocked.db", now=clock)
+    state.seed(discover().values())
+    state.save_fixture("brave", "web_search", "free", {"type": "search"})
+    app = MockApplication(state, discover(), rng=random.Random(5))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as http:
+        yield http, state, clock
+
+
+async def test_free_credit_serves_1000_requests_a_month_without_rollover(
+    clocked: tuple[httpx.AsyncClient, MockStore, _Clock],
+) -> None:
+    client, store, clock = clocked
+    token = next(key.key for key in store.keys("brave") if key.label == "search")
+    headers = {**BRAVE, "X-Subscription-Token": token}
+    first = await client.get(_WEB, params={"q": "free"}, headers=headers)
+    # Jump to the last free request instead of making 998 more calls.
+    store.set_credits("brave", Decimal(1), "brave-search", used=Decimal(999))
+    clock.moment += timedelta(seconds=1)
+    last = await client.get(_WEB, params={"q": "free"}, headers=headers)
+    statuses = [first.status_code, last.status_code]
+
+    clock.moment += timedelta(seconds=1)
+    refused = await client.get(_WEB, params={"q": "free"}, headers=headers)
+
+    assert statuses == [200, 200]
+    assert store.account("brave").credit_limit == 1000
+    assert refused.status_code == 402
+    assert refused.json()["error"]["code"] == "CREDIT_EXHAUSTED"
+    assert store.account("brave").remaining == 0
+
+    clock.moment = datetime(2026, 12, 1, 0, 0, 1, tzinfo=UTC)
+    renewed = await client.get(_WEB, params={"q": "free"}, headers=headers)
+
+    assert renewed.status_code == 200
+    account = store.account("brave")
+    assert (account.credits_used, account.credit_limit) == (1, 1000)
+    assert account.period_reset == datetime(2027, 1, 1, tzinfo=UTC)
+
+
+async def test_unspent_free_credit_does_not_roll_over(
+    clocked: tuple[httpx.AsyncClient, MockStore, _Clock],
+) -> None:
+    client, store, clock = clocked
+    token = next(key.key for key in store.keys("brave") if key.label == "search")
+    await client.get(_WEB, params={"q": "free"}, headers={**BRAVE, "X-Subscription-Token": token})
+
+    clock.moment = datetime(2026, 12, 2, tzinfo=UTC)
+
+    assert store.account("brave").remaining == 1000
+
+
+async def test_purchased_credit_continues_after_the_free_credit(
+    clocked: tuple[httpx.AsyncClient, MockStore, _Clock],
+) -> None:
+    client, store, clock = clocked
+    token = next(key.key for key in store.keys("brave") if key.label == "search")
+    headers = {**BRAVE, "X-Subscription-Token": token}
+    store.set_credits("brave", Decimal(1), used=Decimal(999))
+    store.add_prepaid("brave", Decimal(2))
+    statuses = []
+    for _ in range(4):
+        clock.moment += timedelta(seconds=1)
+        statuses.append((await client.get(_WEB, params={"q": "free"}, headers=headers)).status_code)
+
+    assert statuses == [200, 200, 200, 402]
+    account = store.account("brave")
+    assert account.prepaid_used == 2 and account.prepaid_remaining == 0
+
+    store.add_prepaid("brave", Decimal(5))
+    clock.moment = datetime(2026, 12, 1, 0, 0, 1, tzinfo=UTC)
+    account = store.account("brave")
+    assert account.grant_remaining == 1000 and account.prepaid_remaining == 5
 
 
 @pytest.fixture
@@ -298,7 +423,7 @@ async def test_faults_use_the_application_envelope(
 async def test_fault_rate_limit_carries_the_ledger_rate_headers(
     client: httpx.AsyncClient, store: MockStore, search: dict[str, str]
 ) -> None:
-    store.set_credits("brave", Decimal(1000), "brave-search", used=Decimal(7))
+    store.set_account_attributes("brave", {"monthly_request_limit": 1007})
     store.add_fault(FaultSpec(provider="brave", kind=FaultKind.RATE_LIMIT, count=1))
 
     limited = await client.get(_WEB, params={"q": "x"}, headers=search)
@@ -306,7 +431,7 @@ async def test_fault_rate_limit_carries_the_ledger_rate_headers(
     assert limited.status_code == 429
     assert limited.headers["retry-after"] == "60"
     assert limited.headers["x-ratelimit-limit"] == "50, 1007"
-    assert limited.headers["x-ratelimit-remaining"] == "50, 1000"
+    assert limited.headers["x-ratelimit-remaining"] == "50, 1007"
     assert limited.headers["x-ratelimit-policy"] == "50;w=1, 1007;w=2592000"
     assert "server" not in limited.headers
 

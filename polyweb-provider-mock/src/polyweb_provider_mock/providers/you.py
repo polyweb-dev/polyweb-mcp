@@ -1,7 +1,6 @@
 """You.com: Search and Contents on ``ydc-index.io``, the account balance on ``api.you.com``.
 
-Formats follow the live recordings of 2026-11-17 (``tests/contract/recordings/you``)
-and the official API reference:
+Recorded (live captures of 2026-11-17, ``tests/contract/recordings/you``):
 
 - Authentication is the raw key in ``X-API-Key`` (no ``Bearer``). There is no
   keyless mode. The two hosts answer authentication failures differently:
@@ -9,22 +8,40 @@ and the official API reference:
   for a wrong key and 402 ``payment_required`` for a missing key; the
   ``api.you.com`` balance API sends 401 ``{"detail": ...}`` for both. A path on
   the wrong host gets the gateway's 403 ``Missing Authentication Token``.
-- The account is a shared USD wallet kept in **cents** (``balance`` is cents,
-  fractional cents allowed). Search costs 0.5 cents ($5 per 1,000) and Contents
-  0.1 cents per returned page ($1 per 1,000); full-page extraction with
-  ``extraction_source`` ``fetch`` (every page) or ``blend`` (the pages that
-  miss the cache) adds 0.1 cents per live page. The balance poll is free.
-  The default wallet is the one-time $100 signup credit, which never resets.
-- An empty wallet is 402 ``payment_required``. A key's own spend cap (the key
-  credit limit) is 429 ``spend_cap_exceeded``; backoff does not clear it.
+- Search, Contents, and balance success shapes; the balance is
+  ``data.attributes.balance`` in **cents** (fractional cents allowed), with no
+  limit, expiry, or reset field. Successes carry no ``X-RateLimit-*`` headers.
 - Validation errors: Search answers 422 ``{"error": "invalid request
   parameter(s)"}``; Contents answers FastAPI 422 ``detail`` arrays.
 
-Unverified (no live sample): revoked keys (rendered like a wrong key on each
-host), the rate-limit and spend-cap 429 bodies, the authenticated
-exhausted-wallet body (rendered as the recorded ``payment_required`` envelope),
-and 5xx bodies (rendered as AWS API gateway and FastAPI defaults). Successes
-carry no ``X-RateLimit-*`` headers, as in every recording; a 429 carries them.
+Documented (you.com plans FAQ and docs: billing, rate limits, API keys, error
+codes):
+
+- The account is a shared USD wallet. Search costs 0.5 cents ($5 per 1,000);
+  live pages 0.1 cents each ($1 per 1,000; ``fetch`` bills every page,
+  ``blend`` only the cache misses); Contents 0.1 cents per page ($1 per
+  1,000). The balance poll is free.
+- Signup gives $10 of API credit and $90 more on account verification, no
+  card needed. Free signup credit is valid for 60 days: the default account
+  (``you-signup``, keys ``default`` and ``secondary``) is a verified signup,
+  a 10,000-cent grant that never resets and is forfeited 60 days after
+  seeding; the ``unverified`` key's account (``you-unverified``) holds the
+  1,000-cent unverified grant on the same terms. Purchased credit does not
+  expire while the account is active: add it as prepaid credit
+  (``credits add --prepaid``), which is spent after the grant.
+- Out of credits is 402 ``{"detail": "Insufficient credits"}``.
+- A key may carry an optional dollar spend cap per billing period (none by
+  default); reaching it is 429 ``spend_cap_exceeded`` and a retry does not
+  help. The seeded ``capped`` key has a $1 (100-cent) cap.
+- Search and Contents each allow 10 requests per second.
+- The keyless "100 queries per day" allowance belongs to the MCP endpoint
+  ``api.you.com/mcp/free`` only; it is out of scope for this REST mock.
+
+Guessed (no live sample): revoked keys (rendered like a wrong key on each
+host); the rate-limit and spend-cap 429 bodies; the 10 rps windows counted per
+key and endpoint; the key spend cap never resetting (the billing period length
+is undocumented); and 5xx bodies (rendered as AWS API gateway and FastAPI
+defaults). A 429 carries ``X-RateLimit-*`` headers.
 
 Synthetic Contents targets: a host whose first label is ``blocked`` and a
 ``.invalid`` host are left out of the result array, as a failed page is.
@@ -65,6 +82,7 @@ from polyweb_provider_mock.providers.base import (
     header_value,
 )
 from polyweb_provider_mock.store import MockStore
+from polyweb_provider_mock.windows import WindowSpec
 
 __all__ = ["PLUGIN", "YouPlugin"]
 
@@ -90,8 +108,11 @@ _SPEND_CAP: Final = {
     ),
     "upgrade_url": "https://you.com/platform/api-keys",
 }
+_INSUFFICIENT: Final = {"detail": "Insufficient credits"}
 #: The per-endpoint default of self-serve accounts: 10 requests per second.
 _RATE_LIMIT: Final = 10
+#: Days for which the free signup credit is valid.
+_SIGNUP_DAYS: Final = 60
 #: ``balance`` for an account without a limit; You.com has no unlimited wallet.
 _UNLIMITED_BALANCE_CENTS: Final = 100_000_000.0
 
@@ -377,15 +398,26 @@ class YouPlugin(ProviderPlugin):
             accounts=(
                 AccountSeed(
                     id="you-signup",
-                    plan="Signup credit",
+                    plan="Signup credit (verified)",
                     credit_limit=Decimal(10_000),
                     reset_rule="none",
+                    grant_expires_days=_SIGNUP_DAYS,
+                    attributes={"unit": "usd_cents"},
+                ),
+                AccountSeed(
+                    id="you-unverified",
+                    plan="Signup credit (unverified)",
+                    credit_limit=Decimal(1_000),
+                    reset_rule="none",
+                    grant_expires_days=_SIGNUP_DAYS,
                     attributes={"unit": "usd_cents"},
                 ),
             ),
             keys=(
                 KeySeed(label="default", account_id="you-signup", env_var="POLYWEB_YOU_API_KEY"),
                 KeySeed(label="secondary", account_id="you-signup"),
+                KeySeed(label="capped", account_id="you-signup", credit_limit=Decimal(100)),
+                KeySeed(label="unverified", account_id="you-unverified"),
             ),
         )
 
@@ -441,8 +473,7 @@ class YouPlugin(ProviderPlugin):
         if kind is ErrorKind.QUOTA_EXHAUSTED:
             if context.scope == "key" or status == 429:
                 return MockResponse(429, dict(_SPEND_CAP)), True, None
-            payment = MockResponse(status or 402, dict(_PAYMENT_REQUIRED))
-            return payment, False, "AccessDeniedException"
+            return MockResponse(status or 402, dict(_INSUFFICIENT)), True, None
         if kind is ErrorKind.RATE_LIMITED:
             if context.scope in {"key", "spend_cap"}:
                 return MockResponse(429, dict(_SPEND_CAP)), True, None
@@ -473,7 +504,7 @@ class YouPlugin(ProviderPlugin):
             headers = _rate_headers(context.retry_after, header=context.retry_after_header)
             return MockResponse(status or 429, {"detail": "Too Many Requests"}, headers)
         if kind is ErrorKind.QUOTA_EXHAUSTED:
-            return MockResponse(status or 402, {"detail": "Insufficient credits"})
+            return MockResponse(status or 402, dict(_INSUFFICIENT))
         defaults = {
             ErrorKind.BAD_REQUEST: 400,
             ErrorKind.SERVICE_UNAVAILABLE: 503,
@@ -523,7 +554,23 @@ class YouPlugin(ProviderPlugin):
 
     # --------------------------------------------------------------- search
 
+    @staticmethod
+    def _throttle(context: OperationContext) -> MockResponse | None:
+        """Spend one slot of the key's 10 rps window for this endpoint; ``None`` admits."""
+
+        label = context.principal.label
+        spec = WindowSpec(f"you:{label}:{context.operation.name}:second", _RATE_LIMIT, 1)
+        refused, _ = context.admit([spec])
+        if refused is None:
+            return None
+        return context.error(
+            ErrorKind.RATE_LIMITED, retry_after=refused.retry_after(context.store.now())
+        )
+
     async def _search(self, context: OperationContext) -> MockResponse:
+        limited = self._throttle(context)
+        if limited is not None:
+            return limited
         try:
             body: Any = context.json()
         except json.JSONDecodeError:
@@ -617,6 +664,9 @@ class YouPlugin(ProviderPlugin):
     # ------------------------------------------------------------- contents
 
     async def _contents(self, context: OperationContext) -> MockResponse:
+        limited = self._throttle(context)
+        if limited is not None:
+            return limited
         generator = content.rng(self.name, "headers", context.sequence)
         checked = self._contents_request(context)
         if isinstance(checked, MockResponse):

@@ -16,10 +16,34 @@ with ``x-api-key``. Formats follow the live recordings of 2026-11-17
 - Success bodies carry ``search_id`` / ``extract_id`` and ``session_id`` from
   the same 32 hex request ID (an echoed ``session_id`` wins), ``usage`` SKUs
   (``sku_search``, ``sku_extract_excerpts``), ``warnings`` and ``metadata: null``.
-- Prices are USD: the account ``credit_limit`` is the prepaid balance in
-  dollars. Search costs $0.001 (``turbo``/``fast``) or $0.005 (``basic`` and the
-  default ``advanced``) plus $0.001 per result beyond 10; extract costs $0.001
-  per successfully extracted URL. Failed URLs are free.
+
+Documented billing (parallel.ai/pricing, the free-tier post, docs.parallel.ai
+pricing, rate limits, FAQs and errors; read 2026-11-19), modelled with the
+store's grant / prepaid / overage funds in USD:
+
+- Prices: search $0.001 (``turbo``/``fast``) or $0.005 (``basic`` and the
+  default ``advanced``) with 10 results included, plus $0.001 per result
+  beyond 10; extract $0.001 per successfully extracted URL. Failed URLs are
+  free.
+- An organization with a card on file gets $5 free credit each month; unused
+  free credit expires at the end of the month. Free credit is spent before
+  any paid balance, and further usage is billed to the card at standard
+  rates. Spend limits are notify-only and never block requests. The default
+  account (``parallel-org``, keys ``default`` and ``secondary``) is that org:
+  a $5 monthly grant, then ``postpaid`` overage with no cap, so calls past $5
+  keep answering 200 and accrue (the balance endpoint reports the accrual,
+  see :mod:`._parallel_account`).
+- Without a card or paid balance a call is refused with 402 "Insufficient
+  credit in account". The ``parallel-no-card`` account (key ``no-card``) has
+  no grant and no prepaid credit, so it answers 402 until credit is added
+  (``credits add --prepaid`` or :meth:`MockStore.add_prepaid`).
+- Search and extract each allow 600 requests per minute (POST only).
+
+Guessed where the docs are silent: the free credit follows the UTC calendar
+month (the docs say only "end of the month", not calendar vs. anniversary);
+the one-time signup credit ("up to $80", conditions undocumented) is seeded
+as 0; the rate limits count per API key in aligned minutes (their scope is
+undocumented) and count every POST, including ones refused with 422.
 
 There is no keyless REST mode (the free hosted MCP is a different product).
 
@@ -63,12 +87,17 @@ from polyweb_provider_mock.providers.base import (
     header_value,
 )
 from polyweb_provider_mock.store import MockStore
+from polyweb_provider_mock.windows import WindowSpec
 
 __all__ = ["PLUGIN", "ParallelPlugin"]
 
 API_HOST: Final = "api.parallel.ai"
 PLATFORM_HOST: Final = "platform.parallel.ai"
 DEFAULT_ACCOUNT: Final = "parallel-org"
+#: A prepaid org without a card on file: refused with 402 at $0.
+NO_CARD_ACCOUNT: Final = "parallel-no-card"
+#: Documented: 600 requests per minute each for Search and Extract.
+_PER_MINUTE: Final = 600
 
 _MODES: Final = ("turbo", "fast", "basic", "advanced")
 _DEFAULT_RESULTS: Final = 10
@@ -456,21 +485,36 @@ class ParallelPlugin(ProviderPlugin):
         return Credentials(key=header_value(request, "x-api-key"))
 
     def default_seed(self) -> ProviderSeed:
+        def org(account_id: str, name: str, email: str) -> dict[str, Any]:
+            return {
+                "org_id": content.stable_uuid(self.name, "org", account_id),
+                "org_name": name,
+                "user_id": content.stable_uuid(self.name, "user", account_id),
+                "user_email": email,
+                "currency": "USD",
+                "pending_debit_cents": 0,
+                "will_invoice": False,
+            }
+
         return ProviderSeed(
             accounts=(
+                # A card-on-file org: $5 free each calendar month, then billed to the card.
                 AccountSeed(
                     id=DEFAULT_ACCOUNT,
                     plan="Build",
                     credit_limit=Decimal(5),
-                    attributes={
-                        "org_id": content.stable_uuid(self.name, "org", DEFAULT_ACCOUNT),
-                        "org_name": "Polyweb Mock Org",
-                        "user_id": content.stable_uuid(self.name, "user", DEFAULT_ACCOUNT),
-                        "user_email": "owner@example.com",
-                        "currency": "USD",
-                        "pending_debit_cents": 0,
-                        "will_invoice": False,
-                    },
+                    reset_rule="monthly",
+                    funding="postpaid",
+                    attributes=org(DEFAULT_ACCOUNT, "Polyweb Mock Org", "owner@example.com"),
+                ),
+                # No card and no paid balance: nothing to spend, so 402.
+                AccountSeed(
+                    id=NO_CARD_ACCOUNT,
+                    plan="Build",
+                    credit_limit=Decimal(0),
+                    reset_rule="none",
+                    funding="prepaid",
+                    attributes=org(NO_CARD_ACCOUNT, "Polyweb No-Card Org", "nocard@example.com"),
                 ),
             ),
             keys=(
@@ -478,6 +522,7 @@ class ParallelPlugin(ProviderPlugin):
                     label="default", account_id=DEFAULT_ACCOUNT, env_var="POLYWEB_PARALLEL_API_KEY"
                 ),
                 KeySeed(label="secondary", account_id=DEFAULT_ACCOUNT),
+                KeySeed(label="no-card", account_id=NO_CARD_ACCOUNT),
             ),
         )
 
@@ -598,7 +643,27 @@ class ParallelPlugin(ProviderPlugin):
 
     # --------------------------------------------------------------- search
 
+    @staticmethod
+    def _throttled(context: OperationContext, product: str) -> MockResponse | None:
+        """Spend one slot of the key's per-minute window; a 429 once it is full."""
+
+        key, account = context.principal.key, context.principal.account
+        if key is None:
+            return None
+        attributes = account.attributes if account is not None else {}
+        limit = int(attributes.get(f"{product}_per_minute", _PER_MINUTE))
+        spec = WindowSpec(f"parallel:{key.label}:{product}", limit, 60, aligned=True)
+        refused, _ = context.admit([spec])
+        if refused is None:
+            return None
+        return context.error(
+            ErrorKind.RATE_LIMITED, retry_after=refused.retry_after(context.store.now())
+        )
+
     async def _search(self, context: OperationContext) -> MockResponse:
+        throttled = self._throttled(context, "search")
+        if throttled is not None:
+            return throttled
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request
@@ -669,6 +734,9 @@ class ParallelPlugin(ProviderPlugin):
     # -------------------------------------------------------------- extract
 
     async def _extract(self, context: OperationContext) -> MockResponse:
+        throttled = self._throttled(context, "extract")
+        if throttled is not None:
+            return throttled
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request

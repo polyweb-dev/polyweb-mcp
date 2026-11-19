@@ -3,8 +3,6 @@
 The mock runs under uvicorn on a free loopback port and Polyweb's startup
 interception (``install_provider_mock`` through ``create_async_client``)
 reroutes ``https://api.keenable.ai`` to it. Each fault must surface with the
-MOCK_RANDOM_SEED = 11
-
 classification that ``tests/unit/adapters/test_keenable*.py`` in Polyweb
 asserts for real payloads: the adapter maps by HTTP status only (402
 ``quota_exhausted``, everything else ``http_error``, retryable for
@@ -25,9 +23,11 @@ from polyweb.models.contracts import FetchRequest, SearchRequest
 from pydantic import SecretStr
 
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
+from polyweb_provider_mock.providers.keenable import public_windows
 from polyweb_provider_mock.store import MockStore
-from polyweb_provider_mock.windows import WindowSpec
 from tests._support.live_server import LiveMock, polyweb_settings
+
+MOCK_RANDOM_SEED = 11
 
 _PROJECT = UUID("00000000-0000-4000-8000-0000000000aa")
 _URL = "https://docs.python.org/3/library/json.html"
@@ -119,7 +119,8 @@ async def test_keyless_hourly_pool_exhaustion_is_retryable(
     store: MockStore, adapters: _Adapters
 ) -> None:
     await adapters(None).search(_search())
-    store.count_window(WindowSpec("keenable:public:search:hour", 1000, 3600), 1000)
+    # The live server sees Polyweb's loopback connection.
+    store.count_window(public_windows("search", "127.0.0.1")[0], 1000)
 
     error = (await _error(adapters(None).search(_search()))).error
 

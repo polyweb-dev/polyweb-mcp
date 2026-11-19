@@ -1,14 +1,20 @@
 """Exa plugin wire behavior through the in-process app."""
 
+import random
 import uuid
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import httpx
 import pytest
 
+from polyweb_provider_mock.app import MockApplication
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
+from polyweb_provider_mock.providers import discover
 from polyweb_provider_mock.providers.exa import PLUGIN
-from polyweb_provider_mock.store import MockStore
+from polyweb_provider_mock.store import MockStore, Principal
 
 _API = {"Host": "api.exa.ai"}
 _ADMIN = {"Host": "admin-api.exa.ai"}
@@ -29,12 +35,47 @@ def _usage_path(key: str) -> str:
     return f"/team-management/api-keys/{key}/usage"
 
 
+class _Clock:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+@pytest.fixture
+def clock() -> _Clock:
+    return _Clock(datetime(2026, 11, 17, 12, tzinfo=UTC))
+
+
+@pytest.fixture
+def timed_store(tmp_path: Path, clock: _Clock) -> MockStore:
+    state = MockStore(tmp_path / "timed.db", now=clock)
+    state.seed(discover().values())
+    return state
+
+
+@pytest.fixture
+async def timed_client(timed_store: MockStore) -> AsyncIterator[httpx.AsyncClient]:
+    app = MockApplication(timed_store, discover(), rng=random.Random(7))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as http:
+        yield http
+
+
+def _principal(store: MockStore, label: str = "default") -> Principal:
+    principal = store.resolve("exa", _key(store, label))
+    assert principal is not None
+    return principal
+
+
 def test_seeded_keys_are_uuid_shaped_and_visibly_fake(store: MockStore) -> None:
     keys = store.keys("exa")
-    assert [key.label for key in keys] == ["default", "secondary", "service"]
+    assert [key.label for key in keys] == ["default", "secondary", "service", "budgeted"]
     for key in keys:
         assert str(uuid.UUID(key.key)) == key.key and key.key.startswith("6d6f636b-")
     assert keys[2].scopes == ("team_management",)
+    assert keys[3].credit_limit == Decimal("0.05") and keys[3].env_var is None
     assert PLUGIN.key_format.generate() != PLUGIN.key_format.generate()
 
 
@@ -246,6 +287,80 @@ async def test_credit_exhaustion_is_402_and_never_half_debits(
     assert affordable.status_code == 200
     assert (empty.status_code, empty.json()["tag"]) == (402, "NO_MORE_CREDITS")
     assert store.account("exa").credits_used == Decimal("0.007")
+
+
+async def test_free_tier_spends_the_grant_then_the_bonus_and_the_1st_refills_the_grant(
+    timed_client: httpx.AsyncClient, timed_store: MockStore, clock: _Clock
+) -> None:
+    store = timed_store
+    headers = {**_API, "x-api-key": _key(store)}
+    seeded = store.account("exa")
+    assert (seeded.credit_limit, seeded.prepaid_credits, seeded.remaining) == (10, 10, 20)
+    assert seeded.reset_rule == "monthly"
+
+    assert (await timed_client.post("/search", json={"query": "q"}, headers=headers)).is_success
+    first = store.account("exa")
+    assert (first.credits_used, first.prepaid_used) == (Decimal("0.007"), 0)
+
+    store.charge(_principal(store), "contents.text", Decimal(9993))  # the rest of the grant
+    assert (await timed_client.post("/search", json={"query": "q"}, headers=headers)).is_success
+    bonus = store.account("exa")
+    assert (bonus.grant_remaining, bonus.prepaid_used) == (0, Decimal("0.007"))
+    assert bonus.prepaid_remaining == Decimal("9.993")
+
+    clock.now = datetime(2026, 11, 30, 23, 59, tzinfo=UTC)
+    assert store.account("exa").grant_remaining == 0
+    clock.now = datetime(2026, 12, 1, 0, 0, 1, tzinfo=UTC)
+    rolled = store.account("exa")
+    assert (rolled.credits_used, rolled.grant_remaining) == (0, 10)
+    assert (rolled.prepaid_used, rolled.remaining) == (Decimal("0.007"), Decimal("19.993"))
+
+    store.charge(_principal(store), "contents.text", Decimal(19993))
+    assert store.account("exa").remaining == 0
+    empty = await timed_client.post("/search", json={"query": "q"}, headers=headers)
+    assert (empty.status_code, empty.json()["tag"]) == (402, "NO_MORE_CREDITS")
+
+
+async def test_seeded_budgeted_key_runs_out_of_its_own_budget(
+    client: httpx.AsyncClient, store: MockStore, headers: dict[str, str]
+) -> None:
+    budgeted = {**_API, "x-api-key": _key(store, "budgeted")}
+    for _ in range(7):  # 7 x $0.007 = $0.049 of the $0.05 budget
+        assert (await client.post("/search", json={"query": "q"}, headers=budgeted)).is_success
+
+    refused = await client.post("/search", json={"query": "q"}, headers=budgeted)
+    other = await client.post("/search", json={"query": "q"}, headers=headers)
+
+    assert (refused.status_code, refused.json()["tag"]) == (402, "API_KEY_BUDGET_EXCEEDED")
+    assert "billing period" in refused.json()["error"]
+    assert other.status_code == 200
+    assert store.account("exa").credits_used == Decimal("0.056")
+
+
+async def test_team_rate_limits_per_second(
+    timed_client: httpx.AsyncClient, timed_store: MockStore, clock: _Clock
+) -> None:
+    headers = {**_API, "x-api-key": _key(timed_store)}
+    deep = {"query": "q", "numResults": 1, "type": "deep"}
+    statuses = [
+        (await timed_client.post("/search", json=deep, headers=headers)).status_code
+        for _ in range(6)
+    ]
+    assert statuses == [200] * 5 + [429]
+
+    clock.now += timedelta(seconds=1)
+    fast = [
+        await timed_client.post("/search", json={"query": "q"}, headers=headers) for _ in range(11)
+    ]
+    assert [item.status_code for item in fast] == [200] * 10 + [429]
+    limited = fast[-1]
+    assert limited.json()["tag"] == "RATE_LIMIT_EXCEEDED"
+    assert limited.headers["retry-after"] == "1"
+    contents = await timed_client.post("/contents", json=_CONTENTS, headers=headers)
+    assert contents.status_code == 200
+
+    clock.now += timedelta(seconds=1)
+    assert (await timed_client.post("/search", json=deep, headers=headers)).status_code == 200
 
 
 async def test_key_budget_is_api_key_budget_exceeded(

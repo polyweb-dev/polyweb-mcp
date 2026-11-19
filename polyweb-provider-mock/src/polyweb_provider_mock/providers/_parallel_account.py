@@ -36,6 +36,18 @@ a revoked refresh token is ``invalid_grant``, while its access token keeps
 reading the balance until it expires. Balance cents are JSON numbers with a
 fraction (``478.0``).
 
+Balance semantics, documented (``service-api/balance/get-balance``):
+``credit_balance_cents`` is the prepaid balance (credits and prepaid commits),
+``pending_debit_balance_cents`` holds pending holds and unsynced charges, and
+both are 0 when ``will_invoice`` (postpaid invoicing) is true. The mock derives
+the credit balance from the ledger: the unspent monthly free credit plus any
+one-time (prepaid) credit, floored to whole cents. Guessed (the docs are
+silent): usage billed to the card past the free credit is an unsynced charge,
+so the period's overage (``Account.overage_used``) adds to
+``pending_debit_balance_cents`` (rounded up to whole cents) on top of the
+``pending_debit_cents`` attribute, while the credit balance stays at 0; the
+monthly reset clears the overage with the period.
+
 Still from the official account guide only: ``access_denied`` and
 ``slow_down`` (5 second interval increase).
 
@@ -71,7 +83,7 @@ import secrets
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from datetime import datetime, timedelta
-from decimal import ROUND_FLOOR
+from decimal import ROUND_CEILING, ROUND_FLOOR
 from typing import Any, Final, Literal
 from urllib.parse import parse_qs, quote
 
@@ -686,7 +698,11 @@ class ParallelAccount:
         credit = pending = 0
         if not will_invoice and account.remaining is not None:
             credit = int((account.remaining * 100).to_integral_value(rounding=ROUND_FLOOR))
-            pending = int(attributes.get("pending_debit_cents", 0))
+            # Guessed: card charges past the free credit are "unsynced charges"
+            # until billed, so the period's overage adds to the pending debit,
+            # rounded up to whole cents.
+            overage = int((account.overage_used * 100).to_integral_value(rounding=ROUND_CEILING))
+            pending = int(attributes.get("pending_debit_cents", 0)) + overage
         # Recorded: the cents are JSON numbers with a fraction (478.0).
         return {
             "org_id": str(attributes.get("org_id", account.id)),

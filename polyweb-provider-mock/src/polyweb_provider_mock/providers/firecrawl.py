@@ -1,39 +1,77 @@
 """Firecrawl v2 on ``api.firecrawl.dev``: search, scrape, and team credit usage.
 
-Formats follow the live recordings of 2026-11-17 (``firecrawl-py`` 4.41.0,
-``tests/contract/recordings/firecrawl``) and the official API reference:
+Recorded (live captures of 2026-11-17, ``firecrawl-py`` 4.41.0,
+``tests/contract/recordings/firecrawl``):
 
 - Authentication is ``Authorization: Bearer fc-...``. A wrong or revoked key
   gets 401 ``{"success": false, "error": "Unauthorized: Invalid token"}``
-  with a ``WWW-Authenticate`` header. Without a key, search and scrape use
-  the keyless free tier (a per-day budget); ``/v2/team/credit-usage`` has
-  no keyless mode and answers 401 with a ``signup_url``.
+  with a ``WWW-Authenticate`` header. ``/v2/team/credit-usage`` has no
+  keyless mode and answers 401 with a ``signup_url``.
 - Every error is ``{"success": false, "error": ...}``; validation errors add
-  ``code: "BAD_REQUEST"`` and zod ``details``. Credit exhaustion is 402,
-  rate limits are 429 with ``Retry-After``.
-- Search costs 2 credits per 10 requested results (rounded up) plus the
-  scrape cost of each result when ``scrapeOptions.formats`` asks for
-  content; the envelope reports ``creditsUsed`` and a search ``id``. Scrape
-  costs 1 credit per page plus per-page modifiers (JSON and LLM formats +4,
-  PDF +1 per page, ZDR +1, PII redaction +4, lockdown +4), reported in
-  ``data.metadata.creditsUsed``. A target-site 403/404 still returns a
-  document and is billed; a scrape with no document is free.
-- Scrape auto-resume: a host whose first label is ``processing`` answers
-  the first two identical scrapes with 408 ``SCRAPE_TIMEOUT`` and
-  ``details.state = "processing_continues"``; the SDK re-sends the same
-  POST and the third answer is the finished document, billed once. An
-  ``http_error`` fault with status 408 and scope ``processing_continues``
-  produces the same signal on any URL.
+  ``code: "BAD_REQUEST"`` and zod ``details``.
+- The search envelope reports ``creditsUsed`` and a search ``id``; a scrape
+  reports ``data.metadata.creditsUsed``. Credit usage returns
+  ``remainingCredits``, ``planCredits``, ``billingPeriodStart`` and
+  ``billingPeriodEnd``.
+
+Documented (docs.firecrawl.dev billing, rate limits, credit-usage reference,
+and firecrawl.dev/pricing):
+
+- The Free plan grants 1,000 credits per month that reset at the start of
+  each monthly cycle, with no rollover: the seed is a ``monthly`` grant of
+  1,000. ``credits add --prepaid`` stands for coupon or purchased credits,
+  which "stay on your account until you use them" and are spent after the
+  grant. ``remainingCredits`` is the grant left plus that prepaid balance;
+  ``planCredits`` is the plan grant alone (it excludes coupon and
+  pay-as-you-go credits). Pay-as-you-go exists on paid plans only.
+- Running out of credits is 402 until the next reset (or a top-up), and a
+  request that would overdraw is refused whole.
+- Scrape costs 1 credit per page plus per-page modifiers (JSON and LLM
+  formats +4, PDF +1 per page, ZDR +1, PII redaction +4, prompt-injection
+  check +4, lockdown +4; the enhanced proxy adds nothing). A target-site
+  403/404 still returns a document and is billed; a scrape with no document
+  is free.
+- Search costs 2 credits per 10 results, rounded up, plus the scrape cost of
+  each result when ``scrapeOptions.formats`` asks for content. The docs say
+  only "results"; the mock bills the **requested** ``limit``, not the number
+  returned (it always returns ``limit`` web results unless a fixture says
+  otherwise).
+- Free-plan rate limits: 10 requests per minute each for scrape and search
+  (2 for crawl, which the mock does not serve), counted per team over a
+  60-second window that starts at the first request. Over the limit is 429
+  with ``Retry-After`` and is not billed. Paid-plan limits are not modelled:
+  any other plan name is not rate limited.
+- Without a key, search and scrape use the keyless tier, which has per-IP
+  daily caps on requests and on credits, and answers 429 over them.
+
+Guessed (no live evidence):
+
+- The 402, 429, 5xx, keyless-cap, and DNS-failure messages are inferred
+  from the docs and the open-source API.
+- The keyless cap of 50 requests per day is a placeholder: Firecrawl
+  publishes no numbers. Only the request cap is modelled; the keyless credit
+  cap is not.
+- The billing cycle anchor (signup date or calendar month) is undocumented;
+  the seed follows the calendar month, and the ``reset_day`` account
+  attribute moves it.
+- The Free plan's 2 concurrent requests are not modelled: the mock answers
+  every request at once, so ``metadata.concurrencyLimited`` is always
+  ``false``. A ``rate_limit`` fault with scope ``concurrency`` renders the
+  concurrency 429 on demand.
+- ``branding``, ``product``, ``menu``, and ``attributes`` formats are
+  accepted but return no content.
+
+Scrape auto-resume: a host whose first label is ``processing`` answers the
+first two identical scrapes with 408 ``SCRAPE_TIMEOUT`` and
+``details.state = "processing_continues"``; the SDK re-sends the same POST
+and the third answer is the finished document, billed once. An
+``http_error`` fault with status 408 and scope ``processing_continues``
+produces the same signal on any URL.
 
 Synthetic scrape targets: a ``blocked`` first label returns a document with
 ``metadata.statusCode`` 403, ``notfound`` returns 404, and a ``.invalid``
 host fails DNS resolution (400, no document, free). A ``.pdf`` path is
 parsed as a PDF with ``numPages``.
-
-Accuracy gaps (no live evidence): 402, 429, 5xx, keyless-cap, and DNS
-failure messages are inferred from the docs and the open-source API; the
-keyless per-day cap (50) is unpublished; ``branding``, ``product``,
-``menu``, and ``attributes`` formats are accepted but return no content.
 """
 
 import base64
@@ -70,6 +108,7 @@ from polyweb_provider_mock.providers.base import (
     bearer_token,
 )
 from polyweb_provider_mock.store import MockStore
+from polyweb_provider_mock.windows import WindowSpec
 
 __all__ = ["PLUGIN", "FirecrawlPlugin"]
 
@@ -85,6 +124,11 @@ _RESUME_SECONDS: Final = 5
 _DEFAULT_LIMIT: Final = 5
 _MAX_LIMIT: Final = 100
 _RATE_LIMIT_PER_MINUTE: Final = 10
+#: Requests per minute by plan and operation; a plan not listed is not limited.
+_PLAN_RATE_LIMITS: Final[Mapping[str, Mapping[str, int]]] = {
+    "Free": {"search": _RATE_LIMIT_PER_MINUTE, "scrape": _RATE_LIMIT_PER_MINUTE},
+}
+_RATE_WINDOW_SECONDS: Final = 60
 _UNLIMITED_CREDITS: Final = 1_000_000_000
 _USD_PER_CREDIT: Final = Decimal("0.0038")
 _CHANNELS: Final = ("web", "news", "images")
@@ -326,9 +370,7 @@ class FirecrawlPlugin(ProviderPlugin):
                     id="firecrawl-team",
                     plan="Free",
                     credit_limit=Decimal(1000),
-                    # planCredits excludes coupon and pay-as-you-go credits, so
-                    # `credits add` raises remainingCredits above it, as live.
-                    attributes={"plan_credits": 1000},
+                    reset_rule="monthly",
                 ),
             ),
             keys=(
@@ -437,15 +479,38 @@ class FirecrawlPlugin(ProviderPlugin):
             return {"error": "Concurrency limit reached"}
         seconds = self._retry_after(context)
         resets = _js_date(datetime.now(UTC) + timedelta(seconds=seconds))
+        limit = int(context.details.get("limit", _RATE_LIMIT_PER_MINUTE))
         return {
             "error": (
-                f"Rate limit exceeded. Consumed (req/min): {_RATE_LIMIT_PER_MINUTE + 1}, "
+                f"Rate limit exceeded. Consumed (req/min): {limit + 1}, "
                 "Remaining (req/min): 0. Upgrade your plan at https://firecrawl.dev/pricing "
                 f"for increased rate limits or please retry after {seconds}s, resets at {resets}"
             )
         }
 
     # -------------------------------------------------------------- helpers
+
+    @staticmethod
+    def _rate_limited(context: OperationContext) -> MockResponse | None:
+        """Spend one slot of the team's per-minute window; return the 429 when full."""
+
+        principal = context.principal
+        account = principal.account
+        if principal.keyless or account is None:
+            return None
+        operation = context.operation.name
+        limit = _PLAN_RATE_LIMITS.get(account.plan, {}).get(operation)
+        if limit is None:
+            return None
+        spec = WindowSpec(f"firecrawl:rpm:{account.id}:{operation}", limit, _RATE_WINDOW_SECONDS)
+        refused, _ = context.admit([spec])
+        if refused is None:
+            return None
+        return context.error(
+            ErrorKind.RATE_LIMITED,
+            retry_after=refused.retry_after(context.store.now()),
+            details={"limit": limit},
+        )
 
     @staticmethod
     def _success(context: OperationContext, body: dict[str, Any]) -> MockResponse:
@@ -681,6 +746,9 @@ class FirecrawlPlugin(ProviderPlugin):
         return query, limit, channels
 
     async def _search(self, context: OperationContext) -> MockResponse:
+        limited = self._rate_limited(context)
+        if limited is not None:
+            return limited
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request
@@ -770,6 +838,9 @@ class FirecrawlPlugin(ProviderPlugin):
     # --------------------------------------------------------------- scrape
 
     async def _scrape(self, context: OperationContext) -> MockResponse:
+        limited = self._rate_limited(context)
+        if limited is not None:
+            return limited
         request = _object_body(context)
         if isinstance(request, MockResponse):
             return request
@@ -838,11 +909,13 @@ class FirecrawlPlugin(ProviderPlugin):
         account = context.principal.account
         if account is None:
             return context.error(ErrorKind.AUTH_INVALID, missing_key=True)
+        # remainingCredits counts the grant left plus coupon/purchased (prepaid)
+        # credit; planCredits is the plan grant alone, which excludes them.
         remaining = account.remaining
-        plan = account.attributes.get("plan_credits", account.credit_limit)
+        plan = account.credit_limit
         data = {
             "remainingCredits": _UNLIMITED_CREDITS if remaining is None else _number(remaining),
-            "planCredits": _number(Decimal(str(plan))) if plan is not None else None,
+            "planCredits": None if plan is None else _number(plan),
             "billingPeriodStart": iso_ms(account.period_start),
             "billingPeriodEnd": None
             if account.period_reset is None

@@ -22,34 +22,50 @@ fetch 502 ``target_unreachable`` (2 s), 503 ``auth_unavailable`` (5 s), fetch
 ``http_error`` fault with status 529 renders that last one; current Polyweb
 does not retry 529 although Keenable marks it retryable.
 
-Rate limits:
+Rate limits (docs.keenable.ai ``rate-limits.md``):
 
-- Keyless: 1000 requests per hour and 10 per second *per endpoint* (the
-  recordings show independent search and fetch counters with different
-  reset instants). The hourly window starts at the first request after the
-  previous one ended. Success and post-title 400 responses carry
-  ``X-RateLimit-Limit/Remaining`` and an ISO-8601 ``X-RateLimit-Reset``.
-  Over the limit: 429 ``public_rate_limit_hourly`` /
+- Keyless: "1,000 requests per hour and 10 per second, per IP address, for
+  each endpoint". The mock keeps one fixed window pair per endpoint and
+  client IP (``request.client.host``; behind a proxy every caller shares the
+  proxy's address, as callers behind one NAT do). The recordings show
+  independent search and fetch counters with their own reset instants, so
+  the hourly window starts at the first request after the previous one
+  ended. No per-minute limit is documented. Success and post-title 400
+  responses carry ``X-RateLimit-Limit/Remaining`` and an ISO-8601
+  ``X-RateLimit-Reset``. Over the limit: 429 ``public_rate_limit_hourly`` /
   ``public_rate_limit_per_second`` with a ``limit`` object (scope ``ip``).
   The core keyless ``per_day`` / ``per_minute`` budget (CLI ``keyless set``)
-  applies on top, shared by both endpoints.
+  is a mock-only knob, off by default, shared by both endpoints.
 - Keyed: 10 requests per second per organization (account), shared by all
-  its keys, 429 ``rate_limit_per_second``. The keyed success responses carry
-  the same three headers for that window; no keyed capture confirms them.
+  its keys, 429 ``rate_limit_per_second``. The documented 25 rps tier (90
+  days after USD 1,000 of top-ups) is not modelled.
 
-Credits: every successful keyed call costs 1 credit (``search.pro``,
-``search.realtime``, ``fetch``, ``fetch.live``, USD 0.004) and reports a
-``usage`` object; failed calls are free. The seeded organization has the
-100,000-request monthly free allowance as its credit limit; ``credits add``
-models purchased credits, and ``usage.paid`` turns true once the free
-allowance is spent. Keyless calls are free and have no ``usage``.
+Credits (``pricing.md``, ``credits.md``, ``auto-top-up.md``):
 
-Accuracy gaps: the allowance resets on the UTC calendar month unless the
-account's ``reset_day`` attribute anchors it to the organization's creation
-day (``polyweb-mock account set keenable reset_day=17``); consumed purchased
-credits come back at the monthly reset (real purchased credits never expire
-but are not refunded); ``billing_url`` is inferred from the docs' "Billing
-page of the console".
+- Every successful keyed call costs 1 credit (SKUs ``search.pro``,
+  ``search.realtime``, ``fetch``, ``fetch.live``; USD 0.004, i.e. USD 4 per
+  1,000) and reports a ``usage`` object; failed calls are free. Keyless calls
+  are free and have no ``usage``.
+- The free allowance is the account grant: 100,000 requests a month, shared
+  by search and fetch, resetting "on the day your organization was created
+  (on the last day of shorter months)". The seed pins that day to the 17th
+  (``reset_day`` attribute) so tests are deterministic; change it with
+  ``polyweb-mock account set keenable reset_day=N``.
+- Purchased credits are the store's prepaid balance (``credits add
+  --prepaid`` / ``MockStore.add_prepaid``): "a prepaid balance never
+  expires" and survives the monthly reset. The free allowance is spent
+  first; ``usage.paid`` is true when a call drew on the prepaid balance.
+- ``usage.credits_remaining`` is free left + prepaid left. Both empty: 402
+  ``insufficient_credits`` with ``billing_url``.
+
+Recorded: the keyless routes, headers, envelopes and per-endpoint windows.
+Documented (not captured): keyed routes, ``usage``, the 402, the keyed rate,
+the allowance and its reset day. Guessed: the 17th as the creation day,
+``billing_url`` (from the docs' "Billing page of the console"), the keyed
+success responses carrying the same rate headers, and per-IP keying by the
+socket address. Not modelled: auto top-up (USD 5 threshold, USD 20 amount,
+USD 1,000 monthly cap), the 1,000/month allowance of disposable-email
+signups, and ``usage`` lag; there is no balance API to mock.
 
 Synthetic fetch targets (first host label): ``blocked`` 403
 ``target_blocked``, ``paywall``/``login`` 422 ``target_paywalled``,
@@ -76,6 +92,7 @@ from starlette.requests import Request
 
 from polyweb_provider_mock import content
 from polyweb_provider_mock.models import (
+    Account,
     AccountSeed,
     KeyFormat,
     KeylessSeed,
@@ -97,7 +114,7 @@ from polyweb_provider_mock.providers.base import (
 from polyweb_provider_mock.store import Charge, MockStore
 from polyweb_provider_mock.windows import Window, WindowSpec
 
-__all__ = ["PLUGIN", "KeenablePlugin"]
+__all__ = ["PLUGIN", "KeenablePlugin", "public_windows"]
 
 _JSON: Final = "application/json; charset=utf-8"
 _KEY_PREFIX: Final = "keen_"
@@ -118,6 +135,7 @@ _PUBLIC_HOURLY: Final = 1000
 _PUBLIC_PER_SECOND: Final = 10
 _KEYED_PER_SECOND: Final = 10
 _FREE_ALLOWANCE: Final = Decimal(100_000)
+_CREATION_DAY: Final = 17
 _DEFAULT_RESULTS: Final = 10
 _DEFAULT_MAX_CHARS: Final = 50_000
 _SEARCH_PARAMS: Final = frozenset(
@@ -598,6 +616,19 @@ def _cap(text: str, max_chars: int) -> tuple[str, bool]:
     return text[: max_chars - 3] + "...", True
 
 
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client is not None else "unknown"
+
+
+def public_windows(endpoint: str, ip: str) -> list[WindowSpec]:
+    """Return the keyless hourly and per-second windows of one endpoint and client IP."""
+
+    return [
+        WindowSpec(f"keenable:public:{endpoint}:{ip}:hour", _PUBLIC_HOURLY, 3600),
+        WindowSpec(f"keenable:public:{endpoint}:{ip}:second", _PUBLIC_PER_SECOND, 1),
+    ]
+
+
 class KeenablePlugin(ProviderPlugin):
     """Keenable search and fetch, keyed and keyless."""
 
@@ -630,7 +661,9 @@ class KeenablePlugin(ProviderPlugin):
                     plan="Free",
                     credit_limit=_FREE_ALLOWANCE,
                     reset_rule="monthly",
-                    attributes={"free_allowance": int(_FREE_ALLOWANCE)},
+                    # Documented: the allowance resets on the organization's creation
+                    # day. Guessed: the 17th, fixed so tests are deterministic.
+                    attributes={"reset_day": _CREATION_DAY},
                 ),
             ),
             keys=(
@@ -788,10 +821,7 @@ class KeenablePlugin(ProviderPlugin):
 
         principal = context.principal
         if principal.keyless:
-            specs = [
-                WindowSpec(f"keenable:public:{endpoint}:hour", _PUBLIC_HOURLY, 3600),
-                WindowSpec(f"keenable:public:{endpoint}:second", _PUBLIC_PER_SECOND, 1),
-            ]
+            specs = public_windows(endpoint, _client_ip(context.request))
         else:
             account = principal.account.id if principal.account is not None else "unknown"
             specs = [WindowSpec(f"keenable:org:{account}:second", _KEYED_PER_SECOND, 1)]
@@ -830,16 +860,17 @@ class KeenablePlugin(ProviderPlugin):
             return context.charge(f"public.{sku}")
         return context.charge(sku)
 
-    def _usage(self, context: OperationContext, charge: Charge, sku: str) -> dict[str, Any]:
-        principal = context.principal
-        assert principal.account is not None
-        account = context.store.account(self.name, principal.account.id)
-        free = Decimal(str(account.attributes.get("free_allowance", _FREE_ALLOWANCE)))
+    def _usage(
+        self, context: OperationContext, charge: Charge, sku: str, before: Account
+    ) -> dict[str, Any]:
+        account = context.store.account(self.name, before.id)
+        rolled = account.period_start != before.period_start
+        from_grant = account.credits_used - (Decimal(0) if rolled else before.credits_used)
         usage: dict[str, Any] = {
             "sku": sku,
             "amount": int(charge.units),
             "credits": _number(charge.credits),
-            "paid": account.credits_used - charge.credits >= free,
+            "paid": charge.credits > 0 and from_grant < charge.credits,
         }
         if account.remaining is not None:
             usage["credits_remaining"] = _number(account.remaining)
@@ -848,10 +879,14 @@ class KeenablePlugin(ProviderPlugin):
     def _success(
         self, context: OperationContext, body: dict[str, Any], sku: str, headers: dict[str, str]
     ) -> MockResponse:
+        principal = context.principal
+        before = None
+        if not principal.keyless and principal.account is not None:
+            before = context.store.account(self.name, principal.account.id)
         charge = self._charge(context, sku)
         body.pop("usage", None)
-        if not context.principal.keyless:
-            body["usage"] = self._usage(context, charge, sku)
+        if before is not None:
+            body["usage"] = self._usage(context, charge, sku, before)
         return _json(200, body, {**headers, "x-request-id": _uuid7(context.store.now())})
 
     # --------------------------------------------------------------- search

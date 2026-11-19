@@ -191,7 +191,9 @@ polyweb-mock keys list [--provider tavily]
 polyweb-mock keys create tavily --label ci [--scope search] [--limit 50] [--env-var NAME] [--key VALUE] [--account ID]
 polyweb-mock keys revoke tavily ci                  # by label or key value; `keys restore` undoes it
 polyweb-mock credits show [tavily]
-polyweb-mock credits add tavily 500                 # raise the allowance
+polyweb-mock credits add tavily 500                 # raise the recurring grant
+polyweb-mock credits add exa 10 --prepaid           # one-time credit: never resets, spent after the grant
+polyweb-mock credits funding tavily postpaid --overage-limit 500   # bill after use (PAYGO); `prepaid` refuses at zero
 polyweb-mock credits set tavily 0                   # remaining balance; `unlimited` removes the cap; --used N
 polyweb-mock account show [keenable]
 polyweb-mock account set keenable reset_day=17      # JSON attribute values; NAME= removes one
@@ -259,10 +261,10 @@ Per provider, the faults render as the real provider does:
 | Exa | 401 `INVALID_API_KEY` (no key: 402 x402 challenge); admin API 401 | 429 `RATE_LIMIT_EXCEEDED` | 402 `NO_MORE_CREDITS`; `--scope key`/`team` budgets | 503 `SERVICE_OVERLOADED`, tagged 5xx |
 | Firecrawl | 401 `Unauthorized: Invalid token` | 429 + `Retry-After` | 402 | `{"success": false}`; `http_error --status 408 --scope processing_continues` = scrape resume |
 | Parallel | 401 `{"code": 16}` (C.0/C.1); Account API gateway 401; OAuth `invalid_client` | v1 envelope 429 + `Retry-After` | 402 v1 envelope (OAuth: 500) | v1 envelope; OAuth errors on `platform.parallel.ai` |
-| You.com | gateway 403 `Forbidden` (no key: 402); `api.you.com` 401 | gateway 429 + `X-RateLimit-*` | 402 `payment_required`; `--scope key` 429 `spend_cap_exceeded` | AWS gateway or FastAPI bodies |
-| Brave | edge 422 `SUBSCRIPTION_TOKEN_INVALID` | 429 `RATE_LIMITED` + ledger `X-RateLimit-*` | 429 `QUOTA_LIMITED`; `--scope credits` 402; `--scope spend_cap` 429 | 502/503/504 AWS ELB HTML page |
+| You.com | gateway 403 `Forbidden` (no key: 402 `payment_required`); `api.you.com` 401 | gateway 429 + `X-RateLimit-*` | 402 `{"detail": "Insufficient credits"}`; `--scope key` 429 `spend_cap_exceeded` | AWS gateway or FastAPI bodies |
+| Brave | edge 422 `SUBSCRIPTION_TOKEN_INVALID` | 429 `RATE_LIMITED` + ledger `X-RateLimit-*` | spent credit 402 `CREDIT_EXHAUSTED`; monthly header limit 429 `QUOTA_LIMITED`; `--scope spend_cap` 429 | 502/503/504 AWS ELB HTML page |
 | Keenable | 401 `invalid_api_key` (`Malformed API key` without `keen_`) | 429 `rate_limit_per_second`; keyless `public_rate_limit_*` | 402 `insufficient_credits` | 500, 503 `auth_unavailable`, 529 `search_overloaded`, fetch 502/504 |
-| Tinyfish | 401 `INVALID_API_KEY` / `MISSING_API_KEY` | 429 `RATE_LIMIT_EXCEEDED` + `X-RateLimit-*` | 402 `INSUFFICIENT_CREDITS` (plan `beta`: `FREE_ALLOWANCE_EXHAUSTED`) | 503 `BACKEND_UNAVAILABLE`, 500 `INTERNAL_ERROR` |
+| Tinyfish | 401 `INVALID_API_KEY` / `MISSING_API_KEY` | 429 `RATE_LIMIT_EXCEEDED` + `X-RateLimit-*` | daily allowance 429 `RATE_LIMIT_EXCEEDED` (`free_allowance_exhausted`); wallet spending on: 402 `INSUFFICIENT_CREDITS` | 503 `BACKEND_UNAVAILABLE`, 500 `INTERNAL_ERROR` |
 
 **Timeouts and SDK-owned clients.** The default hold (30 s) is longer than
 Polyweb's default `POLYWEB_HTTP_TIMEOUT_SECONDS` (20 s), so adapters on the
@@ -321,9 +323,37 @@ Add a preset as `src/polyweb_provider_mock/scenarios/<name>.json`:
 `providers/base.py` documents the interface; `providers/tavily.py` is the
 reference implementation.
 
+## Accounts and funding
+
+Each seeded account follows the provider's documented free tier (checked
+against the official pricing and docs pages on 2026-11-19). An account spends,
+in order: its **grant** (`credit_limit`, refilled by its reset rule and
+forfeited at an expiry date when it has one), then its **prepaid** balance
+(one-time credit that never resets: signup bonuses, purchased credit), then,
+on a **postpaid** account, **overage** billed after use, cleared each period
+and capped by `--overage-limit` when set. A prepaid account with nothing
+left is refused with the provider's exhaustion error. Units are the
+provider's own.
+
+| Provider | Seeded account | Resets | Other seeded accounts and keys |
+| --- | --- | --- | --- |
+| Tavily | 1,000 credits | 1st of the month | 100 requests/min per account; `/usage` 10 per 10 min; PAYGO via `credits funding tavily postpaid` (433 at the cap) |
+| Exa | $10 grant + $10 one-time bonus (grant spent first: undocumented) | grant on the 1st; bonus never | key `budgeted` ($0.05 budget, `API_KEY_BUDGET_EXCEEDED`); 10/5/100 QPS search/deep/contents |
+| Firecrawl | 1,000 credits (Free) | monthly (calendar; real cycle anchor undocumented) | 10 RPM search and scrape; prepaid = coupon/purchased credit (in `remainingCredits`, not `planCredits`) |
+| Parallel | $5 grant, card on file: postpaid, never blocked (spend limits only notify) | calendar month | account `parallel-no-card` (key `no-card`): prepaid, 402 at $0; 600/min search and extract |
+| You.com | $100 (verified signup: $10 + $90), forfeited after 60 days | never | account `you-unverified` ($10, key `unverified`); key `capped` ($1 spend cap, 429); 10 rps per endpoint |
+| Brave | $5 a month per plan: Search 1,000 requests, Answers 1,250 | 1st of the month (anchor undocumented) | the `X-RateLimit-*` monthly element stays `0` as recorded (`account set brave monthly_request_limit=N` to show one) |
+| Keenable | 100,000 requests (free) | the organization's creation day (seeded: the 17th) | purchased credit is prepaid; keyless 1,000/hour and 10/second per endpoint per IP |
+| Tinyfish | free: 12,000 searches and 1,000 successful fetch URLs a day | 00:00 UTC | wallet spending off: exhaustion is 429 `free_allowance_exhausted` (`wallet_spending=true` with no balance: 402) |
+
+The dev stack keeps mock state on a volume, so expiry and resets happen as
+they would live: after 60 days the You.com signup credit is gone. Run
+`polyweb-mock seed --reset` (or `credits set you 10000`) to start over.
+Paid plans are not seeded yet (TASK-000104).
+
 ## Fidelity
 
-**Recorded**: live exchanges of 2026-11-17 in `tests/contract/recordings`;
+**Recorded**: live exchanges of 2026-11-17 and 2026-11-19 in `tests/contract/recordings`;
 the contract tests replay each one and check the status, the important
 headers, and the JSON shape. Success bodies are scrubbed (Brave's terms forbid
 storing results): values are synthetic, the structure is real.
@@ -332,14 +362,14 @@ storing results): values are synthetic, the structure is real.
 
 | Provider | Recorded | Documented only | Inferred, known gaps |
 | --- | --- | --- | --- |
-| Tavily | search, extract, usage, keyless, 401/422/400 errors (15) | 432/433 exhaustion, 429 | keyed 429 body; extract credit carry as observed |
+| Tavily | search, extract, usage, keyless, 401/422/400 errors (15) | 432/433 exhaustion, 429, 100 RPM per account, PAYGO | keyed 429 body; extract credit carry as observed; keyless 500/day cap invented (its window is the UTC day; the recorded `Retry-After` was not) |
 | Exa | search, contents, usage 401, x402 402 challenge, 401/400 (14) | admin usage success (TASK-000099), budgets, 503, 429 tags | 429/5xx/budget/revoked-key messages; synthetic company `entities` |
 | Firecrawl | search, scrape, credit usage, 401/400 (12) | 402, 429, scrape resume (408) | 402/429/5xx/keyless-cap/DNS messages; keyless cap 50/day; `branding`/`product`/`menu`/`attributes` formats return no content |
 | Parallel | search, extract, 401/422, balance 401 (10); OAuth device flow, token, refresh, revoke, balance, OAuth token refused on search (2026-11-19 capture, pinned in `tests/unit/test_parallel.py`) | apps, key minting, `access_denied`, `slow_down`, 402/403/429/5xx | expired-token gateway wording; JWTs signed HS256 (real: RS256) |
-| You.com | search, contents, balance, 401/402/403/422 (14) | live-page pricing, spend cap | revoked keys, 429 and spend-cap bodies, exhausted-wallet body, 5xx bodies |
+| You.com | search, contents, balance, 401/402/403/422 (14) | live-page pricing, spend cap, 60-day signup credit, 10 rps | revoked keys, 429 and spend-cap bodies, 5xx bodies; a key's spend cap never resets (billing period undocumented); keyless MCP endpoint out of scope |
 | Brave | web search, LLM context, 400/422 (10) | rate-limit headers, plans, 429/402 envelope and codes (TASK-000101) | 429/402 `detail`/`meta` text, prepaid exhaustion status, revoked key, outage pages; Answers key on Web Search |
-| Keenable | keyless search and fetch, 400s (8) | keyed paths, 401/402/403, retryable 5xx (TASK-000100) | keyed rate headers; allowance resets on the UTC month unless `account set keenable reset_day=N` (real: organization creation day); purchased credits reset monthly |
-| Tinyfish | 401 missing and bogus key on both hosts; search (web, news, research, filters), fetch (3 formats, options, per-URL errors), 400/403/405/422 (41); `/usage` fields and minute-slot accounting (2026-11-19, history not stored) | 402/429, 5xx, highlights success, `iframe_links`, conditional fetch, daily allowance | 402/429/5xx bodies; JSON `format` heading/list nodes; 405 lacks `X-TF-User-ID`; invalid-request and usage-read limits not modelled |
+| Keenable | keyless search and fetch, 400s (8) | keyed paths, 401/402/403, retryable 5xx (TASK-000100) | keyed rate headers; keyless window per IP is the mock client's address (one shared limit behind a proxy); auto top-up, the 25 rps tier and the 1,000/month disposable-email tier not modelled |
+| Tinyfish | 401 missing and bogus key on both hosts; search (web, news, research, filters), fetch (3 formats, options, per-URL errors), 400/403/405/422 (41); `/usage` fields and minute-slot accounting (2026-11-19, history not stored) | 402/429, 5xx, highlights success, `iframe_links`, conditional fetch, daily allowance, wallet spending, 60/min invalid-and-usage limit | 402/429/5xx bodies and the exhaustion `Retry-After`; JSON `format` heading/list nodes; 405 lacks `X-TF-User-ID`; overage price unpublished (0) |
 
 ## Checks
 
