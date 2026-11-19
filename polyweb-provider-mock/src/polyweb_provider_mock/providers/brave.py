@@ -28,11 +28,17 @@ and the official API reference:
   edge-layer answers (422 auth, ELB pages) send ``Server: awselb/2.0``; the
   application answers send no ``Server`` header, as recorded.
 
+The 429 and 402 bodies follow the docs, without a live sample (TASK-000101):
+the ``ErrorResponse`` envelope (``type``, ``error.id/status/code/detail/meta``,
+``time``), the ``error.code`` values ``RATE_LIMITED``, ``QUOTA_LIMITED``,
+``USAGE_LIMIT_EXCEEDED`` and ``CREDIT_EXHAUSTED``, and 429 with ``X-RateLimit-*``
+on a rate breach are documented. The ``detail`` and ``meta`` text is a guess, and so
+is the prepaid-exhaustion status, which the docs do not give (a ``quota_exhausted``
+fault with status 402 or scope ``credits`` gives 402 ``CREDIT_EXHAUSTED``; scope
+``spend_cap`` gives 429 ``USAGE_LIMIT_EXCEEDED``).
+
 Unverified (no live sample): the revoked-key answer (rendered as a wrong
-key), every 429 and 402 body (``meta`` is a guess), the prepaid-exhaustion
-status (a ``quota_exhausted`` fault with status 402 or scope ``credits`` gives
-402 ``CREDIT_EXHAUSTED``; scope ``spend_cap`` gives 429 ``USAGE_LIMIT_EXCEEDED``),
-and outage bodies (502/503/504 use the AWS load balancer HTML page). An
+key) and outage bodies (502/503/504 use the AWS load balancer HTML page). An
 Answers key on Web Search is assumed to fail like it does on LLM Context.
 """
 

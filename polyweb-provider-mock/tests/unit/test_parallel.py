@@ -901,8 +901,14 @@ class _Cli:
 
 
 async def test_cli_oauth_and_balance_commands(
-    client: httpx.AsyncClient, store: MockStore, capsys: pytest.CaptureFixture[str]
+    client: httpx.AsyncClient,
+    store: MockStore,
+    clock: Clock,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    # The CLI opens its own store on the wall clock, so the device codes must be
+    # issued at the real time or they read as expired once the fixed date passes.
+    clock.now = datetime.now(UTC)
     cli = _Cli(store.db.path, capsys)
     client_id = await _register(client)
     first = (await _device(client, client_id)).json()

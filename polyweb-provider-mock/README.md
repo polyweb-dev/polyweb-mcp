@@ -326,12 +326,12 @@ storing results): values are synthetic, the structure is real.
 | Provider | Recorded | Documented only | Inferred, known gaps |
 | --- | --- | --- | --- |
 | Tavily | search, extract, usage, keyless, 401/422/400 errors (15) | 432/433 exhaustion, 429 | keyed 429 body; extract credit carry as observed |
-| Exa | search, contents, usage, x402 402 challenge, 401/400 (14) | budgets, 503, 429 tags | 429/5xx/budget/revoked-key messages; synthetic company `entities` |
+| Exa | search, contents, usage 401, x402 402 challenge, 401/400 (14) | admin usage success (TASK-000099), budgets, 503, 429 tags | 429/5xx/budget/revoked-key messages; synthetic company `entities` |
 | Firecrawl | search, scrape, credit usage, 401/400 (12) | 402, 429, scrape resume (408) | 402/429/5xx/keyless-cap/DNS messages; keyless cap 50/day; `branding`/`product`/`menu`/`attributes` formats return no content |
 | Parallel | search, extract, 401/422, balance 401 (10) | Account API, OAuth device flow, key minting, 402/403/429/5xx | no live device flow; expired-token gateway wording; OAuth token as `x-api-key` accepted (unverified, toggle `--token-product-access`) |
 | You.com | search, contents, balance, 401/402/403/422 (14) | live-page pricing, spend cap | revoked keys, 429 and spend-cap bodies, exhausted-wallet body, 5xx bodies |
-| Brave | web search, LLM context, 400/422 (10) | rate-limit headers, plans | revoked key, every 429/402 body, prepaid exhaustion status, outage pages; Answers key on Web Search |
-| Keenable | keyless search and fetch, 400s (8) | keyed paths, 401/402/403, retryable 5xx | keyed rate headers; allowance resets on the UTC month unless `account set keenable reset_day=N` (real: organization creation day); purchased credits reset monthly |
+| Brave | web search, LLM context, 400/422 (10) | rate-limit headers, plans, 429/402 envelope and codes (TASK-000101) | 429/402 `detail`/`meta` text, prepaid exhaustion status, revoked key, outage pages; Answers key on Web Search |
+| Keenable | keyless search and fetch, 400s (8) | keyed paths, 401/402/403, retryable 5xx (TASK-000100) | keyed rate headers; allowance resets on the UTC month unless `account set keenable reset_day=N` (real: organization creation day); purchased credits reset monthly |
 | Tinyfish | 401 missing and bogus key on both hosts (4) | search, fetch, usage, limits, 402/429 | every success shape; JSON `format` tree; invalid-request and usage-read limits not modelled |
 
 ## Checks
