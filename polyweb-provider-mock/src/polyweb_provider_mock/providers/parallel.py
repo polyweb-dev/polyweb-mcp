@@ -27,9 +27,9 @@ Account API (OAuth device flow, balance, apps, key minting) lives in
 :mod:`polyweb_provider_mock.providers._parallel_account`. Every operation is
 served on its real host only; the OAuth and key-minting operations keep their
 bodies (client secrets, device codes, tokens, minted keys) out of the request
-log. A valid, unexpired access token presented as ``x-api-key`` maps to the
-account's bridge key in :meth:`ParallelPlugin.credentials`; an expired or
-orphaned one is an unknown key (401 ``Invalid API key (C.1)``).
+log. The OAuth access token reads the balance only: presented to the product
+API as ``x-api-key`` or as a Bearer token it gets 401 ``{"code": 16,
+"message": "Invalid JWT credential"}``, as recorded on 2026-11-19.
 
 Synthetic extract targets: a host whose first label is ``blocked`` fails with
 an upstream 403, a ``.invalid`` host fails to resolve, and a non-HTTP URL is
@@ -77,6 +77,8 @@ _MAX_RESULTS: Final = 40
 _MAX_EXTRACT_URLS: Final = 20
 _DEFAULT_EXCERPT_CHARS: Final = 6000
 _MISSING: Final[Any] = object()
+#: Recorded 2026-11-19: an OAuth access token on the product API.
+_JWT_REJECTED: Final = "Invalid JWT credential"
 _QUERIES_MESSAGE: Final = (
     "Field required. Pass a list of 2-3 concise keyword queries, 3-6 words each, and put the "
     "full question in objective."
@@ -176,6 +178,19 @@ def _phrase(status: int, fallback: str) -> str:
         return HTTPStatus(status).phrase
     except ValueError:
         return fallback
+
+
+def _presents_jwt(context: ErrorContext) -> bool:
+    """Whether a rejected product call carried a JWT (an OAuth access token)."""
+
+    key = context.presented_key
+    if key is not None and key.count(".") == 2:
+        return True
+    request = context.request
+    if request is None:
+        return False
+    scheme, _, token = (request.headers.get("authorization") or "").partition(" ")
+    return scheme.lower() == "bearer" and token.strip().count(".") == 2
 
 
 def _request_id() -> str:
@@ -438,13 +453,7 @@ class ParallelPlugin(ProviderPlugin):
         )
 
     def credentials(self, request: Request, store: MockStore) -> Credentials:
-        key = header_value(request, "x-api-key")
-        if key is not None and key.count(".") == 2:
-            # An Account API access token used as a product key (ParallelOAuthAdapter).
-            claims = account_api.ParallelAccount(store).access(key)
-            if isinstance(claims, dict):
-                return Credentials(key=account_api.bridge_key(str(claims.get("org_id"))))
-        return Credentials(key=key)
+        return Credentials(key=header_value(request, "x-api-key"))
 
     def default_seed(self) -> ProviderSeed:
         return ProviderSeed(
@@ -469,12 +478,6 @@ class ParallelPlugin(ProviderPlugin):
                     label="default", account_id=DEFAULT_ACCOUNT, env_var="POLYWEB_PARALLEL_API_KEY"
                 ),
                 KeySeed(label="secondary", account_id=DEFAULT_ACCOUNT),
-                KeySeed(
-                    label=account_api.bridge_label(DEFAULT_ACCOUNT),
-                    account_id=DEFAULT_ACCOUNT,
-                    key=account_api.bridge_key(DEFAULT_ACCOUNT),
-                    scopes=(account_api.BRIDGE_SCOPE,),
-                ),
             ),
         )
 
@@ -543,7 +546,11 @@ class ParallelPlugin(ProviderPlugin):
             401,
         }:
             message = context.message or (
-                "No API key provided (C.0)" if context.missing_key else "Invalid API key (C.1)"
+                _JWT_REJECTED
+                if _presents_jwt(context)
+                else "No API key provided (C.0)"
+                if context.missing_key
+                else "Invalid API key (C.1)"
             )
             return MockResponse(
                 status=401,

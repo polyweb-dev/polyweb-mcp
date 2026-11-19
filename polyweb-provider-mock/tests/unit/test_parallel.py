@@ -4,6 +4,7 @@ The store runs on a controlled clock, so device-code expiry, poll pacing, and
 token lifetimes are deterministic.
 """
 
+import base64
 import json
 import random
 import re
@@ -21,7 +22,7 @@ from polyweb_provider_mock.app import MockApplication
 from polyweb_provider_mock.cli import main
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
 from polyweb_provider_mock.providers import discover
-from polyweb_provider_mock.providers._parallel_account import ParallelAccount, bridge_label
+from polyweb_provider_mock.providers._parallel_account import ParallelAccount
 from polyweb_provider_mock.store import MockStore
 
 API = {"Host": "api.parallel.ai"}
@@ -469,21 +470,55 @@ async def test_device_flow_pending_approve_and_single_use(
 
     tokens = granted.json()
     assert granted.status_code == 200
-    assert set(tokens) == {
+    assert granted.headers["cache-control"] == "no-store"
+    # The recorded field order of the device grant (2026-11-19).
+    assert list(tokens) == [
         "access_token",
         "token_type",
         "expires_in",
-        "refresh_token",
-        "authorization_expires_in",
         "scope",
-    }
+        "org_id",
+        "org_name",
+        "refresh_token",
+        "refresh_token_expires_in",
+        "authorization_expires_in",
+        "identity_assertion",
+        "assertion_expires_at",
+        "registration_id",
+    ]
     assert (tokens["token_type"], tokens["expires_in"], tokens["scope"]) == (
         "Bearer",
         600,
         "balance:read",
     )
-    assert tokens["access_token"].count(".") == 2
-    assert (reused.status_code, reused.json()["error"]) == (400, "invalid_grant")
+    assert tokens["refresh_token_expires_in"] == tokens["authorization_expires_in"] == 2591999
+    assert len(tokens["refresh_token"]) == 48
+    assert tokens["identity_assertion"] is tokens["registration_id"] is None
+    header, claims = (
+        json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        for part in tokens["access_token"].split(".")[:2]
+    )
+    assert header == {"alg": "HS256", "kid": "account-service-v1", "typ": "JWT"}
+    assert sorted(claims) == [
+        "aud",
+        "client_id",
+        "credential_id",
+        "exp",
+        "iat",
+        "iss",
+        "org_id",
+        "scope",
+        "sub",
+    ]
+    assert (claims["aud"], claims["iss"]) == (
+        "account-service-public",
+        "https://api.parallel.ai/account",
+    )
+    assert claims["exp"] - claims["iat"] == 600 and claims["org_id"] == tokens["org_id"]
+    assert (reused.status_code, reused.json()) == (
+        400,
+        {"error": "invalid_grant", "error_description": "Device code already used"},
+    )
 
 
 async def test_enforce_interval_answers_slow_down_and_widens_the_interval(
@@ -609,25 +644,39 @@ async def test_refresh_rotates_and_revoke_ends_the_session(
     rotated = await _refresh(client, client_id, tokens["refresh_token"])
     stale = await _refresh(client, client_id, tokens["refresh_token"])
 
+    # Recorded: reusing a rotated refresh token fails but does not end the session.
+    after_stale = await _refresh(client, client_id, rotated.json()["refresh_token"])
+
     new = rotated.json()
     assert rotated.status_code == 200
+    assert "identity_assertion" not in new and len(new["refresh_token"]) == 48
     assert new["refresh_token"] != tokens["refresh_token"]
     assert new["access_token"] != tokens["access_token"]
-    assert (stale.status_code, stale.json()["error"]) == (400, "invalid_grant")
+    invalid_grant = {"error": "invalid_grant", "error_description": "invalid_grant"}
+    assert (stale.status_code, stale.json()) == (400, invalid_grant)
+    assert after_stale.status_code == 200
+    live = after_stale.json()
 
-    revoke = await client.post(
-        "/getServiceKeys/token/revoke",
-        data={"refresh_token": new["refresh_token"]},
-        headers=PLATFORM,
-    )
-    assert (revoke.status_code, revoke.json()) == (200, {})
-    assert (await _refresh(client, client_id, new["refresh_token"])).json()["error"] == (
-        "invalid_grant"
-    )
+    async def revoke(token: str) -> httpx.Response:
+        return await client.post(
+            "/getServiceKeys/token/revoke", data={"refresh_token": token}, headers=PLATFORM
+        )
+
+    # Recorded: 200 with an empty body and no content type, whatever the token.
+    for response in (
+        await revoke(live["refresh_token"]),
+        await revoke(live["refresh_token"]),
+        await revoke("bogus"),
+    ):
+        assert (response.status_code, response.content) == (200, b"")
+        assert "content-type" not in response.headers
+        assert response.headers["cache-control"] == "no-store"
+    revoked = await _refresh(client, client_id, live["refresh_token"])
+    assert (revoked.status_code, revoked.json()) == (400, invalid_grant)
     # Revocation keeps issued access tokens valid until they expire.
     balance = await client.get(
         "/account/service/v1/balance",
-        headers={**API, "Authorization": f"Bearer {new['access_token']}"},
+        headers={**API, "Authorization": f"Bearer {live['access_token']}"},
     )
     assert balance.status_code == 200
 
@@ -665,7 +714,10 @@ async def test_balance_follows_the_ledger_and_account_facts(
         "pending_debit_balance_cents",
         "will_invoice",
     }
-    assert fresh.json()["credit_balance_cents"] == 500
+    # Recorded: whole cents as JSON numbers with a fraction (478.0).
+    assert fresh.json()["credit_balance_cents"] == 500.0
+    assert isinstance(fresh.json()["credit_balance_cents"], float)
+    assert b'"credit_balance_cents":500.0' in fresh.content
     assert spent["credit_balance_cents"] == 498
     assert pending["pending_debit_balance_cents"] == 250
     assert (invoiced["will_invoice"], invoiced["credit_balance_cents"]) == (True, 0)
@@ -699,22 +751,32 @@ async def test_balance_bearer_failures(
     )
 
 
-async def test_oauth_token_as_product_key_follows_the_setting(
+async def test_oauth_token_is_never_a_product_key(
     client: httpx.AsyncClient, store: MockStore, clock: Clock
 ) -> None:
+    """Recorded 2026-11-19: the access token reads the balance only."""
+
     _, tokens = await _connect(client, store, clock)
-    token_key = {**API, "x-api-key": tokens["access_token"]}
+    token = tokens["access_token"]
+    as_key = {**API, "x-api-key": token}
+    as_bearer = {**API, "Authorization": f"Bearer {token}"}
 
-    allowed = await client.post("/v1/search", json=_SEARCH, headers=token_key)
-    ParallelAccount(store).update_settings(token_product_access=False)
-    refused = await client.post("/v1/search", json=_SEARCH, headers=token_key)
-    ParallelAccount(store).update_settings(token_product_access=True)
-    clock.advance(601)
-    expired = await client.post("/v1/search", json=_SEARCH, headers=token_key)
+    answers = [
+        await client.post("/v1/search", json=_SEARCH, headers=as_key),
+        await client.post("/v1/search", json=_SEARCH, headers=as_bearer),
+        await client.post("/v1/extract", json=_EXTRACT, headers=as_key),
+    ]
+    wrong = await client.post("/v1/search", json=_SEARCH, headers={**API, "x-api-key": "nope"})
 
-    assert allowed.status_code == 200
-    assert store.log_tail("parallel")[-3].key_label == bridge_label("parallel-org")
-    assert refused.json() == expired.json() == {"code": 16, "message": "Invalid API key (C.1)"}
+    for answer in answers:
+        assert (answer.status_code, answer.json()) == (
+            401,
+            {"code": 16, "message": "Invalid JWT credential"},
+        )
+        assert answer.headers["content-type"] == "application/json; charset=utf-8"
+    assert wrong.json() == {"code": 16, "message": "Invalid API key (C.1)"}
+    balance = await client.get("/account/service/v1/balance", headers=as_bearer)
+    assert balance.json()["credit_balance_cents"] == 500.0
 
 
 async def test_apps_and_key_minting(
@@ -857,7 +919,7 @@ async def test_oauth_and_minted_key_secrets_never_reach_the_request_log(
     )
     rotated = (await _refresh(client, client_id, tokens["refresh_token"])).json()
     token_key = {**API, "x-api-key": rotated["access_token"]}
-    assert (await client.post("/v1/search", json=_SEARCH, headers=token_key)).status_code == 200
+    assert (await client.post("/v1/search", json=_SEARCH, headers=token_key)).status_code == 401
     raw_key = minted.json()["raw_api_key"]
     await client.post("/v1/search", json=_SEARCH, headers={**API, "x-api-key": raw_key})
 
@@ -920,13 +982,8 @@ async def test_cli_oauth_and_balance_commands(
     assert "no parallel device" in cli.fails("parallel", "oauth", "expire", "QQQQ-QQQQ")
     settings = cli("parallel", "oauth", "set", "--auto-approve", "on", "--interval", "2")
     assert (settings["auto_approve"], settings["interval"]) == (True, 2)
-    cli("parallel", "oauth", "set", "--token-product-access", "off")
-    bridge = next(
-        item for item in store.keys("parallel") if item.label == bridge_label("parallel-org")
-    )
-    assert bridge.status == "revoked"
     shown = cli("parallel", "oauth", "show")
-    assert len(shown["devices"]) == 2 and shown["settings"]["token_product_access"] is False
+    assert len(shown["devices"]) == 2 and "token_product_access" not in shown["settings"]
     balance = cli("parallel", "balance", "set", "--pending-cents", "40", "--will-invoice", "off")
     assert (balance["credit_balance_cents"], balance["pending_debit_balance_cents"]) == (500, 40)
     assert cli("parallel", "balance", "show")["pending_debit_balance_cents"] == 40

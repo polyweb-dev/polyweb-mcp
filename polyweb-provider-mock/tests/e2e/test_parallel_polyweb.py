@@ -56,7 +56,6 @@ from pydantic import SecretStr
 from polyweb_provider_mock.cli import main
 from polyweb_provider_mock.faults import FaultKind, FaultParams, FaultSpec
 from polyweb_provider_mock.providers import discover
-from polyweb_provider_mock.providers._parallel_account import bridge_label
 from polyweb_provider_mock.store import MockStore
 from tests._support.live_server import polyweb_settings, serve_mock
 
@@ -405,9 +404,11 @@ def _usage(observed: datetime) -> UsageSyncRequest:
     return UsageSyncRequest(provider="parallel", auth_mode=AuthMode.KEYED, observed_at=observed)
 
 
-async def test_device_flow_cli_approval_balance_and_token_search(
-    mock: _Mock, oauth: _OAuth
+async def test_device_flow_cli_approval_balance_and_api_key_spend(
+    mock: _Mock, oauth: _OAuth, key: str, http: httpx.AsyncClient, adapters: list[ParallelAdapter]
 ) -> None:
+    """The grant reads the balance; product calls need the API key (recorded 2026-11-19)."""
+
     started = await oauth.start()
     assert started.verification_uri == f"{mock.origin}/_mock/parallel/oauth/device"
     # Recorded from the real platform (2026-11-17): 2 s interval, 600 s lifetime.
@@ -424,17 +425,19 @@ async def test_device_flow_cli_approval_balance_and_token_search(
     adapter = ParallelOAuthAdapter(oauth.http, token)
     try:
         before = await adapter.usage_snapshot(_usage(oauth.clock[0]))
-        result = await adapter.search(_search())
+        refused = (await _error(adapter.search(_search()))).error
+        result = await _adapter(http, key, adapters).search(_search())
         after = await adapter.usage_snapshot(_usage(oauth.clock[0]))
     finally:
         await adapter.aclose()
 
     assert before is not None and before.remaining == Decimal("5")
     assert before.source == "vendor_api"
+    # Polyweb's OAuth adapter still sends the token to /v1/search; Parallel refuses it.
+    assert (refused.code, refused.status_code) == ("invalid_api_key", 401)
     assert len(result.results) == 3
     # $5 minus one advanced search ($0.005) is 499.5 cents; the balance reports whole cents.
     assert after is not None and after.remaining == Decimal("4.99")
-    assert mock.store.log_tail("parallel")[-2].key_label == bridge_label("parallel-org")
     logged = " ".join(str(entry.request_summary) for entry in mock.store.log_tail("parallel", 20))
     assert token.get_secret_value() not in logged
 
@@ -540,30 +543,6 @@ async def test_invoice_and_pending_debit_balance_semantics(mock: _Mock, oauth: _
 
     assert pending is not None and pending.remaining == Decimal("3.75")
     assert invoiced is not None and invoiced.remaining is None
-
-
-async def test_product_access_off_rejects_the_oauth_token(mock: _Mock, oauth: _OAuth) -> None:
-    _cli(
-        mock,
-        "parallel",
-        "oauth",
-        "set",
-        "--auto-approve",
-        "on",
-        "--token-product-access",
-        "off",
-    )
-    await oauth.start()
-    await oauth.poll()
-    adapter = ParallelOAuthAdapter(oauth.http, SecretStr(await oauth.secret("access")))
-    try:
-        error = (await _error(adapter.search(_search()))).error
-        snapshot = await adapter.usage_snapshot(_usage(oauth.clock[0]))
-    finally:
-        await adapter.aclose()
-
-    assert (error.code, error.status_code) == ("invalid_api_key", 401)
-    assert snapshot is not None and snapshot.remaining == Decimal("5")
 
 
 async def test_oauth_endpoint_faults(mock: _Mock, oauth: _OAuth) -> None:

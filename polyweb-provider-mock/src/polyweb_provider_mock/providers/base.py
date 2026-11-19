@@ -147,7 +147,8 @@ class MockResponse:
     status: int = 200
     body: Any = None
     headers: dict[str, str] = field(default_factory=dict)
-    media_type: str = "application/json"
+    #: ``None`` sends no content type, as for an empty body.
+    media_type: str | None = "application/json"
 
     def content(self) -> bytes:
         if isinstance(self.body, bytes):

@@ -8,9 +8,10 @@ Polyweb (``polyweb.services.parallel_oauth``) calls, on ``platform.parallel.ai``
 ``Authorization: Bearer <access token>``. The mock also serves the documented
 apps and key-minting endpoints of the same Account API.
 
-Recorded against the real platform on 2026-11-17, up to approval: client
-registration (HTTP 201, a ``<client_name>-<word>-<word>-<word>-<hex8>`` public
-client id, ``token_endpoint_auth_method: none``), the device code (48-character
+Recorded against the real platform (2026-11-17 up to approval, 2026-11-19
+through approval, refresh and revoke). Before approval: client registration
+(HTTP 201, a ``<client_name>-<word>-<word>-<word>-<hex8>`` public client id,
+``token_endpoint_auth_method: none``), the device code (48-character
 ``device_code``, ``XXXX-XXXX`` user code, 600 s lifetime, 2 s interval),
 ``invalid_scope``, ``unsupported_grant_type``, ``invalid_grant`` for an unknown
 device code, ``authorization_pending`` and ``expired_token``, with their exact
@@ -19,11 +20,24 @@ device code, ``authorization_pending`` and ``expired_token``, with their exact
 errors. The platform did not answer ``slow_down`` to two polls 0.2 s apart nor
 to 283 polls at the interval, so ``enforce_interval`` is off by default.
 
-Not yet recorded (from the official account guide): the token response,
-``access_denied``, ``slow_down`` (5 second interval increase), 10 minute
-access tokens, refresh tokens that rotate on every use and expire after 30
-idle days, and revoke by form ``refresh_token`` (access tokens stay valid until
-they expire).
+After approval: the token body (``access_token``, ``token_type: Bearer``,
+``expires_in: 600``, ``scope``, ``org_id``, ``org_name``, a 48-character
+``refresh_token``, ``refresh_token_expires_in`` and ``authorization_expires_in``
+of 30 days, plus ``identity_assertion``, ``assertion_expires_at`` and
+``registration_id`` as ``null`` on the device grant only). The access token is
+an RS256 JWT (``kid: account-service-v1``) with the claims ``aud``,
+``client_id``, ``credential_id``, ``exp``, ``iat``, ``iss``, ``org_id``,
+``scope`` and ``sub``; the mock signs HS256 with the same claims. A reused
+device code is ``invalid_grant`` "Device code already used". Every refresh
+rotates the refresh token; the old one then answers ``invalid_grant`` /
+``invalid_grant`` without revoking the new one. Revoke answers 200 with an
+empty body and no content type, also for an unknown or already revoked token;
+a revoked refresh token is ``invalid_grant``, while its access token keeps
+reading the balance until it expires. Balance cents are JSON numbers with a
+fraction (``478.0``).
+
+Still from the official account guide only: ``access_denied`` and
+``slow_down`` (5 second interval increase).
 
 A human cannot approve a mock code at Parallel, so the device page is the
 mock's own ``/_mock/parallel/oauth/device``; ``polyweb-mock parallel oauth
@@ -37,13 +51,10 @@ facts are account attributes (:meth:`MockStore.set_account_attributes`).
 Access tokens are HS256 JWTs signed with a fixed mock key; their claims carry
 the organization (mock account) and scopes.
 
-Product access with an OAuth token: ``ParallelOAuthAdapter`` sends the access
-token as ``x-api-key`` to ``/v1/search`` and ``/v1/extract``. Whether real
-Parallel accepts that is unverified (the docs separate Account API tokens from
-API keys). The mock accepts it while ``token_product_access`` is on (the
-default, so the app path runs): a valid, unexpired token maps to the
-account's hidden ``oauth:<account>`` bridge key, which the setting activates
-or revokes. The plugin's ``credentials()`` checks the expiry on the mock clock.
+The access token reads the balance only. Product calls need an API key: the
+real ``/v1/search`` answered a valid access token, as ``x-api-key`` or as a
+Bearer token, with 401 ``{"code": 16, "message": "Invalid JWT credential"}``
+(2026-11-19), and the mock does the same.
 
 The device page is an unguarded admin page (it only renders the form); with
 ``POLYWEB_PROVIDER_MOCK_ADMIN_TOKEN`` set, its form asks for the token, or a
@@ -77,11 +88,8 @@ from polyweb_provider_mock.store import MockStore, NotFoundError, PluginState
 
 __all__ = [
     "ACCOUNT_OPERATIONS",
-    "BRIDGE_SCOPE",
     "OAUTH_OPERATIONS",
     "ParallelAccount",
-    "bridge_key",
-    "bridge_label",
     "register_admin_pages",
     "register_admin_routes",
     "register_cli",
@@ -104,13 +112,12 @@ SCOPES: Final = frozenset(
         "usage:read",
     }
 )
-BRIDGE_SCOPE: Final = "oauth-bridge"
 OAUTH_OPERATIONS: Final = frozenset({"register", "device_code", "token", "revoke"})
 ACCOUNT_OPERATIONS: Final = frozenset({"balance", "apps", "create_key", "delete_key"})
 
 _PREFIX: Final = "parallel.oauth"
 _SIGNING_KEY: Final = b"polyweb-provider-mock:parallel:account-api:v1"
-_ISSUER: Final = "https://platform.parallel.ai"
+_ISSUER: Final = "https://api.parallel.ai/account"
 _AUDIENCE: Final = "account-service-public"
 _DEVICE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 _USER_CODE_ALPHABET: Final = "BCDFGHJKLMNPQRSTVWXZ"
@@ -135,25 +142,12 @@ _CLIENT_ID_WORDS: Final = (
 DeviceStatus = Literal["pending", "approved", "denied", "expired", "consumed"]
 
 
-def bridge_label(account_id: str) -> str:
-    """Return the label of the hidden key that OAuth product calls bill to."""
-
-    return f"oauth:{account_id}"
-
-
-def bridge_key(account_id: str) -> str:
-    """Return the deterministic value of an account's bridge key."""
-
-    return KEY_FORMAT.generate(f"{PROVIDER}:{bridge_label(account_id)}")
-
-
 class OAuthSettings(BaseModel):
     """Live knobs of the mock grant; ``polyweb-mock parallel oauth set`` changes them."""
 
     model_config = ConfigDict(extra="forbid")
 
     auto_approve: bool = False
-    token_product_access: bool = True
     issue_client_secret: bool = False
     # The real platform did not answer slow_down to fast polls (2026-11-17).
     enforce_interval: bool = False
@@ -221,6 +215,12 @@ class OAuthError(Exception):
         )
 
 
+def _seconds_left(deadline: datetime, now: datetime) -> int:
+    """Whole seconds until a deadline; the platform rounds down (2591999 for 30 days)."""
+
+    return max(1, int((deadline - now).total_seconds()) - 1)
+
+
 # ---------------------------------------------------------------------- JWT
 
 
@@ -236,19 +236,21 @@ def _sign(signing_input: str) -> str:
     return _b64(hmac.new(_SIGNING_KEY, signing_input.encode("ascii"), hashlib.sha256).digest())
 
 
-def _mint(session: Session, now: datetime, ttl: int) -> str:
-    header = {"alg": "HS256", "typ": "JWT", "kid": "polyweb-mock-1"}
+def _mint(session: Session, now: datetime, ttl: int, *, org_id: str, user_id: str) -> str:
+    """Mint an access token with the recorded claim set (HS256, not the real RS256)."""
+
+    header = {"alg": "HS256", "kid": "account-service-v1", "typ": "JWT"}
     issued = int(now.timestamp())
     claims = {
-        "iss": _ISSUER,
         "aud": _AUDIENCE,
-        "sub": session.id,
         "client_id": session.client_id,
-        "org_id": session.account_id,
-        "scope": session.scope,
-        "iat": issued,
+        "credential_id": session.id,
         "exp": issued + ttl,
-        "jti": secrets.token_hex(16),
+        "iat": issued,
+        "iss": _ISSUER,
+        "org_id": org_id,
+        "scope": session.scope,
+        "sub": user_id,
     }
     signing_input = ".".join(
         _b64(json.dumps(part, separators=(",", ":")).encode()) for part in (header, claims)
@@ -311,7 +313,10 @@ class ParallelAccount:
 
     @staticmethod
     def _settings(state: PluginState) -> OAuthSettings:
-        return OAuthSettings.model_validate(state.get("settings") or {})
+        # Settings saved by an older mock may hold removed knobs; ignore them.
+        stored = state.get("settings") or {}
+        known = {k: v for k, v in stored.items() if k in OAuthSettings.model_fields}
+        return OAuthSettings.model_validate(known)
 
     def settings(self) -> OAuthSettings:
         with self._tx(write=False) as state:
@@ -327,36 +332,14 @@ class ParallelAccount:
         return account_id in self.store.account_ids(PROVIDER)
 
     def update_settings(self, **changes: Any) -> OAuthSettings:
-        """Change settings; ``token_product_access`` also (de)activates every bridge key."""
+        """Change the mock grant's settings."""
 
         with self._tx() as state:
             updated = OAuthSettings.model_validate(
                 {**self._settings(state).model_dump(), **changes}
             )
             state.put("settings", updated)
-        if "token_product_access" in changes:
-            status: Literal["active", "revoked"] = (
-                "active" if updated.token_product_access else "revoked"
-            )
-            for key in self.store.keys(PROVIDER):
-                if BRIDGE_SCOPE in key.scopes:
-                    self.store.set_key_status(PROVIDER, key.key, status)
         return updated
-
-    def _ensure_bridge(self, account_id: str) -> None:
-        label = bridge_label(account_id)
-        if any(key.label == label for key in self.store.keys(PROVIDER)):
-            return
-        self.store.create_key(
-            PROVIDER,
-            KEY_FORMAT,
-            account_id=account_id,
-            label=label,
-            key=bridge_key(account_id),
-            scopes=(BRIDGE_SCOPE,),
-        )
-        if not self.settings().token_product_access:
-            self.store.set_key_status(PROVIDER, label, "revoked")
 
     # ------------------------------------------------------- platform calls
 
@@ -431,8 +414,6 @@ class ParallelAccount:
                 interval=settings.interval,
             )
             self._save_device(state, grant)
-        if grant.account_id is not None:
-            self._ensure_bridge(grant.account_id)
         page = (settings.verification_base_url or base_url).rstrip("/") + _DEVICE_PAGE
         return {
             "device_code": grant.device_code,
@@ -488,7 +469,7 @@ class ParallelAccount:
         terminal = {
             "expired": OAuthError("expired_token", "Device code has expired"),
             "denied": OAuthError("access_denied", "The user denied the authorization request."),
-            "consumed": OAuthError("invalid_grant", "The device code was already used."),
+            "consumed": OAuthError("invalid_grant", "Device code already used"),
         }
         outcome: OAuthError | dict[str, Any]
         if grant.status in terminal:
@@ -511,14 +492,14 @@ class ParallelAccount:
                 client_id=grant.client_id,
                 account_id=account_id,
                 scope=grant.scope,
-                refresh_token=secrets.token_urlsafe(48),
+                refresh_token=secrets.token_urlsafe(36),
                 refresh_expires_at=now + timedelta(seconds=settings.refresh_idle_ttl),
                 authorization_expires_at=now + timedelta(seconds=settings.authorization_ttl),
                 created_at=now,
             )
             self._save_session(state, session)
             grant = grant.model_copy(update={"status": "consumed"})
-            outcome = self._token_body(session, settings, now)
+            outcome = self._token_body(session, settings, now, device_grant=True)
         grant = grant.model_copy(update={"last_poll_at": now, "polls": grant.polls + 1})
         state.put(f"device:{grant.device_code}", grant)
         return outcome
@@ -527,18 +508,34 @@ class ParallelAccount:
         state.put(f"session:{session.id}", session)
         state.put(f"refresh:{session.refresh_token}", {"session": session.id})
 
-    @staticmethod
-    def _token_body(session: Session, settings: OAuthSettings, now: datetime) -> dict[str, Any]:
-        return {
-            "access_token": _mint(session, now, settings.access_ttl),
+    def _token_body(
+        self,
+        session: Session,
+        settings: OAuthSettings,
+        now: datetime,
+        *,
+        device_grant: bool = False,
+    ) -> dict[str, Any]:
+        """Return the recorded token body; the device grant adds three null fields."""
+
+        attributes = self.store.account_attributes(PROVIDER, session.account_id)
+        user_id = str(attributes.get("user_id", content.stable_uuid(session.account_id)))
+        org_id = str(attributes.get("org_id", session.account_id))
+        access = _mint(session, now, settings.access_ttl, org_id=org_id, user_id=user_id)
+        body: dict[str, Any] = {
+            "access_token": access,
             "token_type": "Bearer",
             "expires_in": settings.access_ttl,
-            "refresh_token": session.refresh_token,
-            "authorization_expires_in": max(
-                1, int((session.authorization_expires_at - now).total_seconds())
-            ),
             "scope": session.scope,
+            "org_id": org_id,
+            "org_name": str(attributes.get("org_name", session.account_id)),
+            "refresh_token": session.refresh_token,
+            "refresh_token_expires_in": _seconds_left(session.refresh_expires_at, now),
+            "authorization_expires_in": _seconds_left(session.authorization_expires_at, now),
         }
+        if device_grant:
+            body |= dict.fromkeys(("identity_assertion", "assertion_expires_at", "registration_id"))
+        return body
 
     def _session_of(self, state: PluginState, refresh_token: str) -> Session | None:
         pointer = state.get(f"refresh:{refresh_token}") if refresh_token else None
@@ -564,11 +561,12 @@ class ParallelAccount:
                 or now >= session.refresh_expires_at
                 or now >= session.authorization_expires_at
             ):
-                raise OAuthError("invalid_grant", "The refresh token is invalid or expired.")
+                # Recorded: the description repeats the error code.
+                raise OAuthError("invalid_grant", "invalid_grant")
             settings = self._settings(state)
             session = session.model_copy(
                 update={
-                    "refresh_token": secrets.token_urlsafe(48),
+                    "refresh_token": secrets.token_urlsafe(36),
                     "refresh_expires_at": now + timedelta(seconds=settings.refresh_idle_ttl),
                     "authorization_expires_at": now + timedelta(seconds=settings.authorization_ttl),
                     "refreshed_at": now,
@@ -625,8 +623,6 @@ class ParallelAccount:
                 status: DeviceStatus = "denied" if decision == "deny" else "expired"
                 grant = grant.model_copy(update={"status": status})
             state.put(f"device:{grant.device_code}", grant)
-        if grant.account_id is not None:
-            self._ensure_bridge(grant.account_id)
         return grant
 
     def revoke_sessions(self) -> int:
@@ -691,17 +687,22 @@ class ParallelAccount:
         if not will_invoice and account.remaining is not None:
             credit = int((account.remaining * 100).to_integral_value(rounding=ROUND_FLOOR))
             pending = int(attributes.get("pending_debit_cents", 0))
+        # Recorded: the cents are JSON numbers with a fraction (478.0).
         return {
             "org_id": str(attributes.get("org_id", account.id)),
-            "credit_balance_cents": credit,
-            "pending_debit_balance_cents": pending,
+            "credit_balance_cents": float(credit),
+            "pending_debit_balance_cents": float(pending),
             "will_invoice": will_invoice,
         }
 
     def access(
         self, token: str | None
     ) -> dict[str, Any] | Literal["missing", "invalid", "expired"]:
-        """Verify an Account API bearer token against the mock clock and state."""
+        """Verify an Account API bearer token against the mock clock and state.
+
+        The claims come back with ``account_id``, the mock account of the session
+        (``org_id`` holds the organization's public id, as the real token does).
+        """
 
         if token is None:
             return "missing"
@@ -711,10 +712,11 @@ class ParallelAccount:
         if self.store.now().timestamp() >= float(claims.get("exp", 0)):
             return "expired"
         with self._tx(write=False) as state:
-            session = state.get(f"session:{claims.get('sub')}")
-        if session is None or not self._has_account(str(claims.get("org_id"))):
+            session = state.get(f"session:{claims.get('credential_id')}")
+        account_id = None if session is None else str(session.get("account_id"))
+        if account_id is None or not self._has_account(account_id):
             return "invalid"
-        return claims
+        return {**claims, "account_id": account_id}
 
     def app_id(self, account_id: str) -> str:
         return content.stable_uuid(PROVIDER, "app", account_id)
@@ -759,11 +761,7 @@ class ParallelAccount:
 
     def delete_key(self, account_id: str, api_key_id: str) -> bool:
         for key in self.store.keys(PROVIDER):
-            if (
-                key.account_id == account_id
-                and BRIDGE_SCOPE not in key.scopes
-                and self.key_id(key.key) == api_key_id
-            ):
+            if key.account_id == account_id and self.key_id(key.key) == api_key_id:
                 self.store.set_key_status(PROVIDER, key.key, "revoked")
                 return True
         return False
@@ -823,7 +821,8 @@ async def handle_token(context: OperationContext) -> MockResponse:
 async def handle_revoke(context: OperationContext) -> MockResponse:
     try:
         ParallelAccount(context.store).revoke(_form(context.raw_body))
-        return MockResponse(body={}, headers={"server": "Vercel"})
+        # Recorded: 200 with an empty body and no content type, for any token.
+        return MockResponse(body=b"", headers=dict(_PLATFORM_OK_HEADERS), media_type=None)
     except OAuthError as error:
         return error.response()
 
@@ -872,7 +871,7 @@ async def handle_balance(context: OperationContext) -> MockResponse:
     claims = _authorized(context, "balance:read")
     if isinstance(claims, MockResponse):
         return claims
-    body = ParallelAccount(context.store).balance(str(claims["org_id"]))
+    body = ParallelAccount(context.store).balance(str(claims["account_id"]))
     return account_response(200, body)
 
 
@@ -880,7 +879,7 @@ async def handle_apps(context: OperationContext) -> MockResponse:
     claims = _authorized(context, "apps:read")
     if isinstance(claims, MockResponse):
         return claims
-    return account_response(200, ParallelAccount(context.store).apps(str(claims["org_id"])))
+    return account_response(200, ParallelAccount(context.store).apps(str(claims["account_id"])))
 
 
 def _validation(loc: list[str | int], kind: str, message: str, value: Any) -> MockResponse:
@@ -893,7 +892,7 @@ async def handle_create_key(context: OperationContext) -> MockResponse:
     if isinstance(claims, MockResponse):
         return claims
     account = ParallelAccount(context.store)
-    org = str(claims["org_id"])
+    org = str(claims["account_id"])
     if context.request.path_params.get("app_id") != account.app_id(org):
         return account_response(404, {"detail": "App not found"})
     try:
@@ -924,7 +923,7 @@ async def handle_delete_key(context: OperationContext) -> MockResponse:
     if isinstance(claims, MockResponse):
         return claims
     account = ParallelAccount(context.store)
-    org = str(claims["org_id"])
+    org = str(claims["account_id"])
     params = context.request.path_params
     if params.get("app_id") != account.app_id(org) or not account.delete_key(
         org, str(params.get("api_key_id"))
@@ -1059,7 +1058,6 @@ def _switch(text: str) -> bool:
 
 _SETTING_FLAGS: Final = (
     ("--auto-approve", "auto_approve", _switch),
-    ("--token-product-access", "token_product_access", _switch),
     ("--issue-client-secret", "issue_client_secret", _switch),
     ("--enforce-interval", "enforce_interval", _switch),
     ("--interval", "interval", int),

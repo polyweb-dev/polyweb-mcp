@@ -529,6 +529,21 @@ class MockStore:
             ).fetchall()
         return [str(row["id"]) for row in rows]
 
+    def account_attributes(self, provider: str, account_id: str) -> dict[str, Any]:
+        """Return one account's attributes without rolling periods.
+
+        Safe to call while a :meth:`state` transaction of a plugin is open.
+        """
+
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT attributes FROM accounts WHERE provider = ? AND id = ?",
+                (provider, account_id),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"no {provider} account {account_id!r}")
+        return dict(json.loads(row["attributes"] or "{}"))
+
     # --------------------------------------------------------- plugin state
 
     @contextmanager

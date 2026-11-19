@@ -88,12 +88,17 @@ token, or open it once with `&admin_token=<token>` to keep the token in an
 HttpOnly, `SameSite=Strict` cookie for `/_mock`. The approve and deny routes it
 posts to stay guarded. The token never appears in a provider response.
 
-The Parallel platform endpoints (register, device code, token poll, revoke)
-match a recording of the real `platform.parallel.ai` up to approval
-(2026-11-17): status codes, `error_description` strings, headers, the 2 s poll
-interval, and no `slow_down` for fast polls (`polyweb-mock parallel oauth set
---enforce-interval on` turns it on). The token response, refresh rotation, and
-revoke behavior still follow the documentation only.
+The Parallel OAuth flow matches two recordings of the real platform
+(2026-11-17 up to approval, 2026-11-19 through approval, refresh and revoke):
+status codes, `error_description` strings, headers, the 2 s poll interval, no
+`slow_down` for fast polls (`polyweb-mock parallel oauth set
+--enforce-interval on` turns it on), the token body and JWT claims, refresh
+rotation (a reused old refresh token fails without ending the session), revoke
+(200 with an empty body for any token; the access token keeps reading the
+balance until it expires), and balance cents as numbers with a fraction. The
+OAuth token reads the balance only: on `/v1/search` and `/v1/extract` it gets
+401 `{"code": 16, "message": "Invalid JWT credential"}`. Only `access_denied`
+and `slow_down` still follow the documentation.
 
 <!-- DEV-STACK START -->
 ## Run Polyweb against the mock
@@ -152,8 +157,10 @@ device flow, then approve the shown code:
 uv run --project polyweb-provider-mock polyweb-mock parallel oauth approve ABCD-EFGH
 ```
 
-The next poll connects the key; pool it into a project without a Parallel
-pool (Gamma).
+The next poll connects the key, and Polyweb reads the Parallel balance with
+it. Search and extract need a Parallel API key: the mock refuses the OAuth
+token there with 401 `Invalid JWT credential`, as the real API does
+(TASK-000077).
 
 ### Behave live suite against the mock
 
@@ -214,7 +221,7 @@ polyweb-mock parallel oauth show                    # settings, device codes, se
 polyweb-mock parallel oauth approve ABCD-EFGH [--account parallel-org]
 polyweb-mock parallel oauth deny ABCD-EFGH          # or: expire ABCD-EFGH
 polyweb-mock parallel oauth revoke-sessions
-polyweb-mock parallel oauth set --auto-approve on --token-product-access off --access-ttl 60
+polyweb-mock parallel oauth set --auto-approve on --access-ttl 60
 polyweb-mock parallel balance show [--account ID]
 polyweb-mock parallel balance set --pending-cents 250 --will-invoice off
 ```
@@ -328,7 +335,7 @@ storing results): values are synthetic, the structure is real.
 | Tavily | search, extract, usage, keyless, 401/422/400 errors (15) | 432/433 exhaustion, 429 | keyed 429 body; extract credit carry as observed |
 | Exa | search, contents, usage 401, x402 402 challenge, 401/400 (14) | admin usage success (TASK-000099), budgets, 503, 429 tags | 429/5xx/budget/revoked-key messages; synthetic company `entities` |
 | Firecrawl | search, scrape, credit usage, 401/400 (12) | 402, 429, scrape resume (408) | 402/429/5xx/keyless-cap/DNS messages; keyless cap 50/day; `branding`/`product`/`menu`/`attributes` formats return no content |
-| Parallel | search, extract, 401/422, balance 401 (10) | Account API, OAuth device flow, key minting, 402/403/429/5xx | no live device flow; expired-token gateway wording; OAuth token as `x-api-key` accepted (unverified, toggle `--token-product-access`) |
+| Parallel | search, extract, 401/422, balance 401 (10); OAuth device flow, token, refresh, revoke, balance, OAuth token refused on search (2026-11-19 capture, pinned in `tests/unit/test_parallel.py`) | apps, key minting, `access_denied`, `slow_down`, 402/403/429/5xx | expired-token gateway wording; JWTs signed HS256 (real: RS256) |
 | You.com | search, contents, balance, 401/402/403/422 (14) | live-page pricing, spend cap | revoked keys, 429 and spend-cap bodies, exhausted-wallet body, 5xx bodies |
 | Brave | web search, LLM context, 400/422 (10) | rate-limit headers, plans, 429/402 envelope and codes (TASK-000101) | 429/402 `detail`/`meta` text, prepaid exhaustion status, revoked key, outage pages; Answers key on Web Search |
 | Keenable | keyless search and fetch, 400s (8) | keyed paths, 401/402/403, retryable 5xx (TASK-000100) | keyed rate headers; allowance resets on the UTC month unless `account set keenable reset_day=N` (real: organization creation day); purchased credits reset monthly |
