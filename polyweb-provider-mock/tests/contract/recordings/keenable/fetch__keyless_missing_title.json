@@ -1,0 +1,37 @@
+{
+  "method": "GET",
+  "url": "https://api.keenable.ai/v1/fetch/public?url=https%3A%2F%2Fexample.com&max_chars=300",
+  "request_headers": {
+    "host": "api.keenable.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb/0.1.0"
+  },
+  "request_body": null,
+  "status": 400,
+  "response_headers": {
+    "x-request-id": "1867c9ad-7cd2-78fd-8beb-319d94c523ec",
+    "vary": "Origin, Accept-Encoding",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "Content-Type,Authorization,X-Request-Id,Server-Timing,PAYMENT-REQUIRED,PAYMENT-RESPONSE,Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+    "content-type": "application/json; charset=utf-8",
+    "etag": "W/\"1f9-/T1DIEHkUNZ4bP0fW2UzpJ7DagA\"",
+    "content-encoding": "gzip",
+    "date": "Tue, 17 Nov 2026 01:27:32 GMT",
+    "via": "1.1 google",
+    "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+    "transfer-encoding": "chunked"
+  },
+  "response_body": {
+    "error": "Missing app identifier",
+    "message": "X-Keenable-Title header is required for token-less requests",
+    "type": "invalid_request_error",
+    "code": "missing_app_title",
+    "fix": "Name your app in the X-Keenable-Title header (or the keenable_title query parameter) and retry. With an API key, call /v1/search or /v1/fetch instead, which do not need it.",
+    "docs_url": "https://docs.keenable.ai/errors#missing-app-title",
+    "retryable": false,
+    "param": "X-Keenable-Title",
+    "request_id": "1867c9ad-7cd2-78fd-8beb-319d94c523ec"
+  }
+}

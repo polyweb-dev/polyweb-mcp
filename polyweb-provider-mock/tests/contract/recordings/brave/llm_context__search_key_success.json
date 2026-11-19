@@ -1,0 +1,78 @@
+{
+  "method": "GET",
+  "url": "https://api.search.brave.com/res/v1/llm/context?q=example+domain&count=1&maximum_number_of_urls=1&maximum_number_of_tokens=1024&maximum_number_of_snippets=2&enable_source_metadata=true",
+  "request_headers": {
+    "host": "api.search.brave.com",
+    "user-agent": "Polyweb/0.1",
+    "x-subscription-token": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:54 GMT",
+    "content-type": "application/json",
+    "content-length": "5166",
+    "connection": "keep-alive",
+    "x-ratelimit-limit": "50, 0",
+    "x-ratelimit-policy": "50;w=1, 0;w=2592000",
+    "x-ratelimit-remaining": "49, 0",
+    "x-ratelimit-reset": "1, 1204325",
+    "server-timing": "search-roundtrip;dur=859.43",
+    "vary": "Accept-Encoding, Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site, Sec-Fetch-User",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "x-download-options": "noopen",
+    "x-frame-options": "SAMEORIGIN",
+    "x-xss-protection": "1; mode=block"
+  },
+  "response_body": {
+    "grounding": {
+      "generic": [
+        {
+          "url": "https://example.com/synthetic/0e638a450c",
+          "title": "Synthetic title ebc374bf.",
+          "snippets": [
+            "Synthetic snippets 25971fc9.",
+            "Synthetic snippets a9161ca1.",
+            "Synthetic snippets d489a86e.",
+            "Synthetic snippets 771abd50.",
+            "Synthetic snippets 40b97a24.",
+            "Synthetic snippets 86794f4a.",
+            "Synthetic snippets e31d7fd8.",
+            "Synthetic snippets c92c8ec0.",
+            "Synthetic snippets 16daf92c.",
+            "Synthetic snippets 5de6b877.",
+            "Synthetic snippets 5453032b.",
+            "Synthetic snippets c0dbeaf6.",
+            "Synthetic snippets 3d93c876.",
+            "Synthetic snippets 32c0c3a2.",
+            "Synthetic snippets 2ed8d748."
+          ]
+        }
+      ],
+      "map": []
+    },
+    "sources": {
+      "https://example.com/synthetic/0e638a450c": {
+        "title": "Synthetic title ebc374bf.",
+        "hostname": "site-9c75a1.example.com",
+        "age": [
+          "Thursday, August 21, 2025",
+          "2025-08-21",
+          "452 days ago",
+          "2025-08-21T11:00:04Z"
+        ],
+        "site_name": "Synthetic site_name 5f5f6ddd.",
+        "favicon": "https://example.com/synthetic/1a03f24e41",
+        "thumbnail": {
+          "src": "https://example.com/synthetic/4b204503f4",
+          "original": "https://example.com/synthetic/125f9a698e"
+        },
+        "snippet": "Synthetic snippet 46a5adf3.",
+        "description": "Synthetic description 3ef167db.",
+        "fetched_content_timestamp": 1794728168
+      }
+    }
+  }
+}

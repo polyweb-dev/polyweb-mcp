@@ -1,0 +1,8 @@
+{
+  "description": "One call in ten fails: 5% HTTP 500, 3% HTTP 502, 2% dropped connections.",
+  "faults": [
+    {"provider": "*", "operation": "*", "kind": "http_error", "params": {"status": 500}, "probability": 0.05},
+    {"provider": "*", "operation": "*", "kind": "outage", "params": {"status": 502}, "probability": 0.0316},
+    {"provider": "*", "operation": "*", "kind": "connection_drop", "probability": 0.0217}
+  ]
+}

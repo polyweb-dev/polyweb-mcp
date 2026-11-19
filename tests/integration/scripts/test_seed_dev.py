@@ -2,15 +2,19 @@
 
 from pathlib import Path
 
+import httpx
 import pytest
+import scripts.seed_dev as seed_dev
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import SecretStr
 from scripts.seed_dev import (
     DEV_DATABASE,
     DEV_PASSWORD,
+    MOCK_DEV_DATABASE,
     PROJECTS,
     USER_EMAILS,
     main,
+    read_mock_keys,
     read_provider_keys,
     reserve_database,
     seed_database,
@@ -224,3 +228,130 @@ def test_cli_failure_does_not_leak_a_configured_secret(
     assert "failed validation" in output.err
     assert "fake-sensitive-bad-value" not in output.err
     assert not (tmp_path / DEV_DATABASE).exists()
+
+
+_MOCK_EXPORT = (
+    "POLYWEB_BRAVE_ANSWERS_API_KEY=BSAmock-answers\n"
+    "POLYWEB_BRAVE_SEARCH_API_KEY=BSAmock-search\n"
+    "POLYWEB_EXA_API_KEY=6d6f636b-exa\n"
+    "POLYWEB_FIRECRAWL_API_KEY=fc-mock\n"
+    "POLYWEB_KEENABLE_API_KEY=keen_mock\n"
+    "POLYWEB_PARALLEL_API_KEY=mock-parallel\n"
+    "POLYWEB_TAVILY_API_KEY=tvly-dev-mock\n"
+    "POLYWEB_TINYFISH_API_KEY=mock-tinyfish\n"
+    "POLYWEB_YOU_API_KEY=ydc-sk-mock\n"
+)
+
+
+def test_mock_keys_come_from_the_seeded_mock_admin_api() -> None:
+    """Mock mode seeds the mock first, then maps every exported provider variable."""
+
+    seen: list[tuple[str, str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, request.headers.get("authorization")))
+        if request.url.path == "/_mock/seed":
+            return httpx.Response(200, json={"tavily": 1})
+        return httpx.Response(200, text=_MOCK_EXPORT)
+
+    keys = read_mock_keys(
+        "http://127.0.0.1:8212", admin_token="fake-admin", transport=httpx.MockTransport(handler)
+    )
+
+    assert [(method, path) for method, path, _ in seen] == [
+        ("POST", "/_mock/seed"),
+        ("GET", "/_mock/export-keys"),
+    ]
+    assert {auth for _, _, auth in seen} == {"Bearer fake-admin"}
+    assert set(keys) == set(ProviderName)
+    assert keys[ProviderName.BRAVE].get_secret_value() == "BSAmock-search"
+    assert keys[ProviderName.TAVILY].get_secret_value() == "tvly-dev-mock"
+
+
+@pytest.mark.parametrize("origin", ["127.0.0.1:8212", "ftp://127.0.0.1:8212"])
+def test_mock_keys_need_an_http_origin(origin: str) -> None:
+    with pytest.raises(ValueError, match="needs the mock origin"):
+        read_mock_keys(origin)
+
+
+def test_an_unreachable_mock_is_a_safe_refusal() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(
+        ValueError, match=r"provider mock at http://127.0.0.1:8212 failed \(ConnectError\)"
+    ):
+        read_mock_keys("http://127.0.0.1:8212", transport=httpx.MockTransport(handler))
+
+
+async def test_mock_seed_adds_keyless_pools_to_beta(tmp_path: Path) -> None:
+    """Alpha keeps the keyed pools; Beta gets keyless Keenable and Tavily pools."""
+
+    settings = Settings(
+        _env_file=None,
+        environment="development",
+        encryption_key_file=tmp_path / ".secret_key",
+        auth_jwt_secret=SecretStr("fake-test-jwt-secret-at-least-32-characters"),
+    )
+    keys = {ProviderName.TAVILY: SecretStr("tvly-dev-mock"), ProviderName.EXA: SecretStr("exa")}
+    with pytest.raises(ValueError, match=f"Only a new {MOCK_DEV_DATABASE}"):
+        await seed_database(
+            tmp_path / DEV_DATABASE, settings, keys, SecretStr(DEV_PASSWORD), mock=True
+        )
+    database = tmp_path / MOCK_DEV_DATABASE
+    projects = await seed_database(database, settings, keys, SecretStr(DEV_PASSWORD), mock=True)
+
+    async with (
+        await SQLiteRepository.open(database) as repository,
+        repository.session() as session,
+    ):
+        pools = (
+            await session.execute(
+                text(
+                    "SELECT k.provider_type,k.project_id,c.auth_mode FROM key_pools k "
+                    "JOIN provider_credentials c ON c.id=k.credential_id"
+                )
+            )
+        ).all()
+        assert set(pools) == {
+            ("tavily", str(projects[0].id), "api_key"),
+            ("exa", str(projects[0].id), "api_key"),
+            ("keenable", str(projects[1].id), "keyless"),
+            ("tavily", str(projects[1].id), "keyless"),
+        }
+        assert not (await session.execute(text("PRAGMA foreign_key_check"))).all()
+
+
+def test_cli_mock_mode_never_reads_env_file_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for variable in PROVIDER_ENV_VARS.values():
+        monkeypatch.delenv(variable, raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "POLYWEB_ENVIRONMENT=development\n"
+        f"POLYWEB_ENCRYPTION_KEY_FILE={tmp_path / '.secret_key'}\n"
+        "POLYWEB_EXA_API_KEY=fake-real-looking-exa\n",
+        encoding="utf-8",
+    )
+    origins: list[str] = []
+
+    def fake_mock_keys(origin: str, **_: object) -> dict[ProviderName, SecretStr]:
+        origins.append(origin)
+        return {ProviderName.TAVILY: SecretStr("tvly-dev-mock")}
+
+    def no_env_keys(_: Path) -> None:
+        raise AssertionError("mock mode must not read provider keys from the env file")
+
+    monkeypatch.setattr(seed_dev, "read_mock_keys", fake_mock_keys)
+    monkeypatch.setattr(seed_dev, "read_provider_keys", no_env_keys)
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["--keys-from-mock", "http://127.0.0.1:8212", "--env-file", str(env_file)]) == 0
+
+    output = capsys.readouterr().out
+    assert origins == ["http://127.0.0.1:8212"]
+    assert (tmp_path / MOCK_DEV_DATABASE).exists() and not (tmp_path / DEV_DATABASE).exists()
+    assert "Imported providers: tavily" in output
+    assert "POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:8212" in output
+    assert "fake-real-looking-exa" not in output and "tvly-dev-mock" not in output

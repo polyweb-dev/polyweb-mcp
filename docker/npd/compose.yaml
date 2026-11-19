@@ -1,0 +1,116 @@
+# Polyweb npd stack: development code against the real providers. Never auto-loaded.
+#
+# The three environments:
+#   pd   compose.yaml + Dockerfile at the repository root. The deployed stack,
+#        project `polyweb`, started by the deploy script.
+#   npd  compose.yaml + this file. Bind-mounted worktree source, real provider
+#        keys from this project's own encrypted vault.
+#   dev  compose.yaml + this file + docker/dev/compose.yaml. As npd, but every
+#        provider call goes to the provider mock.
+#
+# Use the stack script, not bare `docker compose`:
+#   scripts/linux/stack.sh npd up|down [-v]|logs [service...]|ps
+#   scripts\windows\stack.bat npd up|down [-v]|logs [service...]|ps
+# compose.yaml sets `name: polyweb`, which is pd. This file replaces the project
+# name with POLYWEB_STACK_PROJECT, which only the script sets (for example
+# `polyweb-wt1-npd`), so a command without it stops before it can address pd.
+# Compose resolves the relative paths below from the repository root, the
+# directory of the first file.
+#
+# dev-only: WARNING: `docker compose config` renders live .env values inline in
+# dev-only: each service's environment output. Never run it with secrets present
+# dev-only: for output you intend to share, never paste its output, and use canary
+# dev-only: names only.
+#
+# Compose injects the worktree .env into api/mcp process environments at run
+# time; docker/npd/Dockerfile never copies it. Provider credentials remain
+# encrypted vault data on this project's `polyweb-data` volume, not .env
+# settings. Plain `down` preserves that vault and avoids key re-entry. `down -v`
+# intentionally deletes the database, master key, and provider vault, so
+# credentials must be re-entered. For the UI, run `pnpm dev` in polyweb-ui
+# (VITE_PORT proxies to POLYWEB_API_PORT). The ui container is behind
+# `--profile ui`, which the script never passes; if it is started by hand it
+# binds a random loopback port, never the base file's host-wide 3000.
+
+name: ${POLYWEB_STACK_PROJECT:?use scripts/linux/stack.sh or scripts/windows/stack.bat}
+
+services:
+  api:
+    # dev-only: dependency image plus bind-mounted backend source.
+    build:
+      context: .
+      dockerfile: docker/npd/Dockerfile
+      target: dev
+    # dev-only: do not overwrite the production backend image tag.
+    image: ${POLYWEB_STACK_PROJECT:?use the stack script}-backend-dev:latest
+    ports: !override
+      - "127.0.0.1:${POLYWEB_API_PORT:?set POLYWEB_API_PORT}:8001"
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      # dev-only: make the bind-mounted src layout importable without installing it.
+      PYTHONPATH: /app/src
+      # dev-only: the worktree .env points host-run processes at the host mock
+      # port; npd calls the real providers.
+      POLYWEB_PROVIDER_MOCK_URL: ""
+    volumes:
+      - polyweb-data:/data
+      # dev-only: live backend edits; no source is baked into the image.
+      - ./src:/app/src
+    healthcheck:
+      # dev-only: avoid an implicit project sync because source is bind-mounted.
+      test:
+        [
+          "CMD-SHELL",
+          "uv run --no-sync python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)\"",
+        ]
+
+  mcp:
+    # dev-only: dependency image plus bind-mounted backend source.
+    build:
+      context: .
+      dockerfile: docker/npd/Dockerfile
+      target: dev
+    # dev-only: do not overwrite the production backend image tag.
+    image: ${POLYWEB_STACK_PROJECT:?use the stack script}-backend-dev:latest
+    ports: !override
+      - "127.0.0.1:${POLYWEB_MCP_PORT:?set POLYWEB_MCP_PORT}:8000"
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      # dev-only: make the bind-mounted src layout importable without installing it.
+      PYTHONPATH: /app/src
+      POLYWEB_EXECUTION_AUTHORITY_URL: http://api:8001
+      # dev-only: the worktree .env points host-run processes at the host mock
+      # port; npd calls the real providers.
+      POLYWEB_PROVIDER_MOCK_URL: ""
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - polyweb-data:/data
+      # dev-only: live backend edits; no source is baked into the image.
+      - ./src:/app/src
+    # dev-only: run the module directly without installing bind-mounted source.
+    command:
+      [
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "-m",
+        "polyweb.mcp.server",
+        "--transport",
+        "streamable-http",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+
+  ui:
+    profiles: ["ui"]
+    ports: !override
+      - "127.0.0.1::80"

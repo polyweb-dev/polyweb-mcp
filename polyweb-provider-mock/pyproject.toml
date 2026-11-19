@@ -1,0 +1,66 @@
+[project]
+name = "polyweb-provider-mock"
+version = "0.1.0"
+description = "Development-only impersonation of the provider APIs that Polyweb calls."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12,<3.13"
+# Runtime pins match the versions in the root Polyweb uv.lock.
+dependencies = [
+    "fastapi==0.141.1",
+    "pydantic==2.13.4",
+    "uvicorn==0.52.4",
+]
+
+[project.scripts]
+polyweb-provider-mock = "polyweb_provider_mock.server:main"
+polyweb-mock = "polyweb_provider_mock.cli:main"
+
+[dependency-groups]
+# The editable Polyweb dependency lets the end-to-end tests drive the real
+# adapters and the real startup interception against a live mock.
+dev = [
+    "httpx==0.28.1",
+    "mypy==1.20.2",
+    "polyweb",
+    "pytest==8.4.2",
+    "pytest-asyncio==1.4.0",
+    "pytest-xdist==3.8.0",
+    "ruff==0.16.3",
+]
+
+[tool.uv.sources]
+polyweb = { path = "../", editable = true }
+
+[build-system]
+requires = ["hatchling>=1.27,<2.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/polyweb_provider_mock"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "TID", "RUF", "C90"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["C901"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["polyweb_provider_mock"]
+mypy_path = ["src"]

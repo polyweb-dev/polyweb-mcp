@@ -1,0 +1,48 @@
+{
+  "method": "POST",
+  "url": "https://api.keenable.ai/v1/search/public",
+  "request_headers": {
+    "host": "api.keenable.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb/0.1.0",
+    "x-keenable-title": "polyweb",
+    "content-length": "40",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "query": "polyweb test",
+    "max_results": 1
+  },
+  "status": 200,
+  "response_headers": {
+    "x-request-id": "f8b25e06-0304-7f69-8aa1-f315ead5b8ad",
+    "vary": "Origin, Accept-Encoding",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "Content-Type,Authorization,X-Request-Id,Server-Timing,PAYMENT-REQUIRED,PAYMENT-RESPONSE,Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+    "x-ratelimit-limit": "1000",
+    "x-ratelimit-remaining": "998",
+    "x-ratelimit-reset": "2026-11-17T02:00:50.796Z",
+    "content-type": "application/json; charset=utf-8",
+    "etag": "W/\"4f4-1740oF4I7y7UJOR74Aaz2P3BgBY\"",
+    "content-encoding": "gzip",
+    "date": "Tue, 17 Nov 2026 01:27:28 GMT",
+    "via": "1.1 google",
+    "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+    "transfer-encoding": "chunked"
+  },
+  "response_body": {
+    "query": "polyweb test",
+    "mode": "pro",
+    "results": [
+      {
+        "title": "Synthetic title aa524a5c.",
+        "url": "https://example.com/synthetic/d33e058c00",
+        "description": "",
+        "snippet": "Synthetic snippet e094ab0d.",
+        "acquired_at": "2018-11-15T03:51:49Z"
+      }
+    ]
+  }
+}

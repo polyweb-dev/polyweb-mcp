@@ -1,0 +1,55 @@
+{
+  "method": "POST",
+  "url": "https://api.exa.ai/search",
+  "request_headers": {
+    "host": "api.exa.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "exa-py/2.18.1",
+    "content-type": "application/json",
+    "x-api-key": "<REDACTED>",
+    "content-length": "72"
+  },
+  "request_body": {
+    "query": "Example Domain",
+    "numResults": 1,
+    "contents": {
+      "highlights": true
+    }
+  },
+  "status": 401,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:40 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "228",
+    "connection": "keep-alive",
+    "content-security-policy": "frame-ancestors 'self'",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "origin-agent-cluster": "?1",
+    "referrer-policy": "no-referrer",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "x-content-type-options": "nosniff",
+    "x-dns-prefetch-control": "off",
+    "x-download-options": "noopen",
+    "x-frame-options": "DENY",
+    "x-permitted-cross-domain-policies": "none",
+    "x-xss-protection": "0",
+    "x-request-id": "220034952683670fb872ad137f33f80a",
+    "x-exa-region": "us-west-2",
+    "x-exa-processing-region": "us",
+    "vary": "Origin",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "PAYMENT-REQUIRED,PAYMENT-RESPONSE,payment-required,payment-response,WWW-Authenticate,Payment-Receipt,x-request-id,x-exa-queued,x-exa-queue-ms,x-exa-region,x-exa-processing-region,Deprecation,Sunset,Retry-After,X-RateLimit-Scope",
+    "etag": "W/\"e4-nhYIlpUYLlnnX+KU5xVTDaCHCF4\"",
+    "cf-cache-status": "DYNAMIC",
+    "server": "cloudflare",
+    "cf-ray": "a3ccd30b7b710788-BFF"
+  },
+  "response_body": {
+    "requestId": "220034952683670fb872ad137f33f80a",
+    "error": "Invalid API key. Provide a valid key using 'Authorization: Bearer <key>' or 'x-api-key: <key>'. Create a key at https://dashboard.exa.ai/api-keys",
+    "tag": "INVALID_API_KEY"
+  }
+}

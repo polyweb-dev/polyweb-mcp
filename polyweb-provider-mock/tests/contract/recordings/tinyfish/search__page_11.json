@@ -1,0 +1,63 @@
+{
+  "method": "GET",
+  "url": "https://api.search.tinyfish.ai?query=x&page=11",
+  "request_headers": {
+    "host": "api.search.tinyfish.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 400,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "259",
+    "connection": "keep-alive",
+    "date": "Thu, 19 Nov 2026 09:53:29 GMT",
+    "x-ratelimit-reset": "1795082040",
+    "set-cookie": "<REDACTED>",
+    "server": "uvicorn",
+    "strict-transport-security": "max-age=63072000; includeSubDomains",
+    "x-frame-options": "DENY",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "access-control-allow-headers": "Content-Type, X-API-Key, Authorization, X-TF-Request-Origin, X-TF-Client-Name, X-TF-Client-Version, X-TF-API-Source, X-TF-API-Example, X-TF-Setup-Attempt-Id, X-TF-Connect-Source, X-TF-Connect-Client, X-TF-Connect-Attempt-Id, Payment-Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": "Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Request-ID, X-TF-Notice, X-TF-Notice-Level, X-TF-Notice-Latest, X-TF-Notice-Package, WWW-Authenticate, Payment-Receipt",
+    "x-clerk-auth-reason": "session-token-and-uat-missing",
+    "x-clerk-auth-status": "signed-out",
+    "x-middleware-rewrite": "/v1/search?query=x&page=11",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-request-id": "aa00a00a-0a00-0aa0-a00a-000a0aaa00a0",
+    "x-tf-user-id": "aaaa_0AAaAaAA0AaAA00A0AaAaAAAAaa",
+    "x-ratelimit-limit": "30",
+    "x-ratelimit-remaining": "21",
+    "x-cache": "Error from cloudfront",
+    "via": "1.1 7162ad114a2620a596cd6cd391ad1032.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P8",
+    "x-amz-cf-id": "Aa0aAaA0aaaaaaAAAaaAAaA0AAa0aaAaAaaAAa_0aaaaAAaAAAA00A=="
+  },
+  "response_body": {
+    "error": {
+      "code": "INVALID_INPUT",
+      "message": "Field \"page\": page must be <= 10",
+      "details": [
+        {
+          "origin": "number",
+          "code": "too_big",
+          "maximum": 10,
+          "inclusive": true,
+          "path": [
+            "page"
+          ],
+          "message": "page must be <= 10"
+        }
+      ]
+    },
+    "request_id": "aa00a00a-0a00-0aa0-a00a-000a0aaa00a0"
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "method": "POST",
+  "url": "https://api.exa.ai/search",
+  "request_headers": {
+    "host": "api.exa.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "x-api-key": "<REDACTED>",
+    "user-agent": "exa-py/unknown",
+    "content-type": "application/json",
+    "content-length": "135"
+  },
+  "request_body": {
+    "query": "Example Domain",
+    "contents": {
+      "text": false,
+      "highlights": false,
+      "summary": false
+    },
+    "numResults": 1,
+    "includeDomains": [
+      "example.com"
+    ]
+  },
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:39 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "content-security-policy": "frame-ancestors 'self'",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "origin-agent-cluster": "?1",
+    "referrer-policy": "no-referrer",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "x-content-type-options": "nosniff",
+    "x-dns-prefetch-control": "off",
+    "x-download-options": "noopen",
+    "x-frame-options": "DENY",
+    "x-permitted-cross-domain-policies": "none",
+    "x-xss-protection": "0",
+    "x-request-id": "59016d0145ad49ed3a85ef47b764d66b",
+    "x-exa-region": "us-west-2",
+    "x-exa-processing-region": "us",
+    "vary": "Origin",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "PAYMENT-REQUIRED,PAYMENT-RESPONSE,payment-required,payment-response,WWW-Authenticate,Payment-Receipt,x-request-id,x-exa-queued,x-exa-queue-ms,x-exa-region,x-exa-processing-region,Deprecation,Sunset,Retry-After,X-RateLimit-Scope",
+    "x-exa-queued": "false",
+    "x-exa-queue-ms": "0",
+    "etag": "W/\"f2-rQjl7HCxwSnla+3uMjGrP6f/UqY\"",
+    "cf-cache-status": "DYNAMIC",
+    "content-encoding": "gzip",
+    "server": "cloudflare",
+    "cf-ray": "d6edf5798a69b35c-DAH"
+  },
+  "response_body": {
+    "requestId": "59016d0145ad49ed3a85ef47b764d66b",
+    "resolvedSearchType": "",
+    "results": [
+      {
+        "id": "https://example.com/",
+        "title": "Synthetic title 162b8154.",
+        "url": "https://example.com/"
+      }
+    ],
+    "searchTime": 84.4,
+    "costDollars": {
+      "total": 0.007,
+      "search": {
+        "neural": 0.007
+      }
+    }
+  }
+}

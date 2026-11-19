@@ -1,0 +1,320 @@
+{
+  "method": "POST",
+  "url": "https://api.firecrawl.dev/v2/scrape",
+  "request_headers": {
+    "host": "api.firecrawl.dev",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "python-httpx/0.28.1",
+    "authorization": "Bearer <REDACTED>",
+    "content-length": "61",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "url": "https://example.com",
+    "formats": [
+      "not-a-real-format"
+    ]
+  },
+  "status": 400,
+  "response_headers": {
+    "access-control-allow-origin": "*",
+    "content-length": "2923",
+    "content-type": "application/json; charset=utf-8",
+    "date": "Tue, 17 Nov 2026 01:27:37 GMT",
+    "etag": "W/\"b6b-mwDzqkKbSVcJnUlEDc1i+8blTSM\"",
+    "x-response-time": "67.507ms"
+  },
+  "response_body": {
+    "success": false,
+    "code": "BAD_REQUEST",
+    "error": "Bad Request",
+    "details": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "markdown"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"markdown\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "html"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"html\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "rawHtml"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"rawHtml\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "rawBase64"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"rawBase64\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "links"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"links\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "images"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"images\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "summary"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"summary\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "json"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"json\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "deterministicJson"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"deterministicJson\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "changeTracking"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"changeTracking\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "screenshot"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"screenshot\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "attributes"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"attributes\""
+            },
+            {
+              "expected": "array",
+              "code": "invalid_type",
+              "path": [
+                "selectors"
+              ],
+              "message": "Invalid input: expected array, received undefined"
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "branding"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"branding\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "product"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"product\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "menu"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"menu\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "question"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"question\""
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "question"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "highlights"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"highlights\""
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "query"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "query"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"query\""
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "prompt"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "audio"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"audio\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                "video"
+              ],
+              "path": [
+                "type"
+              ],
+              "message": "Invalid input: expected \"video\""
+            }
+          ]
+        ],
+        "path": [
+          "formats",
+          0
+        ],
+        "message": "Invalid input"
+      }
+    ]
+  },
+  "sdk_version": "4.41.0",
+  "capture_note": "HTTPX decoded response body; original response headers retained. Secret values redacted; identifiers use synthetic same-format values."
+}

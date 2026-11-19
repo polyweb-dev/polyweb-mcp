@@ -615,28 +615,28 @@ async def allow_full_trace_capture(repository: SQLiteRepository) -> None:
 def create_bound_provider(
     client: Any, project_id: str, provider: str, secret: str, headers: dict[str, str]
 ) -> Any:
-    """Create a private credential via A4 HTTP, bind it, and explicitly enable it."""
+    """Create an owned vault key via HTTP and pool it into the project.
+
+    The project credential write route is gone; the vault key and pool routes
+    replace it (same flow as the integration router proofs).
+    """
     response = client.post(
-        f"/api/v1/projects/{project_id}/credentials",
+        "/api/v1/account/vault/keys",
         headers=headers,
         json={"provider_type": provider, "label": f"proof-{uuid4().hex}", "secret": secret},
     )
     assert response.status_code == 201, response.text
-    body = response.json()
-    credential_id = body.get("id", body.get("credential_id"))
-    binding = client.post(
-        f"/api/v1/projects/{project_id}/bindings",
+    pool = client.post(
+        f"/api/v1/account/vault/keys/{response.json()['id']}/pools",
         headers=headers,
-        json={"credential_id": credential_id, "route_label": provider},
+        json={
+            "label": f"proof-pool-{uuid4().hex}",
+            "project_id": project_id,
+            "rate": {"limit": None, "window_seconds": 60},
+            "operations": ["search"] if provider == "brave" else ["search", "fetch"],
+        },
     )
-    assert binding.status_code == 201, binding.text
-    assert binding.json()["enabled_operations"] == []
-    enabled = client.patch(
-        f"/api/v1/projects/{project_id}/bindings/{binding.json()['id']}",
-        headers=headers,
-        json={"enabled_operations": ["search"] if provider == "brave" else ["search", "fetch"]},
-    )
-    assert enabled.status_code == 200, enabled.text
+    assert pool.status_code == 201, pool.text
     return response
 
 

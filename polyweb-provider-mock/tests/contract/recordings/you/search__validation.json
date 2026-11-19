@@ -1,0 +1,34 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/search",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "content-length": "11",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "count": 1
+  },
+  "status": 422,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:39 GMT",
+    "content-type": "application/json",
+    "content-length": "40",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "a00aaaa0-000a-0000-0aaa-a000a00aaa00",
+    "x-amzn-remapped-content-length": "40",
+    "x-amz-apigw-id": "A0aA0AAAaAAA0AA=",
+    "x-amzn-remapped-server": "uvicorn",
+    "x-amzn-trace-id": "Root=0-0aaaaa0a-0000a0000a00a00a000000a0",
+    "x-amzn-remapped-date": "Tue, 17 Nov 2026 01:27:39 GMT"
+  },
+  "response_body": {
+    "error": "invalid request parameter(s)"
+  }
+}

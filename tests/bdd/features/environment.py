@@ -18,12 +18,14 @@ from polyweb.adapters.keenable import KeenableAdapter
 from polyweb.adapters.parallel import ParallelAdapter
 from polyweb.adapters.tavily import TavilyAdapter
 from polyweb.adapters.tinyfish import TinyfishAdapter
+from polyweb.configuration.config import get_settings
 from polyweb.infrastructure.http import create_async_client
 from polyweb.infrastructure.secrets import (
     PROVIDER_ENV_VARS,
     ProviderName,
     provider_env_var_names,
 )
+from tests.fixtures.provider_mock_isolation import isolate_provider_mock
 
 _LIVE_GATE = "POLYWEB_RUN_LIVE"
 
@@ -47,6 +49,10 @@ def _harness_env_key(provider: ProviderName) -> str | None:
 
 def before_all(context: Any) -> None:
     """Verify provider secrets availability before running feature suites."""
+    # A developer's .env mock origin must not reroute these scenarios; the
+    # mock-backed live run opts in with POLYWEB_TEST_PROVIDER_MOCK=1.
+    context.provider_mock_url = isolate_provider_mock()
+    get_settings.cache_clear()
     context.has_tavily_key = _harness_env_key(ProviderName.TAVILY) is not None
     context.has_brave_key = _harness_env_key(ProviderName.BRAVE) is not None
     context.has_exa_key = _harness_env_key(ProviderName.EXA) is not None

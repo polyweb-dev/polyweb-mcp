@@ -17,17 +17,22 @@ Polyweb is a Python backend (`src/polyweb`), a React dashboard (`polyweb-ui`), a
 
 ## Run a development stack
 
-Docker with the development override bind-mounts `./src` and needs a `.env` file with `POLYWEB_AUTH_JWT_SECRET` set:
+The stack script runs your checkout in Docker with `./src` bind-mounted. It needs a `.env` file with `POLYWEB_AUTH_JWT_SECRET` and the worktree ports (`POLYWEB_API_PORT`, `POLYWEB_MCP_PORT`, and `POLYWEB_PROVIDER_MOCK_PORT` for `dev`) set. Pick the environment:
+
+- `npd` calls the real providers, with keys you add to its own vault.
+- `dev` sends every provider call to the provider mock (`polyweb-provider-mock/`), with fake keys and credits.
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml up --build -d
+scripts/linux/stack.sh dev up      # or: npd up
 ```
 
 Stop it with:
 
 ```bash
-docker compose -f compose.yaml -f compose.dev.yaml down
+scripts/linux/stack.sh dev down    # add -v to delete its volumes
 ```
+
+On Windows, use `scripts\windows\stack.bat` with the same arguments. The root `compose.yaml` and `Dockerfile` are the production stack; `docker compose up --build` there runs it.
 
 For a stack without Docker, follow [Manual setup](/setup/manual/).
 

@@ -1,0 +1,125 @@
+{
+  "method": "GET",
+  "url": "https://api.search.tinyfish.ai?query=python+asyncio&exclude_domains=docs.python.org",
+  "request_headers": {
+    "host": "api.search.tinyfish.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "date": "Thu, 19 Nov 2026 09:53:25 GMT",
+    "content-encoding": "gzip",
+    "x-tf-user-id": "aaaa_0AAaAaAA0AaAA00A0AaAaAAAAaa",
+    "set-cookie": "<REDACTED>",
+    "server": "uvicorn",
+    "strict-transport-security": "max-age=63072000; includeSubDomains",
+    "x-frame-options": "DENY",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "access-control-allow-headers": "Content-Type, X-API-Key, Authorization, X-TF-Request-Origin, X-TF-Client-Name, X-TF-Client-Version, X-TF-API-Source, X-TF-API-Example, X-TF-Setup-Attempt-Id, X-TF-Connect-Source, X-TF-Connect-Client, X-TF-Connect-Attempt-Id, Payment-Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": "Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Request-ID, X-TF-Notice, X-TF-Notice-Level, X-TF-Notice-Latest, X-TF-Notice-Package, WWW-Authenticate, Payment-Receipt",
+    "x-clerk-auth-reason": "session-token-and-uat-missing",
+    "x-clerk-auth-status": "signed-out",
+    "x-middleware-rewrite": "/v1/search?query=python+asyncio&exclude_domains=docs.python.org",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding",
+    "x-ratelimit-limit": "30",
+    "x-ratelimit-remaining": "24",
+    "x-ratelimit-reset": "1795082040",
+    "x-request-id": "aa00a00a-a000-0000-000a-aaaa0000aa00",
+    "x-cache": "Miss from cloudfront",
+    "via": "1.1 7162ad114a2620a596cd6cd391ad1032.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P8",
+    "x-amz-cf-id": "aaAaaAa0AAA0aa0aaaa0aAaAAa0a0aA0aA00aAaAaaa0aaAAaA00aa=="
+  },
+  "response_body": {
+    "query": "python asyncio",
+    "results": [
+      {
+        "date": "2023-01-20T12:45:44Z",
+        "position": 1,
+        "site_name": "site-88ba7a.example.com",
+        "snippet": "Synthetic snippet a016cef0.",
+        "title": "Synthetic title fad62548.",
+        "url": "https://example.com/synthetic/fab94525f5"
+      },
+      {
+        "position": 2,
+        "site_name": "site-1690bb.example.com",
+        "snippet": "Synthetic snippet 9991680c.",
+        "title": "Synthetic title c91fb9e0.",
+        "url": "https://example.com/synthetic/e129dcd96e"
+      },
+      {
+        "position": 3,
+        "site_name": "site-317d9e.example.com",
+        "snippet": "Synthetic snippet 2e518429.",
+        "title": "Synthetic title 8eb9b54d.",
+        "url": "https://example.com/synthetic/133e21d7dc"
+      },
+      {
+        "position": 4,
+        "site_name": "site-686077.example.com",
+        "snippet": "Synthetic snippet ae3a3837.",
+        "title": "Synthetic title 1034b39b.",
+        "url": "https://example.com/synthetic/0c9ca3d158"
+      },
+      {
+        "position": 5,
+        "site_name": "site-e9d929.example.com",
+        "snippet": "Synthetic snippet 38d17103.",
+        "title": "Synthetic title 7fdc9e46.",
+        "url": "https://example.com/synthetic/bdec33734d"
+      },
+      {
+        "position": 6,
+        "site_name": "site-1690bb.example.com",
+        "snippet": "Synthetic snippet 0e31718e.",
+        "title": "Synthetic title aaaf479b.",
+        "url": "https://example.com/synthetic/dfb5a37009"
+      },
+      {
+        "date": "Jun 3, 2025",
+        "position": 7,
+        "site_name": "site-8708bb.example.com",
+        "snippet": "Synthetic snippet 9d749e44.",
+        "title": "Synthetic title 60e9d6db.",
+        "url": "https://example.com/synthetic/5cfdb5665c"
+      },
+      {
+        "position": 8,
+        "site_name": "site-be7f47.example.com",
+        "snippet": "Synthetic snippet 259e3ecd.",
+        "title": "Synthetic title fe7d1514.",
+        "url": "https://example.com/synthetic/a4c2eec7aa"
+      },
+      {
+        "position": 9,
+        "site_name": "site-3d6bd7.example.com",
+        "snippet": "Synthetic snippet c4f687c0.",
+        "title": "Synthetic title 73a9374c.",
+        "url": "https://example.com/synthetic/5b08cdbacb"
+      },
+      {
+        "date": "2023-11-10T13:21:27Z",
+        "position": 10,
+        "site_name": "site-4609d1.example.com",
+        "snippet": "Synthetic snippet d0bf4de5.",
+        "title": "Synthetic title 7ed4a00a.",
+        "url": "https://example.com/synthetic/8023d34a59"
+      }
+    ],
+    "total_results": 10,
+    "page": 0
+  }
+}

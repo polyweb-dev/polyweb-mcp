@@ -1,0 +1,98 @@
+{
+  "method": "POST",
+  "url": "https://api.tavily.com/search",
+  "request_headers": {
+    "host": "api.tavily.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-tavily-contract-research",
+    "content-type": "application/json",
+    "authorization": "Bearer <REDACTED>",
+    "x-client-source": "tavily-python",
+    "content-length": "241"
+  },
+  "request_body": {
+    "query": "polyweb test",
+    "search_depth": "advanced",
+    "include_answer": "basic",
+    "include_raw_content": "markdown",
+    "max_results": 1,
+    "include_images": true,
+    "include_favicon": true,
+    "include_usage": true,
+    "include_image_descriptions": true
+  },
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "8170",
+    "connection": "keep-alive",
+    "date": "Tue, 17 Nov 2026 01:27:23 GMT",
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;",
+    "x-cache": "Miss from cloudfront",
+    "via": "1.1 bf9e5565039f7e32c47e53e1895197ba.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P5",
+    "alt-svc": "h3=\":443\"; ma=86400",
+    "x-amz-cf-id": "cVrs-DftT9JJ3vUGTNKhoTF3Lk4ed2ashTdp71JdPiVoUG1Unm15ND=="
+  },
+  "response_body": {
+    "query": "polyweb test",
+    "follow_up_questions": null,
+    "answer": "Synthetic answer 588b009b.",
+    "images": [
+      {
+        "url": "https://example.com/synthetic/a866f2fe54",
+        "title": "Synthetic title 0f63763c.",
+        "description": "Synthetic description 49f45a9a."
+      },
+      {
+        "url": "https://example.com/synthetic/511534cdcf",
+        "title": "Synthetic title c9110e70.",
+        "description": "Synthetic description 409d561a."
+      },
+      {
+        "url": "https://example.com/synthetic/8fe947d368",
+        "title": "Synthetic title c9110e70.",
+        "description": "Synthetic description 107ee1dc."
+      },
+      {
+        "url": "https://example.com/synthetic/0bd463a01f",
+        "title": "Synthetic title afa3d45c.",
+        "description": "Synthetic description 0578f156."
+      },
+      {
+        "url": "https://example.com/synthetic/40fb287ebf",
+        "title": "Synthetic title b3310b34.",
+        "description": null
+      }
+    ],
+    "results": [
+      {
+        "url": "https://example.com/synthetic/404575487e",
+        "title": "Synthetic title 53ea68ea.",
+        "content": "Synthetic content bb3d5c13.",
+        "score": 0.5740963,
+        "raw_content": "Synthetic raw_content 198d7bff.",
+        "images": [
+          {
+            "url": "https://example.com/synthetic/b9123d93e8",
+            "description": null,
+            "description_source": "og:image",
+            "score": 10
+          }
+        ],
+        "favicon": "https://example.com/synthetic/2e606d5c78",
+        "id": "f4b812-00"
+      }
+    ],
+    "response_time": 5.97,
+    "usage": {
+      "credits": 2
+    },
+    "request_id": "8ce33ef3-293f-1041-e4fc-8b11052d017b"
+  },
+  "sdk_version": "0.7.27",
+  "recorded_at": "2026-11-17T01:27:23.895352+00:00",
+  "notes": "HTTPX decoded content encoding. Request/trace IDs are synthetic with original character classes and length. Auth and account identifiers are redacted. Header lengths describe the original wire body."
+}

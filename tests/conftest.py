@@ -19,6 +19,12 @@ from polyweb.models.contracts import (
     UsageEvent,
     UsageOperation,
 )
+from tests.fixtures.provider_mock_isolation import isolate_provider_mock
+
+# Before any test builds settings: a ``.env`` provider mock origin must not
+# reroute provider calls unless the run opts in (POLYWEB_TEST_PROVIDER_MOCK=1).
+isolate_provider_mock()
+get_settings.cache_clear()
 
 
 class FakeAdapter(ProviderAdapter):

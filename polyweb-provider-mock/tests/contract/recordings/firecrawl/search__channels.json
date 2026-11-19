@@ -1,0 +1,77 @@
+{
+  "method": "POST",
+  "url": "https://api.firecrawl.dev/v2/search",
+  "request_headers": {
+    "host": "api.firecrawl.dev",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "python-httpx/0.28.1",
+    "authorization": "Bearer <REDACTED>",
+    "content-length": "138",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "query": "Firecrawl",
+    "sources": [
+      {
+        "type": "web"
+      },
+      {
+        "type": "news"
+      },
+      {
+        "type": "images"
+      }
+    ],
+    "limit": 1,
+    "timeout": 300000,
+    "origin": "python-sdk@4.41.0"
+  },
+  "status": 200,
+  "response_headers": {
+    "access-control-allow-origin": "*",
+    "content-length": "12799",
+    "content-type": "application/json; charset=utf-8",
+    "date": "Tue, 17 Nov 2026 01:27:35 GMT",
+    "etag": "W/\"31ff-QEGFmv22Ot8YD2wOBAjKp7IGKsQ\"",
+    "x-response-time": "1790.609ms"
+  },
+  "response_body": {
+    "success": true,
+    "data": {
+      "web": [
+        {
+          "url": "https://example.com/synthetic/20b7ba9377",
+          "title": "Synthetic title 1d57bb36.",
+          "description": "Synthetic description 6ceef04f.",
+          "position": 1
+        }
+      ],
+      "news": [
+        {
+          "title": "Synthetic title 0dd8191c.",
+          "url": "https://example.com/synthetic/11f1255b12",
+          "snippet": "Synthetic snippet d6e7a063.",
+          "date": "2 weeks ago",
+          "imageUrl": "https://example.com/synthetic/a20ae6db5b",
+          "position": 1
+        }
+      ],
+      "images": [
+        {
+          "title": "Synthetic title e8baa7d7.",
+          "imageUrl": "https://example.com/synthetic/671f3f6ec7",
+          "imageWidth": 2048,
+          "imageHeight": 477,
+          "url": "https://example.com/synthetic/1af541f419",
+          "position": 1
+        }
+      ]
+    },
+    "creditsUsed": 2,
+    "id": "30e5e32e-c23f-4242-ce0e-f68f6141f5cf"
+  },
+  "sdk_version": "4.41.0",
+  "capture_note": "HTTPX decoded response body; original response headers retained. Secret values redacted; identifiers use synthetic same-format values."
+}

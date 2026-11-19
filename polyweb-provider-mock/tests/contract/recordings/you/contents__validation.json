@@ -1,0 +1,50 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/contents",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "content-length": "24",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "formats": [
+      "markdown"
+    ]
+  },
+  "status": 422,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:40 GMT",
+    "content-type": "application/json",
+    "content-length": "109",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "aa000000-a0a0-0aa0-0aaa-00a0a000a0aa",
+    "x-amzn-remapped-content-length": "109",
+    "x-amz-apigw-id": "A0aA0AaaAAAAA0A=",
+    "x-amzn-remapped-server": "uvicorn",
+    "x-amzn-trace-id": "Root=0-0aaaaa0a-00a00a0a000000000000a00a",
+    "x-amzn-remapped-date": "Tue, 17 Nov 2026 01:27:40 GMT"
+  },
+  "response_body": {
+    "detail": [
+      {
+        "type": "missing",
+        "loc": [
+          "body",
+          "urls"
+        ],
+        "msg": "Field required",
+        "input": {
+          "formats": [
+            "markdown"
+          ]
+        }
+      }
+    ]
+  }
+}

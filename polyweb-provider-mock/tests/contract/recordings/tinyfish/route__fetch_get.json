@@ -1,0 +1,41 @@
+{
+  "method": "GET",
+  "url": "https://api.fetch.tinyfish.ai?urls=https%3A%2F%2Fexample.com",
+  "request_headers": {
+    "host": "api.fetch.tinyfish.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 405,
+  "response_headers": {
+    "content-length": "0",
+    "connection": "keep-alive",
+    "date": "Thu, 19 Nov 2026 09:54:19 GMT",
+    "x-request-id": "0a000aa0-00a0-00a0-0a0a-0000aa0a0000",
+    "set-cookie": "<REDACTED>",
+    "server": "uvicorn",
+    "strict-transport-security": "max-age=63072000; includeSubDomains",
+    "x-frame-options": "DENY",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "access-control-allow-headers": "Content-Type, X-API-Key, Authorization, X-TF-Request-Origin, X-TF-Client-Name, X-TF-Client-Version, X-TF-API-Source, X-TF-API-Example, X-TF-Setup-Attempt-Id, X-TF-Connect-Source, X-TF-Connect-Client, X-TF-Connect-Attempt-Id, Payment-Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": "Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Request-ID, X-TF-Notice, X-TF-Notice-Level, X-TF-Notice-Latest, X-TF-Notice-Package, WWW-Authenticate, Payment-Receipt",
+    "x-clerk-auth-reason": "session-token-and-uat-missing",
+    "x-clerk-auth-status": "signed-out",
+    "x-middleware-rewrite": "/v1/fetch?urls=https%3A%2F%2Fexample.com",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-tf-user-id": "aaaa_0AAaAaAA0AaAA00A0AaAaAAAAaa",
+    "x-cache": "Error from cloudfront",
+    "via": "1.1 23567c7a20d1e0b93a9ff6e08929cdf2.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW56-P13",
+    "x-amz-cf-id": "aAAaAAAaAAaAAaAaaAaaaAaa-AAAAaaaa0aaAaA0aA00AAaA0-aaAA=="
+  },
+  "response_body": null
+}

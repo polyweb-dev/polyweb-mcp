@@ -1,0 +1,491 @@
+{
+ "accepts": [
+  {
+   "scheme": "exact",
+   "network": "eip155:8453",
+   "amount": "0",
+   "payTo": "0x6d6f636b0000000000000000000000000000e7a1",
+   "maxTimeoutSeconds": 60,
+   "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+   "extra": {
+    "name": "USD Coin",
+    "version": "2",
+    "breakdown": {},
+    "totalUsd": 0,
+    "acceptId": "legacy"
+   }
+  },
+  {
+   "scheme": "exact",
+   "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+   "amount": "0",
+   "payTo": "MockExaPayTo1111111111111111111111111111111",
+   "maxTimeoutSeconds": 60,
+   "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+   "extra": {
+    "feePayer": "MockExaFeePayer111111111111111111111111111",
+    "transactionVersions": [
+     0,
+     1
+    ],
+    "name": "USD Coin",
+    "version": "2",
+    "breakdown": {},
+    "totalUsd": 0,
+    "acceptId": "solana-usdc-mainnet"
+   }
+  },
+  {
+   "scheme": "exact",
+   "network": "eip155:8453",
+   "amount": "0",
+   "payTo": "0x6d6f636b0000000000000000000000000000e7a2",
+   "maxTimeoutSeconds": 604900,
+   "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+   "extra": {
+    "name": "GatewayWalletBatched",
+    "version": "1",
+    "verifyingContract": "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee",
+    "minValiditySeconds": 604800,
+    "assets": [
+     {
+      "symbol": "USDC",
+      "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "decimals": 6,
+      "authorizationVersions": [
+       "1",
+       "2"
+      ]
+     },
+     {
+      "symbol": "EURC",
+      "address": "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42",
+      "decimals": 6,
+      "authorizationVersions": [
+       "2"
+      ]
+     }
+    ],
+    "breakdown": {},
+    "totalUsd": 0,
+    "acceptId": "base-usdc-gateway"
+   }
+  },
+  {
+   "scheme": "exact",
+   "network": "eip155:480",
+   "amount": "0",
+   "payTo": "0x6d6f636b0000000000000000000000000000e7a2",
+   "maxTimeoutSeconds": 604900,
+   "asset": "0x79A02482A880bCE3F13e09Da970dC34db4CD24d1",
+   "extra": {
+    "name": "GatewayWalletBatched",
+    "version": "1",
+    "verifyingContract": "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee",
+    "minValiditySeconds": 604800,
+    "assets": [
+     {
+      "symbol": "USDC",
+      "address": "0x79a02482a880bce3f13e09da970dc34db4cd24d1",
+      "decimals": 6,
+      "authorizationVersions": [
+       "1",
+       "2"
+      ]
+     },
+     {
+      "symbol": "EURC",
+      "address": "0x1c60ba0a0ed1019e8eb035e6daf4155a5ce2380b",
+      "decimals": 6,
+      "authorizationVersions": [
+       "2"
+      ]
+     }
+    ],
+    "breakdown": {},
+    "totalUsd": 0,
+    "acceptId": "worldchain-usdc-gateway"
+   }
+  },
+  {
+   "scheme": "exact",
+   "network": "eip155:5042",
+   "amount": "0",
+   "payTo": "0x6d6f636b0000000000000000000000000000e7a2",
+   "maxTimeoutSeconds": 604900,
+   "asset": "0x3600000000000000000000000000000000000000",
+   "extra": {
+    "name": "GatewayWalletBatched",
+    "version": "1",
+    "verifyingContract": "0x77777777dcc4d5a8b6e418fd04d8997ef11000ee",
+    "minValiditySeconds": 604800,
+    "assets": [
+     {
+      "symbol": "USDC",
+      "address": "0x3600000000000000000000000000000000000000",
+      "decimals": 6,
+      "authorizationVersions": [
+       "1",
+       "2"
+      ]
+     },
+     {
+      "symbol": "cirBTC",
+      "address": "0x171a4217b86a807a64eb94757db6849fb4bdbaa0",
+      "decimals": 8,
+      "authorizationVersions": [
+       "2"
+      ]
+     },
+     {
+      "symbol": "EURC",
+      "address": "0xbef5f6d51cb62b58e6a8f77868681825c6fe21c1",
+      "decimals": 6,
+      "authorizationVersions": [
+       "2"
+      ]
+     }
+    ],
+    "breakdown": {},
+    "totalUsd": 0,
+    "acceptId": "arc-usdc-gateway"
+   }
+  },
+  {
+   "scheme": "exact",
+   "network": "eip155:5042",
+   "amount": "0",
+   "payTo": "0x6d6f636b0000000000000000000000000000e7a2",
+   "maxTimeoutSeconds": 3600,
+   "asset": "0x3600000000000000000000000000000000000000",
+   "extra": {
+    "assetTransferMethod": "eip3009",
+    "name": "USDC",
+    "version": "2",
+    "breakdown": {},
+    "totalUsd": 0,
+    "acceptId": "arc-usdc-circle"
+   }
+  },
+  {
+   "scheme": "exact",
+   "network": "eip155:8453",
+   "amount": "0",
+   "payTo": "0x6d6f636b0000000000000000000000000000e7a2",
+   "maxTimeoutSeconds": 3600,
+   "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+   "extra": {
+    "assetTransferMethod": "eip3009",
+    "name": "USD Coin",
+    "version": "2",
+    "breakdown": {},
+    "totalUsd": 0,
+    "acceptId": "base-usdc-circle"
+   }
+  }
+ ],
+ "agentkit": {
+  "info": {
+   "version": "1",
+   "statement": "Verify your agent is backed by a real human to access Exa",
+   "domain": "api.exa.ai",
+   "uri": "",
+   "nonce": "",
+   "issuedAt": "",
+   "resources": []
+  },
+  "supportedChains": [
+   {
+    "chainId": "eip155:480",
+    "type": "eip191"
+   },
+   {
+    "chainId": "eip155:480",
+    "type": "eip1271"
+   }
+  ],
+  "schema": {
+   "$schema": "https://json-schema.org/draft/2020-12/schema",
+   "type": "object",
+   "properties": {
+    "domain": {
+     "type": "string"
+    },
+    "address": {
+     "type": "string"
+    },
+    "statement": {
+     "type": "string"
+    },
+    "uri": {
+     "type": "string",
+     "format": "uri"
+    },
+    "version": {
+     "type": "string"
+    },
+    "chainId": {
+     "type": "string"
+    },
+    "type": {
+     "type": "string"
+    },
+    "nonce": {
+     "type": "string"
+    },
+    "issuedAt": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "expirationTime": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "notBefore": {
+     "type": "string",
+     "format": "date-time"
+    },
+    "requestId": "{'bcca': 'xstoow'}",
+    "resources": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "format": "uri"
+     }
+    },
+    "signature": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "domain",
+    "address",
+    "uri",
+    "version",
+    "chainId",
+    "type",
+    "nonce",
+    "issuedAt",
+    "signature"
+   ]
+  },
+  "_options": {
+   "statement": "Verify your agent is backed by a real human to access Exa",
+   "mode": {
+    "type": "free-trial",
+    "uses": 100
+   },
+   "network": "eip155:480"
+  }
+ },
+ "bazaar": {
+  "search": {
+   "info": {
+    "input": {
+     "type": "http",
+     "bodyType": "json",
+     "body": {
+      "query": "example search query",
+      "numResults": 10,
+      "type": "auto"
+     },
+     "method": "POST"
+    },
+    "output": {
+     "type": "json",
+     "example": {
+      "results": [
+       {
+        "url": "https://example.com",
+        "title": "Example",
+        "score": 0.99
+       }
+      ]
+     }
+    }
+   },
+   "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "input": {
+      "type": "object",
+      "properties": {
+       "type": {
+        "type": "string",
+        "const": "http"
+       },
+       "method": {
+        "type": "string",
+        "enum": [
+         "POST"
+        ]
+       },
+       "bodyType": {
+        "type": "string",
+        "enum": [
+         "json",
+         "form-data",
+         "text"
+        ]
+       },
+       "body": {
+        "type": "object",
+        "properties": {
+         "query": {
+          "type": "string",
+          "description": "Search query"
+         },
+         "numResults": {
+          "type": "number",
+          "description": "Number of results to return (max 10 for x402)"
+         },
+         "type": {
+          "type": "string",
+          "description": "Search type: auto, keyword, neural, deep-lite, deep, deep-reasoning"
+         },
+         "contents": {
+          "type": "object",
+          "description": "Content fields to include: text, highlights, summary"
+         }
+        },
+        "required": [
+         "query"
+        ]
+       }
+      },
+      "required": [
+       "type",
+       "bodyType",
+       "body",
+       "method"
+      ],
+      "additionalProperties": false
+     },
+     "output": {
+      "type": "object",
+      "properties": {
+       "type": {
+        "type": "string"
+       },
+       "example": {
+        "type": "object"
+       }
+      },
+      "required": [
+       "type"
+      ]
+     }
+    },
+    "required": [
+     "input"
+    ]
+   }
+  },
+  "contents": {
+   "info": {
+    "input": {
+     "type": "http",
+     "bodyType": "json",
+     "body": {
+      "urls": [
+       "https://example.com"
+      ],
+      "text": true
+     },
+     "method": "POST"
+    },
+    "output": {
+     "type": "json",
+     "example": {
+      "results": [
+       {
+        "url": "https://example.com",
+        "title": "Example",
+        "text": "Page content..."
+       }
+      ]
+     }
+    }
+   },
+   "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "input": {
+      "type": "object",
+      "properties": {
+       "type": {
+        "type": "string",
+        "const": "http"
+       },
+       "method": {
+        "type": "string",
+        "enum": [
+         "POST"
+        ]
+       },
+       "bodyType": {
+        "type": "string",
+        "enum": [
+         "json",
+         "form-data",
+         "text"
+        ]
+       },
+       "body": {
+        "type": "object",
+        "properties": {
+         "ids": {
+          "type": "array",
+          "description": "Array of Exa document IDs to retrieve content for"
+         },
+         "urls": {
+          "type": "array",
+          "description": "Array of URLs to retrieve content for"
+         },
+         "text": {
+          "type": "boolean",
+          "description": "Include full text content"
+         },
+         "highlights": {
+          "type": "boolean",
+          "description": "Include text highlights"
+         },
+         "summary": {
+          "type": "boolean",
+          "description": "Include AI summary"
+         }
+        }
+       }
+      },
+      "required": [
+       "type",
+       "bodyType",
+       "body",
+       "method"
+      ],
+      "additionalProperties": false
+     },
+     "output": {
+      "type": "object",
+      "properties": {
+       "type": {
+        "type": "string"
+       },
+       "example": {
+        "type": "object"
+       }
+      },
+      "required": [
+       "type"
+      ]
+     }
+    },
+    "required": [
+     "input"
+    ]
+   }
+  }
+ }
+}

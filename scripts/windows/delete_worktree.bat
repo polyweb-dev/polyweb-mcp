@@ -283,21 +283,27 @@ if defined W_PATH (
     if exist "!W_PATH!" (
         where docker >nul 2>&1
         if not errorlevel 1 (
-            set "HAS_COMPOSE=0"
-            if exist "!W_PATH!\compose.yaml" set "HAS_COMPOSE=1"
-            if exist "!W_PATH!\docker-compose.yml" set "HAS_COMPOSE=1"
-            if "!HAS_COMPOSE!"=="1" (
-                echo [1/6] Tearing down Docker Compose containers, networks, and volumes...
-                pushd "!W_PATH!"
-                if "!CLEAN_IMAGES!"=="1" (
-                    call docker compose down --volumes --remove-orphans --rmi local >nul 2>&1
-                ) else (
-                    call docker compose down --volumes --remove-orphans >nul 2>&1
-                )
-                popd
-            ) else (
-                echo [1/6] [SKIP] No Docker Compose file found in worktree.
+            REM Only this worktree's own projects, by name (see scripts\windows\stack.bat).
+            REM A bare `docker compose down` here would load compose.yaml, whose
+            REM project is `polyweb`: the pd stack and its vault volume.
+            for %%I in ("!W_PATH!") do set "W_FOLDER=%%~nxI"
+            set "W_BASE="
+            if /i "!W_FOLDER:~0,11!"=="polyweb_wt_" (
+                set "W_SLOT=!W_FOLDER:~11!"
+                for %%D in (1 2 3 4 5 6 7 8 9) do if "!W_SLOT!"=="%%D" set "W_BASE=polyweb-wt%%D"
             )
+            if not defined W_BASE (
+                set "W_BASE=!W_FOLDER:_=-!"
+                for %%L in (a b c d e f g h i j k l m n o p q r s t u v w x y z) do set "W_BASE=!W_BASE:%%L=%%L!"
+            )
+            set "W_RMI="
+            if "!CLEAN_IMAGES!"=="1" set "W_RMI=--rmi all"
+            echo [1/6] Tearing down !W_BASE!-npd and !W_BASE!-dev ^(containers, networks, volumes^)...
+            pushd "%SystemDrive%\"
+            for %%S in (npd dev mock) do (
+                call docker compose -p "!W_BASE!-%%S" down --volumes --remove-orphans !W_RMI! >nul 2>&1
+            )
+            popd
         ) else (
             echo [1/6] [SKIP] Docker CLI not found.
         )
@@ -438,7 +444,7 @@ echo Options:
 echo   -a, --all           Delete ALL existing worktrees (except main repository)
 echo   -f, --force         Force removal [even if dirty or unmerged]
 echo   -k, --keep-branch   Delete worktree directory and registration, but keep the branch
-echo   --clean-images      Also remove locally built Docker images (--rmi local)
+echo   --clean-images      Also remove the worktree stacks' Docker images (--rmi all)
 echo   -y, --yes           Skip confirmation prompt
 echo.
 echo Examples:

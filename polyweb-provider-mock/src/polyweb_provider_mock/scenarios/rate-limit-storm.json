@@ -1,0 +1,4 @@
+{
+  "description": "Half of all provider calls answer 429 with the provider's rate-limit headers (Retry-After 5).",
+  "faults": [{"provider": "*", "operation": "*", "kind": "rate_limit", "params": {"retry_after": 5}, "probability": 0.5}]
+}

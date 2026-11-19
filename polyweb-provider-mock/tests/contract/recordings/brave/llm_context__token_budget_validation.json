@@ -1,0 +1,45 @@
+{
+  "method": "GET",
+  "url": "https://api.search.brave.com/res/v1/llm/context?q=example+domain&count=1&maximum_number_of_urls=1&maximum_number_of_tokens=500&maximum_number_of_snippets=2&enable_source_metadata=true",
+  "request_headers": {
+    "host": "api.search.brave.com",
+    "user-agent": "Polyweb/0.1",
+    "x-subscription-token": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 422,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:15 GMT",
+    "content-type": "application/json",
+    "content-length": "359",
+    "connection": "keep-alive",
+    "server-timing": "search-roundtrip;dur=3.759",
+    "vary": "Accept-Encoding"
+  },
+  "response_body": {
+    "type": "ErrorResponse",
+    "error": {
+      "id": "1533b0de-4639-2686-60dd-7e7f69d09b1c",
+      "status": 422,
+      "detail": "Unable to validate request parameter(s)",
+      "meta": {
+        "errors": [
+          {
+            "type": "greater_than_equal",
+            "loc": [
+              "query",
+              "maximum_number_of_tokens"
+            ],
+            "msg": "Input should be greater than or equal to 1024",
+            "input": "500",
+            "ctx": {
+              "ge": 1024
+            }
+          }
+        ]
+      },
+      "code": "VALIDATION"
+    },
+    "time": 1794878835
+  }
+}

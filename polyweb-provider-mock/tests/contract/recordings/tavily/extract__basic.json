@@ -1,0 +1,56 @@
+{
+  "method": "POST",
+  "url": "https://api.tavily.com/extract",
+  "request_headers": {
+    "host": "api.tavily.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-tavily-contract-research",
+    "content-type": "application/json",
+    "authorization": "Bearer <REDACTED>",
+    "x-client-source": "tavily-python",
+    "content-length": "119"
+  },
+  "request_body": {
+    "urls": [
+      "https://example.com"
+    ],
+    "extract_depth": "basic",
+    "format": "markdown",
+    "timeout": 20,
+    "include_usage": true
+  },
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "1566",
+    "connection": "keep-alive",
+    "date": "Tue, 17 Nov 2026 01:27:24 GMT",
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;",
+    "x-cache": "Miss from cloudfront",
+    "via": "1.1 59e0aae6855787eddc9df46b7119213a.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P5",
+    "alt-svc": "h3=\":443\"; ma=86400",
+    "x-amz-cf-id": "mru-3cfjLgNrg37tU3jCoU6R6_kHebIgJ0jdiEcFV7UBeqCBIvQUnm=="
+  },
+  "response_body": {
+    "results": [
+      {
+        "url": "https://example.com",
+        "title": "Synthetic title 162b8154.",
+        "raw_content": "Synthetic raw_content 9405b1d7.",
+        "images": []
+      }
+    ],
+    "failed_results": [],
+    "response_time": 0.01,
+    "usage": {
+      "credits": 0
+    },
+    "request_id": "f390b1c4-1116-3dd7-b805-c10d54a20467"
+  },
+  "sdk_version": "0.7.27",
+  "recorded_at": "2026-11-17T01:27:24.119966+00:00",
+  "notes": "HTTPX decoded content encoding. Request/trace IDs are synthetic with original character classes and length. Auth and account identifiers are redacted. Header lengths describe the original wire body."
+}

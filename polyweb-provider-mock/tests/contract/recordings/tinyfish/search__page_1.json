@@ -1,0 +1,126 @@
+{
+  "method": "GET",
+  "url": "https://api.search.tinyfish.ai?query=polyweb+test&page=1",
+  "request_headers": {
+    "host": "api.search.tinyfish.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "date": "Thu, 19 Nov 2026 09:53:15 GMT",
+    "content-encoding": "gzip",
+    "x-tf-user-id": "aaaa_0AAaAaAA0AaAA00A0AaAaAAAAaa",
+    "set-cookie": "<REDACTED>",
+    "server": "uvicorn",
+    "strict-transport-security": "max-age=63072000; includeSubDomains",
+    "x-frame-options": "DENY",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "access-control-allow-headers": "Content-Type, X-API-Key, Authorization, X-TF-Request-Origin, X-TF-Client-Name, X-TF-Client-Version, X-TF-API-Source, X-TF-API-Example, X-TF-Setup-Attempt-Id, X-TF-Connect-Source, X-TF-Connect-Client, X-TF-Connect-Attempt-Id, Payment-Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": "Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Request-ID, X-TF-Notice, X-TF-Notice-Level, X-TF-Notice-Latest, X-TF-Notice-Package, WWW-Authenticate, Payment-Receipt",
+    "x-clerk-auth-reason": "session-token-and-uat-missing",
+    "x-clerk-auth-status": "signed-out",
+    "x-middleware-rewrite": "/v1/search?query=polyweb+test&page=1",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding",
+    "x-ratelimit-limit": "30",
+    "x-ratelimit-remaining": "28",
+    "x-ratelimit-reset": "1795082040",
+    "x-request-id": "0a0a0000-a000-0a0a-0a0a-000a000a00a0",
+    "x-cache": "Miss from cloudfront",
+    "via": "1.1 7162ad114a2620a596cd6cd391ad1032.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P8",
+    "x-amz-cf-id": "Aaaa0aaAa0aaAA0AAAaAAAA0aa0aaAAA0aAA0aa0A0_AaAAaA-aA0a=="
+  },
+  "response_body": {
+    "query": "polyweb test",
+    "results": [
+      {
+        "date": "2024-03-12T11:00:58Z",
+        "position": 1,
+        "site_name": "site-955e87.example.com",
+        "snippet": "Synthetic snippet 8ae07a04.",
+        "title": "Synthetic title ffbc2a32.",
+        "url": "https://example.com/synthetic/1d5574ca82"
+      },
+      {
+        "position": 2,
+        "site_name": "site-4cd116.example.com",
+        "snippet": "Synthetic snippet ec7a7972.",
+        "title": "Synthetic title 3de1dfb3.",
+        "url": "https://example.com/synthetic/3f1dbaee3e"
+      },
+      {
+        "position": 3,
+        "site_name": "site-bc3053.example.com",
+        "snippet": "Synthetic snippet 681637c0.",
+        "title": "Synthetic title b2ff7cb5.",
+        "url": "https://example.com/synthetic/b62f6ac63f"
+      },
+      {
+        "position": 4,
+        "site_name": "site-14f88c.example.com",
+        "snippet": "Synthetic snippet 7d8ba910.",
+        "title": "Synthetic title b6b48d64.",
+        "url": "https://example.com/synthetic/7ebe802783"
+      },
+      {
+        "position": 5,
+        "site_name": "site-686077.example.com",
+        "snippet": "https://example.com/synthetic/4ff8801a71",
+        "title": "Synthetic title 5e774038.",
+        "url": "https://example.com/synthetic/2afd21903c"
+      },
+      {
+        "date": "Sep 6, 2023",
+        "position": 6,
+        "site_name": "site-ac4881.example.com",
+        "snippet": "Synthetic snippet a205eaaa.",
+        "title": "Synthetic title 8557cccb.",
+        "url": "https://example.com/synthetic/8919f5f358"
+      },
+      {
+        "position": 7,
+        "site_name": "site-d65278.example.com",
+        "snippet": "Synthetic snippet 4c60ccba.",
+        "title": "Synthetic title ee777da7.",
+        "url": "https://example.com/synthetic/e7e9a5ee67"
+      },
+      {
+        "date": "Nov 6, 2014",
+        "position": 8,
+        "site_name": "site-5f59e1.example.com",
+        "snippet": "Synthetic snippet ae70c213.",
+        "title": "Synthetic title a07d4e53.",
+        "url": "https://example.com/synthetic/978646392b"
+      },
+      {
+        "date": "2025-06-24T14:00:27Z",
+        "position": 9,
+        "site_name": "site-4dc3a7.example.com",
+        "snippet": "Synthetic snippet 42d917be.",
+        "title": "Synthetic title f3884262.",
+        "url": "https://example.com/synthetic/b2ce6cbdc3"
+      },
+      {
+        "position": 10,
+        "site_name": "site-a8dc61.example.com",
+        "snippet": "Synthetic snippet 56911f69.",
+        "title": "Synthetic title 4e9c266d.",
+        "url": "https://example.com/synthetic/e76fdce49f"
+      }
+    ],
+    "total_results": 10,
+    "page": 1
+  }
+}

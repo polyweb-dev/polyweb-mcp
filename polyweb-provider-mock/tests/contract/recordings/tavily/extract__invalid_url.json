@@ -1,0 +1,43 @@
+{
+  "method": "POST",
+  "url": "https://api.tavily.com/extract",
+  "request_headers": {
+    "host": "api.tavily.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-tavily-contract-research",
+    "content-type": "application/json",
+    "authorization": "Bearer <REDACTED>",
+    "x-client-source": "tavily-python",
+    "content-length": "43"
+  },
+  "request_body": {
+    "urls": [
+      "not-a-url"
+    ],
+    "include_usage": true
+  },
+  "status": 400,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:30:41 GMT",
+    "content-type": "application/json",
+    "content-length": "136",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;"
+  },
+  "response_body": {
+    "detail": {
+      "error": "All URLs failed validation.",
+      "failed_results": [
+        {
+          "url": "not-a-url",
+          "error": "Validation Error: Invalid URL format"
+        }
+      ]
+    }
+  },
+  "sdk_version": "0.7.27",
+  "recorded_at": "2026-11-17T01:30:41.424228+00:00",
+  "notes": "HTTPX decoded content encoding. Request/trace IDs are synthetic with original character classes and length. Auth and account identifiers are redacted. Header lengths describe the original wire body."
+}

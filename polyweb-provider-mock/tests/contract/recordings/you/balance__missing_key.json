@@ -1,0 +1,30 @@
+{
+  "method": "GET",
+  "url": "https://api.you.com/v1/billing/account_balance",
+  "request_headers": {
+    "host": "api.you.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "cookie": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 401,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:54 GMT",
+    "content-type": "application/json",
+    "content-length": "32",
+    "connection": "keep-alive",
+    "server": "cloudflare",
+    "x-request-id": "0a000aa0-a0a0-00a0-0000-a0aa00aa0a00",
+    "x-correlation-id": "0a0a000a-0a00-0aa0-0aa0-0aaa00000000",
+    "x-trace-id": "0000a000-000a-000a-0000-0aa00aa0a0a0|2026-11-17T01:26:54.351657+00:00",
+    "cf-cache-status": "DYNAMIC",
+    "cf-ray": "a0aaa00a0aa00000-AAA",
+    "alt-svc": "h3=\":443\"; ma=86400"
+  },
+  "response_body": {
+    "detail": "API key is required"
+  }
+}
