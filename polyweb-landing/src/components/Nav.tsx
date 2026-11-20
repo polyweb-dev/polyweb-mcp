@@ -53,7 +53,7 @@ export function Nav({ page = false }: { page?: boolean }) {
           Polyweb
         </a>
         <nav className="nav-links" aria-label="Sections">
-          <a href="#features">Features</a>
+          <a href="#how">Features</a>
           <a href="#agents">For agents</a>
           <a href="#self-host">Self-host</a>
           <a href="#/search-api">Docs</a>

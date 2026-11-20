@@ -8,21 +8,25 @@ import tinyfish from "./assets/tinyfish.webp"
 import youcom from "./assets/youcom.webp"
 
 export interface Provider {
+  id: string
   name: string
   src: string
   search: boolean
   fetch: boolean
 }
 
+// Capabilities mirror PROVIDER_SUPPORT_MASKS in
+// src/polyweb/configuration/provider_config.py: everything does search +
+// fetch except Brave, which is search only.
 export const PROVIDERS: Provider[] = [
-  { name: "Brave Search", src: brave, search: true, fetch: false },
-  { name: "Exa", src: exa, search: true, fetch: true },
-  { name: "Firecrawl", src: firecrawl, search: true, fetch: true },
-  { name: "Tavily", src: tavily, search: true, fetch: true },
-  { name: "Parallel", src: parallel, search: true, fetch: true },
-  { name: "You.com", src: youcom, search: true, fetch: true },
-  { name: "Keenable", src: keenable, search: true, fetch: false },
-  { name: "Tinyfish", src: tinyfish, search: true, fetch: true },
+  { id: "brave", name: "Brave Search", src: brave, search: true, fetch: false },
+  { id: "exa", name: "Exa", src: exa, search: true, fetch: true },
+  { id: "firecrawl", name: "Firecrawl", src: firecrawl, search: true, fetch: true },
+  { id: "tavily", name: "Tavily", src: tavily, search: true, fetch: true },
+  { id: "parallel", name: "Parallel", src: parallel, search: true, fetch: true },
+  { id: "you", name: "You.com", src: youcom, search: true, fetch: true },
+  { id: "keenable", name: "Keenable", src: keenable, search: true, fetch: true },
+  { id: "tinyfish", name: "Tinyfish", src: tinyfish, search: true, fetch: true },
 ]
 
 export function pickRandom<T>(list: T[], n: number): T[] {

@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ComponentType } from "react"
 import {
+  animate,
   motion,
+  useInView,
   useMotionValue,
   useReducedMotion,
   useScroll,
@@ -8,11 +10,10 @@ import {
   type MotionValue,
 } from "motion/react"
 import { SiteFooter } from "./components/Footer"
-import { HeroBeams } from "./components/HeroBeams"
+import { HeroOctagon } from "./components/HeroOctagon"
 import { Nav } from "./components/Nav"
+import { ProviderOctagon } from "./components/ProviderOctagon"
 import { Reveal } from "./components/Reveal"
-import { RosetteScene } from "./components/RosetteScene"
-import { RoutingScene } from "./components/RoutingScene"
 import { AboutPage } from "./pages/About"
 import { FetchApiPage } from "./pages/FetchApi"
 import { McpPage } from "./pages/Mcp"
@@ -22,350 +23,567 @@ import { ProvidersPage } from "./pages/Providers"
 import { SearchApiPage } from "./pages/SearchApi"
 import { SecurityPage } from "./pages/Security"
 import { SelfHostingPage } from "./pages/SelfHosting"
-import { GITHUB } from "./links"
-import { useMobile } from "./useMobile"
 
 import projectsWide from "./assets/projects-wide.webp"
 import { PROVIDERS, pickRandom } from "./providers"
+
+const EASE = [0.22, 1, 0.36, 1] as const
+const SEARCHABLE = PROVIDERS.filter((p) => p.search)
+
+/* ---------- random per-load provider picks ---------- */
+
+const [REQ_PROVIDER] = pickRandom(SEARCHABLE, 1)
+const STEP2_PROVIDERS = pickRandom(SEARCHABLE, 3)
+const [WF_A, WF_B] = pickRandom(SEARCHABLE, 2)
+const STEP4_PROVIDERS = pickRandom(PROVIDERS, 4)
+const [ACT_FB_A, ACT_FB_B, ACT_QUOTA, ACT_HEALTH] = pickRandom(SEARCHABLE, 4)
+
+/* ---------- hero ---------- */
 
 function Hero() {
   return (
     <div className="section-night" id="top" data-theme="night">
       <section className="hero" aria-label="Polyweb introduction">
-        <HeroBeams />
-        <div className="container">
-          <div className="hero-content">
-            <Reveal>
-              <h1 className="hero-headline">
-                <span className="hero-line">One search API.</span>
-                <span className="hero-line">Every provider.</span>
-              </h1>
-            </Reveal>
-            <Reveal delay={0.08}>
-              <p className="hero-sub">
-                Polyweb routes search and fetch across eight providers,
-                behind one REST API and an MCP server you host yourself.
-              </p>
-            </Reveal>
-            <Reveal delay={0.16}>
-              <div className="hero-actions">
-                <a className="button button-primary" href="#self-host">
-                  Get started
-                </a>
-                <a
-                  className="button button-secondary-dark"
-                  href={GITHUB}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  View on GitHub
-                </a>
-              </div>
-            </Reveal>
-          </div>
+        <div className="container hero-inner">
+          <Reveal>
+            <p className="eyebrow">Self-hosted search gateway</p>
+          </Reveal>
+          <Reveal delay={0.06}>
+            <h1 className="hero-headline">
+              <span className="hero-line">One search API.</span>
+              <span className="hero-line hero-line-accent">
+                Every provider.
+              </span>
+            </h1>
+          </Reveal>
+          <Reveal delay={0.12}>
+            <p className="hero-sub">
+              Polyweb routes search and fetch across eight providers, behind
+              one REST API and an MCP server you host yourself.
+            </p>
+          </Reveal>
+          <Reveal delay={0.18}>
+            <div className="hero-actions">
+              <a className="button button-primary button-pill" href="#self-host">
+                Get started
+              </a>
+              <a className="hero-link" href="#how">
+                See how it works ›
+              </a>
+            </div>
+          </Reveal>
+          <HeroOctagon />
         </div>
       </section>
-      <div
-        className="provider-strip"
-        aria-label="Supported providers"
-        data-theme="night"
-      >
-        {PROVIDERS.map((p) => (
-          <img key={p.name} src={p.src} alt={p.name} />
-        ))}
-      </div>
     </div>
   )
 }
 
-/* ---------- credits gauges ---------- */
+/* ---------- manifesto ---------- */
 
-const GAUGE_PICKS = pickRandom(PROVIDERS, 4)
-const GAUGES = [
-  { value: 642, fill: 0.64, drain: 0.06 },
-  { value: 818, fill: 0.82, drain: 0.09 },
-  { value: 231, fill: 0.46, drain: 0.07 },
-  { value: 412, fill: 0.41, drain: 0.10 },
-].map((g, i) => ({ ...g, provider: GAUGE_PICKS[i] }))
+const MANIFESTO =
+  "Every search API has its own keys, limits, prices and ways to fail. Your agent shouldn't need to know any of them. Polyweb gives it one API, sends each call to a provider that's up and within budget, and moves on to the next one when it isn't."
 
-const GAUGE_R = 118
-const GAUGE_C = 2 * Math.PI * GAUGE_R
-
-function Gauge({ g, progress }: { g: (typeof GAUGES)[number]; progress: MotionValue<number> }) {
-  const fillT = useTransform(progress, [0, 0.4], [0, 1], { clamp: true })
-  const drainT = useTransform(progress, [0.5, 0.95], [0, g.drain], { clamp: true })
-  const level = useTransform([fillT, drainT] as MotionValue<number>[], (v) => {
-    return (v[0] as number) * (1 - (v[1] as number))
-  })
-  const dash = useTransform(level, (l) => l * g.fill * GAUGE_C)
-  const dasharray = useTransform(dash, (d) => `${d} ${GAUGE_C}`)
-  const num = useTransform(level, (l) => String(Math.round(l * g.value)))
-  return (
-    <div className="gauge">
-      <svg viewBox="0 0 264 264" aria-hidden="true">
-        <circle className="gauge-track" cx="132" cy="132" r={GAUGE_R} fill="none" strokeWidth="14" />
-        <motion.circle
-          className="gauge-fill"
-          cx="132"
-          cy="132"
-          r={GAUGE_R}
-          fill="none"
-          strokeWidth="14"
-          style={{ strokeDasharray: dasharray }}
-        />
-      </svg>
-      <img className="gauge-logo" src={g.provider.src} alt={g.provider.name} />
-      <motion.span className="gauge-num">{num}</motion.span>
-    </div>
-  )
-}
-
-function Credits() {
-  const ref = useRef<HTMLDivElement>(null)
-  const reduced = useReducedMotion()
-  const mobile = useMobile()
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end end"] })
-  const done = useMotionValue(1)
-  const progress = reduced || mobile ? done : scrollYProgress
-  return (
-    <div className="pin-wrap credits-wrap section-night" ref={ref} data-theme="night" aria-label="Credits and limits">
-      <div className="pin-sticky">
-      <div className="container" style={{ textAlign: "center" }}>
-        <Reveal>
-          <h2 className="headline">
-            <span className="hero-line">Know what</span>
-            <span className="hero-line">every call costs</span>
-          </h2>
-        </Reveal>
-        <Reveal delay={0.08}>
-          <p className="subhead" style={{ margin: "24px auto 0" }}>
-            Credits, rate limits and keyless tiers, tracked per provider and
-            shown honestly
-          </p>
-        </Reveal>
-        <div className="gauge-row">
-          {GAUGES.map((g) => (
-            <Gauge key={g.provider.name} g={g} progress={progress} />
-          ))}
-        </div>
-      </div>
-      </div>
-    </div>
-  )
-}
-
-/* ---------- projects: clip-path reveal + bento ---------- */
-
-function ProjectsReveal() {
-  const ref = useRef<HTMLDivElement>(null)
-  const reduced = useReducedMotion()
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end end"] })
-  const done = useMotionValue(1)
-  const progress = reduced ? done : scrollYProgress
-  const clip = useTransform(
-    progress,
-    [0, 0.7],
-    ["inset(18% 20% 18% 20% round 32px)", "inset(0% 0% 0% 0% round 0px)"]
-  )
-  const headOpacity = useTransform(progress, [0.15, 0.5], [0, 1], { clamp: true })
-  const headScale = useTransform(progress, [0.15, 0.6], [0.92, 1])
-  return (
-    <div className="projects-wrap section-night" ref={ref} data-theme="night">
-      <div className="projects-sticky">
-        <motion.div className="projects-clip" style={{ clipPath: clip }}>
-          <img
-            src={projectsWide}
-            alt="Three glass panes lit from within on a dark floor"
-          />
-        </motion.div>
-        <motion.h2
-          className="projects-head cta-head"
-          style={{ opacity: headOpacity, scale: headScale }}
-        >
-          A workspace for every team
-        </motion.h2>
-      </div>
-    </div>
-  )
-}
-
-const MEMBERS = [
-  ["MK", "mara.kovacs@acme.co", "Admin"],
-  ["JW", "jon.wells@acme.co", "Member"],
-  ["AS", "aisha.syed@acme.co", "Member"],
-]
-const KEY_TEXT = "fs_live_7Hk2xQ9m"
-const KEY_PREFIX = "fs_live_"
-
-function KeyField({ progress }: { progress: MotionValue<number> }) {
-  const typedN = useTransform(progress, [0.2, 0.5], [0, KEY_TEXT.length], {
-    clamp: true,
-  })
-  const maskN = useTransform(
-    progress,
-    [0.5, 0.7],
-    [0, KEY_TEXT.length - KEY_PREFIX.length],
-    { clamp: true }
-  )
-  const copyOn = useTransform(progress, [0.73, 0.78], [0, 1], { clamp: true })
-  const copyOff = useTransform(copyOn, (v) => 1 - v)
-  const chars = useTransform([typedN, maskN] as MotionValue<number>[], (v) => {
-    const t = Math.round(v[0] as number)
-    const m = Math.round(v[1] as number)
-    return KEY_TEXT.split("")
-      .map((c, i) =>
-        i >= t ? "" : i < KEY_PREFIX.length || i - KEY_PREFIX.length >= m ? c : "•"
-      )
-      .join("")
-  })
-  return (
-    <div style={{ marginTop: "auto", marginBottom: "auto" }}>
-      <div className="key-field key-field-big">
-        <motion.span className="key-live">{chars}</motion.span>
-        <span className="key-copy">
-          <motion.span style={{ opacity: copyOff, position: "absolute" }}>
-            Copy
-          </motion.span>
-          <motion.span style={{ opacity: copyOn }}>Copied</motion.span>
-        </span>
-      </div>
-    </div>
-  )
-}
-
-const EVENT_FETCH = pickRandom(PROVIDERS.filter((p) => p.fetch), 1)[0]
-const EVENT_SEARCH = pickRandom(
-  PROVIDERS.filter((p) => p.search && p !== EVENT_FETCH),
-  2
-)
-const EVENTS = [
-  { tag: "search", provider: EVENT_SEARCH[0] },
-  { tag: "fetch", provider: EVENT_FETCH },
-  { tag: "search", provider: EVENT_SEARCH[1] },
-]
-
-function PinRow({
+function Word({
   progress,
-  from,
-  to,
-  className,
+  range,
   children,
 }: {
   progress: MotionValue<number>
-  from: number
-  to: number
-  className: string
-  children: ReactNode
+  range: [number, number]
+  children: string
 }) {
-  const opacity = useTransform(progress, [from, to], [0, 1], { clamp: true })
-  const y = useTransform(progress, [from, to], [10, 0])
+  const opacity = useTransform(progress, range, [0.18, 1], { clamp: true })
   return (
-    <motion.div className={className} style={{ opacity, y }}>
-      {children}
-    </motion.div>
+    <motion.span className="manifesto-word" style={{ opacity }}>
+      {children}{" "}
+    </motion.span>
   )
 }
 
-function Bento() {
-  const ref = useRef<HTMLDivElement>(null)
+function Manifesto() {
+  const ref = useRef<HTMLParagraphElement>(null)
   const reduced = useReducedMotion()
-  const mobile = useMobile("(max-width: 860px)")
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end end"] })
-  const done = useMotionValue(1)
-  const progress = reduced || mobile ? done : scrollYProgress
+  const { scrollYProgress } = useScroll({
+    target: ref,
+    offset: ["start 0.85", "end 0.5"],
+  })
+  const words = MANIFESTO.split(" ")
   return (
-    <div className="pin-wrap bento-wrap section-paper" ref={ref} data-theme="paper" aria-label="Projects">
-      <div className="pin-sticky">
-        <div className="bento">
-          <div className="bento-tile">
-            <h3 className="bento-title">Members</h3>
-            <div>
-              {MEMBERS.map(([ini, mail, role], i) => (
-                <PinRow key={mail} progress={progress} from={0.05 + i * 0.08} to={0.13 + i * 0.08} className="member-row">
-                  <span className="member-avatar">{ini}</span>
-                  <span className="member-mail">{mail}</span>
-                  <span className="role-pill">{role}</span>
-                </PinRow>
-              ))}
-            </div>
-          </div>
-          <div className="bento-tile bento-tile-center">
-            <h3 className="bento-title">Keys shown once</h3>
-            <KeyField progress={progress} />
-          </div>
-          <div className="bento-tile">
-            <h3 className="bento-title">Activity</h3>
-            <div className="timeline">
-              {EVENTS.map((e, i) => (
-                <PinRow key={e.provider.name + e.tag} progress={progress} from={0.45 + i * 0.11} to={0.56 + i * 0.11} className="timeline-row">
-                  <span className="timeline-dot" aria-hidden="true" />
-                  <span className="timeline-tag">{e.tag}</span>
-                  <img src={e.provider.src} alt="" />
-                  <span className="timeline-meta">{e.provider.name} · answered</span>
-                </PinRow>
-              ))}
-            </div>
+    <div className="section-paper" data-theme="paper">
+      <section className="section manifesto">
+        <div className="container">
+          <p ref={ref} className="manifesto-text">
+            {reduced
+              ? MANIFESTO
+              : words.map((w, i) => (
+                  <Word
+                    key={i}
+                    progress={scrollYProgress}
+                    range={[i / words.length, (i + 1) / words.length]}
+                  >
+                    {w}
+                  </Word>
+                ))}
+          </p>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+/* ---------- how it works ---------- */
+
+const STEPS = [
+  {
+    n: "01",
+    title: "One request shape.",
+    body: "POST /search or /fetch with the same JSON for every provider. Results come back in one format.",
+  },
+  {
+    n: "02",
+    title: "It picks a provider.",
+    body: "Providers are tried in your project's order, cheapest first by default. Ones that are down, out of quota or switched off are skipped.",
+  },
+  {
+    n: "03",
+    title: "It falls back on its own.",
+    body: "If a provider errors or hits a rate limit, the next one gets the call. The trace keeps every attempt.",
+  },
+  {
+    n: "04",
+    title: "It counts every call.",
+    body: "Credits, quota and cost for each provider key, per project, on the Usage page.",
+  },
+]
+
+const RESULT_ROWS = [
+  ["Global temperature record broken in 2026", "nature.com"],
+  ["How cities adapt to a warming coastline", "reuters.com"],
+  ["Ocean heat content hits a new high", "noaa.gov"],
+]
+
+const STEP2_STATUS = [
+  { label: "Skipped · out of quota", tone: "gray" },
+  { label: "Skipped · down", tone: "gray" },
+  { label: "Answered", tone: "green" },
+]
+
+const STEP4_VALUES = [
+  { value: 642, fill: 0.64 },
+  { value: 818, fill: 0.82 },
+  { value: 231, fill: 0.46 },
+  { value: 412, fill: 0.41 },
+]
+
+function CountUp({ value, on }: { value: number; on: boolean }) {
+  const reduced = useReducedMotion()
+  const mv = useMotionValue(reduced ? value : 0)
+  const text = useTransform(mv, (v) => String(Math.round(v)))
+  useEffect(() => {
+    if (!on || reduced) {
+      mv.set(value)
+      return
+    }
+    const controls = animate(mv, value, { duration: 0.8, ease: "easeOut" })
+    return () => controls.stop()
+  }, [on, reduced, value, mv])
+  return <motion.span className="how-count">{text}</motion.span>
+}
+
+function PanelBody({ step, on }: { step: number; on: boolean }) {
+  if (step === 0) {
+    return (
+      <div className="panel-stack">
+        <div className="panel-card">
+          <p className="panel-card-head">
+            <span className="panel-method">POST</span> /search
+          </p>
+          <pre className="panel-code">
+            {`{ "query": "latest climate research",\n  "limit": 5 }`}
+          </pre>
+        </div>
+        <div className="panel-card">
+          <pre className="panel-code">
+            {`{ "provider": "${REQ_PROVIDER.id}",\n  "results": [ … ] }`}
+          </pre>
+          <div className="panel-results">
+            {RESULT_ROWS.map(([t, d]) => (
+              <div className="panel-result" key={d}>
+                <span className="panel-result-title">{t}</span>
+                <span className="panel-result-domain">{d}</span>
+              </div>
+            ))}
           </div>
         </div>
+      </div>
+    )
+  }
+  if (step === 1) {
+    return (
+      <div className="panel-rows">
+        {STEP2_PROVIDERS.map((p, i) => (
+          <div className="panel-prow" key={p.id}>
+            <img src={p.src} alt="" />
+            <span className="panel-pname">{p.name}</span>
+            <span className={`tag-pill tag-${STEP2_STATUS[i].tone}`}>
+              {STEP2_STATUS[i].label}
+            </span>
+          </div>
+        ))}
+      </div>
+    )
+  }
+  if (step === 2) {
+    return (
+      <div className="panel-rows">
+        <div className="panel-wf">
+          <div className="panel-wf-head">
+            <span>{WF_A.name} request</span>
+            <span className="panel-wf-code">429</span>
+          </div>
+          <div className="panel-wf-track">
+            <div
+              className="panel-wf-bar panel-wf-bar-fail"
+              style={{ width: on ? "34%" : "0%" }}
+            />
+          </div>
+        </div>
+        <div className="panel-wf">
+          <div className="panel-wf-head">
+            <span>{WF_B.name} request</span>
+            <span className="panel-wf-ms">812 ms</span>
+          </div>
+          <div className="panel-wf-track">
+            <div
+              className="panel-wf-bar"
+              style={{ width: on ? "72%" : "0%" }}
+            />
+          </div>
+        </div>
+        <p className="panel-wf-note">2 attempts · second answered</p>
+      </div>
+    )
+  }
+  return (
+    <div className="panel-rows">
+      {STEP4_PROVIDERS.map((p, i) => (
+        <div className="panel-meter" key={p.id}>
+          <div className="panel-meter-head">
+            <img src={p.src} alt="" />
+            <span className="panel-pname">{p.name}</span>
+            <CountUp value={STEP4_VALUES[i].value} on={on} />
+          </div>
+          <div className="panel-wf-track">
+            <div
+              className="panel-wf-bar"
+              style={{ width: on ? `${STEP4_VALUES[i].fill * 100}%` : "0%" }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PanelFrame({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="how-panel">
+      <div className="how-panel-bar" aria-hidden="true">
+        <span className="agents-dot" />
+        <span className="agents-dot" />
+        <span className="agents-dot" />
+        <span className="how-panel-title">Polyweb</span>
+      </div>
+      <div className="how-panel-body">{children}</div>
+    </div>
+  )
+}
+
+function HowStep({
+  index,
+  onActive,
+}: {
+  index: number
+  onActive: (i: number) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const inView = useInView(ref, { amount: 0.6 })
+  useEffect(() => {
+    if (inView) onActive(index)
+  }, [inView, index, onActive])
+  const s = STEPS[index]
+  return (
+    <div className="how-step" ref={ref}>
+      <div className="how-step-text">
+        <span className="how-num">{s.n}</span>
+        <h3>{s.title}</h3>
+        <p>{s.body}</p>
+      </div>
+      <div className="how-step-panel">
+        <PanelFrame>
+          <PanelBody step={index} on={inView} />
+        </PanelFrame>
       </div>
     </div>
   )
 }
 
-/* ---------- shared capacity ---------- */
-
-function Capacity() {
-  const ref = useRef<HTMLDivElement>(null)
-  const reduced = useReducedMotion()
-  const mobile = useMobile()
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end end"] })
-  const done = useMotionValue(1)
-  const progress = reduced || mobile ? done : scrollYProgress
-  const s1 = useTransform(progress, [0.05, 0.3], [0, 1], { clamp: true })
-  const s2 = useTransform(progress, [0.25, 0.5], [0, 1], { clamp: true })
-  const s3 = useTransform(progress, [0.45, 0.65], [0, 1], { clamp: true })
-  const s4 = useTransform(progress, [0.65, 0.85], [0, 1], { clamp: true })
-  const meta = useTransform(progress, [0.82, 0.92], [0, 1], { clamp: true })
+function HowItWorks() {
+  const [active, setActive] = useState(0)
   return (
-    <div className="pin-wrap capacity-wrap section-paper" ref={ref} data-theme="paper" aria-label="Shared capacity">
-      <div className="pin-sticky">
-      <div className="container">
-        <Reveal>
-          <h2 className="headline">Share one key fairly</h2>
-        </Reveal>
-        <Reveal delay={0.08}>
-          <p className="subhead">
-            Pool provider capacity and grant each project an allocation. Only
-            system administrators change pools and allocations
-          </p>
-        </Reveal>
-        <div className="pool-big">
-          <div className="pool-big-labels">
-            <motion.span className="pool-big-label" style={{ width: "40%", opacity: s1 }}>
-              Research <span className="pool-fig">strict cap 400</span>
-            </motion.span>
-            <motion.span className="pool-big-label" style={{ width: "35%", opacity: s2 }}>
-              Support <span className="pool-fig">strict cap 350</span>
-            </motion.span>
-            <motion.span className="pool-big-label" style={{ width: "25%", opacity: s3 }}>
-              Growth <span className="pool-fig">150 + loan</span>
-            </motion.span>
+    <div className="section-paper" id="how" data-theme="paper">
+      <section className="section how">
+        <div className="container">
+          <div className="how-head">
+            <Reveal>
+              <p className="eyebrow">How it works</p>
+            </Reveal>
+            <Reveal delay={0.06}>
+              <h2 className="headline">
+                <span className="hero-line">You send one request.</span>
+                <span className="hero-line">Polyweb does the rest.</span>
+              </h2>
+            </Reveal>
+            <Reveal delay={0.12}>
+              <p className="subhead subhead-center">
+                No SDK per provider. One request shape, one response shape,
+                and a trace for every call.
+              </p>
+            </Reveal>
           </div>
-          <motion.div className="pool-total" style={{ opacity: meta }}>1,000 requests per minute</motion.div>
-          <div className="pool-big-bar">
-            <motion.div className="pool-big-seg" style={{ width: "40%", scaleX: s1 }} />
-            <motion.div className="pool-big-seg" style={{ width: "35%", scaleX: s2 }} />
-            <motion.div className="pool-big-seg" style={{ width: "15%", scaleX: s3 }} />
-            <div className="pool-big-unused" style={{ width: "10%" }}>
-              <motion.div className="pool-big-loan" style={{ scaleX: s4 }} />
+          <div className="how-grid">
+            <div className="how-steps">
+              {STEPS.map((_, i) => (
+                <HowStep key={i} index={i} onActive={setActive} />
+              ))}
+            </div>
+            <div className="how-rail">
+              <div className="how-sticky">
+                <PanelFrame>
+                  {STEPS.map((_, i) => (
+                    <div
+                      key={i}
+                      className={`how-panel-step${i === active ? " on" : ""}`}
+                    >
+                      <PanelBody step={i} on={i === active} />
+                    </div>
+                  ))}
+                </PanelFrame>
+              </div>
             </div>
           </div>
-          <motion.p className="pool-loan-note" style={{ opacity: meta }}>
-            Loan · borrows idle capacity, up to a max rate
-          </motion.p>
         </div>
-      </div>
-      </div>
+      </section>
+    </div>
+  )
+}
+
+/* ---------- providers ---------- */
+
+const PROVIDER_ROWS: [id: string, cap: string][] = [
+  ["brave", "Search"],
+  ["exa", "Search · Fetch"],
+  ["firecrawl", "Search · Fetch"],
+  ["keenable", "Search · Fetch · works without a key"],
+  ["parallel", "Search · Fetch"],
+  ["tavily", "Search · Fetch · works without a key"],
+  ["tinyfish", "Search · Fetch"],
+  ["you", "Search · Fetch"],
+]
+
+function ProvidersSection() {
+  return (
+    <div className="section-night" id="providers" data-theme="night">
+      <section className="section providers">
+        <div className="container">
+          <div className="how-head">
+            <Reveal>
+              <p className="eyebrow">Providers</p>
+            </Reveal>
+            <Reveal delay={0.06}>
+              <h2 className="headline">
+                <span className="hero-line">Eight providers.</span>
+                <span className="hero-line">One contract.</span>
+              </h2>
+            </Reveal>
+          </div>
+          <div className="prov-grid">
+            <ProviderOctagon />
+            <ol className="prov-list">
+              {PROVIDER_ROWS.map(([id, cap], i) => {
+                const p = PROVIDERS.find((x) => x.id === id)!
+                return (
+                  <Reveal key={id} delay={0.05 * i}>
+                    <li className="prov-item">
+                      <span className="prov-num">
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <span className="prov-name">{p.name}</span>
+                      <span className="prov-cap">{cap}</span>
+                    </li>
+                  </Reveal>
+                )
+              })}
+            </ol>
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+/* ---------- activity examples ---------- */
+
+const ACT_CARDS: {
+  label: string
+  tag: string
+  tone: string
+  stmt?: string
+  code?: string
+  note: string
+}[] = [
+  {
+    label: "Fallback",
+    tag: "Fell back",
+    tone: "amber",
+    stmt: `${ACT_FB_A.name} hit a rate limit. ${ACT_FB_B.name} answered.`,
+    note: "Your agent still gets results. The trace keeps both attempts.",
+  },
+  {
+    label: "Quota",
+    tag: "Skipped",
+    tone: "gray",
+    stmt: `${ACT_QUOTA.name} was out of quota, so it was skipped.`,
+    note: "Quota is checked before the call, not after it fails.",
+  },
+  {
+    label: "Fan-out",
+    tag: "Merged",
+    tone: "green",
+    stmt: "One query. Three providers. One list.",
+    note: "Duplicate URLs are merged and ranked with reciprocal rank fusion.",
+  },
+  {
+    label: "API keys",
+    tag: "Shown once",
+    tone: "gray",
+    code: "fs_live_8f2c…",
+    note: "A project key is shown once. Revoke it and the next call gets a 401.",
+  },
+  {
+    label: "Health",
+    tag: "Degraded",
+    tone: "amber",
+    stmt: `${ACT_HEALTH.name} is slow today. It moves to the back of the line.`,
+    note: "Healthy providers are always tried first.",
+  },
+  {
+    label: "Projects",
+    tag: "Isolated",
+    tone: "green",
+    stmt: "Two projects. Separate keys, logs and limits.",
+    note: "Members only see the projects they belong to.",
+  },
+]
+
+function Activity() {
+  return (
+    <div className="section-paper" data-theme="paper">
+      <section className="section activity">
+        <div className="container">
+          <div className="how-head">
+            <Reveal>
+              <p className="eyebrow">Activity</p>
+            </Reveal>
+            <Reveal delay={0.06}>
+              <h2 className="headline">
+                <span className="hero-line">See every call.</span>
+                <span className="hero-line">Down to the attempt.</span>
+              </h2>
+            </Reveal>
+          </div>
+          <div className="act-grid">
+            {ACT_CARDS.map((c, i) => (
+              <Reveal key={c.label} delay={0.05 * i} className="act-cell">
+                <div className="act-card">
+                  <div className="act-top">
+                    <span className="act-label">{c.label}</span>
+                    <span className={`tag-pill tag-${c.tone}`}>{c.tag}</span>
+                  </div>
+                  {c.code ? (
+                    <code className="act-code">{c.code}</code>
+                  ) : (
+                    <p className="act-stmt">{c.stmt}</p>
+                  )}
+                  <p className="act-note">{c.note}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+          <Reveal delay={0.2}>
+            <p className="act-foot">Illustrative examples.</p>
+          </Reveal>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+/* ---------- projects split ---------- */
+
+const PROJECT_POINTS: [string, string][] = [
+  [
+    "Members and roles",
+    "Invite people and choose what each role can see and change.",
+  ],
+  [
+    "Keys shown once",
+    "Project API keys appear one time, then only their prefix.",
+  ],
+  [
+    "Activity per project",
+    "Every call is logged with its provider, latency and cost.",
+  ],
+  [
+    "Share one key fairly",
+    "Split a provider key's quota between projects.",
+  ],
+]
+
+function Projects() {
+  return (
+    <div className="section-paper" data-theme="paper">
+      <section className="section projects">
+        <div className="container proj-grid">
+          <Reveal className="proj-media">
+            <div className="proj-img-card">
+              <img src={projectsWide} alt="The Polyweb projects dashboard" />
+            </div>
+          </Reveal>
+          <div className="proj-copy">
+            <Reveal>
+              <p className="eyebrow">Projects</p>
+            </Reveal>
+            <Reveal delay={0.06}>
+              <h2 className="headline headline-split">
+                <span className="hero-line">One gateway.</span>
+                <span className="hero-line">Every team.</span>
+              </h2>
+            </Reveal>
+            <ul className="proj-list">
+              {PROJECT_POINTS.map(([h, p], i) => (
+                <Reveal key={h} delay={0.1 + i * 0.05}>
+                  <li>
+                    <h3>{h}</h3>
+                    <p>{p}</p>
+                  </li>
+                </Reveal>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </section>
     </div>
   )
 }
@@ -384,98 +602,115 @@ const AGENT_LINES = [
   ["out", "  Researchers attribute the rise to sustained ocean heat."],
 ]
 
-function AgentLine({ index, kind, text, progress }: { index: number; kind: string; text: string; progress: MotionValue<number> }) {
-  const opacity = useTransform(progress, [0.05 + index * 0.0775, 0.125 + index * 0.0775], [0, 1], { clamp: true })
-  return (
-    <motion.div className={`agents-line-${kind}`} style={{ opacity }}>
-      {text}
-    </motion.div>
-  )
-}
-
 function Agents() {
   const ref = useRef<HTMLDivElement>(null)
   const reduced = useReducedMotion()
-  const mobile = useMobile()
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end end"] })
-  const done = useMotionValue(1)
-  const progress = reduced || mobile ? done : scrollYProgress
-  const glowOpacity = useTransform(progress, [0, 0.3], [0, 1], { clamp: true })
+  const inView = useInView(ref, { once: true, margin: "-20% 0px" })
+  const show = inView || reduced
   return (
-    <div className="section-night" id="agents" data-theme="night" aria-label="For agents">
-      <div className="pin-wrap agents-pin" ref={ref}>
-      <div className="pin-sticky">
-      <div className="container">
-        <Reveal>
-          <h2 className="headline">Built for agents</h2>
-        </Reveal>
-        <Reveal delay={0.08}>
-          <p className="subhead">
-            The MCP server runs over streamable HTTP and accepts project API
-            keys. An agent searches and fetches inside its own project scopes
-          </p>
-        </Reveal>
-        <div className="agents-stage">
-          <motion.div
-            className="agents-glow"
-            style={{ opacity: glowOpacity }}
-            aria-hidden="true"
-          />
-          <div className="agents-window">
-            <div className="agents-titlebar" aria-hidden="true">
-              <span className="agents-dot" />
-              <span className="agents-dot" />
-              <span className="agents-dot" />
-            </div>
-            <div className="agents-body">
-              {AGENT_LINES.map(([kind, text], i) => (
-                <AgentLine key={i} index={i} kind={kind} text={text} progress={progress} />
-              ))}
+    <div className="section-night" id="agents" data-theme="night">
+      <section className="section agents">
+        <div className="container">
+          <div className="how-head">
+            <Reveal>
+              <h2 className="headline">Built for agents.</h2>
+            </Reveal>
+            <Reveal delay={0.08}>
+              <p className="subhead subhead-center">
+                The MCP server runs over streamable HTTP and accepts project
+                API keys. An agent searches and fetches inside its own
+                project scopes
+              </p>
+            </Reveal>
+          </div>
+          <div className="agents-stage" ref={ref}>
+            <motion.div
+              className="agents-glow"
+              aria-hidden="true"
+              initial={reduced ? false : { opacity: 0 }}
+              animate={show ? { opacity: 1 } : undefined}
+              transition={{ duration: 0.8, ease: "easeOut" }}
+            />
+            <div className="agents-window">
+              <div className="agents-titlebar" aria-hidden="true">
+                <span className="agents-dot" />
+                <span className="agents-dot" />
+                <span className="agents-dot" />
+              </div>
+              <div className="agents-body">
+                {AGENT_LINES.map(([kind, text], i) => (
+                  <motion.div
+                    key={i}
+                    className={`agents-line-${kind}`}
+                    initial={reduced ? false : { opacity: 0, y: 8 }}
+                    animate={show ? { opacity: 1, y: 0 } : undefined}
+                    transition={{ duration: 0.45, delay: 0.15 + i * 0.09, ease: EASE }}
+                  >
+                    {text}
+                  </motion.div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
-      </div>
-      </div>
-      </div>
+      </section>
     </div>
   )
 }
 
 /* ---------- self-host ---------- */
 
+const SELFHOST_POINTS: [string, string][] = [
+  ["One Compose file", "API, MCP server and dashboard come up together"],
+  ["Keys encrypted at rest", "Provider keys live in an encrypted on-disk vault"],
+  ["Never returned by the API", "No response ever contains secret material"],
+]
+
 function SelfHost() {
   return (
-    <div className="section-night" id="self-host" data-theme="night">
-      <div className="selfhost-points">
-        <Reveal>
-          <div className="selfhost-point">
-            <h3>One Compose file</h3>
-            <p>
-              API, MCP server and dashboard come up together
-            </p>
-            <p style={{ marginTop: 16 }}>
-              <span className="code-chip">docker compose up --build -d</span>
-            </p>
+    <div className="section-paper" id="self-host" data-theme="paper">
+      <section className="section selfhost">
+        <div className="container selfhost-grid">
+          <div>
+            <Reveal>
+              <p className="eyebrow">Self-host</p>
+            </Reveal>
+            <Reveal delay={0.06}>
+              <h2 className="headline headline-split">
+                <span className="hero-line">Your keys.</span>
+                <span className="hero-line">Your machine.</span>
+              </h2>
+            </Reveal>
+            <ul className="proj-list">
+              {SELFHOST_POINTS.map(([h, p], i) => (
+                <Reveal key={h} delay={0.1 + i * 0.05}>
+                  <li>
+                    <h3>{h}</h3>
+                    <p>{p}</p>
+                  </li>
+                </Reveal>
+              ))}
+            </ul>
           </div>
-        </Reveal>
-        <Reveal delay={0.1}>
-          <div className="selfhost-point">
-            <h3>Keys encrypted at rest</h3>
-            <p>Provider keys live in an encrypted on-disk vault</p>
-          </div>
-        </Reveal>
-        <Reveal delay={0.2}>
-          <div className="selfhost-point">
-            <h3>Never returned by the API</h3>
-            <p>No response ever contains secret material</p>
-          </div>
-        </Reveal>
-      </div>
+          <Reveal className="selfhost-media" delay={0.15}>
+            <div className="selfhost-card">
+              <p className="selfhost-cmd">docker compose up --build -d</p>
+              <p className="selfhost-line">
+                <span>Dashboard</span> {"http://<host>:3000"}
+              </p>
+              <p className="selfhost-line">
+                <span>API</span> {"http://<host>:8001/docs"}
+              </p>
+              <p className="selfhost-line">
+                <span>MCP</span> {"http://<host>:8000/mcp"}
+              </p>
+            </div>
+          </Reveal>
+        </div>
+      </section>
     </div>
   )
 }
-
-/* ---------- final CTA ---------- */
 
 /* ---------- router ---------- */
 
@@ -500,12 +735,11 @@ function Home() {
   return (
     <>
       <Hero />
-      <RosetteScene />
-      <RoutingScene />
-      <Credits />
-      <ProjectsReveal />
-      <Bento />
-      <Capacity />
+      <Manifesto />
+      <HowItWorks />
+      <ProvidersSection />
+      <Activity />
+      <Projects />
       <Agents />
       <SelfHost />
     </>

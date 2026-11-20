@@ -1,5 +1,5 @@
-import { motion, useInView, useReducedMotion } from "motion/react"
-import { useRef, type ReactNode } from "react"
+import { motion, useReducedMotion } from "motion/react"
+import type { ReactNode } from "react"
 
 const EASE = [0.22, 1, 0.36, 1] as const
 
@@ -17,32 +17,12 @@ export function Reveal({
   return (
     <motion.div
       className={className}
-      initial={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 16 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-12% 0px" }}
-      transition={{ duration: 0.5, ease: EASE, delay }}
+      transition={{ duration: 0.6, ease: EASE, delay }}
     >
       {children}
     </motion.div>
-  )
-}
-
-/** Adds `revealed` to className once the element scrolls into view (or
- * immediately under reduced motion), so CSS can run enter transitions. */
-export function Revealed({
-  children,
-  className,
-}: {
-  children: ReactNode
-  className?: string
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const reduced = useReducedMotion()
-  const inView = useInView(ref, { once: true, margin: "-15% 0px" })
-  const cls = `${className ?? ""}${inView || reduced ? " revealed" : ""}`.trim()
-  return (
-    <div ref={ref} className={cls || undefined}>
-      {children}
-    </div>
   )
 }
