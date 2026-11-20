@@ -4,12 +4,13 @@ import type { ProjectOrder } from "@/domains/routing"
 import {
   USAGE_COLUMN_HINTS,
   USAGE_COLUMN_LABELS,
-  usageAmountText,
+  usageAmount,
   usageAmountTitle,
   usageTotalsView,
   type UsageAmountColumn,
   type UsageAmounts,
 } from "../model/usageTotalsView"
+import { EstimatedMark } from "@/shared/ui/EstimatedMark"
 import { UsageProviderCell } from "./UsageProviderCell"
 import { renderUsageTable, type UsageColumn } from "./usageTableParts"
 
@@ -23,13 +24,14 @@ const FOOTER_CELL = "border-t border-[var(--border-subtle)] tnum text-right fs-c
 
 function amountCells(amounts: UsageAmounts, columns: readonly UsageAmountColumn[], className: string) {
   return columns.map((column) => {
-    const text = usageAmountText(amounts, column)
+    const { text, estimated } = usageAmount(amounts, column)
     return (
       <td
         key={column}
         className={text === "—" ? `${className} text-[var(--muted)]` : className}
         title={usageAmountTitle(amounts, column)}
       >
+        {estimated && <EstimatedMark />}
         {text}
       </td>
     )

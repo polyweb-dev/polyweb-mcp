@@ -113,23 +113,34 @@ export function usageTotalsView(totals: readonly ProjectUsageTotal[], order?: Pr
 }
 
 const AMOUNT_FORMAT: Intl.NumberFormatOptions = { maximumFractionDigits: 4 }
-/** The cell text of one unit column; a dash when the row recorded none. */
-export function usageAmountText(amounts: UsageAmounts, column: UsageAmountColumn): string {
+
+/** One unit cell: its amount, and whether that amount is partly estimated. */
+interface UsageAmount {
+  text: string
+  estimated: boolean
+}
+
+/** The cell amount of one unit column; a dash when the row recorded none. */
+export function usageAmount(amounts: UsageAmounts, column: UsageAmountColumn): UsageAmount {
   const value = amounts[column]
-  if (column === "usd" && (value === null || value === 0)) {
-    if (amounts.free && !amounts.unreportedCost) return formatCallCost(0)
-    if (value === null) return "—"
+  if (column === "usd" && (value === null || value === 0) && amounts.free && !amounts.unreportedCost) {
+    return { text: formatCallCost(0), estimated: false }
   }
-  if (value === null) return "—"
-  if (column !== "usd") return value.toLocaleString("en-US", AMOUNT_FORMAT)
+  if (value === null) return { text: "—", estimated: false }
+  if (column !== "usd") return { text: value.toLocaleString("en-US", AMOUNT_FORMAT), estimated: false }
   // Ledger values arrive as numbers, so remove binary addition noise before display.
-  const cost = formatCostTotal(Number(value.toPrecision(15)))
-  return amounts.estimated ? `~${cost}` : cost
+  return { text: formatCostTotal(Number(value.toPrecision(15))), estimated: amounts.estimated }
+}
+
+/** The visible cell text of one unit column; "~" marks an estimated amount. */
+export function usageAmountText(amounts: UsageAmounts, column: UsageAmountColumn): string {
+  const { text, estimated } = usageAmount(amounts, column)
+  return estimated ? `~${text}` : text
 }
 
 /** The tooltip of a cell whose dollar amount is partly estimated. */
 export function usageAmountTitle(amounts: UsageAmounts, column: UsageAmountColumn): string | undefined {
-  return usageAmountText(amounts, column).startsWith("~") ? "Estimated from the catalog price" : undefined
+  return usageAmount(amounts, column).estimated ? "Estimated from the catalog price" : undefined
 }
 
 export const USAGE_COLUMN_LABELS: Readonly<Record<UsageAmountColumn, string>> = {

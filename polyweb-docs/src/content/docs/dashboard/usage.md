@@ -16,7 +16,7 @@ The **Usage** page totals a project's calls per provider and operation, over all
 | --- | --- |
 | **Provider**, **Operation** | The provider and whether the row counts searches or fetches. |
 | **Calls** | How many calls ran. |
-| **Cost** | Reported charges in US dollars. Shows **Free** for keyless calls and a dash when the provider reported no cost. Totals include known costs only. |
+| **Cost** | Charges in US dollars: what the provider reported, or an estimate from the catalog price marked **~** (screen readers announce "Estimated"). Shows **Free** for keyless and free calls, and a dash when no price is known. Totals include known costs only. |
 | **Billed requests** | Calls counted against a provider's request allowance. Shown only when a provider reports them. |
 | **Provider credits** | Credits the provider deducted, in its own unit. Shown only when a provider reports them. |
 | **Other units** | Units recorded before unit types were tracked. |

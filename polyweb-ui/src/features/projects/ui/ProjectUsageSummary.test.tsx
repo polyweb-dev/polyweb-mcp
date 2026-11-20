@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import { installFetchStub, ok } from "@/test/fetchMock"
 import { ProjectUsageSummary } from "./ProjectUsageSummary"
 
@@ -47,5 +47,7 @@ describe("ProjectUsageSummary", () => {
 
     const card = (await screen.findByText("Provider cost")).closest("div")!
     expect(card).toHaveTextContent("~$0.016")
+    expect(within(card).getByText("~")).toHaveAttribute("aria-hidden", "true")
+    expect(within(card).getByText("Estimated")).toHaveClass("sr-only")
   })
 })
