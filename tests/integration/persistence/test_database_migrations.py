@@ -601,6 +601,30 @@ def test_usage_event_cost_upgrade_backfills_usd_and_free_rows_only(tmp_path: Pat
     assert {"cost_usd", "cost_source"}.isdisjoint(columns)
 
 
+def test_usage_event_cost_upgrade_backfills_exa_pricing_fallback_as_estimated(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "usage-cost-exa-fallback.db"
+    migration_module.command.upgrade(_config_for(database), _OWNED_KEYLESS)
+    metadata = (
+        '{"provenance":"exa_pricing_fallback","source":"estimated","pricing_date":"2026-01-01"}'
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO usage_events (id, provider, operation, units, observed_at, metadata, "
+            "status, unit_kind, project_id, actor_type, actor_id) VALUES "
+            "(1, 'exa', 'search', '0.007', '2026-01-01T00:00:00+00:00', ?, 'success', 'USD', "
+            "?, 'human', ?)",
+            (metadata, str(uuid.uuid4()), str(uuid.uuid4())),
+        )
+
+    migration_module.command.upgrade(_config_for(database), "head")
+
+    with sqlite3.connect(database) as connection:
+        costs = connection.execute("SELECT cost_usd, cost_source FROM usage_events").fetchall()
+    assert costs == [("0.007", "estimated")]
+
+
 @pytest.mark.parametrize("rejected_database", _REJECTED_IDS[:1] + _REJECTED_IDS[3:4], indirect=True)
 @pytest.mark.parametrize("command", ["status", "upgrade"])
 def test_cli_reports_reset_required_without_traceback(

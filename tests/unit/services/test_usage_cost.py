@@ -8,6 +8,7 @@ import pytest
 
 from polyweb.models.contracts import (
     CostSource,
+    FetchRequest,
     SearchRequest,
     UnitKind,
     UsageCost,
@@ -56,6 +57,17 @@ def test_estimated_usd_gap_event_stays_estimated() -> None:
     event = _event("you", "0.005", UnitKind.USD, metadata=metadata)
 
     assert usage_cost(event) == _estimated("0.005")
+
+
+def test_exa_pricing_fallback_usd_event_is_estimated() -> None:
+    metadata = {
+        "provenance": "exa_pricing_fallback",
+        "source": "estimated",
+        "pricing_date": "2026-01-01",
+    }
+    event = _event("exa", "0.007", UnitKind.USD, metadata=metadata)
+
+    assert usage_cost(event) == _estimated("0.007")
 
 
 def test_free_unit_costs_zero() -> None:
@@ -208,6 +220,62 @@ def test_catalog_event_for_a_usd_rail_is_estimated() -> None:
         "USD",
     )
     assert usage_cost(event) == _estimated("0.007")
+
+
+@pytest.mark.parametrize(
+    ("parallel_options", "mode", "extra_bundles", "expected"),
+    [
+        ({"mode": "turbo"}, None, 0, "0.001"),
+        ({"mode": "turbo"}, None, 2, "0.003"),
+        (None, "turbo", 0, "0.001"),
+        ({"mode": "turbo"}, "advanced", 0, "0.001"),
+        (None, None, 0, "0.005"),
+        (None, "advanced", 0, "0.005"),
+    ],
+)
+def test_catalog_event_prices_parallel_search_by_mode_and_bundles(
+    parallel_options: dict[str, Any] | None,
+    mode: str | None,
+    extra_bundles: int,
+    expected: str,
+) -> None:
+    provider_options = None if parallel_options is None else {"parallel": parallel_options}
+    request = SearchRequest.model_validate(
+        {
+            "query": "q",
+            "mode": mode,
+            "extra_bundles": extra_bundles,
+            "provider_options": provider_options,
+        }
+    )
+
+    event = catalog_usage_event("parallel", UsageOperation.SEARCH, AuthMode.KEYED, request, _AT)
+
+    assert event is not None
+    assert (event.units, event.unit_kind, event.display_unit) == (
+        Decimal(expected),
+        UnitKind.USD,
+        "USD",
+    )
+    assert event.metadata["estimated"] is True
+    assert usage_cost(event) == _estimated(expected)
+
+
+def test_catalog_event_prices_parallel_extract_per_url() -> None:
+    request = FetchRequest(url="https://example.com/", url_count=3)
+
+    event = catalog_usage_event("parallel", UsageOperation.FETCH, AuthMode.KEYED, request, _AT)
+
+    assert event is not None
+    assert (event.units, event.unit_kind) == (Decimal("0.003"), UnitKind.USD)
+    assert usage_cost(event) == _estimated("0.003")
+
+
+def test_catalog_event_for_parallel_without_a_request_uses_the_standard_cost() -> None:
+    event = catalog_usage_event("parallel", UsageOperation.SEARCH, AuthMode.KEYED, None, _AT)
+
+    assert event is not None
+    assert (event.units, event.unit_kind) == (Decimal("0.005"), UnitKind.USD)
 
 
 def test_catalog_event_for_an_unknown_provider_is_none() -> None:

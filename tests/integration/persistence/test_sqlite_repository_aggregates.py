@@ -164,6 +164,24 @@ async def test_usage_totals_sum_cost_flag_estimates_count_unpriced_and_skip_aggr
     assert AGGREGATED_PROVIDER in {event.provider for event in recent}
 
 
+async def test_usage_total_stays_estimated_when_a_reported_cost_follows_an_estimate(
+    repository: SQLiteRepository,
+) -> None:
+    attribution = await seed_execution_project(repository)
+    await repository.record_usage(
+        _kind_event("exa", "0.007", UnitKind.USD), attribution=attribution, cost=_estimated("0.007")
+    )
+    await repository.record_usage(
+        _kind_event("exa", "0.001", UnitKind.USD), attribution=attribution, cost=_reported("0.001")
+    )
+
+    totals = await repository.installation_usage_totals()
+
+    assert [(total.provider, total.cost_usd, total.cost_estimated) for total in totals] == [
+        ("exa", Decimal("0.008"), True)
+    ]
+
+
 async def test_recent_usage_is_newest_first_and_respects_limit(
     repository: SQLiteRepository,
 ) -> None:

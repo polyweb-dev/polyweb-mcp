@@ -15,11 +15,14 @@ def upgrade() -> None:
     op.add_column("usage_events", sa.Column("cost_usd", sa.Text(), nullable=True))
     op.add_column("usage_events", sa.Column("cost_source", sa.Text(), nullable=True))
     # Only rows whose units already are dollars (or free) can be priced
-    # without the provider catalog; every other row stays unpriced.
+    # without the provider catalog; every other row stays unpriced. A USD row
+    # is an estimate by the same rule as ``usage_cost._is_estimated``: an
+    # ``estimated`` flag, or the Exa pricing fallback's ``source`` marker.
     op.execute(
         "UPDATE usage_events SET cost_usd = units, cost_source = CASE "
         "WHEN json_valid(metadata) THEN CASE "
-        "WHEN json_type(metadata, '$.estimated') = 'true' THEN 'estimated' "
+        "WHEN json_type(metadata, '$.estimated') = 'true' "
+        "OR json_extract(metadata, '$.source') = 'estimated' THEN 'estimated' "
         "ELSE 'reported' END "
         "ELSE 'reported' END "
         "WHERE unit_kind = 'USD'"

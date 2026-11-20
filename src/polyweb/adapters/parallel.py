@@ -123,6 +123,23 @@ def usage_event_cost_usd(event: UsageEvent) -> Decimal | None:
         return None
 
 
+def _search_mode(request: SearchRequest) -> str | None:
+    """Return the Parallel search mode: the provider option first, then the request's mode."""
+
+    options = request.provider_options.parallel if request.provider_options is not None else None
+    if options is not None and options.mode is not None:
+        return options.mode
+    return request.mode
+
+
+def request_cost_usd(request: SearchRequest | FetchRequest) -> Decimal:
+    """Price one Parallel request locally from its mode, extra bundles, or URL count."""
+
+    if isinstance(request, SearchRequest):
+        return search_cost_usd(_search_mode(request), request.extra_bundles)
+    return extract_cost_usd(request.url_count)
+
+
 def parse_seed(value: Decimal | None) -> Decimal | None:
     """Validate an optional exact, non-negative local seed."""
 
@@ -223,12 +240,6 @@ class ParallelAdapter(ProviderAdapter):
         provider_options = request.provider_options
         return None if provider_options is None else provider_options.parallel
 
-    def _search_mode(self, request: SearchRequest) -> str | None:
-        options = self._parallel_search_options(request)
-        if options is not None and options.mode is not None:
-            return options.mode
-        return request.mode
-
     def _search_limit(self, request: SearchRequest) -> int:
         options = self._parallel_search_options(request)
         advanced = None if options is None else options.advanced_settings
@@ -246,7 +257,7 @@ class ParallelAdapter(ProviderAdapter):
             "search_queries": [request.query],
             "advanced_settings": settings,
         }
-        mode = self._search_mode(request)
+        mode = _search_mode(request)
         if mode is not None:
             body["mode"] = mode
 
@@ -285,7 +296,7 @@ class ParallelAdapter(ProviderAdapter):
             payload,
             UsageOperation.SEARCH,
             request_id,
-            mode=self._search_mode(request),
+            mode=_search_mode(request),
             extra_bundles=request.extra_bundles,
         )
         usage_gap: dict[str, Any] | None = None
@@ -407,13 +418,11 @@ class ParallelAdapter(ProviderAdapter):
         raise self._error("fetch_failed", "no successful extraction result") from None
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
+        units = request_cost_usd(request)
         if isinstance(request, SearchRequest):
-            units = search_cost_usd(self._search_mode(request), request.extra_bundles)
             operation = UsageOperation.SEARCH
             notes = "mode-aware local estimate"
         else:
-            count = int(getattr(request, "url_count", 1))
-            units = extract_cost_usd(count)
             operation = UsageOperation.FETCH
             notes = "estimated per extracted URL"
         return CostEstimate(

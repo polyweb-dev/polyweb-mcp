@@ -10,11 +10,13 @@ from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
 
+from polyweb.adapters.parallel import request_cost_usd as parallel_request_cost_usd
 from polyweb.adapters.parallel import usage_event_cost_usd as parallel_usage_cost_usd
 from polyweb.configuration.provider_limits import provider_limit_defaults
 from polyweb.models.contracts import (
     CostSource,
     FetchRequest,
+    QuotaSource,
     SearchRequest,
     UnitKind,
     UsageCost,
@@ -41,10 +43,9 @@ def usage_cost(event: UsageEvent, *, auth_mode: AuthMode = AuthMode.KEYED) -> Us
     if event.status is UsageStatus.FAILURE and event.units == 0:
         return None
     if event.unit_kind is UnitKind.USD:
-        estimated = event.metadata.get("estimated") is True
         return UsageCost(
             usd=event.units,
-            source=CostSource.ESTIMATED if estimated else CostSource.REPORTED,
+            source=CostSource.ESTIMATED if _is_estimated(event.metadata) else CostSource.REPORTED,
         )
     if event.unit_kind is UnitKind.FREE:
         return UsageCost(usd=Decimal("0"), source=CostSource.ESTIMATED)
@@ -72,8 +73,10 @@ def catalog_usage_event(
     """Estimate one unmetered call's usage from the catalog, or ``None`` when unknown.
 
     The event carries the native cost the catalog expects ``request`` to
-    consume on the ``auth_mode`` rail. A provider without a supported record,
-    a record without a native unit, or an unknown native cost yields ``None``.
+    consume on the ``auth_mode`` rail. Parallel prices ``request`` by its search
+    mode, extra bundles and URL count, in dollars like its catalog record. A
+    provider without a supported record, a record without a native unit, or an
+    unknown native cost yields ``None``.
     """
 
     try:
@@ -83,7 +86,10 @@ def catalog_usage_event(
     record = _catalog_record(provider, limit_operation, auth_mode)
     if record is None or record.native_unit is None:
         return None
-    units = request_native_cost(record, request)
+    if provider == "parallel" and record.native_unit is UnitKind.USD and request is not None:
+        units: Decimal | None = parallel_request_cost_usd(request)
+    else:
+        units = request_native_cost(record, request)
     if units is None:
         return None
     return UsageEvent(
@@ -94,6 +100,19 @@ def catalog_usage_event(
         display_unit=_DISPLAY_UNITS[record.native_unit],
         observed_at=observed_at,
         metadata={"estimated": True, "metering_gap": True, "catalog_fallback": True},
+    )
+
+
+def _is_estimated(metadata: dict[str, object]) -> bool:
+    """Return whether a USD event's metadata marks its dollar amount as a local estimate.
+
+    Gap and catalog events set ``estimated``; the Exa pricing fallback sets
+    ``source`` to ``QuotaSource.ESTIMATED``. Migration ``0009_usage_event_cost``
+    mirrors this rule when it backfills stored rows.
+    """
+
+    return (
+        metadata.get("estimated") is True or metadata.get("source") == QuotaSource.ESTIMATED.value
     )
 
 
