@@ -39,3 +39,7 @@ export function pickRandom<T>(list: T[], n: number): T[] {
   }
   return a.slice(0, n)
 }
+
+export function capabilityLabel(p: Provider): string {
+  return [p.search && "Search", p.fetch && "Fetch"].filter(Boolean).join(" · ")
+}

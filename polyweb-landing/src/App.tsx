@@ -14,6 +14,7 @@ import { HeroOctagon } from "./components/HeroOctagon"
 import { Nav } from "./components/Nav"
 import { ProviderOctagon } from "./components/ProviderOctagon"
 import { Reveal } from "./components/Reveal"
+import { RoutingPlayground } from "./components/RoutingPlayground"
 import { AboutPage } from "./pages/About"
 import { FetchApiPage } from "./pages/FetchApi"
 import { McpPage } from "./pages/Mcp"
@@ -68,7 +69,7 @@ function Hero() {
                 Get started
               </a>
               <a className="hero-link" href="#how">
-                See how it works ›
+                See how it works <span aria-hidden="true">›</span>
               </a>
             </div>
           </Reveal>
@@ -373,6 +374,14 @@ function HowItWorks() {
               </div>
             </div>
           </div>
+          <div className="play-wrap">
+            <Reveal>
+              <h3 className="play-title">Try it. Break a provider.</h3>
+            </Reveal>
+            <Reveal delay={0.06}>
+              <RoutingPlayground />
+            </Reveal>
+          </div>
         </div>
       </section>
     </div>
@@ -393,6 +402,7 @@ const PROVIDER_ROWS: [id: string, cap: string][] = [
 ]
 
 function ProvidersSection() {
+  const [active, setActive] = useState<string | null>(null)
   return (
     <div className="section-night" id="providers" data-theme="night">
       <section className="section providers">
@@ -409,13 +419,19 @@ function ProvidersSection() {
             </Reveal>
           </div>
           <div className="prov-grid">
-            <ProviderOctagon />
-            <ol className="prov-list">
+            <ProviderOctagon active={active} onActive={setActive} />
+            <ol className="prov-list" onMouseLeave={() => setActive(null)}>
               {PROVIDER_ROWS.map(([id, cap], i) => {
                 const p = PROVIDERS.find((x) => x.id === id)!
                 return (
                   <Reveal key={id} delay={0.05 * i}>
-                    <li className="prov-item">
+                    <li
+                      className={`prov-item${active === id ? " on" : ""}`}
+                      tabIndex={0}
+                      onMouseEnter={() => setActive(id)}
+                      onFocus={() => setActive(id)}
+                      onBlur={() => setActive(null)}
+                    >
                       <span className="prov-num">
                         {String(i + 1).padStart(2, "0")}
                       </span>
@@ -660,6 +676,30 @@ function Agents() {
 
 /* ---------- self-host ---------- */
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = window.setTimeout(() => setCopied(false), 1600)
+    return () => window.clearTimeout(t)
+  }, [copied])
+  return (
+    <button
+      type="button"
+      className={`copy-btn${copied ? " copied" : ""}`}
+      onClick={() => {
+        navigator.clipboard?.writeText(text).then(
+          () => setCopied(true),
+          () => {}
+        )
+      }}
+      aria-label={copied ? "Copied" : "Copy command"}
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  )
+}
+
 const SELFHOST_POINTS: [string, string][] = [
   ["One Compose file", "API, MCP server and dashboard come up together"],
   ["Keys encrypted at rest", "Provider keys live in an encrypted on-disk vault"],
@@ -694,7 +734,10 @@ function SelfHost() {
           </div>
           <Reveal className="selfhost-media" delay={0.15}>
             <div className="selfhost-card">
-              <p className="selfhost-cmd">docker compose up --build -d</p>
+              <p className="selfhost-cmd">
+                <span>docker compose up --build -d</span>
+                <CopyButton text="docker compose up --build -d" />
+              </p>
               <p className="selfhost-line">
                 <span>Dashboard</span> {"http://<host>:3000"}
               </p>
