@@ -56,6 +56,16 @@ The Docker settings above change only the host side. Inside the containers the p
 
 For a manual setup, set the authority URL to the API address. The API and MCP then share one execution authority. Without a URL or standalone mode, the MCP server refuses to start.
 
+## Smart routing
+
+Optional. These settings connect `routing.mode = "smart"` to an external route advisor. Without them, `smart` behaves like `auto`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `POLYWEB_ROUTER_URL` | none | Base URL of the route advisor. Polyweb calls `POST <url>/v1/route`. Use `https` outside a trusted network. |
+| `POLYWEB_ROUTER_SECRET` | none | Shared secret sent as `Authorization: Bearer <secret>`. Generate one with `openssl rand -hex 32`. |
+| `POLYWEB_ROUTER_TIMEOUT_SECONDS` | `1.5` | How long a request waits for the advisor before it runs without advice. At most `10`. |
+
 ## Storage
 
 | Variable | Default | Meaning |

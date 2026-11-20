@@ -588,7 +588,9 @@ def _register_tools(
         ctx: Context,  # type: ignore[type-arg]
     ) -> dict[str, Any]:
         """Search the web. Select providers with routing:
-        {"mode": "require" or "prefer", "providers": ["keenable"]}.
+        {"mode": "require" or "prefer", "providers": ["keenable"]}, or let the
+        server's route advisor pick with {"mode": "smart"} (runs like auto when
+        no advisor is configured).
 
         Recency is provider-specific under providerOptions, e.g. {"tavily": {"time_range": "week"}}
         or {"tinyfish": {"recency_minutes": 60}}. Unknown request fields are rejected.

@@ -48,6 +48,10 @@ class RoutingMode(StrEnum):
     PREFER = "prefer"
     REQUIRE = "require"
     FANOUT = "fanout"
+    SMART = "smart"
+
+
+RouteObjective = Literal["accuracy", "balanced", "speed"]
 
 
 class RoutingPreference(ContractModel):
@@ -57,12 +61,28 @@ class RoutingPreference(ContractModel):
     several credentials of the same provider. It is only a selector: the
     execution layer still proves that the binding belongs to the verified
     project, is enabled for the operation, and resolves a usable credential.
+
+    ``smart`` asks an optional external route advisor for a provider order;
+    ``providers`` then limits the advisor's choice and ``objective`` tunes it.
+    Without a configured advisor, or when it does not answer in time,
+    ``smart`` runs exactly like ``auto`` (or ``prefer`` when ``providers`` is
+    set). Fetch requests always ignore the advisor.
     """
 
     mode: RoutingMode = RoutingMode.AUTO
     providers: tuple[str, ...] = ()
     allow_fallback: bool = True
     binding_id: UUID | None = None
+    objective: RouteObjective | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_objective(self, handler: Any) -> Any:
+        # Keep requests without an objective byte-identical on the wire;
+        # queue byte budgets and forwarded payloads measure this encoding.
+        payload = handler(self)
+        if self.objective is None and isinstance(payload, dict):
+            payload.pop("objective", None)
+        return payload
 
     @field_validator("providers")
     @classmethod

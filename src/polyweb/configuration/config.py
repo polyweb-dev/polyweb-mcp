@@ -257,6 +257,13 @@ class Settings(BaseSettings):
     execution_authority_lease_seconds: float = Field(default=30.0, gt=0)
     execution_authority_recovery_seconds: float = Field(default=5.0, ge=0)
 
+    # Optional external route advisor for ``routing.mode = "smart"``. Unset
+    # means smart routing runs like ``auto``. The advisor only returns a
+    # provider order; credentials, quotas and execution stay in Polyweb.
+    router_url: str | None = None
+    router_secret: SecretStr | None = Field(default=None, repr=False)
+    router_timeout_seconds: float = Field(default=1.5, gt=0, le=10)
+
 
 def require_transport_port(settings: Settings, *, transport: str) -> int:
     """Return a configured transport port, or reject a start without one.

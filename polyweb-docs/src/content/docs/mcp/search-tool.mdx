@@ -40,10 +40,11 @@ The `routing` object:
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `mode` | `auto`, `prefer`, `require`, or `fanout` | `auto` | `auto` lets Polyweb choose. `prefer` tries `providers` first. `require` uses only `providers`. `fanout` queries `providers` together. |
+| `mode` | `auto`, `prefer`, `require`, `fanout`, or `smart` | `auto` | `auto` lets Polyweb choose. `prefer` tries `providers` first. `require` uses only `providers`. `fanout` queries `providers` together. `smart` asks the optional route advisor for the order. See [Routing](/concepts/routing/#smart-routing). |
 | `providers` | array of strings | `[]` | Provider names, for example `exa` or `tavily`. |
 | `allow_fallback` | boolean | `true` | Try other providers if the preferred one fails. |
 | `binding_id` | UUID | none | Pin one project binding when the project has several keys for the same provider. |
+| `objective` | `accuracy`, `balanced`, or `speed` | none | Only for `smart`: what the route advisor optimizes for. |
 
 For how Polyweb picks a provider, see [Routing](/concepts/routing/).
 

@@ -202,6 +202,7 @@ from polyweb.services.provider_runtime import (
     routing_policy,
     schedule_quota_refresh,
 )
+from polyweb.services.route_advisor import RouteAdvisor
 
 logger = logging.getLogger(__name__)
 
@@ -884,8 +885,15 @@ class ExecutionService:
         host_authority: bool = True,
         retry_backoff: Callable[[], float] | None = None,
         retry_sleep: Callable[[float], Awaitable[None]] | None = None,
+        route_advisor: RouteAdvisor | Literal["settings"] | None = "settings",
     ) -> None:
         self._repository = repository
+        # ``smart`` routing asks this optional advisor for a provider order.
+        # The default reads ``POLYWEB_ROUTER_URL``; ``None`` disables it.
+        self._route_advisor = (
+            RouteAdvisor.from_settings() if route_advisor == "settings" else route_advisor
+        )
+        self._owns_route_advisor = route_advisor == "settings"
         self._secret_store = secret_store
         self._limits = limits
         self._account_id = account_id
@@ -950,6 +958,11 @@ class ExecutionService:
         if authority is not None:
             await authority.aclose()
         await self._adapter_cache.aclose()
+        advisor = self._route_advisor
+        self._route_advisor = None
+        if self._owns_route_advisor and advisor is not None:
+            with suppress(Exception):
+                await advisor.aclose()
         client = self._client
         self._client = None
         if self._owns_client and client is not None:
@@ -1139,6 +1152,7 @@ class ExecutionService:
         """
 
         deadline = self._logical_deadline(deadline)
+        request = await self._advised(request)
         budget_token = set_retry_budget(RetryBudget(1))
 
         async def run() -> SearchResponse:
@@ -1168,6 +1182,31 @@ class ExecutionService:
             )
         finally:
             reset_retry_budget(budget_token)
+
+    async def _advised(self, request: SearchRequest) -> SearchRequest:
+        """Replace a ``smart`` request's provider order with the advisor's.
+
+        Only the order changes: eligibility, health, quotas and fallback are
+        decided by the normal ranking. When the advisor is not configured or
+        does not answer, the request is returned unchanged and ranks like
+        ``auto`` (or by the caller's own ``providers`` order).
+        """
+
+        routing = request.routing
+        advisor = self._route_advisor
+        if (
+            routing.mode is not RoutingMode.SMART
+            or advisor is None
+            or request.fanout
+            or routing.binding_id is not None
+        ):
+            return request
+        advice = await advisor.advise(request.query, routing.providers, routing.objective)
+        if advice is None or not advice.providers:
+            return request
+        return request.model_copy(
+            update={"routing": routing.model_copy(update={"providers": advice.providers})}
+        )
 
     async def fetch(
         self,
@@ -1732,7 +1771,13 @@ class ExecutionService:
                 {leg.provider for leg in usable},
             )
         order_index = {provider: index for index, provider in enumerate(project_order)}
-        ordered = self._rank(usable, preference.providers, order_index, health)
+        ordered = self._rank(
+            usable,
+            preference.providers,
+            order_index,
+            health,
+            ordered=preference.mode is RoutingMode.SMART,
+        )
         if preference.mode is RoutingMode.FANOUT:
             return [(leg, leg.adapter) for leg in ordered]
         if not preference.allow_fallback or (policy.fallback_policy is FallbackPolicy.FIRST_ONLY):
@@ -1839,6 +1884,8 @@ class ExecutionService:
         preference: tuple[str, ...],
         order_index: Mapping[str, int],
         health: Mapping[UUID, ProviderHealth],
+        *,
+        ordered: bool = False,
     ) -> list[_Leg]:
         """Rank legs by health, request preference, then project provider order."""
         return sorted(
@@ -1849,6 +1896,7 @@ class ExecutionService:
                 order_index.get(leg.provider, len(order_index)),
                 leg.binding,
                 preference,
+                ordered=ordered,
             ),
         )
 
@@ -1859,14 +1907,28 @@ class ExecutionService:
         order_index: int,
         binding: StoredBinding,
         preference: tuple[str, ...],
+        *,
+        ordered: bool = False,
     ) -> tuple[int, int, int, int, str, str]:
-        """Return the deterministic rank key shared by planning and the leg chain."""
+        """Return the deterministic rank key shared by planning and the leg chain.
+
+        ``ordered`` (``smart`` routing) ranks by position in ``preference``;
+        otherwise listed providers only rank ahead of unlisted ones.
+        """
 
         status = HealthStatus.UNKNOWN if observation is None else observation.status
         health_order = (HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN)
+        tier = health_order.index(status) if status in health_order else len(health_order)
+        if ordered:
+            # The advisor already weighs reliability, so a provider without a
+            # health observation yet ranks with healthy ones instead of last.
+            tier = 0 if status in (HealthStatus.HEALTHY, HealthStatus.UNKNOWN) else tier
+            slot = preference.index(provider) if provider in preference else len(preference)
+        else:
+            slot = 0 if provider in preference else 1
         return (
-            health_order.index(status) if status in health_order else len(health_order),
-            0 if provider in preference else 1,
+            tier,
+            slot,
             order_index,
             binding.priority,
             binding.route_label,
@@ -2356,6 +2418,7 @@ class ExecutionService:
                 order_index.get(candidate.provider, len(order_index)),
                 candidate.binding,
                 request.routing.providers,
+                ordered=request.routing.mode is RoutingMode.SMART,
             )
         )
         return context, (min(caps) if caps else None), candidates

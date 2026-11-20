@@ -23,6 +23,7 @@ Send `routing` in a request body to steer the call:
 | `providers` | empty | Provider names the mode applies to |
 | `allow_fallback` | `true` | Try the next leg when one fails. `false` tries one leg only |
 | `binding_id` | none | Pin one project binding when the project has several provider keys for the same provider |
+| `objective` | none | `smart` only: `accuracy`, `balanced`, or `speed` |
 
 | Mode | What it does |
 | --- | --- |
@@ -30,8 +31,22 @@ Send `routing` in a request body to steer the call:
 | `prefer` | Tries the listed providers first, in order |
 | `require` | Uses only the listed providers |
 | `fanout` | Asks the listed providers at the same time and fuses the answers |
+| `smart` | Asks an optional route advisor which provider to try first for this query. Runs like `auto` when no advisor is configured |
 
 `binding_id` only selects. Polyweb still checks that the binding belongs to your project, is enabled for the operation, and has a usable key.
+
+## Smart routing
+
+`smart` lets an external route advisor order the providers for each query. Polyweb sends the advisor the query, the `providers` you listed (if any), and the `objective`, and gets back a provider order. Polyweb never sends keys to the advisor, and the advisor never runs the search: health, quotas, fallback, and telemetry work exactly as in the other modes.
+
+```json
+{
+  "query": "Q3 2024 revenue of Nvidia",
+  "routing": {"mode": "smart", "objective": "accuracy"}
+}
+```
+
+The advisor is off unless the server sets `POLYWEB_ROUTER_URL`. If it is not set, does not answer within `POLYWEB_ROUTER_TIMEOUT_SECONDS`, or returns an error, the request still runs, ranked like `auto` (or by the order of your `providers` list). A pinned `binding_id` or fanout skips the advisor, and `fetch` calls never ask it. See [Configuration](/setup/configuration/#smart-routing).
 
 ## Fallback
 

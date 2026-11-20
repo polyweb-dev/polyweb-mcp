@@ -539,3 +539,57 @@ def test_fanout_with_no_eligible_provider_raises_routing_error() -> None:
 
     assert exc_info.value.code == "no_eligible_provider"
     assert exc_info.value.providers == ("ghost",)
+
+
+def test_smart_ranks_by_advised_order_within_health_group() -> None:
+    adapters = [adapter("alpha"), adapter("beta"), adapter("gamma")]
+    snapshots = {name: health(name, HealthStatus.HEALTHY) for name in ("alpha", "beta", "gamma")}
+
+    candidates = route(
+        search_request(RoutingMode.SMART, providers=("gamma", "alpha")),
+        adapters,
+        snapshots,
+    )
+
+    assert names(candidates) == ["gamma", "alpha", "beta"]
+
+
+def test_smart_does_not_override_health_ranking() -> None:
+    adapters = [adapter("alpha"), adapter("beta")]
+    snapshots = {
+        "alpha": health("alpha", HealthStatus.HEALTHY),
+        "beta": health("beta", HealthStatus.DEGRADED),
+    }
+
+    candidates = route(
+        search_request(RoutingMode.SMART, providers=("beta", "alpha")),
+        adapters,
+        snapshots,
+    )
+
+    assert names(candidates) == ["alpha", "beta"]
+
+
+def test_smart_without_advice_keeps_configured_order() -> None:
+    adapters = [adapter("alpha"), adapter("beta")]
+    snapshots = {
+        "alpha": health("alpha", HealthStatus.HEALTHY),
+        "beta": health("beta", HealthStatus.HEALTHY),
+    }
+
+    candidates = route(search_request(RoutingMode.SMART), adapters, snapshots)
+
+    assert names(candidates) == ["alpha", "beta"]
+
+
+def test_smart_ranks_unobserved_providers_with_healthy_ones() -> None:
+    adapters = [adapter("alpha"), adapter("beta")]
+    snapshots = {"alpha": health("alpha", HealthStatus.HEALTHY)}
+
+    candidates = route(
+        search_request(RoutingMode.SMART, providers=("beta", "alpha")),
+        adapters,
+        snapshots,
+    )
+
+    assert names(candidates) == ["beta", "alpha"]

@@ -104,7 +104,7 @@ def select_route(
     ranked = sorted(
         candidates,
         key=lambda candidate: (
-            _HEALTH_ORDER.index(candidate.health.status),
+            _health_rank(candidate.health.status, preference),
             _preference_rank(candidate.adapter.name, preference),
         ),
     )
@@ -158,9 +158,23 @@ def _hard_quota_exhaustion(name: str, quota: QuotaSnapshot) -> bool:
     )
 
 
-def _preference_rank(name: str, preference: RoutingPreference) -> int:
-    """Return 0 for recognized ``PREFER`` names and 1 otherwise."""
+def _health_rank(status: HealthStatus, preference: RoutingPreference) -> int:
+    """Rank health; ``SMART`` ranks providers without an observation as healthy."""
 
+    if preference.mode is RoutingMode.SMART and status is HealthStatus.UNKNOWN:
+        return 0
+    return _HEALTH_ORDER.index(status)
+
+
+def _preference_rank(name: str, preference: RoutingPreference) -> int:
+    """Return 0 for recognized ``PREFER`` names and 1 otherwise.
+
+    ``SMART`` ranks by position in ``providers`` (the advisor's order).
+    """
+
+    if preference.mode is RoutingMode.SMART:
+        providers = preference.providers
+        return providers.index(name) if name in providers else len(providers)
     if preference.mode is RoutingMode.PREFER and name in preference.providers:
         return 0
     return 1
