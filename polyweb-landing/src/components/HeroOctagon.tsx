@@ -1,6 +1,7 @@
+import { useState } from "react"
 import { motion, useReducedMotion } from "motion/react"
 
-import { PROVIDERS } from "../providers"
+import { PROVIDERS, capabilityLabel } from "../providers"
 import polyweb from "../assets/polyweb.webp"
 
 const W = 520
@@ -33,71 +34,110 @@ const lerpHex = (from: string, to: string, t: number) => {
 }
 
 /** Hero object: an octagon of provider plates around a central Polyweb
- * plate, with thin magenta→orange spokes that draw in once on load. */
+ * plate, with thin magenta→orange spokes that draw in once on load.
+ * Hovering or focusing a plate lights its spoke and names the provider. */
 export function HeroOctagon() {
   const reduced = useReducedMotion()
+  const [active, setActive] = useState<number | null>(null)
   const lineInitial = reduced ? false : { pathLength: 0 }
+  const current = active === null ? null : PROVIDERS[active]
   return (
-    <div className="hero-oct" aria-hidden="true">
-      <svg className="hero-oct-svg" viewBox={`0 0 ${W} ${W}`} fill="none">
-        <motion.polygon
-          points={OCT_POINTS}
-          stroke="rgba(238, 240, 245, 0.18)"
-          strokeWidth={1.5}
-          strokeLinejoin="round"
-          initial={lineInitial}
-          animate={{ pathLength: 1 }}
-          transition={{ duration: 0.9, ease: "easeOut" }}
-        />
+    <div className="hero-oct-wrap">
+      <div
+        className={`hero-oct${active !== null ? " has-active" : ""}`}
+        onMouseLeave={() => setActive(null)}
+      >
+        <svg
+          className="hero-oct-svg"
+          viewBox={`0 0 ${W} ${W}`}
+          fill="none"
+          aria-hidden="true"
+        >
+          <motion.polygon
+            points={OCT_POINTS}
+            stroke="rgba(238, 240, 245, 0.14)"
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+            initial={lineInitial}
+            animate={{ pathLength: 1 }}
+            transition={{ duration: 0.9, ease: "easeOut" }}
+          />
+          {VERTEX_ANGLES.map((a, i) => {
+            const [x1, y1] = pt(a, CENTER_PLATE_R + 6)
+            const [x2, y2] = pt(a, VERTEX_R - PLATE_R - 8)
+            return (
+              <motion.line
+                key={a}
+                className={`hero-oct-spoke${active === i ? " on" : ""}`}
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                stroke={lerpHex("#b8035e", "#fe8a0b", i / (VERTEX_ANGLES.length - 1))}
+                strokeWidth={1.25}
+                strokeLinecap="round"
+                initial={lineInitial}
+                animate={{ pathLength: 1 }}
+                transition={{
+                  duration: 0.7,
+                  delay: 0.6 + i * 0.05,
+                  ease: "easeOut",
+                }}
+              />
+            )
+          })}
+        </svg>
         {VERTEX_ANGLES.map((a, i) => {
-          const [x1, y1] = pt(a, CENTER_PLATE_R + 6)
-          const [x2, y2] = pt(a, VERTEX_R - PLATE_R - 8)
+          const [x, y] = pt(a, VERTEX_R)
+          const p = PROVIDERS[i]
           return (
-            <motion.line
+            <motion.div
               key={a}
-              x1={x1}
-              y1={y1}
-              x2={x2}
-              y2={y2}
-              stroke={lerpHex("#b8035e", "#fe8a0b", i / (VERTEX_ANGLES.length - 1))}
-              strokeWidth={1.25}
-              strokeLinecap="round"
-              strokeOpacity={0.5}
-              initial={lineInitial}
-              animate={{ pathLength: 1 }}
-              transition={{
-                duration: 0.7,
-                delay: 0.6 + i * 0.05,
-                ease: "easeOut",
-              }}
-            />
+              className="hero-oct-slot"
+              style={{ left: `${(x / W) * 100}%`, top: `${(y / W) * 100}%` }}
+              initial={reduced ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.5, delay: 0.5 + i * 0.05 }}
+            >
+              <button
+                type="button"
+                className={`hero-oct-plate${active === i ? " on" : ""}`}
+                aria-label={`${p.name}: ${capabilityLabel(p)}`}
+                aria-describedby="hero-oct-caption"
+                onMouseEnter={() => setActive(i)}
+                onFocus={() => setActive(i)}
+                onBlur={() => setActive(null)}
+              >
+                <img src={p.src} alt="" />
+              </button>
+            </motion.div>
           )
         })}
-      </svg>
-      {VERTEX_ANGLES.map((a, i) => {
-        const [x, y] = pt(a, VERTEX_R)
-        return (
-          <motion.div
-            key={a}
-            className="hero-oct-plate"
-            style={{ left: `${(x / W) * 100}%`, top: `${(y / W) * 100}%` }}
-            initial={reduced ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.5, delay: 0.5 + i * 0.05 }}
-          >
-            <img src={PROVIDERS[i].src} alt={PROVIDERS[i].name} />
-          </motion.div>
-        )
-      })}
-      <motion.div
-        className="hero-oct-plate hero-oct-center"
-        initial={reduced ? false : { opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.6, delay: 0.2 }}
-      >
-        <img src={polyweb} alt="Polyweb" />
-      </motion.div>
-      <div className="hero-oct-floor" />
+        <motion.div
+          className="hero-oct-plate hero-oct-center"
+          aria-hidden="true"
+          initial={reduced ? false : { opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.6, delay: 0.2 }}
+        >
+          <img src={polyweb} alt="" />
+        </motion.div>
+        <div className="hero-oct-floor" aria-hidden="true" />
+      </div>
+      <p className="hero-oct-caption" id="hero-oct-caption" aria-live="polite">
+        {current ? (
+          <>
+            <span className="hero-oct-caption-name">{current.name}</span>
+            <span className="hero-oct-caption-cap">
+              {capabilityLabel(current)}
+            </span>
+          </>
+        ) : (
+          <span className="hero-oct-caption-hint">
+            Hover a provider. Polyweb talks to all of them.
+          </span>
+        )}
+      </p>
     </div>
   )
 }

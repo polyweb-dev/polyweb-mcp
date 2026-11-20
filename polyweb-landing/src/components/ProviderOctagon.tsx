@@ -22,17 +22,25 @@ const pt = (angle: number, r: number): [number, number] => [
 
 const OCT_POINTS = OCT_ANGLES.map((a) => pt(a, OCT_R).join(",")).join(" ")
 
-/** Static octagon mark for the Providers section: an octagon ringed by
- * one ring per provider, drawn once when it scrolls into view. */
-export function ProviderOctagon() {
+/** Octagon mark for the Providers section: an octagon ringed by one ring
+ * per provider, drawn once when it scrolls into view. `active` (a provider
+ * id) lights that ring's spoke; hovering a logo reports it via `onActive`. */
+export function ProviderOctagon({
+  active = null,
+  onActive,
+}: {
+  active?: string | null
+  onActive?: (id: string | null) => void
+}) {
   const reduced = useReducedMotion()
   const lineInitial = reduced ? false : { pathLength: 0 }
   const fadeInitial = reduced ? false : { opacity: 0 }
   return (
     <div
-      className="prov-oct"
+      className={`prov-oct${active ? " has-active" : ""}`}
       role="img"
       aria-label="The Polyweb octagon ringed by the eight providers"
+      onMouseLeave={() => onActive?.(null)}
     >
       <svg className="prov-oct-svg" viewBox={`0 0 ${W} ${W}`} fill="none">
         <defs>
@@ -56,17 +64,17 @@ export function ProviderOctagon() {
           const [x1, y1] = pt(a, OCT_R + 4)
           const [x2, y2] = pt(a, RING_DIST - RING_R - 6)
           const [rx, ry] = pt(a, RING_DIST)
+          const on = active === PROVIDERS[i].id
           return (
-            <g key={a}>
+            <g key={a} className={`prov-oct-arm${on ? " on" : ""}`}>
               <motion.line
+                className="prov-oct-spoke"
                 x1={x1}
                 y1={y1}
                 x2={x2}
                 y2={y2}
-                stroke="#a3a9b8"
                 strokeWidth={1.2}
                 strokeLinecap="round"
-                strokeOpacity={0.25}
                 initial={lineInitial}
                 whileInView={{ pathLength: 1 }}
                 viewport={{ once: true, margin: "-15% 0px" }}
@@ -99,6 +107,7 @@ export function ProviderOctagon() {
       </motion.div>
       {LOGO_ANGLES.map((a, i) => {
         const [x, y] = pt(a, RING_DIST)
+        const p = PROVIDERS[i]
         return (
           <motion.div
             key={a}
@@ -108,8 +117,13 @@ export function ProviderOctagon() {
             whileInView={{ opacity: 1 }}
             viewport={{ once: true, margin: "-15% 0px" }}
             transition={{ duration: 0.4, delay: 0.4 + i * 0.05 }}
+            onMouseEnter={() => onActive?.(p.id)}
           >
-            <img src={PROVIDERS[i].src} alt={PROVIDERS[i].name} />
+            <img
+              className={active === p.id ? "on" : undefined}
+              src={p.src}
+              alt={p.name}
+            />
           </motion.div>
         )
       })}
