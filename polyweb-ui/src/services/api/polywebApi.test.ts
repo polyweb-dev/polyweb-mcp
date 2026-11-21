@@ -94,8 +94,38 @@ describe("PolywebApiService (live HTTP)", () => {
     expect(stub.requests).toHaveLength(1)
     expect(stub.requests[0].body).toEqual(body)
     expect(stub.requests[0].headers["content-type"]).toContain("application/json")
-    expect(result).toEqual(wire)
+    // No X-Trace-Id header (tracing off): the body still arrives, without a trace id.
+    expect(result).toEqual({ body: wire, traceId: null })
   })
+
+  it("search() returns the X-Trace-Id header of the call as its trace id", async () => {
+    const wire = searchResponseFixture()
+    const traceId = "4bf92f3577b34da6a3ce929d0e0e4736"
+    installFetchStub(
+      () =>
+        new Response(JSON.stringify(wire), {
+          status: 200,
+          headers: { "Content-Type": "application/json", "X-Trace-Id": traceId },
+        })
+    )
+
+    expect(await service.search({} as never)).toEqual({ body: wire, traceId })
+  })
+
+  it.each(["not-a-trace", "4BF92F3577B34DA6A3CE929D0E0E4736", "4bf92f3577b34da6"])(
+    "search() ignores a malformed X-Trace-Id header %s",
+    async (header) => {
+      installFetchStub(
+        () =>
+          new Response(JSON.stringify(searchResponseFixture()), {
+            status: 200,
+            headers: { "Content-Type": "application/json", "X-Trace-Id": header },
+          })
+      )
+
+      expect((await service.search({} as never)).traceId).toBeNull()
+    }
+  )
 
   it("fetchDoc() POSTs the exact BackendFetchRequest to relative /fetch", async () => {
     const wire = fetchResponseFixture()

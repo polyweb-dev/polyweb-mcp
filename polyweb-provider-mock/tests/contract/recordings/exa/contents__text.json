@@ -1,0 +1,144 @@
+{
+  "method": "POST",
+  "url": "https://api.exa.ai/contents",
+  "request_headers": {
+    "host": "api.exa.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "x-api-key": "<REDACTED>",
+    "user-agent": "exa-py/unknown",
+    "content-type": "application/json",
+    "content-length": "62"
+  },
+  "request_body": {
+    "urls": [
+      "https://example.com/"
+    ],
+    "text": {
+      "maxCharacters": 600
+    }
+  },
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:39 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "content-security-policy": "frame-ancestors 'self'",
+    "cross-origin-opener-policy": "same-origin",
+    "cross-origin-resource-policy": "same-origin",
+    "origin-agent-cluster": "?1",
+    "referrer-policy": "no-referrer",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "x-content-type-options": "nosniff",
+    "x-dns-prefetch-control": "off",
+    "x-download-options": "noopen",
+    "x-frame-options": "DENY",
+    "x-permitted-cross-domain-policies": "none",
+    "x-xss-protection": "0",
+    "x-request-id": "f397e75946da2894f94deb9208e2bb72",
+    "x-exa-region": "us-west-2",
+    "x-exa-processing-region": "us",
+    "vary": "Origin",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "PAYMENT-REQUIRED,PAYMENT-RESPONSE,payment-required,payment-response,WWW-Authenticate,Payment-Receipt,x-request-id,x-exa-queued,x-exa-queue-ms,x-exa-region,x-exa-processing-region,Deprecation,Sunset,Retry-After,X-RateLimit-Scope",
+    "x-exa-queued": "false",
+    "x-exa-queue-ms": "0",
+    "etag": "W/\"85e-P0AmfKTHRiIEHGUVAyhni7xQ9Mg\"",
+    "cf-cache-status": "DYNAMIC",
+    "content-encoding": "gzip",
+    "server": "cloudflare",
+    "cf-ray": "f9ede0273b4dd76d-AAW"
+  },
+  "response_body": {
+    "requestId": "f397e75946da2894f94deb9208e2bb72",
+    "results": [
+      {
+        "id": "https://example.com/",
+        "title": "Synthetic title 162b8154.",
+        "url": "https://example.com/",
+        "author": null,
+        "text": "Synthetic text da93e777.",
+        "entities": [
+          {
+            "id": "https://example.com/synthetic/8a7997f265",
+            "type": "company",
+            "version": 1,
+            "properties": {
+              "name": "Synthetic name d4521a76.",
+              "foundedYear": 1979,
+              "description": "Synthetic description 3ec6c51d.",
+              "workforce": {
+                "total": 579
+              },
+              "headquarters": {
+                "address": "Synthetic address e8adff58.",
+                "city": "Synthetic city abae7682.",
+                "postalCode": null,
+                "country": "Synthetic country ea0b937e."
+              },
+              "financials": {
+                "revenueAnnual": 10000000,
+                "fundingTotal": null,
+                "fundingLatestRound": null
+              },
+              "webTraffic": {
+                "visitsMonthly": 495777,
+                "countryRank": 1743,
+                "avgDurationSeconds": 154,
+                "history": [
+                  {
+                    "value": 527794,
+                    "dateFrom": "2026-04",
+                    "dateTo": "2026-04"
+                  },
+                  {
+                    "value": 419093,
+                    "dateFrom": "2026-05",
+                    "dateTo": "2026-05"
+                  },
+                  {
+                    "value": 370931,
+                    "dateFrom": "2026-06",
+                    "dateTo": "2026-06"
+                  },
+                  {
+                    "value": 342642,
+                    "dateFrom": "2026-07",
+                    "dateTo": "2026-07"
+                  },
+                  {
+                    "value": 365361,
+                    "dateFrom": "2026-08",
+                    "dateTo": "2026-08"
+                  },
+                  {
+                    "value": 481046,
+                    "dateFrom": "2026-10",
+                    "dateTo": "2026-10"
+                  }
+                ]
+              },
+              "research": null
+            }
+          }
+        ]
+      }
+    ],
+    "statuses": [
+      {
+        "id": "https://example.com/",
+        "status": "success",
+        "source": "cached"
+      }
+    ],
+    "costDollars": {
+      "total": 0.001,
+      "contents": {
+        "text": 0.001
+      }
+    },
+    "searchTime": 6.678649999666959
+  }
+}

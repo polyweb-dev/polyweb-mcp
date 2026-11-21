@@ -1,0 +1,38 @@
+{
+  "method": "GET",
+  "url": "https://api.keenable.ai/v1/fetch/public?url=https%3A%2F%2Fexample.com&max_chars=1000",
+  "request_headers": {
+    "host": "api.keenable.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb/0.1.0",
+    "x-keenable-title": "polyweb"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "x-request-id": "a6a62827-7397-7835-8e2f-dd9522b4cf02",
+    "vary": "Origin, Accept-Encoding",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "Content-Type,Authorization,X-Request-Id,Server-Timing,PAYMENT-REQUIRED,PAYMENT-RESPONSE,Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+    "x-ratelimit-limit": "1000",
+    "x-ratelimit-remaining": "999",
+    "x-ratelimit-reset": "2026-11-17T02:27:28.655Z",
+    "content-type": "application/json; charset=utf-8",
+    "etag": "W/\"115-xN5Cbfe1jSH4dW0rYL7ekxItEuU\"",
+    "content-encoding": "gzip",
+    "date": "Tue, 17 Nov 2026 01:27:28 GMT",
+    "via": "1.1 google",
+    "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+    "transfer-encoding": "chunked"
+  },
+  "response_body": {
+    "url": "https://example.com/",
+    "title": "Synthetic title 162b8154.",
+    "content": "Synthetic content 0a080719.",
+    "description": "",
+    "truncated": false,
+    "total_chars": 156
+  }
+}

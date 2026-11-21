@@ -1,0 +1,62 @@
+{
+  "method": "POST",
+  "url": "https://api.firecrawl.dev/v2/scrape",
+  "request_headers": {
+    "host": "api.firecrawl.dev",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "python-httpx/0.28.1",
+    "authorization": "Bearer <REDACTED>",
+    "content-length": "243",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "url": "https://example.com",
+    "onlyMainContent": true,
+    "skipTlsVerification": true,
+    "removeBase64Images": true,
+    "fastMode": false,
+    "blockAds": true,
+    "storeInCache": true,
+    "maxAge": 14400000,
+    "formats": [
+      "markdown"
+    ],
+    "mobile": false,
+    "origin": "python-sdk@4.41.0"
+  },
+  "status": 200,
+  "response_headers": {
+    "access-control-allow-origin": "*",
+    "content-length": "1806",
+    "content-type": "application/json; charset=utf-8",
+    "date": "Tue, 17 Nov 2026 01:27:35 GMT",
+    "etag": "W/\"70e-+eRyHaIM5YaAvtjmacxzHY1ihzs\"",
+    "x-response-time": "191.148ms"
+  },
+  "response_body": {
+    "success": true,
+    "data": {
+      "markdown": "Synthetic markdown cd43b41e.",
+      "metadata": {
+        "viewport": "Synthetic viewport 5a634dc3.",
+        "language": "en",
+        "title": "Synthetic title 162b8154.",
+        "favicon": "data:,",
+        "scrapeId": "80f6a61c-c94c-93a3-1489-1ac1516414a2",
+        "sourceURL": "https://example.com",
+        "url": "https://example.com/",
+        "statusCode": 200,
+        "contentType": "text/html; charset=utf-8",
+        "proxyUsed": "basic",
+        "cacheState": "hit",
+        "cachedAt": "2026-11-17T01:26:39.776Z",
+        "creditsUsed": 1,
+        "concurrencyLimited": false
+      }
+    }
+  },
+  "sdk_version": "4.41.0",
+  "capture_note": "HTTPX decoded response body; original response headers retained. Secret values redacted; identifiers use synthetic same-format values."
+}

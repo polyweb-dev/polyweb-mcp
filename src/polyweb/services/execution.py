@@ -36,7 +36,7 @@ import hashlib
 import logging
 import random
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -198,6 +198,7 @@ from polyweb.services.projects import ProjectStorageUnavailable
 from polyweb.services.provider_runtime import (
     build_adapter_with_secret,
     effective_config_for_name,
+    prepare_adapter_quota,
     routing_policy,
     schedule_quota_refresh,
 )
@@ -607,33 +608,46 @@ class _AdapterLease:
     using an obsolete adapter without closing one that is still in flight.
     """
 
-    __slots__ = ("_cache", "_key", "_released", "adapter")
+    __slots__ = ("_cache", "_entry", "_key", "_released", "adapter")
 
     def __init__(
         self,
         cache: CredentialAdapterCache,
         key: _AdapterKey,
-        adapter: ProviderAdapter,
+        entry: _CacheEntry,
     ) -> None:
         self._cache = cache
         self._key = key
-        self.adapter = adapter
+        self._entry = entry
+        self.adapter = entry.adapter
         self._released = False
 
     def release(self) -> None:
         if self._released:
             return
         self._released = True
-        self._cache.release(self._key)
+        self._cache.release(self._key, self._entry)
 
 
 class _CacheEntry:
-    __slots__ = ("active", "adapter", "retired")
+    __slots__ = ("active", "adapter", "ready", "retired")
 
     def __init__(self, adapter: ProviderAdapter) -> None:
         self.adapter = adapter
         self.active = 0
         self.retired = False
+        self.ready: asyncio.Task[None] | None = None
+
+    def preparation_failed(self) -> bool:
+        """Return whether this entry's preparation ended with an error."""
+
+        ready = self.ready
+        return (
+            ready is not None
+            and ready.done()
+            and not ready.cancelled()
+            and ready.exception() is not None
+        )
 
 
 class CredentialAdapterCache:
@@ -655,37 +669,71 @@ class CredentialAdapterCache:
         self._entries: dict[_AdapterKey, _CacheEntry] = {}
         self._order: list[_AdapterKey] = []
         self._closing: set[asyncio.Task[None]] = set()
+        self._draining: list[_CacheEntry] = []
 
     async def lease(
         self,
         key: _AdapterKey,
         builder: Callable[[], ProviderAdapter],
+        prepare: Callable[[ProviderAdapter], Coroutine[Any, Any, None]] | None = None,
     ) -> _AdapterLease:
+        """Lease the entry of ``key``, building and preparing it once when absent.
+
+        ``prepare`` runs once per built adapter, outside the cache lock. Every
+        lease of that entry waits for it, so no request uses an adapter before
+        its saved quota state is restored. A failed preparation does not fail
+        the request: the entry is retired, so the next lease builds and
+        prepares a new adapter. A retired entry is never leased again.
+        """
+
         async with self._lock:
             entry = self._entries.get(key)
-            if entry is None:
+            if entry is not None and entry.preparation_failed():
+                self._retire_entry(key, entry)
+            if entry is None or entry.retired:
                 entry = _CacheEntry(builder())
+                if prepare is not None:
+                    entry.ready = asyncio.get_running_loop().create_task(prepare(entry.adapter))
                 self._entries[key] = entry
-                self._order.append(key)
-            else:
-                with suppress(ValueError):
-                    self._order.remove(key)
-                self._order.append(key)
-            entry.active += 1
-            self._trim_locked()
-            return _AdapterLease(self, key, entry.adapter)
-
-    def release(self, key: _AdapterKey) -> None:
-        entry = self._entries.get(key)
-        if entry is None:
-            return
-        entry.active = max(0, entry.active - 1)
-        if entry.retired and entry.active == 0:
-            self._entries.pop(key, None)
             with suppress(ValueError):
                 self._order.remove(key)
-            self._retire(entry.adapter)
+            self._order.append(key)
+            entry.active += 1
+            self._trim_locked()
+            lease = _AdapterLease(self, key, entry)
+            ready = entry.ready
+        if ready is not None and not ready.done():
+            try:
+                await asyncio.shield(ready)
+            except Exception:
+                self._retire_entry(key, entry)
+            except BaseException:
+                lease.release()
+                raise
+        return lease
+
+    def serves(self, key: _AdapterKey, adapter: ProviderAdapter) -> bool:
+        """Return whether ``adapter`` is the live, not retired adapter of ``key``."""
+
+        entry = self._entries.get(key)
+        return entry is not None and entry.adapter is adapter and not entry.retired
+
+    def release(self, key: _AdapterKey, entry: _CacheEntry) -> None:
+        entry.active = max(0, entry.active - 1)
+        if entry.retired and entry.active == 0:
+            self._drop(key, entry)
         self._trim_locked()
+
+    def retire_credentials(self, credential_ids: set[UUID]) -> None:
+        """Retire every adapter of these credentials, so the next lease rebuilds it.
+
+        A rebuilt adapter restores its quota state from the database, which
+        clears an in-memory block that a newer stored record replaced.
+        """
+
+        for key in list(self._entries):
+            if key[1] in credential_ids:
+                self._retire_entry(key)
 
     def retire_other_configs(
         self, provider: str, credential_id: UUID, generation: int, keep: _AdapterKey
@@ -717,16 +765,26 @@ class CredentialAdapterCache:
                 continue
             self._retire_entry(key)
 
-    def _retire_entry(self, key: _AdapterKey) -> None:
-        entry = self._entries.get(key)
+    def _retire_entry(self, key: _AdapterKey, entry: _CacheEntry | None = None) -> None:
+        entry = entry if entry is not None else self._entries.get(key)
         if entry is None or entry.retired:
             return
         entry.retired = True
         if entry.active == 0:
+            self._drop(key, entry)
+        else:
+            self._draining.append(entry)
+
+    def _drop(self, key: _AdapterKey, entry: _CacheEntry) -> None:
+        """Forget one retired, idle entry and close its adapter in the background."""
+
+        if self._entries.get(key) is entry:
             self._entries.pop(key, None)
             with suppress(ValueError):
                 self._order.remove(key)
-            self._retire(entry.adapter)
+        with suppress(ValueError):
+            self._draining.remove(entry)
+        self._retire(entry)
 
     def _trim_locked(self) -> None:
         while len(self._order) > self._max_entries:
@@ -742,31 +800,43 @@ class CredentialAdapterCache:
                 return
             self._retire_entry(calm)
 
-    def _retire(self, adapter: ProviderAdapter) -> None:
+    def _retire(self, entry: _CacheEntry) -> None:
+        """Cancel an unfinished preparation and close the adapter in the background.
+
+        The close task waits for the cancelled preparation, so it can never
+        record quota state for a retired key, and ``aclose`` awaits the task.
+        """
+
+        ready = entry.ready
+        if ready is not None and not ready.done():
+            ready.cancel()
         try:
-            task = asyncio.get_running_loop().create_task(self._close(adapter))
+            task = asyncio.get_running_loop().create_task(self._close(entry))
         except RuntimeError:
             return
         self._closing.add(task)
         task.add_done_callback(self._closing.discard)
 
     @staticmethod
-    async def _close(adapter: ProviderAdapter) -> None:
+    async def _close(entry: _CacheEntry) -> None:
+        if entry.ready is not None:
+            await asyncio.gather(entry.ready, return_exceptions=True)
         with suppress(Exception):
-            await adapter.aclose()
+            await entry.adapter.aclose()
 
     async def aclose(self) -> None:
         """Close every cached adapter; safe to call repeatedly."""
 
         async with self._lock:
-            adapters, self._entries, self._order = (
-                [entry.adapter for entry in self._entries.values()],
-                {},
-                [],
-            )
-        for adapter in adapters:
+            entries = [*self._entries.values(), *self._draining]
+            self._entries, self._order, self._draining = {}, [], []
+        preparing = [entry.ready for entry in entries if entry.ready is not None]
+        for task in preparing:
+            task.cancel()
+        await asyncio.gather(*preparing, return_exceptions=True)
+        for entry in entries:
             with suppress(Exception):
-                await adapter.aclose()
+                await entry.adapter.aclose()
         pending, self._closing = list(self._closing), set()
         for task in pending:
             with suppress(Exception, asyncio.CancelledError):
@@ -908,6 +978,11 @@ class ExecutionService:
         """Attach the rails after a generation that starts them lazily."""
 
         self._limits = limits
+
+    def retire_credential_adapters(self, credential_ids: set[UUID]) -> None:
+        """Drop the cached adapters of these keys; the next lease rebuilds and restores them."""
+
+        self._adapter_cache.retire_credentials(credential_ids)
 
     async def sync_system_limits(self, provider: str, now: datetime) -> SyncResult:
         """Refresh one provider's native usage through active vault credentials.
@@ -1546,7 +1621,32 @@ class ExecutionService:
                 config=tavily_config,
             )
 
-        lease = await self._adapter_cache.lease(key, build)
+        async def prepare(adapter: ProviderAdapter) -> None:
+            if self._limits is not None and credential.provider_type == ProviderName.KEENABLE.value:
+                self._limits.apply_keenable_auth_mode(_adapter_auth_mode(adapter))
+            # Best effort, as a failed read must not fail the request: the
+            # adapter then starts from its constructor state.
+            try:
+                scope = ProviderObservationScope(
+                    credential_id=credential.credential_id,
+                    upstream_pool_id=await self._observation_upstream_pool(
+                        credential.credential_id
+                    ),
+                    credential_generation=credential.generation,
+                )
+                await prepare_adapter_quota(
+                    adapter,
+                    self._repository,
+                    config,
+                    auth_mode=credential.auth_mode,
+                    scope=scope,
+                    still_current=lambda: self._adapter_cache.serves(key, adapter),
+                )
+            except Exception:
+                logger.warning("adapter quota state could not be restored", exc_info=True)
+                raise
+
+        lease = await self._adapter_cache.lease(key, build, prepare)
         self._adapter_cache.retire_other_configs(
             credential.provider_type, credential.credential_id, credential.generation, key
         )

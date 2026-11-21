@@ -4,10 +4,12 @@ title: Replace Quotas allowance cards with rate limits in the Key balances table
 status: To Do
 assignee: []
 created_date: '2026-11-14T16:00:00Z'
+updated_date: '2026-11-15T15:06:00Z'
 labels:
   - frontend
   - ui
-dependencies: []
+dependencies:
+  - TASK-000070
 priority: medium
 type: task
 ordinal: 65000
@@ -50,4 +52,6 @@ Keyless free providers such as Keenable have no key row today. They need a row (
 - [ ] #4 Every action from the removed cards is still reachable from the table: refresh, the Tavily rate tier, OAuth pairing, the manual balance anchor, info tooltips and the Free badge
 - [ ] #5 Desktop and 390 px layouts, in dark and light themes, pass a screenshot-only aesthetic review with no overflow or misalignment. At 390 px the table may become stacked rows.
 - [ ] #6 Unit tests (vitest) cover the limit rows and the moved actions. Tests for the removed cards are deleted or migrated, including ProviderLimitsCards, QuotaPage and quotaReviewSurfaces.
+- [ ] #7 Each key row in Key balances has its own Set balance action that sends the key or pool scope to PUT /api/v1/providers/{provider_id}/manual-quota (backend scope added in TASK-000070), prefilled from that key's balance. It stays available when the key is blocked by a vendor 402
+- [ ] #8 polyweb-docs explains how to unblock a key after adding credits with the vendor (automatic vendor refresh, and per-key Set balance), with screenshots of the final Key balances layout taken from a fresh demo database; each screenshot passes a screenshot-only review
 <!-- AC:END -->

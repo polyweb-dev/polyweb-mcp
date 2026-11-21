@@ -8,9 +8,11 @@ import {
 } from "@/test/accessFixtures"
 import { ADMIN_ACCOUNT_ID } from "@/test/authFixtures"
 import {
+  SUCCESS_TRACE_ID,
   projectProviderType,
   projectProvidersFixture,
   searchResponseFixture,
+  traceDetailFixture,
 } from "@/test/backendFixtures"
 import { PlaygroundHarness } from "@/test/renderPlayground"
 import { PLAYGROUND_PROJECT_ID, projectProvidersUrl } from "@/test/projectPlayground"
@@ -299,5 +301,101 @@ describe("ProjectPlaygroundPage project execution", () => {
       window.localStorage.getItem(playgroundPersistKey(ADMIN_ACCOUNT_ID, PROJECT_BETA_ID)) ?? ""
     ).not.toContain("Live backend result one")
     expect(within(document.body).queryByText(/Executing/)).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * TASK-000002: View details opens the Activity trace inspector for the call
+ * the Playground just made. The trace id is the `X-Trace-Id` header of the
+ * search; the detail is read through the project route only, never through a
+ * list or a global trace read.
+ */
+describe("ProjectPlaygroundPage View details", () => {
+  const traceUrl = `/api/v1/projects/${PLAYGROUND_PROJECT_ID}/traces/${SUCCESS_TRACE_ID}`
+
+  function tracedSearch(traceId: string | null): Response {
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (traceId !== null) headers["X-Trace-Id"] = traceId
+    return new Response(JSON.stringify(searchResponseFixture()), { status: 200, headers })
+  }
+
+  function traceStub(traceId: string | null, detail: () => Response) {
+    return stub((req) => {
+      if (req.url === "/search" && req.method === "POST") return tracedSearch(traceId)
+      if (req.method === "GET" && req.url === traceUrl) return detail()
+      return null
+    })
+  }
+
+  function traceReads(fetchStub: ReturnType<typeof stub>) {
+    return fetchStub.requests.filter((req) => req.url.includes("/traces"))
+  }
+
+  async function openDetails() {
+    await submitSearch("trace query")
+    await screen.findByText("Live backend result one")
+    expect(screen.queryByRole("button", { name: /raw JSON/i })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "View details" }))
+    return screen.findByRole("dialog")
+  }
+
+  it("opens the project trace inspector for the call's trace", async () => {
+    const fetchStub = traceStub(SUCCESS_TRACE_ID, () => ok(traceDetailFixture()))
+    render(<PlaygroundHarness />)
+
+    const dialog = await openDetails()
+    expect(within(dialog).getByText("Trace detail")).toBeInTheDocument()
+    expect(await within(dialog).findByText("distributed consensus algorithms")).toBeInTheDocument()
+    expect(within(dialog).getAllByText("Consensus algorithms explained").length).toBeGreaterThan(0)
+    expect(traceReads(fetchStub).map((req) => req.url)).toEqual([traceUrl])
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }))
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    })
+    expect(screen.getByText("Live backend result one")).toBeInTheDocument()
+  })
+
+  it("explains a metadata-only trace instead of showing empty results", async () => {
+    const fetchStub = traceStub(SUCCESS_TRACE_ID, () => ok(traceDetailFixture({ input: null, output: null })))
+    render(<PlaygroundHarness />)
+
+    const dialog = await openDetails()
+    expect(await within(dialog).findByText("Metadata only")).toBeInTheDocument()
+    expect(traceReads(fetchStub).map((req) => req.url)).toEqual([traceUrl])
+    expect(within(dialog).getByText("Query not stored")).toBeInTheDocument()
+    expect(within(dialog).getAllByText("Results were not stored (metadata-only trace policy)").length).toBeGreaterThan(0)
+  })
+
+  it("says the trace is not in this project when the project read answers 404", async () => {
+    const fetchStub = traceStub(SUCCESS_TRACE_ID, () => err(404, { detail: "no trace" }))
+    render(<PlaygroundHarness />)
+
+    const dialog = await openDetails()
+    expect(await within(dialog).findByText("This trace is not available in this project")).toBeInTheDocument()
+    expect(traceReads(fetchStub).map((req) => req.url)).toEqual([traceUrl])
+  })
+
+  it("explains an untraced call without any trace read", async () => {
+    const fetchStub = traceStub(null, () => ok(traceDetailFixture()))
+    render(<PlaygroundHarness />)
+
+    const dialog = await openDetails()
+    expect(
+      within(dialog).getByText("No trace was recorded for this request, so its details are not available")
+    ).toBeInTheDocument()
+    expect(traceReads(fetchStub)).toHaveLength(0)
+  })
+
+  it("explains missing Activity permission without any trace read", async () => {
+    const fetchStub = traceStub(SUCCESS_TRACE_ID, () => ok(traceDetailFixture()))
+    const permissions = PROJECT_MEMBER_PERMISSIONS.filter((p) => p !== "traces.read")
+    render(<PlaygroundHarness permissions={permissions} />)
+
+    const dialog = await openDetails()
+    expect(
+      within(dialog).getByText("You need permission to read this project's Activity to see these details")
+    ).toBeInTheDocument()
+    expect(traceReads(fetchStub)).toHaveLength(0)
   })
 })

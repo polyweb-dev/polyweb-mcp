@@ -26,6 +26,7 @@ from polyweb.models.provider_limits import (
 
 FIXED_AT = datetime(2026, 3, 10, 12, 0, 0, tzinfo=UTC)
 _KEY = SecretStr("keenable-test-secret")
+_PROJECT = "00000000-0000-4000-8000-0000000000aa"
 
 
 def _adapter(
@@ -441,3 +442,89 @@ async def test_no_retry_402_with_single_attempt() -> None:
     assert exc_info.value.error.code == "quota_exhausted"
     assert exc_info.value.error.retryable is False
     assert len(calls) == 1
+
+
+# ------------------------------------------- AC #11: billed responses report credits
+
+
+def _http_usage_payload(
+    *, credits: int = 1, paid: bool = True, credits_remaining: int | None = 4000
+) -> dict[str, object]:
+    usage: dict[str, object] = {
+        "sku": "search.pro",
+        "amount": credits,
+        "credits": credits,
+        "paid": paid,
+    }
+    if credits_remaining is not None:
+        usage["credits_remaining"] = credits_remaining
+    return {"results": [{"title": "k", "url": "https://example.com/k"}], "usage": usage}
+
+
+def test_http_usage_object_keeps_credits_remaining_and_paid() -> None:
+    """AC #11: the HTTP ``usage`` object is read, including ``credits_remaining``."""
+
+    credits, paid, metadata = KeenableAdapter._reported_usage(
+        _http_usage_payload(credits=2, paid=True, credits_remaining=99120)
+    )
+
+    assert (credits, paid) == (Decimal("2"), True)
+    assert metadata["credits_remaining"] == "99120"
+    assert metadata["paid"] is True
+
+
+async def test_credits_remaining_is_published_as_a_vendor_fact() -> None:
+    """AC #11: a billed response's ``credits_remaining`` is the key's observed balance."""
+
+    adapter, client = _adapter(lambda request: httpx.Response(200, json=_http_usage_payload()))
+    try:
+        await adapter.search(SearchRequest(project_id=_PROJECT, query="q", limit=1))
+        snapshot = await adapter.usage_snapshot(
+            UsageSyncRequest(provider="keenable", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT)
+        )
+    finally:
+        await client.aclose()
+
+    assert snapshot is not None
+    assert (snapshot.source, snapshot.confidence) == ("vendor_api", Confidence.OBSERVED)
+    assert snapshot.remaining == Decimal("4000")
+
+
+async def test_paid_use_past_the_free_allowance_does_not_block_the_key() -> None:
+    """AC #11: a spent free allowance is not a zero balance; purchased credits may remain."""
+
+    adapter, client = _adapter(lambda request: httpx.Response(200, json=_http_usage_payload()))
+    try:
+        adapter._allowance_spend = Decimal("100000")
+        before = await adapter.quota()
+        await adapter.search(SearchRequest(project_id=_PROJECT, query="q", limit=1))
+        after = await adapter.quota()
+    finally:
+        await client.aclose()
+
+    assert before is not None and before.remaining != Decimal("0")
+    assert after is not None and after.remaining == Decimal("4000")
+
+
+async def test_spent_free_allowance_without_a_vendor_balance_stays_unknown() -> None:
+    """A10 (AC #11): free credits spent, no paid use and no credits_remaining is unknown.
+
+    The free tier is large, so Polyweb never blocks a key on a guess: purchased
+    credits may remain. The vendor 402 is the hard stop.
+    """
+
+    adapter, client = _adapter(_ok_handler(credits=1, paid=False))
+    try:
+        adapter.apply_usage(credits=Decimal("100000"), paid=False)
+        await adapter.search(SearchRequest(project_id=_PROJECT, query="q", limit=1))
+        quota = await adapter.quota()
+        snapshot = await adapter.usage_snapshot(
+            UsageSyncRequest(provider="keenable", auth_mode=AuthMode.KEYED, observed_at=FIXED_AT)
+        )
+    finally:
+        await client.aclose()
+
+    assert quota is not None and quota.remaining is None
+    assert snapshot is not None
+    assert (snapshot.source, snapshot.remaining) == ("local_ledger", None)
+    assert snapshot.confidence is Confidence.ESTIMATED

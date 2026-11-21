@@ -1,0 +1,56 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/search",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "content-length": "34",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "query": "polyweb test",
+    "count": 1
+  },
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:51 GMT",
+    "content-type": "application/json",
+    "content-length": "1080",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "aa000a00-a000-0a00-aaa0-a00000aa0aa0",
+    "x-amzn-remapped-content-length": "1080",
+    "x-amz-apigw-id": "A0aAAA0AaAAAa0a=",
+    "x-amzn-remapped-server": "uvicorn",
+    "x-amzn-trace-id": "Root=0-0aaaaa0a-0a00aa000a0a0000000aa000",
+    "x-amzn-remapped-date": "Tue, 17 Nov 2026 01:26:50 GMT"
+  },
+  "response_body": {
+    "results": {
+      "web": [
+        {
+          "url": "https://example.com/synthetic/b5ea23a949",
+          "title": "Synthetic title 7594ed74.",
+          "description": "Synthetic description 9b704dd0.",
+          "thumbnail_url": "https://example.com/synthetic/7f6dc406be",
+          "original_thumbnail_url": "https://example.com/synthetic/7f6dc406be",
+          "page_age": "2026-09-04T11:34:17",
+          "favicon_url": "https://example.com/synthetic/f901f2bfcb",
+          "snippets": [
+            "Synthetic snippets 93a5c4d9.",
+            "Synthetic snippets 6c1e8807."
+          ]
+        }
+      ]
+    },
+    "metadata": {
+      "query": "polyweb test",
+      "search_uuid": "aa00a0a0-00aa-0000-0000-000a00a00000",
+      "latency": 0.44082902499940246
+    }
+  }
+}

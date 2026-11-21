@@ -118,6 +118,12 @@ class Settings(BaseSettings):
     mcp_host: str = "127.0.0.1"
     mcp_port: int | None = Field(default=None, ge=1, le=65535)
 
+    # Development-only provider mock origin (TASK-000097). When set, the HTTPX
+    # transports reroute every request for a known provider API host to this
+    # origin (``polyweb.infrastructure.provider_mock``). Blank means off, and a
+    # production environment refuses to start with it.
+    provider_mock_url: str | None = None
+
     @model_validator(mode="before")
     @classmethod
     def _process_environment_only(cls, data: Any) -> Any:
@@ -139,6 +145,33 @@ class Settings(BaseSettings):
         if self.auth_refresh_lifetime_seconds <= self.auth_jwt_lifetime_seconds:
             raise ValueError("auth refresh lifetime must exceed the access lifetime")
         return self
+
+    @model_validator(mode="after")
+    def _provider_mock_outside_production(self) -> "Settings":
+        """Refuse a provider mock origin in a production environment."""
+
+        if self.provider_mock_url is not None and self.environment == "production":
+            raise ValueError("POLYWEB_PROVIDER_MOCK_URL must not be set in production")
+        return self
+
+    @field_validator("provider_mock_url")
+    @classmethod
+    def _provider_mock_origin(cls, value: str | None) -> str | None:
+        """Accept a blank value (off) or an exact http/https origin."""
+
+        if value is None or not value.strip():
+            return None
+        parsed = urlsplit(value.strip())
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("POLYWEB_PROVIDER_MOCK_URL must be an http or https origin")
+        return f"{parsed.scheme}://{parsed.netloc}"
 
     @field_validator("auth_issuer_url", "mcp_resource_url", "execution_authority_url")
     @classmethod

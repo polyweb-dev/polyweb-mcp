@@ -1,0 +1,42 @@
+{
+  "method": "POST",
+  "url": "https://api.fetch.tinyfish.ai",
+  "request_headers": {
+    "host": "api.fetch.tinyfish.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-mock-research/1.0",
+    "content-type": "application/json",
+    "content-length": "52"
+  },
+  "request_body": {
+    "urls": [
+      "https://example.com"
+    ],
+    "format": "markdown"
+  },
+  "status": 401,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "129",
+    "connection": "keep-alive",
+    "date": "Tue, 17 Nov 2026 01:26:47 GMT",
+    "x-request-id": "aaa0a000-aa0a-000a-000a-0aaa000a00a0",
+    "set-cookie": "<REDACTED>",
+    "server": "uvicorn",
+    "cache-control": "no-store",
+    "www-authenticate": "ApiKey",
+    "x-cache": "Error from cloudfront",
+    "via": "1.1 d3fd36d1c263f24b2afe551d76b05d88.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW59-P5",
+    "x-amz-cf-id": "aAaAaAAAAa0aAaaAaaa0AaaaaaAA00AaA0a0AAAAaaAAA0AaaAaA0A=="
+  },
+  "response_body": {
+    "error": {
+      "code": "MISSING_API_KEY",
+      "message": "X-API-Key header is required"
+    },
+    "request_id": "aaa0a000-aa0a-000a-000a-0aaa000a00a0"
+  }
+}

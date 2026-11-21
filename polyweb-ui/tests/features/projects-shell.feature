@@ -38,7 +38,7 @@ Feature: Project shell and membership UX
     Then I see the heading "Activity"
     And the page URL path should be "/p/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/activity"
 
-  @stub
+  @stub @serial
   Scenario: A rapid project switch drops the late Alpha members response
     Given I am a member of project Alpha with role project_admin
     And I am a member of project Beta with role project_admin

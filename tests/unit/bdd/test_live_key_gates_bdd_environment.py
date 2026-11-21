@@ -367,3 +367,34 @@ def test_live_tinyfish_scenario_builds_tinyfish_adapter(monkeypatch: pytest.Monk
     monkeypatch.setenv("POLYWEB_TINYFISH_API_KEY", "tinyfish-fixture")
     adapter = environment._adapter_for(_FakeClient(), _FakeScenario(["live", "tinyfish-live"]))
     assert adapter.name == "tinyfish"
+
+
+def test_before_all_masks_a_provider_mock_origin_without_the_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A developer's mock origin must not reroute an ordinary Behave run."""
+
+    monkeypatch.delenv("POLYWEB_TEST_PROVIDER_MOCK", raising=False)
+    monkeypatch.setenv("POLYWEB_PROVIDER_MOCK_URL", "http://127.0.0.1:8212")
+    context = SimpleNamespace()
+
+    environment.before_all(context)
+
+    assert context.provider_mock_url is None
+    assert environment.get_settings().provider_mock_url is None
+    environment.get_settings.cache_clear()
+
+
+def test_before_all_keeps_an_opted_in_provider_mock_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mock-backed live run opts in and keeps its process origin."""
+
+    monkeypatch.setenv("POLYWEB_TEST_PROVIDER_MOCK", "1")
+    monkeypatch.setenv("POLYWEB_PROVIDER_MOCK_URL", "http://127.0.0.1:8212")
+    context = SimpleNamespace()
+
+    environment.before_all(context)
+
+    assert context.provider_mock_url == "http://127.0.0.1:8212"
+    environment.get_settings.cache_clear()

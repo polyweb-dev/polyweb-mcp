@@ -59,7 +59,8 @@ The orchestrator picks the model and reasoning effort for each subagent by the k
 - **Local vs cloud**: run **unit tests locally**. All other suites (integration, BDD, latency, live, mutation) must run on Woodpecker CI — they execute on autoscaled GCP Spot workers so the VPS stays free. One exception for the inner loop: you may run a single offline file locally (one integration test file, or one Behave feature with `--tags="not @live and not @latency"`) to see a regression test fail and then pass. Full suites still run on CI.
 - **Triggering**: the `executor` MCP server exposes a `woodpecker` integration. Discover tools inside `execute` with `tools.search({ namespace: "woodpecker", query: "..." })` and inspect shapes via `tools.describe.tool({ path })` before calling.
 - **Single workflow**: `tools.woodpecker.org.agent.trigger_pipeline({ repo_id: 1, branch: "<branch>", workflow: "<name>" })` where `<name>` is a `.woodpecker/*.yaml` basename (e.g. `api-latency`). Omitting `workflow` runs ALL manual workflows — expensive (live provider calls, long mutation runs).
-- **UI workflows**: `ui-quality` runs dependency checks, lint, type checks, unit tests, and the production build. `ui-bdd` runs the critical desktop smoke Playwright-BDD scenarios; it does not run `@live` or `@mobile`.
+- **UI workflows**: `ui-quality` runs dependency checks, lint, type checks, unit tests, and the production build. `ui-bdd` runs the critical desktop smoke Playwright-BDD scenarios; it does not run `@live` or `@mobile`. To select other scenarios, pass the manual variable `PLAYWRIGHT_GREP`: `trigger_pipeline({ repo_id: 1, branch: "<branch>", workflow: "ui-bdd", variables: { PLAYWRIGHT_GREP: "@stub" } })`.
+- **UI BDD workers**: stubbed scenarios run fully parallel. CI sets `PLAYWRIGHT_WORKERS` (default: the smaller of 12 and the core count, in `scripts/ci/run-ui-bdd.sh`). Local runs default to 1 worker because the dev host is slow. Tag a scenario `@serial` when it relies on fixed delays, held responses or late responses. CI runs `@serial` scenarios in a second Playwright invocation on one worker, after the parallel pass, so they run with no other worker. A new scenario must not depend on state left by another scenario.
 - The branch must be **pushed to origin**; local-only branches cannot be triggered. Monitor with `get_pipeline`, debug with `get_step_logs`, stop with `cancel_pipeline`.
 - **Artifacts**: each workflow uploads `reports.zip` (log + `test_reports/`) to Gitea as generic package `polyweb-<workflow>` versioned `pipeline-<N>-r<reruns>-<ns>`. Download with `python3 scripts/gitea_packages.py download <pkg> <version> reports.zip` (lands in `.gitea-packages/`; `python` is unavailable — use `python3`).
 - **Live suite**: CI has no provider secrets, so `@live` scenarios skip there. Run them locally and sparingly (they spend API credits): `POLYWEB_RUN_LIVE=1 uv run --no-sync --env-file .env behave --tags="@live"`. The harness reads keys from the process env only. Tinyfish reads `POLYWEB_TINYFISH_API_KEY` (legacy `TINYFISH_API_KEY` also accepted); blank values count as absent. Keyless Keenable scenarios always run without a key; keyed ones need `POLYWEB_KEENABLE_API_KEY`.
@@ -76,19 +77,39 @@ The orchestrator picks the model and reasoning effort for each subagent by the k
 
 Each workspace/worktree has fixed, isolated ports defined in its root `.env` to prevent port collisions between concurrently running agents:
 
-| Workspace | Worktree Directory | MCP Server (`POLYWEB_MCP_PORT`) | Backend API (`POLYWEB_API_PORT`) | UI Dev (`VITE_PORT`) |
-| :--- | :--- | :--- | :--- | :--- |
-| **Main** | `polyweb-mcp` | `8200` | `8201` | `5174` |
-| **WT 1** | `polyweb_wt_1` | `8210` | `8211` | `5175` |
-| **WT 2** | `polyweb_wt_2` | `8220` | `8221` | `5176` |
-| **WT 3** | `polyweb_wt_3` | `8230` | `8231` | `5177` |
-| **WT 4** | `polyweb_wt_4` | `8240` | `8241` | `5178` |
-| **WT N** (1-9) | `polyweb_wt_N` | `82N0` | `82N1` | `5174+N` |
+| Workspace | Worktree Directory | MCP Server (`POLYWEB_MCP_PORT`) | Backend API (`POLYWEB_API_PORT`) | UI Dev (`VITE_PORT`) | Provider mock (`POLYWEB_PROVIDER_MOCK_PORT`) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Main** | `polyweb-mcp` | `8200` | `8201` | `5174` | `8202` |
+| **WT 1** | `polyweb_wt_1` | `8210` | `8211` | `5175` | `8212` |
+| **WT 2** | `polyweb_wt_2` | `8220` | `8221` | `5176` | `8222` |
+| **WT 3** | `polyweb_wt_3` | `8230` | `8231` | `5177` | `8232` |
+| **WT 4** | `polyweb_wt_4` | `8240` | `8241` | `5178` | `8242` |
+| **WT N** (1-9) | `polyweb_wt_N` | `82N0` | `82N1` | `5174+N` | `82N2` |
 
 - **Why 82xx**: the dev host already uses 8000/8001 (other services), 8080, 8090, 8100/8101 (the production Polyweb stack), 9000 and 9090, so local development keeps to 8200-8291. The application defaults (8000/8001 in code, Compose and docs) are for end users and are unchanged.
 - **Zero hardcoding**: Always launch servers without hardcoded ports (e.g. `uv run polyweb-api`, `uv run polyweb-mcp`, `pnpm dev`). They automatically read from the local `.env`.
 - **Landing app** (`polyweb-landing/`): the marketing site's Vite dev server reads `POLYWEB_LANDING_PORT` from the root `.env` and defaults to `5274` when unset.
 - **Zero merge conflicts**: Port configurations live in the local `.env` (gitignored), keeping committed files identical across all branches.
+
+### Environments: pd, npd, dev
+
+| Name | Files | What it is | How to run |
+|------|-------|------------|------------|
+| **pd** | `compose.yaml`, `Dockerfile` (root) | The deployed stack, Compose project `polyweb`: source baked into the image, real providers, `POLYWEB_ENVIRONMENT=production`. | The deploy script only. Never from a worktree. |
+| **npd** | `compose.yaml` + `docker/npd/compose.yaml`, `docker/npd/Dockerfile` | Worktree source bind-mounted, real providers, keys in this project's own vault. Project `polyweb-wtN-npd`. | `scripts/linux/stack.sh npd up\|down\|logs\|ps` |
+| **dev** | npd + `docker/dev/compose.yaml` | As npd, but every provider call goes to the provider mock with fake keys. Project `polyweb-wtN-dev`. | `scripts/linux/stack.sh dev up\|down\|logs\|ps\|seed\|cli <polyweb-mock args>` |
+
+Windows: `scripts\windows\stack.bat` takes the same arguments. Both stacks bind the worktree ports on `127.0.0.1`. Never run `docker compose` with a `docker/` overlay by hand: `compose.yaml` names the pd `polyweb` project, so the overlays refuse to render without the script's `POLYWEB_STACK_PROJECT`. Run `down` only for your own `-npd`/`-dev` project. `docker/test/Dockerfile` is the Windows mutation-test image (`scripts\windows\run_gremlin_mutation_docker.bat`).
+
+Test runs: **live** is the `@live` Behave scenarios against the real providers (Woodpecker `api-live`, spends credits). **dev-live** is the same scenarios answered by the mock: `scripts/linux/stack.sh dev live` locally, and the `provider-mock` Woodpecker workflow in CI.
+
+### Provider mock dev environment
+
+`polyweb-provider-mock/` is a development-only server that answers as every provider (Exa, Tavily, Firecrawl, Parallel, You.com, Brave, Keenable, Tinyfish), with fake keys, credits and fault scenarios. Use it to run the app or the `@live` suites without real keys or provider cost. Its README (section "Run Polyweb against the mock") has the full steps.
+- **Docker**: the dev stack above (`scripts/linux/stack.sh dev up`).
+- **uv**: start the mock on `POLYWEB_PROVIDER_MOCK_PORT`, then `uv run python scripts/seed_dev.py --keys-from-mock http://127.0.0.1:<port>`, then start the API and MCP with `POLYWEB_DB=polyweb.mock-dev.db` and `POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:<port>`.
+- **dev-live (live suite against the mock)**: `scripts/linux/stack.sh dev live [behave args]` starts the dev mock and runs the scenarios on the host. By hand: export the keys from `polyweb-mock export-keys`, plus `POLYWEB_PROVIDER_MOCK_URL`, `POLYWEB_TEST_PROVIDER_MOCK=1` and `POLYWEB_RUN_LIVE=1`, then run `uv run --no-sync behave --tags="@live and not @latency"`. CI runs the same in the manual `provider-mock` workflow.
+- **Safety**: `POLYWEB_PROVIDER_MOCK_URL` is refused in production. Tests ignore it unless `POLYWEB_TEST_PROVIDER_MOCK=1` is set. Never put real keys into the mock or into `polyweb.mock-dev.db`.
 
 ### Creating worktrees
 

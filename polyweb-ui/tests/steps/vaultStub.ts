@@ -68,6 +68,15 @@ export function seedVaultKey(provider: string, label: string, authMode = "api_ke
   return createKey({ provider_type: provider, label, auth_mode: authMode })
 }
 
+/**
+ * A fake key with one pool in `project` for `operations`, so the project
+ * routing order (and the Playground picker) offers that provider.
+ */
+export function seedVaultPool(provider: string, project: string, operations: Operation[]): void {
+  const key = createKey({ provider_type: provider, label: `${provider} seeded key`, auth_mode: "api_key" })
+  createPool(key, { project_id: project, label: `${provider} seeded pool`, operations })
+}
+
 export function vaultOwner(project: string, fallback: { user_id: string; email: string } | null): { user_id: string; email: string } | null {
   return owners.get(project) ?? fallback
 }

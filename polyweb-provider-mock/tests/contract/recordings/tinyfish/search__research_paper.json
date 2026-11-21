@@ -1,0 +1,232 @@
+{
+  "method": "GET",
+  "url": "https://api.search.tinyfish.ai?query=retrieval+augmented+generation&domain_type=research_paper&pub_year_min=2023&pub_year_max=2025",
+  "request_headers": {
+    "host": "api.search.tinyfish.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "date": "Thu, 19 Nov 2026 09:53:19 GMT",
+    "content-encoding": "gzip",
+    "x-tf-user-id": "aaaa_0AAaAaAA0AaAA00A0AaAaAAAAaa",
+    "set-cookie": "<REDACTED>",
+    "server": "uvicorn",
+    "strict-transport-security": "max-age=63072000; includeSubDomains",
+    "x-frame-options": "DENY",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "access-control-allow-headers": "Content-Type, X-API-Key, Authorization, X-TF-Request-Origin, X-TF-Client-Name, X-TF-Client-Version, X-TF-API-Source, X-TF-API-Example, X-TF-Setup-Attempt-Id, X-TF-Connect-Source, X-TF-Connect-Client, X-TF-Connect-Attempt-Id, Payment-Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": "Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Request-ID, X-TF-Notice, X-TF-Notice-Level, X-TF-Notice-Latest, X-TF-Notice-Package, WWW-Authenticate, Payment-Receipt",
+    "x-clerk-auth-reason": "session-token-and-uat-missing",
+    "x-clerk-auth-status": "signed-out",
+    "x-middleware-rewrite": "/v1/search?query=retrieval+augmented+generation&domain_type=research_paper&pub_year_min=2023&pub_year_max=2025",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding",
+    "x-ratelimit-limit": "30",
+    "x-ratelimit-remaining": "26",
+    "x-ratelimit-reset": "1795082040",
+    "x-request-id": "a00a0a00-0aa0-0a0a-0000-0000000000a0",
+    "x-cache": "Miss from cloudfront",
+    "via": "1.1 7162ad114a2620a596cd6cd391ad1032.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P8",
+    "x-amz-cf-id": "aaaaaaa00aAA0AaAAAAAAAAaaAAaA0aA0a000aAA0a0aaAa0AAaaAa=="
+  },
+  "response_body": {
+    "query": "retrieval augmented generation",
+    "results": [
+      {
+        "authors": [
+          "Synthetic authors 638e2fc3.",
+          "Synthetic authors 1c737f33.",
+          "Synthetic authors 98d8a171.",
+          "Synthetic authors 62cce525.",
+          "Synthetic authors 1da43e6d."
+        ],
+        "cited_by_count": 454,
+        "pdf_url": "https://example.com/synthetic/c8bc19580c",
+        "position": 1,
+        "site_name": "site-9fdfa8.example.com",
+        "snippet": "Synthetic snippet f40ff84a.",
+        "title": "Synthetic title c64f1f2d.",
+        "url": "https://example.com/synthetic/fdc9d5892b",
+        "venue": "Synthetic venue 802be6d6.",
+        "year": 2024
+      },
+      {
+        "authors": [
+          "Synthetic authors 901fbb9d.",
+          "Synthetic authors dd25b4f7.",
+          "Synthetic authors f1221076.",
+          "Synthetic authors 674af8a6.",
+          "Synthetic authors 4a7a5732."
+        ],
+        "cited_by_count": 1111,
+        "pdf_url": "https://example.com/synthetic/7a892614e3",
+        "position": 2,
+        "site_name": "site-9fdfa8.example.com",
+        "snippet": "Synthetic snippet 8e67b8e4.",
+        "title": "Synthetic title 64e08e2b.",
+        "url": "https://example.com/synthetic/7a892614e3",
+        "venue": "Synthetic venue aafe9169.",
+        "year": 2025
+      },
+      {
+        "authors": [
+          "Synthetic authors 8bdce85e.",
+          "Synthetic authors da5f7d5c.",
+          "Synthetic authors 9b34f9f9.",
+          "Synthetic authors 6f5264ca.",
+          "Synthetic authors 701cfaee.",
+          "Synthetic authors 68bf65d7."
+        ],
+        "cited_by_count": 650,
+        "pdf_url": "https://example.com/synthetic/98617d25dd",
+        "position": 3,
+        "site_name": "site-72abc5.example.com",
+        "snippet": "Synthetic snippet c1447dc8.",
+        "title": "Synthetic title a4ecb48d.",
+        "url": "https://example.com/synthetic/4d0d578bb2",
+        "venue": "Synthetic venue ac6c5d30.",
+        "year": 2024
+      },
+      {
+        "authors": [
+          "Synthetic authors c445ec1a.",
+          "Synthetic authors ef7ccf30.",
+          "Synthetic authors f7316395.",
+          "Synthetic authors 224f6f99.",
+          "Synthetic authors dea08493.",
+          "Synthetic authors 1d79895f."
+        ],
+        "cited_by_count": 1080,
+        "pdf_url": "https://example.com/synthetic/3832af9fd4",
+        "position": 4,
+        "site_name": "site-d5a2ff.example.com",
+        "snippet": "Synthetic snippet 7b933072.",
+        "title": "Synthetic title d8f2323e.",
+        "url": "https://example.com/synthetic/f7ab121408",
+        "venue": "Synthetic venue 642c146f.",
+        "year": 2025
+      },
+      {
+        "authors": [
+          "Synthetic authors 025b816a.",
+          "Synthetic authors ee66cecb.",
+          "Synthetic authors 06cb41e7.",
+          "Synthetic authors 5155aa21.",
+          "Synthetic authors 3c62673e."
+        ],
+        "cited_by_count": 2044,
+        "pdf_url": "https://example.com/synthetic/88ce200293",
+        "position": 5,
+        "site_name": "site-9fdfa8.example.com",
+        "snippet": "Synthetic snippet 398dc286.",
+        "title": "Synthetic title efd2f064.",
+        "url": "https://example.com/synthetic/79a58955ed",
+        "venue": "Synthetic venue 802be6d6.",
+        "year": 2023
+      },
+      {
+        "authors": [
+          "Synthetic authors 025b816a.",
+          "Synthetic authors e3a2300f.",
+          "Synthetic authors e4ebe4c9."
+        ],
+        "cited_by_count": 219,
+        "pdf_url": "https://example.com/synthetic/8ab6ea5169",
+        "position": 6,
+        "site_name": "site-1e7b55.example.com",
+        "snippet": "Synthetic snippet 96cdece5.",
+        "title": "Synthetic title 9a9b8b24.",
+        "url": "https://example.com/synthetic/f0062220c0",
+        "venue": "Synthetic venue ebcc5fab.",
+        "year": 2024
+      },
+      {
+        "authors": [
+          "Synthetic authors f1221076.",
+          "Synthetic authors d3b7e2ed.",
+          "Synthetic authors 68bf65d7.",
+          "Synthetic authors 786c4593.",
+          "Synthetic authors d4ac18b9."
+        ],
+        "cited_by_count": 425,
+        "pdf_url": "https://example.com/synthetic/b3fd503ace",
+        "position": 7,
+        "site_name": "site-85c168.example.com",
+        "snippet": "Synthetic snippet cc743985.",
+        "title": "Synthetic title 68639abd.",
+        "url": "https://example.com/synthetic/5c17bb2cda",
+        "venue": "Synthetic venue 01abb6ee.",
+        "year": 2024
+      },
+      {
+        "authors": [
+          "Synthetic authors 22a2fbb2.",
+          "Synthetic authors 3e4e3329.",
+          "Synthetic authors ef167a31."
+        ],
+        "cited_by_count": 110,
+        "pdf_url": "https://example.com/synthetic/9255aecad9",
+        "position": 8,
+        "site_name": "site-9fdfa8.example.com",
+        "snippet": "Synthetic snippet ebac5237.",
+        "title": "Synthetic title ce1395f5.",
+        "url": "https://example.com/synthetic/8ce9ffb292",
+        "venue": "Synthetic venue b0e43a29.",
+        "year": 2025
+      },
+      {
+        "authors": [
+          "Synthetic authors 643e50bf.",
+          "Synthetic authors 8e9e4c60.",
+          "Synthetic authors 3de7112c.",
+          "Synthetic authors 267e4203.",
+          "Synthetic authors cf71b6ca.",
+          "Synthetic authors 26043cce."
+        ],
+        "cited_by_count": 122,
+        "pdf_url": "https://example.com/synthetic/1f82c4a2cc",
+        "position": 9,
+        "site_name": "site-d5a2ff.example.com",
+        "snippet": "Synthetic snippet 78c8305c.",
+        "title": "Synthetic title 94762bfd.",
+        "url": "https://example.com/synthetic/28600c4c62",
+        "venue": "Synthetic venue b48fe2d4.",
+        "year": 2025
+      },
+      {
+        "authors": [
+          "Synthetic authors d4fba5d4.",
+          "Synthetic authors 89af2ec0.",
+          "Synthetic authors 4aee8927.",
+          "Synthetic authors 7fa734d7.",
+          "Synthetic authors 8adbb8ef.",
+          "Synthetic authors 53499680."
+        ],
+        "cited_by_count": 485,
+        "pdf_url": "https://example.com/synthetic/48a63d2596",
+        "position": 10,
+        "site_name": "site-1e7b55.example.com",
+        "snippet": "Synthetic snippet c002d868.",
+        "title": "Synthetic title a547ad65.",
+        "url": "https://example.com/synthetic/4d3c0d8efc",
+        "venue": "Synthetic venue aa523da5.",
+        "year": 2024
+      }
+    ],
+    "total_results": 10,
+    "page": 0
+  }
+}

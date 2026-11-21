@@ -1,0 +1,41 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/contents",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "content-length": "85",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "urls": [
+      "https://example.com"
+    ],
+    "formats": [
+      "markdown",
+      "html",
+      "metadata"
+    ],
+    "max_age": 0
+  },
+  "status": 402,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:52 GMT",
+    "content-type": "application/json",
+    "content-length": "174",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "00a0aaa0-0000-00a0-00a0-a0a0aa0a00aa",
+    "x-amzn-errortype": "AccessDeniedException",
+    "x-amz-apigw-id": "A0aAaAAAAAAA0Aa=",
+    "x-amzn-trace-id": "Root=0-0aaaaa0a-00a0a0a00000000a000aaa00"
+  },
+  "response_body": {
+    "error": "payment_required",
+    "message": "Your prepaid credit balance has been depleted. Please add credits to continue using the API.",
+    "upgrade_url": "https://you.com/platform"
+  }
+}

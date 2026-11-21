@@ -1,0 +1,37 @@
+{
+  "method": "GET",
+  "url": "https://api.search.tinyfish.ai?query=polyweb+test&page=0",
+  "request_headers": {
+    "host": "api.search.tinyfish.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 401,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "127",
+    "connection": "keep-alive",
+    "date": "Tue, 17 Nov 2026 01:26:46 GMT",
+    "x-request-id": "a0a0aa00-aaaa-0aa0-a000-aa00aa0a00a0",
+    "set-cookie": "<REDACTED>",
+    "server": "uvicorn",
+    "cache-control": "no-store",
+    "www-authenticate": "ApiKey",
+    "x-cache": "Error from cloudfront",
+    "via": "1.1 c5f66fe3b5be961785fdbe24f1b92486.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P8",
+    "x-amz-cf-id": "A00AAaaaaA-Aa0AA_0AAAAaAaa_aaa0AAA0aAaaaaAaaa0aaA00aaa=="
+  },
+  "response_body": {
+    "error": {
+      "code": "INVALID_API_KEY",
+      "message": "Invalid or expired API key"
+    },
+    "request_id": "a0a0aa00-aaaa-0aa0-a000-aa00aa0a00a0"
+  }
+}

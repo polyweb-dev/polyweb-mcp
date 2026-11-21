@@ -1,0 +1,51 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/contents",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "content-length": "85",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "urls": [
+      "https://example.com"
+    ],
+    "formats": [
+      "markdown",
+      "html",
+      "metadata"
+    ],
+    "max_age": 0
+  },
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:52 GMT",
+    "content-type": "application/json",
+    "content-length": "3489",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "00a000aa-0a00-0a0a-000a-aa0a000a00aa",
+    "x-amzn-remapped-content-length": "3489",
+    "x-amz-apigw-id": "A0aAAAAAaAAAAaa=",
+    "x-amzn-remapped-server": "uvicorn",
+    "x-amzn-trace-id": "Root=0-0aaaaa0a-0aaaa00a00a00a000aa0aaa0",
+    "x-amzn-remapped-date": "Tue, 17 Nov 2026 01:26:51 GMT"
+  },
+  "response_body": [
+    {
+      "url": "https://example.com",
+      "html": "Synthetic html 944af265.",
+      "metadata": {
+        "site_name": "",
+        "favicon_url": "https://example.com/synthetic/4b70a04ac2"
+      },
+      "markdown": "Synthetic markdown cd43b41e.",
+      "title": "Synthetic title 162b8154."
+    }
+  ]
+}

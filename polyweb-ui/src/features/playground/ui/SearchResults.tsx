@@ -1,12 +1,14 @@
+import { useState } from "react"
 import type { ReactNode } from "react"
-import type { SearchResponse } from "@/domains/execution"
+import { searchTraceRef } from "@/domains/execution"
+import type { SearchResponse, SearchTraceRef } from "@/domains/execution"
 import { getProviderPrices, providerIdentity } from "@/domains/providers"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
 import { formatLatency } from "@/shared/lib/formatTime"
 import { Button } from "@/shared/ui/button"
 import { InspectorSplitPane } from "@/shared/ui/InspectorSplitPane"
-import { JsonViewer } from "@/shared/ui/JsonViewer"
 import { ProviderBadge } from "@/shared/ui/ProviderBadge"
+import type { RenderTraceDetails } from "../model/traceDetailsSlot"
 import type { PlaygroundController } from "../model/usePlaygroundController"
 import { usageTelemetry } from "../model/usageTelemetry"
 import { ResultCard } from "./ResultCard"
@@ -16,21 +18,7 @@ import { WaterfallPanel } from "./WaterfallPanel"
 export interface SearchResultsProps {
   controller: PlaygroundController
   result: SearchResponse
-}
-
-/** Raw response inspector: one copy action over the shared collapsible viewer. */
-function jsonInspector(search: SearchResponse, copied: boolean, onCopy: () => void): ReactNode {
-  return (
-    <div className="min-w-0 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--elevated)]">
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-3 py-1">
-        <span className="text-[12px] text-[var(--muted)]">Raw response</span>
-        <Button type="button" variant="ghost" size="sm" onClick={onCopy}>
-          {copied ? "Copied" : "Copy JSON"}
-        </Button>
-      </div>
-      <JsonViewer value={search} ariaLabel="Raw search response" className="p-3" />
-    </div>
-  )
+  renderTraceDetails: RenderTraceDetails
 }
 
 /** One label/value pair of the telemetry bar. */
@@ -52,15 +40,14 @@ function resolvedBy(search: SearchResponse): ReactNode {
   return <ProviderBadge providerId={identity.id} name={identity.name} logoClassName="size-3.5" />
 }
 
-/** Widescreen search results: telemetry bar, JSON inspector, list + inspector. */
-export function SearchResults({ controller, result: activeSearch }: SearchResultsProps) {
+/** Widescreen search results: telemetry bar with View details, list + inspector. */
+export function SearchResults({ controller, result: activeSearch, renderTraceDetails }: SearchResultsProps) {
+  // The open popup keeps the trace of the result the user clicked, even when
+  // a search that was still running replaces the results underneath it.
+  const [openTrace, setOpenTrace] = useState<SearchTraceRef | null>(null)
   const {
     selectedResultForPreview,
     setSelectedResultForPreview,
-    showJsonInspector,
-    setShowJsonInspector,
-    copied,
-    copyToClipboard,
     isSearching,
     isFetching,
     canFetch,
@@ -92,17 +79,14 @@ export function SearchResults({ controller, result: activeSearch }: SearchResult
           type="button"
           variant="ghost"
           size="form"
-          aria-expanded={showJsonInspector}
-          onClick={() => setShowJsonInspector(!showJsonInspector)}
+          aria-haspopup="dialog"
+          onClick={() => setOpenTrace(searchTraceRef(activeSearch))}
         >
-          {showJsonInspector ? "Hide raw JSON" : "Inspect raw JSON"}
+          View details
         </Button>
       </div>
 
-      {showJsonInspector &&
-        jsonInspector(activeSearch, copied, () =>
-          copyToClipboard(JSON.stringify(activeSearch, null, 2))
-        )}
+      {openTrace !== null && renderTraceDetails({ ...openTrace, onClose: () => setOpenTrace(null) })}
 
       {/* Master/detail: results list beside the inspector and live telemetry.
           The split geometry is shared with the Activity dialog. */}

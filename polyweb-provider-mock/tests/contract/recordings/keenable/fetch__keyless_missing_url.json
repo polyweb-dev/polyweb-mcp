@@ -1,0 +1,41 @@
+{
+  "method": "GET",
+  "url": "https://api.keenable.ai/v1/fetch/public",
+  "request_headers": {
+    "host": "api.keenable.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb/0.1.0",
+    "x-keenable-title": "polyweb"
+  },
+  "request_body": null,
+  "status": 400,
+  "response_headers": {
+    "x-request-id": "ac38acb6-b2c2-7de0-86c9-7a3f033f8b5e",
+    "vary": "Origin, Accept-Encoding",
+    "access-control-allow-credentials": "true",
+    "access-control-expose-headers": "Content-Type,Authorization,X-Request-Id,Server-Timing,PAYMENT-REQUIRED,PAYMENT-RESPONSE,Retry-After,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset",
+    "x-ratelimit-limit": "1000",
+    "x-ratelimit-remaining": "997",
+    "x-ratelimit-reset": "2026-11-17T02:27:28.656Z",
+    "content-type": "application/json; charset=utf-8",
+    "etag": "W/\"153-8pmSMEZkf56QMMkLbgpF2F87t58\"",
+    "content-encoding": "gzip",
+    "date": "Tue, 17 Nov 2026 01:27:32 GMT",
+    "via": "1.1 google",
+    "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+    "transfer-encoding": "chunked"
+  },
+  "response_body": {
+    "error": "Missing required parameter",
+    "message": "\"url\" is required",
+    "type": "invalid_request_error",
+    "code": "missing_parameter",
+    "fix": "Send the \"url\" parameter; it is required. Then retry.",
+    "docs_url": "https://docs.keenable.ai/errors#missing-parameter",
+    "retryable": false,
+    "param": "url",
+    "request_id": "ac38acb6-b2c2-7de0-86c9-7a3f033f8b5e"
+  }
+}

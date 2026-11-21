@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach, vi } from "vitest"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router"
 import { ProjectScopeContext } from "@/domains/projects/state/context"
@@ -436,6 +436,92 @@ describe("TraceDetailDialog", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
     })
     expect(trigger).toHaveFocus()
+  })
+})
+
+/**
+ * TASK-000002 owner request: a trace that can be inspected can be copied.
+ * Copy JSON writes the decoded detail as shown, exactly as stored, and says
+ * Copied only after the write succeeds.
+ */
+describe("TraceDetailDialog Copy JSON", () => {
+  const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard")
+
+  // After userEvent.setup(), which installs its own clipboard stub.
+  function mockClipboard(writeText: (text: string) => Promise<void>): void {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true })
+  }
+
+  afterEach(() => {
+    if (clipboardDescriptor) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor)
+    } else {
+      Reflect.deleteProperty(navigator, "clipboard")
+    }
+  })
+
+  it("shows Copy JSON as an icon button with a Copy JSON tooltip", async () => {
+    const user = userEvent.setup()
+    renderDialog(searchDetail())
+
+    const button = screen.getByRole("button", { name: "Copy JSON" })
+    expect(button.textContent).toBe("")
+    await user.hover(button)
+
+    expect(await screen.findByText("Copy JSON")).toBeInTheDocument()
+  })
+
+  it("copies the shown trace as pretty-printed JSON and confirms with Copied", async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn(async (_text: string) => {})
+    mockClipboard(writeText)
+    const detail = searchDetail()
+    renderDialog(detail)
+
+    await user.click(screen.getByRole("button", { name: "Copy JSON" }))
+
+    expect(writeText).toHaveBeenCalledWith(JSON.stringify(detail, null, 2))
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Copy JSON" })).not.toBeInTheDocument()
+    expect(await screen.findByText("Copied")).toBeInTheDocument()
+  })
+
+  it("copies a metadata-only trace exactly as stored, with null input and output", async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn(async (_text: string) => {})
+    mockClipboard(writeText)
+    renderDialog({ ...searchDetail(), input: null, output: null })
+
+    await user.click(screen.getByRole("button", { name: "Copy JSON" }))
+
+    const copied: unknown = JSON.parse(writeText.mock.calls[0]?.[0] ?? "")
+    expect(copied).toMatchObject({ traceId: searchDetail().traceId, input: null, output: null })
+  })
+
+  it("keeps Copy JSON when the clipboard write fails", async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn(() => Promise.reject(new Error("denied")))
+    mockClipboard(writeText)
+    renderDialog(searchDetail())
+
+    await user.click(screen.getByRole("button", { name: "Copy JSON" }))
+    await act(async () => {})
+    expect(writeText).toHaveBeenCalledTimes(1)
+
+    expect(screen.getByRole("button", { name: "Copy JSON" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument()
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ["loading", { status: "loading" }],
+    ["error", { status: "error", error: "boom" }],
+    ["missing", { status: "missing", error: "This trace is not available in this project." }],
+  ])("offers no Copy JSON in the %s state", (_state, overrides) => {
+    renderDialog(null, overrides)
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Copy JSON" })).not.toBeInTheDocument()
   })
 })
 

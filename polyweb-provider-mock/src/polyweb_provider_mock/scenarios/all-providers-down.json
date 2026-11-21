@@ -1,0 +1,4 @@
+{
+  "description": "Every provider operation answers 503 in the provider's own format.",
+  "faults": [{"provider": "*", "operation": "*", "kind": "outage", "params": {"status": 503}}]
+}

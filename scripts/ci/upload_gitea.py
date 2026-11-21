@@ -30,6 +30,7 @@ WORKFLOWS = {
     "api-live": "live-provider-tests.log",
     "api-mutation": "mutation-tests.log",
     "api-latency": "routing-latency-tests.log",
+    "provider-mock": "provider-mock-tests.log",
     "ui-quality": "ui-quality.log",
     "ui-bdd": "ui-bdd-tests.log",
 }

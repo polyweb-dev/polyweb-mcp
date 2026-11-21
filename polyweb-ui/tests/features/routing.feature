@@ -77,7 +77,7 @@ Feature: Provider and playground workflows
     And no Tavily provider test requests should exist
     And no Tavily force-sync requests should exist
 
-  @stub
+  @stub @serial
   Scenario: Tavily card tier keeps the confirmed ceiling while the dashboard refresh is deferred
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
@@ -196,7 +196,7 @@ Feature: Provider and playground workflows
     And no Tavily provider test requests should exist
     And no Tavily force-sync requests should exist
 
-  @stub
+  @stub @serial
   Scenario: Tavily card tier disables the select while a delayed PATCH is pending
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
@@ -213,7 +213,7 @@ Feature: Provider and playground workflows
     And no Tavily provider test requests should exist
     And no Tavily force-sync requests should exist
 
-  @stub
+  @stub @serial
   Scenario: Tavily card tier ignores a PATCH response after unmount
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
@@ -230,7 +230,7 @@ Feature: Provider and playground workflows
     And no Tavily provider test requests should exist
     And no Tavily force-sync requests should exist
 
-  @stub
+  @stub @serial
   Scenario: Tavily card tier converges after credential replacement during a delayed PATCH
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"
@@ -265,7 +265,7 @@ Feature: Provider and playground workflows
     And no Tavily provider test requests should exist
     And no Tavily force-sync requests should exist
 
-  @stub
+  @stub @serial
   Scenario: Tavily card tier keeps keyboard access with a delayed PATCH
     Given the sidebar session belongs to a system administrator
     And the Tavily stored key environment is "dev"

@@ -27,6 +27,7 @@ from polyweb.models.quota_api import (
     USDBudgetPayload,
     USDGrantsSummary,
     USDHistoryPage,
+    USDLimitDetail,
     USDProviderLimits,
     USDUsageTotal,
     USDVaultKeyUsage,
@@ -175,3 +176,67 @@ def test_history_and_usage_totals_expose_usd() -> None:
     )
     assert total.spend_usd == Decimal("0.016")
     assert total.attempt_count == 2
+
+
+@pytest.mark.parametrize(
+    ("source", "confidence", "manual_anchor", "confirmed"),
+    [
+        ("vendor_api", "authoritative", False, True),
+        ("vendor_402", "observed", False, True),
+        ("vendor_headers", "observed", False, True),
+        ("vendor_headers", "estimated", False, False),
+        ("vendor_402", "estimated", False, False),
+        ("manual_anchor", "estimated", True, False),
+        ("local_ledger", "estimated", False, False),
+        ("vendor_api", "unknown", False, False),
+    ],
+)
+def test_balances_mark_vendor_confirmed_from_confidence_not_source(
+    source: str, confidence: str, manual_anchor: bool, confirmed: bool
+) -> None:
+    """AC #14: each balance says whether the vendor confirmed it or it is an estimate.
+
+    A local estimate that lowered a trusted row keeps the trusted source but
+    an estimated confidence, so the mark reads the confidence.
+    """
+
+    pool = NativePool(
+        pool_id="brave:keyed:usd#cred:k1",
+        provider="brave",
+        auth_mode=AuthMode.KEYED,
+        native_unit="USD",
+        remaining=Decimal("2"),
+        source=source,
+        confidence=confidence,
+        manual_anchor=manual_anchor,
+        tiers=[
+            TierBalance(
+                pool_id="brave:keyed:usd",
+                tier="free",
+                native_unit="USD",
+                native_remaining=Decimal("2"),
+                source=source,
+                confidence=confidence,
+            )
+        ],
+    )
+
+    key = USDVaultKeyUsage.model_validate(
+        VaultKeyUsage(key_id=uuid4(), label="k", balance=pool)
+    ).model_dump(mode="json")
+
+    assert key["balance"]["vendor_confirmed"] is confirmed
+    assert key["balance"]["tiers"][0]["vendor_confirmed"] is confirmed
+
+
+@pytest.mark.parametrize("confidence", ["authoritative", "observed"])
+def test_manual_record_detail_is_never_vendor_confirmed(confidence: str) -> None:
+    """A11: a manual record is an estimate by construction, whatever its confidence says."""
+
+    detail = USDLimitDetail.model_validate(
+        {"source": "manual_anchor", "confidence": confidence, "native_balance": Decimal("10")}
+    )
+
+    assert detail.model_dump(mode="json")["vendor_confirmed"] is False
+    vendor = USDLimitDetail.model_validate({"source": "vendor_api", "confidence": confidence})
+    assert vendor.model_dump(mode="json")["vendor_confirmed"] is True

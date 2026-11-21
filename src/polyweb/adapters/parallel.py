@@ -490,7 +490,11 @@ class ParallelAdapter(ProviderAdapter):
         self._hydrated_month = None
 
     async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
-        """Rebuild local spend from the current-month snapshot and USD ledger."""
+        """Rebuild local spend from the current-month snapshot and USD ledger.
+
+        A newer manual record outranks the local ledger: the spend becomes the
+        seed minus the recorded remaining, plus the spend recorded after it.
+        """
 
         if self._free_seed is None:
             return None
@@ -519,7 +523,12 @@ class ParallelAdapter(ProviderAdapter):
             ),
             Decimal("0"),
         )
-        self._spend = max(ledger_spend, snapshot_spend + later_spend)
+        manual = snapshot is not None and snapshot.metadata.get("manual_anchor") is True
+        self._spend = (
+            snapshot_spend + later_spend
+            if manual
+            else max(ledger_spend, snapshot_spend + later_spend)
+        )
         if snapshot is not None:
             self._soft_zero = bool(snapshot.metadata.get("soft_zero", False))
             if later_spend > 0:

@@ -1,0 +1,4 @@
+{
+  "description": "Every billed operation answers with the provider's credit exhaustion error.",
+  "faults": [{"provider": "*", "operation": "*", "kind": "quota_exhausted"}]
+}

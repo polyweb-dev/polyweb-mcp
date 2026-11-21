@@ -46,6 +46,11 @@ export interface SearchResponse {
   costDisplayUnit?: string | null;
   timestamp: string;
   participatingProviders?: string[];
+  /**
+   * Trace of this call in the project (`X-Trace-Id`); null when the backend
+   * sent none. Absent on results persisted before the field existed.
+   */
+  traceId?: string | null;
 }
 
 export interface FetchRequest {

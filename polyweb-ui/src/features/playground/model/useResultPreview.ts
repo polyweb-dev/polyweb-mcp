@@ -4,10 +4,8 @@ import { useClipboard } from "@/shared/clipboard/useClipboard"
 
 export interface ResultPreview {
   selectedResultForPreview: SearchResult | null
-  showJsonInspector: boolean
   copied: boolean
   setSelectedResultForPreview: (value: SearchResult | null) => void
-  setShowJsonInspector: (value: boolean | ((previous: boolean) => boolean)) => void
   copyToClipboard: (text: string) => void
 }
 
@@ -18,7 +16,6 @@ export interface ResultPreview {
  */
 export function useResultPreview(): ResultPreview {
   const [selectedResultForPreview, setSelectedResultForPreview] = useState<SearchResult | null>(null)
-  const [showJsonInspector, setShowJsonInspector] = useState(false)
   // Transient 2s feedback with the legacy fire-and-forget quirk preserved:
   // copied is unconditional and the write promise floats (see optimistic).
   const clipboard = useClipboard({ resetAfterMs: 2000, optimistic: true })
@@ -29,10 +26,8 @@ export function useResultPreview(): ResultPreview {
 
   return {
     selectedResultForPreview,
-    showJsonInspector,
     copied: clipboard.copied,
     setSelectedResultForPreview,
-    setShowJsonInspector,
     copyToClipboard,
   }
 }

@@ -1,0 +1,4 @@
+{
+  "description": "Every provider call takes 1.5 s more, plus up to 1 s of jitter.",
+  "faults": [{"provider": "*", "operation": "*", "kind": "latency", "params": {"ms": 1500, "jitter_ms": 1000}}]
+}

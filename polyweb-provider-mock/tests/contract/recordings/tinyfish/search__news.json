@@ -1,0 +1,142 @@
+{
+  "method": "GET",
+  "url": "https://api.search.tinyfish.ai?query=web+search+api&domain_type=news",
+  "request_headers": {
+    "host": "api.search.tinyfish.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "date": "Thu, 19 Nov 2026 09:53:17 GMT",
+    "content-encoding": "gzip",
+    "x-tf-user-id": "aaaa_0AAaAaAA0AaAA00A0AaAaAAAAaa",
+    "set-cookie": "<REDACTED>",
+    "server": "uvicorn",
+    "strict-transport-security": "max-age=63072000; includeSubDomains",
+    "x-frame-options": "DENY",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "access-control-allow-headers": "Content-Type, X-API-Key, Authorization, X-TF-Request-Origin, X-TF-Client-Name, X-TF-Client-Version, X-TF-API-Source, X-TF-API-Example, X-TF-Setup-Attempt-Id, X-TF-Connect-Source, X-TF-Connect-Client, X-TF-Connect-Attempt-Id, Payment-Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": "Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Request-ID, X-TF-Notice, X-TF-Notice-Level, X-TF-Notice-Latest, X-TF-Notice-Package, WWW-Authenticate, Payment-Receipt",
+    "x-clerk-auth-reason": "session-token-and-uat-missing",
+    "x-clerk-auth-status": "signed-out",
+    "x-middleware-rewrite": "/v1/search?query=web+search+api&domain_type=news",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding",
+    "x-ratelimit-limit": "30",
+    "x-ratelimit-remaining": "27",
+    "x-ratelimit-reset": "1795082040",
+    "x-request-id": "aaa00aaa-aa0a-00a0-0aaa-000000aa00aa",
+    "x-cache": "Miss from cloudfront",
+    "via": "1.1 7162ad114a2620a596cd6cd391ad1032.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P8",
+    "x-amz-cf-id": "0Aa-AA0A0aAAaAaAa0AaAaAaaA0AaAaa0aAA0AaAaA0AA-A0-aAAaA=="
+  },
+  "response_body": {
+    "query": "web search api",
+    "results": [
+      {
+        "date": "Wed, 11 Nov 2026 23:13:16 GMT",
+        "position": 1,
+        "publisher": "Synthetic publisher 63538b3f.",
+        "site_name": "site-474197.example.com",
+        "snippet": "",
+        "title": "Synthetic title 96ff2d5e.",
+        "url": "https://example.com/synthetic/159c28074b"
+      },
+      {
+        "date": "Fri, 02 Oct 2026 07:00:00 GMT",
+        "position": 2,
+        "publisher": "Synthetic publisher b76e0d53.",
+        "site_name": "site-8321bb.example.com",
+        "snippet": "",
+        "title": "Synthetic title ef1bc425.",
+        "url": "https://example.com/synthetic/172a27cefb"
+      },
+      {
+        "date": "Thu, 29 Oct 2026 07:00:00 GMT",
+        "position": 3,
+        "publisher": "site-ed70d4.example.com",
+        "site_name": "site-dcf775.example.com",
+        "snippet": "",
+        "title": "Synthetic title 192b9f55.",
+        "url": "https://example.com/synthetic/09a34bac2f"
+      },
+      {
+        "date": "Thu, 19 Nov 2026 01:53:49 GMT",
+        "position": 4,
+        "publisher": "Synthetic publisher f16fd2da.",
+        "site_name": "site-9c0dfb.example.com",
+        "snippet": "",
+        "title": "Synthetic title cc4880e1.",
+        "url": "https://example.com/synthetic/d40c67bedf"
+      },
+      {
+        "date": "Tue, 10 Nov 2026 08:00:00 GMT",
+        "position": 5,
+        "publisher": "Synthetic publisher b2e8e94e.",
+        "site_name": "site-be40fc.example.com",
+        "snippet": "",
+        "title": "Synthetic title e8f73836.",
+        "url": "https://example.com/synthetic/77e352326a"
+      },
+      {
+        "date": "Mon, 16 Nov 2026 14:40:00 GMT",
+        "position": 6,
+        "publisher": "Synthetic publisher fe731609.",
+        "site_name": "site-e3e09c.example.com",
+        "snippet": "",
+        "title": "Synthetic title 4ce06a5a.",
+        "url": "https://example.com/synthetic/1479ee9191"
+      },
+      {
+        "date": "Sat, 14 Nov 2026 17:58:31 GMT",
+        "position": 7,
+        "publisher": "Synthetic publisher f16bf6e9.",
+        "site_name": "site-05eac7.example.com",
+        "snippet": "",
+        "title": "Synthetic title b277abf8.",
+        "url": "https://example.com/synthetic/1f80a3e3af"
+      },
+      {
+        "date": "Tue, 17 Nov 2026 08:00:55 GMT",
+        "position": 8,
+        "publisher": "Synthetic publisher 461fe319.",
+        "site_name": "site-a74352.example.com",
+        "snippet": "",
+        "title": "Synthetic title 48ad6366.",
+        "url": "https://example.com/synthetic/c357140cf9"
+      },
+      {
+        "date": "Wed, 18 Nov 2026 13:38:55 GMT",
+        "position": 9,
+        "publisher": "Synthetic publisher 55c91bc2.",
+        "site_name": "site-695ee1.example.com",
+        "snippet": "",
+        "title": "Synthetic title d948d3a8.",
+        "url": "https://example.com/synthetic/daeb825243"
+      },
+      {
+        "date": "Wed, 11 Nov 2026 23:28:03 GMT",
+        "position": 10,
+        "publisher": "site-aaa611.example.com",
+        "site_name": "site-496184.example.com",
+        "snippet": "",
+        "title": "Synthetic title 15ba7fb2.",
+        "url": "https://example.com/synthetic/07f5f6dfff"
+      }
+    ],
+    "total_results": 10,
+    "page": 0
+  }
+}

@@ -1,0 +1,79 @@
+labels:
+  size: standard
+  provider: gcp
+
+when:
+  - event: manual
+
+# Provider mock checks, then the root Behave live suite against the mock.
+# CI has no provider secrets; the mock keys are fake and every provider call
+# goes to the local mock, so this covers the @live scenarios offline.
+steps:
+  provider-mock-tests:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    environment:
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+      POLYWEB_PROVIDER_MOCK_PORT: "8212"
+      POLYWEB_PROVIDER_MOCK_DB: /tmp/polyweb-provider-mock/mock.db
+    commands:
+      - |
+        echo "=========================================================="
+        echo "               GCP SPOT CI WORKER INFO                    "
+        echo "=========================================================="
+        echo "Worker Host:   ${CI_MACHINE}"
+        echo "Worker Labels: ${CI_AGENT_LABELS}"
+        echo "OS / Platform: ${CI_SYSTEM_PLATFORM}"
+        echo "CPU Cores:     $(nproc) physical/virtual cores detected"
+        echo "Total Memory:  $(free -h | awk "/Mem:/ {print \$2}")"
+        echo "Free Disk:     $(df -h / | awk "NR==2 {print \$4}")"
+        echo "=========================================================="
+      - |
+        bash scripts/ci/run-and-log.sh provider-mock-tests.log bash -euo pipefail -c '
+          test -f .env || cp .env.example .env
+          mkdir -p test_reports/provider-mock "$(dirname "$POLYWEB_PROVIDER_MOCK_DB")"
+          uv sync --frozen
+          uv sync --frozen --project polyweb-provider-mock
+          echo "== provider mock: lint, types, tests"
+          (
+            cd polyweb-provider-mock
+            uv run --no-sync ruff check .
+            uv run --no-sync ruff format --check .
+            uv run --no-sync mypy src
+            uv run --no-sync pytest -q -n auto
+          )
+          echo "== root Behave @live suite against the provider mock"
+          uv run --no-sync --project polyweb-provider-mock polyweb-provider-mock \
+            > test_reports/provider-mock/mock-server.log 2>&1 &
+          mock_pid=$!
+          finish() {
+            uv run --no-sync --project polyweb-provider-mock polyweb-mock log tail --limit 500 \
+              > test_reports/provider-mock/mock-request-log.json || true
+            kill "$mock_pid" 2>/dev/null || true
+          }
+          trap finish EXIT
+          for attempt in $(seq 60); do
+            uv run --no-sync python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8212/_mock/health\", timeout=2)" 2>/dev/null && break
+            test "$attempt" -lt 60 || { echo "provider mock did not become healthy"; exit 1; }
+            sleep 1
+          done
+          set -a
+          eval "$(uv run --no-sync --project polyweb-provider-mock polyweb-mock export-keys --format dotenv)"
+          set +a
+          export POLYWEB_PROVIDER_MOCK_URL=http://127.0.0.1:8212
+          export POLYWEB_TEST_PROVIDER_MOCK=1
+          export POLYWEB_RUN_LIVE=1
+          uv run --no-sync polyweb-db upgrade
+          uv run --no-sync behave --tags="@live and not @latency" \
+            --junit --junit-directory test_reports/provider-mock/behave
+        '
+
+  upload-artifacts:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
+    environment:
+      GITEA_UPLOAD_TOKEN:
+        from_secret: gitea_artifact_upload_token
+    commands:
+      - python scripts/ci/upload_gitea.py provider-mock
+    when:
+      - event: manual
+        status: [success, failure]

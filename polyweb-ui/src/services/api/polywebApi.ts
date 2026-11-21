@@ -19,7 +19,21 @@ import type {
   LimitHistoryQuery,
   ProviderLimitPatch,
 } from "@/domains/dashboard"
-import { requestJson } from "@/shared/api/client"
+import { requestJson, requestJsonWithHeaders } from "@/shared/api/client"
+import { isTraceId } from "@/domains/execution"
+
+/** One execution response body with the trace id the backend sent for it. */
+interface TracedResponse<T> {
+  body: T
+  /** `X-Trace-Id` of the call; null when tracing is off or the header is malformed. */
+  traceId: string | null
+}
+
+/** The well-formed `X-Trace-Id` response header, else null. */
+function traceIdOf(headers: Headers | undefined): string | null {
+  const value = headers?.get("x-trace-id")
+  return isTraceId(value) ? value : null
+}
 
 type RoutingConfigPatch = Partial<BackendRoutingConfig>
 type ProviderPatch = {
@@ -82,12 +96,14 @@ export class PolywebApiService {
     )
   }
 
-  search(body: BackendSearchRequest, signal?: AbortSignal): Promise<BackendSearchResponse> {
-    return this.request<BackendSearchResponse>("/search", {
+  /** Search with the trace id of the call, so the caller can open its trace. */
+  async search(body: BackendSearchRequest, signal?: AbortSignal): Promise<TracedResponse<BackendSearchResponse>> {
+    const response = await requestJsonWithHeaders<BackendSearchResponse>("/search", {
       method: "POST",
       body: JSON.stringify(body),
       ...(signal !== undefined ? { signal } : {}),
     })
+    return { body: response.body, traceId: traceIdOf(response.headers) }
   }
 
   fetchDoc(body: BackendFetchRequest, signal?: AbortSignal): Promise<BackendFetchResponse> {

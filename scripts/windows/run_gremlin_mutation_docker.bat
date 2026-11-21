@@ -7,7 +7,7 @@ pushd "%REPO_ROOT%"
 
 REM Build the mutation test image
 echo [1/2] Building Docker image for mutation testing...
-docker build -f Dockerfile.test -t polyweb-mutation .
+docker build -f docker\test\Dockerfile -t polyweb-mutation .
 if errorlevel 1 (
     echo [ERROR] Docker build failed. Make sure Docker Desktop is running.
     popd

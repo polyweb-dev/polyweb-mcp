@@ -1,14 +1,16 @@
 ---
 id: TASK-000069
 title: Wire Parallel OAuth access-token refresh
-status: To Do
-assignee: []
+status: Planning
+assignee:
+  - Abhishek
 created_date: '2026-11-14T11:37:00Z'
+updated_date: '2026-11-15T18:03:00Z'
 labels: []
 dependencies: []
 priority: high
 type: bug
-ordinal: 58000
+ordinal: 1000
 ---
 
 ## Description

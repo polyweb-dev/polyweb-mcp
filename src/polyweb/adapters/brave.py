@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_FLOOR, Decimal
 from typing import Any, cast
 
 import httpx
@@ -154,6 +154,31 @@ def monthly_header_value(value: str | None) -> int | None:
 parse_monthly_element = monthly_header_value
 
 
+def _anchor_requests(latest: QuotaSnapshot | None, month_start: datetime) -> Decimal | None:
+    """Return the remaining requests a stored snapshot of this month proves, if any.
+
+    A vendor header report, a 402, a native sync projection, a manual record
+    and an earlier anchored restore count. A plain local counter estimate does
+    not. A USD figure converts at the documented per-request price.
+    """
+
+    if latest is None or latest.remaining is None or latest.observed_at < month_start:
+        return None
+    trusted = (
+        latest.source is not QuotaSource.ESTIMATED
+        or latest.metadata.get("anchored") is True
+        or latest.metadata.get("manual_anchor") is True
+    )
+    if not trusted:
+        return None
+    if latest.unit_kind is UnitKind.REQUEST:
+        return max(Decimal("0"), latest.remaining)
+    if latest.unit_kind is UnitKind.USD:
+        requests = latest.remaining / COST_USD_PER_REQUEST
+        return max(Decimal("0"), requests.to_integral_value(rounding=ROUND_FLOOR))
+    return None
+
+
 class BraveAdapter(ProviderAdapter):
     """Normalize Brave web search responses without owning client lifecycle."""
 
@@ -183,6 +208,7 @@ class BraveAdapter(ProviderAdapter):
         self._monthly_used = Decimal("0")
         self._ledger_month = _month_start(self._clock())
         self._hydrated_month: datetime | None = None
+        self._anchored = False
         # The burst element of the rate-limit comma pair is a one-second rate
         # observation only. It never enters the monthly budget figures.
         self._burst_remaining: int | None = None
@@ -474,7 +500,14 @@ class BraveAdapter(ProviderAdapter):
         return response.quota_snapshot or self._last_quota
 
     async def hydrate_quota(self, repository: Any) -> QuotaSnapshot | None:
-        """Restore the monthly counter after an adapter or process restart."""
+        """Restore the monthly counter after an adapter or process restart.
+
+        When the newest stored snapshot of this month is a trusted fact (a
+        vendor header report, a 402, a native sync projection, a manual record,
+        or an earlier anchored restore), the remaining requests are that fact
+        minus the successful requests recorded after it. Otherwise the counter
+        is the month's recorded successful requests.
+        """
 
         now = self._clock()
         month_start = _month_start(now)
@@ -492,16 +525,30 @@ class BraveAdapter(ProviderAdapter):
         ):
             self._monthly_limit = latest.limit
             self._monthly_limit_implied = False
-        events = await repository.list_provider_usage(provider=self.name)
-        used = Decimal("0")
-        for event in events:
-            if (
-                event.observed_at >= month_start
-                and event.status.value == "success"
-                and event.unit_kind is UnitKind.REQUEST
+        events = await repository.list_provider_usage(provider=self.name, since=month_start)
+        successes = [
+            event
+            for event in events
+            if event.observed_at >= month_start
+            and event.status.value == "success"
+            and event.unit_kind is UnitKind.REQUEST
+        ]
+        anchor = _anchor_requests(latest, month_start)
+        self._anchored = anchor is not None
+        if latest is None or anchor is None:
+            self._monthly_used = sum((event.units for event in successes), Decimal("0"))
+        else:
+            later = sum(
+                (event.units for event in successes if event.observed_at > latest.observed_at),
+                Decimal("0"),
+            )
+            remaining = max(Decimal("0"), anchor - later)
+            if self._monthly_limit is None or (
+                self._monthly_limit_implied and remaining > self._monthly_limit
             ):
-                used += event.units
-        self._monthly_used = used
+                self._monthly_limit = max(_IMPLIED_MONTHLY_LIMIT, remaining)
+                self._monthly_limit_implied = True
+            self._monthly_used = max(Decimal("0"), self._monthly_limit - remaining)
         self._hydrated_month = month_start
         return self._snapshot_from_counter(now, None)
 
@@ -528,6 +575,7 @@ class BraveAdapter(ProviderAdapter):
         self._ledger_month = month
         self._monthly_used = Decimal("0")
         self._hydrated_month = None
+        self._anchored = False
         # A new month voids the previous month's observation and burst headroom.
         self._monthly_observed = False
         self._burst_remaining = None
@@ -570,6 +618,8 @@ class BraveAdapter(ProviderAdapter):
         metadata = self._base_metadata()
         if implied:
             metadata["limit_implied"] = True
+        if self._anchored:
+            metadata["anchored"] = True
         return QuotaSnapshot(
             provider=self.name,
             source=QuotaSource.ESTIMATED if implied else QuotaSource.OBSERVED,
@@ -719,7 +769,10 @@ class BraveAdapter(ProviderAdapter):
         # monthly limit and no local projection stands behind the value.
         vendor_limit = self._monthly_limit is not None and not self._monthly_limit_implied
         from_headers = (
-            vendor_limit and limit is not None and not bool(quota.metadata.get("limit_implied"))
+            self._monthly_observed
+            and vendor_limit
+            and limit is not None
+            and not bool(quota.metadata.get("limit_implied"))
         )
         return NativeUsageSnapshot(
             pool_id=native_pool_id(self.name, auth_mode, UnitKind.USD),

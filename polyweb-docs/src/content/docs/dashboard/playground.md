@@ -19,7 +19,9 @@ If the project has no provider set up, the page says "No provider is set up for 
 
 The bar above the results shows **Latency**, **Cost** and **Resolved by**, which is the provider that answered. **Returned results** lists each hit with its title, URL and snippet. Select a result to open it in the inspector beside the list.
 
-Below the inspector, the **Execution waterfall** shows which providers ran, how long each took and whether each succeeded, failed, was rate limited or was skipped. **Inspect raw JSON** shows the full response, with a **Copy JSON** button.
+Below the inspector, the **Execution waterfall** shows which providers ran, how long each took and whether each succeeded, failed, was rate limited or was skipped.
+
+**View details** opens the trace of this search in a popup. It is the same trace detail you see in [Activity and traces](/dashboard/activity/): the query, the summary, each provider attempt and the timeline. The copy icon (**Copy JSON**) in the popup copies the trace detail to the clipboard as formatted JSON. You need permission to read the project's Activity. If the project's trace policy keeps metadata only, the popup says that the query and results were not stored. If tracing is off, the popup says that no trace was recorded for this request. If the trace was deleted by retention, or belongs to another project, the popup says that the trace is not available in this project. A result kept from before this feature has no trace link; run the search again to see its details.
 
 ## Fetch a page
 

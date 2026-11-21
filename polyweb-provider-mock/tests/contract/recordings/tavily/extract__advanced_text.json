@@ -1,0 +1,59 @@
+{
+  "method": "POST",
+  "url": "https://api.tavily.com/extract",
+  "request_headers": {
+    "host": "api.tavily.com",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-tavily-contract-research",
+    "content-type": "application/json",
+    "authorization": "Bearer <REDACTED>",
+    "x-client-source": "tavily-python",
+    "content-length": "167"
+  },
+  "request_body": {
+    "urls": [
+      "https://example.com"
+    ],
+    "include_images": true,
+    "extract_depth": "advanced",
+    "format": "text",
+    "timeout": 20,
+    "include_favicon": true,
+    "include_usage": true
+  },
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "content-length": "1528",
+    "connection": "keep-alive",
+    "date": "Tue, 17 Nov 2026 01:27:24 GMT",
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;",
+    "x-cache": "Miss from cloudfront",
+    "via": "1.1 ec7b06429be1c7c502aa30576c8d24c2.cloudfront.net (CloudFront)",
+    "x-amz-cf-pop": "DFW57-P5",
+    "alt-svc": "h3=\":443\"; ma=86400",
+    "x-amz-cf-id": "SNEdC4I55sJMdPu-CCIGQ_M0sJBtndmsu-Rq8B-ma4AcUG2q4lvuNg=="
+  },
+  "response_body": {
+    "results": [
+      {
+        "url": "https://example.com",
+        "title": "Synthetic title 162b8154.",
+        "raw_content": "Synthetic raw_content 6a2f988e.",
+        "images": [],
+        "favicon": null
+      }
+    ],
+    "failed_results": [],
+    "response_time": 0.02,
+    "usage": {
+      "credits": 1
+    },
+    "request_id": "61d39756-bc1c-13f1-bdd6-22f7d2035492"
+  },
+  "sdk_version": "0.7.27",
+  "recorded_at": "2026-11-17T01:27:24.252515+00:00",
+  "notes": "HTTPX decoded content encoding. Request/trace IDs are synthetic with original character classes and length. Auth and account identifiers are redacted. Header lengths describe the original wire body."
+}

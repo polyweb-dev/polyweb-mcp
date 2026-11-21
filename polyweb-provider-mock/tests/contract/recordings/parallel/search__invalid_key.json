@@ -1,0 +1,40 @@
+{
+  "method": "POST",
+  "url": "https://api.parallel.ai/v1/search",
+  "request_headers": {
+    "host": "api.parallel.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "python-httpx/0.28.1",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>",
+    "content-length": "114",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "objective": "polyweb test",
+    "search_queries": [
+      "polyweb test"
+    ],
+    "mode": "fast",
+    "advanced_settings": {
+      "max_results": 1
+    }
+  },
+  "status": 401,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:26:59 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "server": "cloudflare",
+    "via": "1.1 google",
+    "cf-cache-status": "DYNAMIC",
+    "cf-ray": "a0aaa000aa00000a-AAA"
+  },
+  "response_body": {
+    "code": 16,
+    "message": "Invalid API key (C.1)"
+  }
+}

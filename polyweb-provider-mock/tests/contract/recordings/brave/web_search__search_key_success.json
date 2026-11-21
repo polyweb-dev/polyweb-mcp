@@ -1,0 +1,792 @@
+{
+  "method": "GET",
+  "url": "https://api.search.brave.com/res/v1/web/search?q=example+domain&count=2&extra_snippets=true&include_fetch_metadata=true",
+  "request_headers": {
+    "host": "api.search.brave.com",
+    "user-agent": "Polyweb/0.1",
+    "x-subscription-token": "<REDACTED>"
+  },
+  "request_body": null,
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:14 GMT",
+    "content-type": "application/json",
+    "content-length": "41201",
+    "connection": "keep-alive",
+    "x-ratelimit-limit": "50, 0",
+    "x-ratelimit-policy": "50;w=1, 0;w=2592000",
+    "x-ratelimit-remaining": "49, 0",
+    "x-ratelimit-reset": "1, 1204364",
+    "server-timing": "search-roundtrip;dur=80.839",
+    "vary": "Accept-Encoding, Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site, Sec-Fetch-User",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "x-download-options": "noopen",
+    "x-frame-options": "SAMEORIGIN",
+    "x-xss-protection": "1; mode=block"
+  },
+  "response_body": {
+    "type": "search",
+    "query": {
+      "original": "example domain",
+      "show_strict_warning": false,
+      "is_navigational": false,
+      "is_news_breaking": false,
+      "spellcheck_off": false,
+      "country": "us",
+      "bad_results": false,
+      "should_fallback": false,
+      "postal_code": "",
+      "city": "",
+      "header_country": "",
+      "more_results_available": true,
+      "state": "",
+      "related_queries": [
+        "Synthetic related_queries 564bd763.",
+        "Synthetic related_queries 28dd93f3.",
+        "Synthetic related_queries 64426668.",
+        "Synthetic related_queries bc93acc2.",
+        "Synthetic related_queries 971ddbcc.",
+        "Synthetic related_queries 471391d6.",
+        "Synthetic related_queries a40509fa.",
+        "Synthetic related_queries 72debac3.",
+        "Synthetic related_queries a2815060.",
+        "Synthetic related_queries ef6ea7e3."
+      ]
+    },
+    "discussions": {
+      "type": "search",
+      "results": [
+        {
+          "title": "Synthetic title 23cebd27.",
+          "url": "https://example.com/synthetic/faa564bdb9",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description e0849298.",
+          "fetched_content_timestamp": 1794818288,
+          "language": "en",
+          "family_friendly": true,
+          "type": "discussion",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 099c9e05."
+          },
+          "age": "April 6, 2021",
+          "data": {
+            "forum_name": "Synthetic forum_name 899bfc13.",
+            "num_answers": 70,
+            "score": "577",
+            "title": "Synthetic title 23cebd27.",
+            "question": "Synthetic question e171326d.",
+            "top_comment": "Synthetic top_comment e0849298."
+          }
+        },
+        {
+          "title": "Synthetic title 0f0bfccb.",
+          "url": "https://example.com/synthetic/1ab9a994af",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description 9c42f3f3.",
+          "fetched_content_timestamp": 1794399789,
+          "language": "en",
+          "family_friendly": true,
+          "type": "discussion",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path c1007284."
+          },
+          "age": "July 24, 2022",
+          "data": {
+            "forum_name": "Synthetic forum_name 1ebee14e.",
+            "num_answers": 41,
+            "score": "455",
+            "title": "Synthetic title 0f0bfccb.",
+            "top_comment": "Synthetic top_comment 9c42f3f3."
+          }
+        },
+        {
+          "title": "Synthetic title bd166e36.",
+          "url": "https://example.com/synthetic/9473ce32b9",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description 9de890ae.",
+          "fetched_content_timestamp": 1794576513,
+          "language": "en",
+          "family_friendly": true,
+          "type": "discussion",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 68ed5914."
+          },
+          "age": "August 29, 2024",
+          "data": {
+            "forum_name": "Synthetic forum_name f52a9861.",
+            "num_answers": 156,
+            "score": "89",
+            "title": "Synthetic title bd166e36.",
+            "question": "Synthetic question bea1f2e8.",
+            "top_comment": "Synthetic top_comment 9de890ae."
+          }
+        },
+        {
+          "title": "Synthetic title 4b0cc51d.",
+          "url": "https://example.com/synthetic/d5fe338966",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description a37bbdeb.",
+          "fetched_content_timestamp": 1762356488,
+          "language": "en",
+          "family_friendly": true,
+          "type": "discussion",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path f55aba0f."
+          },
+          "age": "March 16, 2024",
+          "data": {
+            "forum_name": "Synthetic forum_name cabb634c.",
+            "num_answers": 22,
+            "score": "0",
+            "title": "Synthetic title 4b0cc51d.",
+            "question": "Synthetic question e6096aa7.",
+            "top_comment": "Synthetic top_comment a37bbdeb."
+          }
+        },
+        {
+          "title": "Synthetic title 3a390e47.",
+          "url": "https://example.com/synthetic/e223a72d50",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description 3c612f8a.",
+          "fetched_content_timestamp": 1792321769,
+          "language": "en",
+          "family_friendly": true,
+          "type": "discussion",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 1557fb4f."
+          },
+          "age": "May 5, 2018",
+          "data": {
+            "forum_name": "Synthetic forum_name eeb7b5ef.",
+            "num_answers": 24,
+            "score": "10",
+            "title": "Synthetic title 3a390e47.",
+            "question": "Synthetic question cc4eb558.",
+            "top_comment": "Synthetic top_comment 3c612f8a."
+          }
+        },
+        {
+          "title": "Synthetic title 5827267a.",
+          "url": "https://example.com/synthetic/a671e88eae",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description 6d02ff09.",
+          "fetched_content_timestamp": 1793248597,
+          "language": "en",
+          "family_friendly": true,
+          "type": "discussion",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 741ccaba."
+          },
+          "age": "October 10, 2021",
+          "data": {
+            "forum_name": "Synthetic forum_name 899bfc13.",
+            "num_answers": 5,
+            "score": "10",
+            "title": "Synthetic title 5827267a.",
+            "question": "Synthetic question 58c44a58.",
+            "top_comment": "Synthetic top_comment 6d02ff09."
+          }
+        },
+        {
+          "title": "Synthetic title 931ce720.",
+          "url": "https://example.com/synthetic/67be5558bc",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description 06e9b3ea.",
+          "fetched_content_timestamp": 1775826047,
+          "language": "en",
+          "family_friendly": true,
+          "type": "discussion",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path ed9b90b6."
+          },
+          "age": "December 27, 2020",
+          "data": {
+            "forum_name": "Synthetic forum_name 40706b58.",
+            "num_answers": 1,
+            "score": "15",
+            "title": "Synthetic title 931ce720.",
+            "question": "Synthetic question c2b83b92.",
+            "top_comment": "Synthetic top_comment 06e9b3ea."
+          }
+        },
+        {
+          "title": "Synthetic title 1ede190e.",
+          "url": "https://example.com/synthetic/76c228dfc7",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description 61b2d8ae.",
+          "fetched_content_timestamp": 1794765279,
+          "language": "en",
+          "family_friendly": true,
+          "type": "discussion",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path b2572050."
+          },
+          "age": "August 22, 2022",
+          "data": {
+            "forum_name": "Synthetic forum_name f52a9861.",
+            "num_answers": 68,
+            "score": "47",
+            "title": "Synthetic title 1ede190e.",
+            "question": "Synthetic question 77206113.",
+            "top_comment": "Synthetic top_comment 61b2d8ae."
+          }
+        },
+        {
+          "title": "Synthetic title f01cd4c7.",
+          "url": "https://example.com/synthetic/b39bcc59f0",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description b1b34c09.",
+          "fetched_content_timestamp": 1788029621,
+          "language": "en",
+          "family_friendly": true,
+          "type": "discussion",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-90ce95.example.com",
+            "hostname": "site-582cff.example.com",
+            "favicon": "https://example.com/synthetic/31b2ac44b2",
+            "path": "Synthetic path 3576bd56."
+          },
+          "age": "February 9, 2018",
+          "data": {
+            "forum_name": "Synthetic forum_name 13afbe77.",
+            "num_answers": 21,
+            "score": "23",
+            "title": "Synthetic title f01cd4c7.",
+            "question": "Synthetic question aaa9dfc2.",
+            "top_comment": "Synthetic top_comment b1b34c09."
+          }
+        }
+      ],
+      "mutated_by_goggles": false
+    },
+    "faq": {
+      "type": "faq",
+      "results": [
+        {
+          "question": "Synthetic question 106ff91d.",
+          "answer": "Synthetic answer 00e4aaa9.",
+          "title": "Synthetic title 43beb68f.",
+          "url": "https://example.com/synthetic/333773b5af",
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-53e179.example.com",
+            "hostname": "site-cdee92.example.com",
+            "favicon": "https://example.com/synthetic/10dceec9e0",
+            "path": "Synthetic path cb14639f."
+          }
+        },
+        {
+          "question": "Synthetic question ff9a7df3.",
+          "answer": "Synthetic answer 7f9ff36e.",
+          "title": "Synthetic title 43beb68f.",
+          "url": "https://example.com/synthetic/333773b5af",
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-53e179.example.com",
+            "hostname": "site-cdee92.example.com",
+            "favicon": "https://example.com/synthetic/10dceec9e0",
+            "path": "Synthetic path cb14639f."
+          }
+        },
+        {
+          "question": "Synthetic question 394fec7f.",
+          "answer": "Synthetic answer beaeb0cc.",
+          "title": "Synthetic title 43beb68f.",
+          "url": "https://example.com/synthetic/333773b5af",
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-53e179.example.com",
+            "hostname": "site-cdee92.example.com",
+            "favicon": "https://example.com/synthetic/10dceec9e0",
+            "path": "Synthetic path cb14639f."
+          }
+        }
+      ]
+    },
+    "infobox": {
+      "type": "graph",
+      "results": [
+        {
+          "title": "Example.com",
+          "url": "https://example.com/synthetic/256fbe104a",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description fe2d9d94.",
+          "family_friendly": true,
+          "type": "infobox",
+          "position": 2,
+          "long_desc": "Synthetic long_desc 6be524d7.",
+          "attributes": [
+            [
+              "Synthetic attributes ad9c15c9.",
+              "Synthetic attributes 3c62b94b."
+            ],
+            [
+              "Synthetic attributes 59e5d85f.",
+              "Synthetic attributes ba118bf7."
+            ],
+            [
+              "Synthetic attributes 4b1b8aa3.",
+              "Synthetic attributes 2918703a."
+            ],
+            [
+              "Synthetic attributes 7ff87333.",
+              "Synthetic attributes 85a39ab3."
+            ],
+            [
+              "Synthetic attributes cf55727a.",
+              "Synthetic attributes 73725867."
+            ],
+            [
+              "Synthetic attributes 2f5d50ad.",
+              "Synthetic attributes 0d21bd52."
+            ]
+          ],
+          "profiles": [
+            {
+              "name": "Synthetic name d38b38a2.",
+              "url": "https://example.com/synthetic/256fbe104a",
+              "long_name": "site-b71288.example.com",
+              "img": "https://example.com/synthetic/5ca84e6a43"
+            },
+            {
+              "name": "Synthetic name a8269b65.",
+              "url": "https://example.com/synthetic/11fe57517c",
+              "long_name": "site-e28c70.example.com",
+              "img": "https://example.com/synthetic/a565c5a638"
+            },
+            {
+              "name": "Synthetic name 9ef7e70e.",
+              "url": "https://example.com/synthetic/dc38ad4420",
+              "long_name": "site-fe9774.example.com",
+              "img": "https://example.com/synthetic/47bc0b6b7d"
+            },
+            {
+              "name": "Synthetic name aa91f9d4.",
+              "url": "https://example.com/synthetic/d0d38c0af5",
+              "long_name": "site-fbbfdf.example.com",
+              "img": "https://example.com/synthetic/e621d07d83"
+            }
+          ],
+          "website_url": "https://example.com",
+          "ratings": [],
+          "providers": [
+            {
+              "type": "external",
+              "name": "Synthetic name d38b38a2.",
+              "url": "https://example.com/synthetic/256fbe104a",
+              "img": "https://example.com/synthetic/5ca84e6a43"
+            }
+          ],
+          "images": [
+            {
+              "src": "https://example.com/synthetic/69d564fc58",
+              "alt": "Synthetic alt 25335a0c.",
+              "original": "https://example.com/synthetic/a9c1d5693f",
+              "logo": false
+            },
+            {
+              "src": "https://example.com/synthetic/7b92acc627",
+              "alt": "site-bfabc3.example.com",
+              "original": "https://example.com/synthetic/b125ec12a4",
+              "logo": false
+            },
+            {
+              "src": "https://example.com/synthetic/8d7d154f3a",
+              "alt": "example.com",
+              "original": "https://example.com/synthetic/f8f6128f6e",
+              "logo": false
+            },
+            {
+              "src": "https://example.com/synthetic/c11e0b52e6",
+              "alt": "Synthetic alt 5b2f818e.",
+              "original": "https://example.com/synthetic/cda7c57c3d",
+              "logo": false
+            }
+          ],
+          "subtype": "generic",
+          "found_in_urls": [
+            "https://example.com/",
+            "https://example.com/synthetic/256fbe104a"
+          ]
+        }
+      ]
+    },
+    "mixed": {
+      "type": "mixed",
+      "main": [
+        {
+          "type": "web",
+          "index": 0,
+          "all": false
+        },
+        {
+          "type": "infobox",
+          "index": 0,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 1,
+          "all": false
+        },
+        {
+          "type": "discussions",
+          "all": true
+        },
+        {
+          "type": "faq",
+          "all": true
+        },
+        {
+          "type": "videos",
+          "all": true
+        },
+        {
+          "type": "web",
+          "index": 2,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 3,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 4,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 5,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 6,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 7,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 8,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 9,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 10,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 11,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 12,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 13,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 14,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 15,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 16,
+          "all": false
+        },
+        {
+          "type": "web",
+          "index": 17,
+          "all": false
+        }
+      ],
+      "top": [],
+      "side": []
+    },
+    "videos": {
+      "type": "videos",
+      "results": [
+        {
+          "type": "video_result",
+          "url": "https://example.com/synthetic/6645836cbf",
+          "title": "Synthetic title 167b5eea.",
+          "description": "Synthetic description f80890db.",
+          "fetched_content_timestamp": 1794875331,
+          "video": {},
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-311933.example.com",
+            "hostname": "site-3e723b.example.com",
+            "favicon": "https://example.com/synthetic/e5f8387d16",
+            "path": "Synthetic path be1297e2."
+          }
+        },
+        {
+          "type": "video_result",
+          "url": "https://example.com/synthetic/9d890ff9c5",
+          "title": "Synthetic title 52f81ca0.",
+          "description": "Synthetic description 60fea414.",
+          "age": "September 10, 2020",
+          "page_age": "2020-09-10T15:20:46",
+          "fetched_content_timestamp": 1794836630,
+          "video": {
+            "duration": "07:27",
+            "publisher": "Synthetic publisher 3ff5620b."
+          },
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-f2ddf0.example.com",
+            "hostname": "site-f2ddf0.example.com",
+            "favicon": "https://example.com/synthetic/30df09fa8f",
+            "path": "Synthetic path 5847b1db."
+          },
+          "thumbnail": {
+            "src": "https://example.com/synthetic/751eb744ab",
+            "original": "https://example.com/synthetic/7102cee294"
+          }
+        },
+        {
+          "type": "video_result",
+          "url": "https://example.com/synthetic/62af05cce7",
+          "title": "Synthetic title 5f430b42.",
+          "description": "Synthetic description f80890db.",
+          "fetched_content_timestamp": 1794875331,
+          "video": {},
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-311933.example.com",
+            "hostname": "site-3e723b.example.com",
+            "favicon": "https://example.com/synthetic/e5f8387d16",
+            "path": "Synthetic path 0c2bc6f0."
+          }
+        },
+        {
+          "type": "video_result",
+          "url": "https://example.com/synthetic/f5eaca00ed",
+          "title": "Synthetic title 47a9d23e.",
+          "description": "Synthetic description 3746abf0.",
+          "age": "June 14, 2025",
+          "page_age": "2025-06-14T13:01:17",
+          "fetched_content_timestamp": 1794569357,
+          "video": {},
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-4dc3a7.example.com",
+            "hostname": "site-686077.example.com",
+            "favicon": "https://example.com/synthetic/598ee352f8",
+            "path": "Synthetic path 4fff6968."
+          },
+          "thumbnail": {
+            "src": "https://example.com/synthetic/7183fc92fb",
+            "original": "https://example.com/synthetic/3961b73ec9"
+          }
+        },
+        {
+          "type": "video_result",
+          "url": "https://example.com/synthetic/00be096774",
+          "title": "Synthetic title 75038fdd.",
+          "description": "Synthetic description 7a5cf986.",
+          "age": "July 20, 2023",
+          "page_age": "2023-07-20T13:12:24",
+          "fetched_content_timestamp": 1793606119,
+          "video": {
+            "duration": "26:42",
+            "creator": "Synthetic creator 05d5ad90.",
+            "publisher": "Synthetic publisher fb7accff."
+          },
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-4dc3a7.example.com",
+            "hostname": "site-686077.example.com",
+            "favicon": "https://example.com/synthetic/598ee352f8",
+            "path": "Synthetic path 4fff6968."
+          },
+          "thumbnail": {
+            "src": "https://example.com/synthetic/206f912e6c",
+            "original": "https://example.com/synthetic/c9bc7ec970"
+          }
+        },
+        {
+          "type": "video_result",
+          "url": "https://example.com/synthetic/f5d22c9cb3",
+          "title": "Synthetic title b3e401a6.",
+          "description": "Synthetic description 941e4b7c.",
+          "age": "September 29, 2021",
+          "page_age": "2021-09-29T23:35:03",
+          "fetched_content_timestamp": 1794158062,
+          "video": {
+            "duration": "02:29",
+            "creator": "Synthetic creator 0651e6dc.",
+            "publisher": "Synthetic publisher fb7accff."
+          },
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-4dc3a7.example.com",
+            "hostname": "site-686077.example.com",
+            "favicon": "https://example.com/synthetic/598ee352f8",
+            "path": "Synthetic path 4fff6968."
+          },
+          "thumbnail": {
+            "src": "https://example.com/synthetic/d86c47ba10",
+            "original": "https://example.com/synthetic/b1b644641d"
+          }
+        }
+      ],
+      "mutated_by_goggles": false
+    },
+    "web": {
+      "type": "search",
+      "results": [
+        {
+          "title": "Synthetic title 162b8154.",
+          "url": "https://example.com/",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description d2429afa.",
+          "page_age": "2026-11-16T14:41:23",
+          "fetched_content_timestamp": 1794876922,
+          "profile": {
+            "name": "Synthetic name 162b8154.",
+            "url": "https://example.com/",
+            "long_name": "example.com",
+            "img": "https://example.com/synthetic/5fdd610603"
+          },
+          "language": "en",
+          "family_friendly": true,
+          "type": "search_result",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "example.com",
+            "hostname": "example.com",
+            "favicon": "https://example.com/synthetic/5fdd610603",
+            "path": ""
+          },
+          "age": "11 hours ago",
+          "extra_snippets": [
+            "Synthetic extra_snippets 53fafb96."
+          ]
+        },
+        {
+          "title": "Synthetic title 8d7e39b4.",
+          "url": "https://example.com/synthetic/7630c14a6e",
+          "is_source_local": false,
+          "is_source_both": false,
+          "description": "Synthetic description 970a413d.",
+          "page_age": "2026-09-27T00:00:00",
+          "fetched_content_timestamp": 1794841303,
+          "profile": {
+            "name": "Synthetic name 6cc2f04c.",
+            "url": "https://example.com/synthetic/7630c14a6e",
+            "long_name": "site-60fb8a.example.com",
+            "img": "https://example.com/synthetic/3a659f50ce"
+          },
+          "language": "en",
+          "family_friendly": true,
+          "type": "search_result",
+          "subtype": "generic",
+          "is_live": false,
+          "meta_url": {
+            "scheme": "https",
+            "netloc": "site-60fb8a.example.com",
+            "hostname": "site-60ec59.example.com",
+            "favicon": "https://example.com/synthetic/3a659f50ce",
+            "path": "Synthetic path 1342f555."
+          },
+          "age": "September 27, 2026",
+          "extra_snippets": [
+            "Synthetic extra_snippets 57085063.",
+            "Synthetic extra_snippets e337f1c6."
+          ]
+        }
+      ],
+      "family_friendly": true
+    }
+  }
+}

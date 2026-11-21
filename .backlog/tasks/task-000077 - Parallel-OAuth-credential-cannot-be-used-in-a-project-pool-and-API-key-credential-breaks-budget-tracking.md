@@ -3,10 +3,11 @@ id: TASK-000077
 title: >-
   Parallel: OAuth credential cannot be used in a project pool, and API-key
   credential breaks budget tracking
-status: To Do
-assignee: []
+status: Planning
+assignee:
+  - Abhishek
 created_date: '2026-11-15T01:51:00Z'
-updated_date: '2026-11-15T01:58:00Z'
+updated_date: '2026-11-19T09:41:00Z'
 labels: []
 dependencies: []
 references:
@@ -15,7 +16,7 @@ references:
   - src/polyweb/services/credentials.py
 priority: high
 type: bug
-ordinal: 66000
+ordinal: 2000
 ---
 
 ## Description
@@ -50,3 +51,13 @@ So a project today has to choose between a working Parallel provider (API key, n
 - [ ] #9 Parallel API-key calls record their actual cost, and those costs are summed into the totals shown in usage and budget views (not only a default per-call value)
 - [ ] #10 The remaining budget/balance reported by the Parallel API is fetched and shown in the dashboard (key balances/budget views) for the credential in use
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-11-19, live capture against the real Parallel platform (device flow approved by the owner, then refreshed and revoked; no secrets stored):
+- The OAuth grant is balance-only. Its access token (RS256 JWT, aud account-service-public, scope balance:read, 600 s) reads GET api.parallel.ai/account/service/v1/balance, but POST /v1/search answers 401 {"code": 16, "message": "Invalid JWT credential"} whether the token is sent as x-api-key or as a Bearer token. Search and extract need a Parallel API key.
+- This explains the second report: Polyweb's ParallelOAuthAdapter (src/polyweb/services/parallel_oauth_adapter.py, chosen in execution.py when auth_mode is oauth) sends the access token as the product API key, so an OAuth-only pool can never run search or fetch. AC #2 as written cannot be met against the real API; the owner confirmed the model is OAuth token for balance read, API key for calls.
+- Balance body: credit_balance_cents and pending_debit_balance_cents are JSON numbers with a fraction (478.0), which Polyweb's validator already accepts.
+- The provider mock (PR #79) now refuses the OAuth token on /v1/search and /v1/extract with the recorded 401, so the dev stack reproduces this.
+<!-- SECTION:NOTES:END -->

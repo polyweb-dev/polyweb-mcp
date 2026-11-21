@@ -52,7 +52,7 @@ from polyweb.infrastructure.observability import (
     use_observability,
 )
 from polyweb.infrastructure.observability_asgi import flush_traces
-from polyweb.infrastructure.secrets import AsyncSecretStore, ProviderName
+from polyweb.infrastructure.secrets import AsyncSecretStore
 from polyweb.infrastructure.trace_payloads import (
     _annotate_root,
     _annotate_root_error,
@@ -136,10 +136,11 @@ class _ServerState(TypedDict):
 
 
 async def _start_limits_generation(state: _ServerState, routes: Sequence[ProviderAdapter]) -> None:
-    """Seed the limit catalog and start ONE schedule task for this generation.
+    """Seed the limit catalog and build this generation's limit and sync services.
 
-    A server without a repository has no limit store, so no task starts. The
-    task is per generation, never per MCP session.
+    No polling task starts; the services are per generation, never per MCP
+    session. A server without a repository has no limit store, so nothing is
+    built.
     """
 
     repository = state["repository"]
@@ -147,9 +148,6 @@ async def _start_limits_generation(state: _ServerState, routes: Sequence[Provide
         return
     limits = ProviderLimitsService(repository.limits)
     await limits.initialize()
-    keenable = next((route for route in routes if route.name == ProviderName.KEENABLE.value), None)
-    if keenable is not None:
-        limits.apply_keenable_auth_mode(keenable.limit_auth_mode)
     stop = asyncio.Event()
     sync = LimitSyncService(repository.limits, limits, lambda: state["routes"] or [])
     state["limits"] = limits
@@ -161,15 +159,17 @@ async def _start_limits_generation(state: _ServerState, routes: Sequence[Provide
 async def _start_injected_limits(state: _ServerState, routes: Sequence[ProviderAdapter]) -> None:
     """Start the limit service of an injected composition, mirroring REST.
 
-    ``create_app`` with injected adapters and a repository seeds the catalog,
-    projects the Tavily and Keenable rails, and starts one schedule task in its
-    lifespan; an injected MCP server does the same on its first session enter.
-    Without a repository there is no limit store, so nothing starts.
+    ``create_app`` with injected adapters and a repository seeds the catalog
+    and builds the limit and on-demand sync services in its lifespan, with no
+    polling task; an injected MCP server does the same on its first session
+    enter and hands the limit service to its execution service. Without a
+    repository there is no limit store, so nothing starts.
     """
 
-    # Same order and error handling as the REST lifespan and the owned MCP
-    # generation: restore local quota settings, then start the limit service,
-    # then project the Tavily rail best effort.
+    # Same order as the REST lifespan and the owned MCP generation: start the
+    # limit service, then hand it to the execution service. No quota state is
+    # restored here; the execution service restores saved quota settings and
+    # recorded usage once per adapter it builds (ExecutionService._lease_adapter).
     await _start_limits_generation(state, routes)
     # Every execution attempt takes the rails, so an eager (injected) or a
     # freshly built (owned) execution service adopts the started rails.
@@ -198,7 +198,11 @@ def _take_limit_cells(
 
 
 async def _stop_limits_task(stop: asyncio.Event | None, task: "asyncio.Task[None] | None") -> None:
-    """Signal, cancel, and await one schedule task."""
+    """Signal the limit stop event and await a leftover limit task, if any.
+
+    No limit schedule task starts any more (see :func:`_start_limits_generation`),
+    so ``task`` is normally ``None``.
+    """
 
     if stop is not None:
         stop.set()
@@ -209,7 +213,7 @@ async def _stop_limits_task(stop: asyncio.Event | None, task: "asyncio.Task[None
 
 
 async def _stop_limits_generation(state: _ServerState) -> None:
-    """Stop and await the schedule task before the repository and adapters close."""
+    """Stop this generation's limit services before the repository and adapters close."""
 
     await _stop_limits_task(state["limits_stop"], state["limits_task"])
     _take_limit_cells(state)
@@ -348,7 +352,7 @@ async def _build_generation(
             get_settings(), database=_trace_database(state["repository"], database)
         )
     except BaseException:
-        # A failed enter never increments: stop any schedule task, then close
+        # A failed enter never increments: stop the limit services, then close
         # the freshly built client and adapters so a failed open cannot leak a
         # partial generation.
         execution = state["execution"]
@@ -709,8 +713,8 @@ def create_server(
     # sequential sessions — and sessions entering during a still-running
     # teardown — never inherit closed or stale resources.
     # The encrypted runtime store is built eagerly, so a store-backed execution
-    # service can also be eager: session-enter only starts the limit schedule
-    # and builds the trace runtime.
+    # service can also be eager: session-enter only builds the limit services
+    # (no polling task) and the trace runtime.
     encrypted_store: AsyncSecretStore | None = (
         _encrypted_store(repository) if isinstance(repository, SQLiteRepository) else None
     )
@@ -770,7 +774,9 @@ def create_server(
     # builds the generation and the last exit tears it down. An injected
     # composition refcounts its limit service the same way: like the REST app
     # with injected adapters and a repository, the first enter seeds the limit
-    # catalog and starts one schedule task, and the last exit stops it.
+    # catalog and builds the limit and on-demand sync services, with no polling
+    # task, and the last exit stops them. Quota state is restored per adapter
+    # when the execution service builds it (ExecutionService._lease_adapter).
     lock = asyncio.Lock()
     refcount = 0
 
@@ -824,8 +830,8 @@ def create_server(
                     await _detach_generation(state, owns_repository=owns_repository)
             else:
                 if last_exit:
-                    # Mirrors the REST shutdown: the schedule task stops and is
-                    # awaited, the caches clear, then the adapters close.
+                    # Mirrors the REST shutdown: the limit services stop, the
+                    # caches clear, then the adapters close.
                     await _stop_limits_task(limit_stop, limit_task)
                     if retiring_execution is not None:
                         await retiring_execution.aclose()

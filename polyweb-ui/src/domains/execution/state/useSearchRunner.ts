@@ -59,14 +59,15 @@ export function useSearchRunner({ projectId, showToast, catalogNameOf }: SearchR
       dispatch(searchStarted());
       const startedAt = performance.now();
       try {
-        const wire = await apiService.search(
+        const { body, traceId } = await apiService.search(
           searchBody(projectId, request),
           withTimeout(controller.signal, request.timeoutMs),
         );
         if (controller.signal.aborted) return null;
-        const response = mapSearchResponse(wire, {
+        const response = mapSearchResponse(body, {
           wallClockMs: Math.round(performance.now() - startedAt),
           catalogNameOf,
+          traceId,
         });
         dispatch(searchSucceeded(response));
         return response;

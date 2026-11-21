@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field, computed_field, model_validator
 
 from polyweb.models import provider_limits as ledger
 from polyweb.models.budget_period import BudgetPeriod
@@ -60,6 +60,42 @@ class USDContract(ContractModel):
         return project_usd(value)
 
 
+_VENDOR_CONFIDENCE = frozenset({ledger.Confidence.AUTHORITATIVE, ledger.Confidence.OBSERVED})
+
+
+_MANUAL_RECORD_SOURCE = "manual_anchor"
+
+
+class _VendorConfirmed(USDContract):
+    """Mark a balance as vendor-confirmed or estimated (TASK-000070).
+
+    The mark reads the confidence, not the source: a local estimate that
+    lowered a vendor balance keeps the vendor source but an estimated
+    confidence. An operator manual record is an estimate by construction:
+    its source (or the pool's manual-record flag) makes the mark false,
+    whatever confidence it carries. The mark is computed on every read, and
+    an input value is ignored.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_vendor_confirmed(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "vendor_confirmed" in value:
+            return {key: item for key, item in value.items() if key != "vendor_confirmed"}
+        return value
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def vendor_confirmed(self) -> bool:
+        """Whether a vendor stated this balance, rather than an estimate or an operator."""
+
+        return (
+            getattr(self, "confidence", None) in _VENDOR_CONFIDENCE
+            and getattr(self, "source", None) != _MANUAL_RECORD_SOURCE
+            and not getattr(self, "manual_anchor", False)
+        )
+
+
 class USDPriceProfile(USDContract):
     native_usd_per_unit: ledger.OptionalExactDecimal = Field(default=None, ge=0)
     cost_basis: Literal["priced_native_use"] = "priced_native_use"
@@ -68,7 +104,7 @@ class USDPriceProfile(USDContract):
     estimated: bool = False
 
 
-class USDTierBalance(USDContract):
+class USDTierBalance(_VendorConfirmed):
     pool_id: str
     tier: Literal["free", "paid", "unknown"]
     native_unit: UnitKind
@@ -85,7 +121,7 @@ class USDTierBalance(USDContract):
     label: str | None = None
 
 
-class USDNativePool(USDContract):
+class USDNativePool(_VendorConfirmed):
     pool_id: str
     provider: str
     auth_mode: ledger.AuthMode
@@ -189,7 +225,7 @@ class USDGrantsSummary(USDContract):
     fetch_reserved_usd: ledger.ExactDecimal = Decimal("0")
 
 
-class USDLimitDetail(USDContract):
+class USDLimitDetail(_VendorConfirmed):
     plan_name: str | None = None
     native_unit: UnitKind | None = None
     native_balance: ledger.OptionalExactDecimal = None

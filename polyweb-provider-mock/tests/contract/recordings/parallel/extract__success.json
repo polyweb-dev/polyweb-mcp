@@ -1,0 +1,67 @@
+{
+  "method": "POST",
+  "url": "https://api.parallel.ai/v1/extract",
+  "request_headers": {
+    "host": "api.parallel.ai",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "python-httpx/0.28.1",
+    "x-api-key": "<REDACTED>",
+    "cookie": "<REDACTED>",
+    "content-length": "75",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "urls": [
+      "https://example.com/"
+    ],
+    "advanced_settings": {
+      "full_content": true
+    }
+  },
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:27:02 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "keep-alive",
+    "server": "cloudflare",
+    "x-request-id": "aaaa0aa0aaa0000000000000aaaa000a",
+    "via": "1.1 google",
+    "cf-cache-status": "DYNAMIC",
+    "content-encoding": "gzip",
+    "cf-ray": "a0aaa00a0a00000a-AAA"
+  },
+  "response_body": {
+    "extract_id": "extract_aaaa0aa0aaa0000000000000aaaa000a",
+    "results": [
+      {
+        "url": "https://example.com/",
+        "title": "Synthetic title 162b8154.",
+        "publish_date": null,
+        "excerpts": [
+          "Synthetic excerpts 9405b1d7."
+        ],
+        "full_content": "Synthetic full_content 9405b1d7.",
+        "acquired_at": "2026-11-17T00:00:00Z"
+      }
+    ],
+    "errors": [],
+    "warnings": [
+      {
+        "type": "warning",
+        "message": "Neither objective nor search_queries were provided, provide at least one to increase the relevance of excerpts.",
+        "detail": null
+      }
+    ],
+    "usage": [
+      {
+        "name": "sku_extract_excerpts",
+        "count": 1
+      }
+    ],
+    "metadata": null,
+    "session_id": "session_aaaa0aa0aaa0000000000000aaaa000a"
+  }
+}

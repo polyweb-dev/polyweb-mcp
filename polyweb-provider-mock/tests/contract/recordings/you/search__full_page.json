@@ -1,0 +1,70 @@
+{
+  "method": "POST",
+  "url": "https://ydc-index.io/v1/search",
+  "request_headers": {
+    "host": "ydc-index.io",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "polyweb-provider-mock-research/1.0",
+    "x-api-key": "<REDACTED>",
+    "content-length": "198",
+    "content-type": "application/json"
+  },
+  "request_body": {
+    "query": "Example Domain",
+    "count": 1,
+    "include_domains": [
+      "example.com"
+    ],
+    "extraction": {
+      "extraction_mode": "full_page",
+      "extraction_source": "cache",
+      "full_page": {
+        "extraction_formats": [
+          "markdown",
+          "html"
+        ]
+      }
+    }
+  },
+  "status": 200,
+  "response_headers": {
+    "date": "Tue, 17 Nov 2026 01:28:31 GMT",
+    "content-type": "application/json",
+    "content-length": "3808",
+    "connection": "keep-alive",
+    "server": "Server",
+    "x-amzn-requestid": "aaa00000-aa00-00aa-aaa0-a0000aaa0a00",
+    "x-amzn-remapped-content-length": "3808",
+    "x-amz-apigw-id": "A0aA0A0AaAAAaAA=",
+    "x-amzn-remapped-server": "uvicorn",
+    "x-amzn-trace-id": "Root=0-0aaaaaaa-00a00a000aaaa0aa00aaa00a",
+    "x-amzn-remapped-date": "Tue, 17 Nov 2026 01:28:30 GMT"
+  },
+  "response_body": {
+    "results": {
+      "web": [
+        {
+          "url": "https://example.com/",
+          "title": "Synthetic title 162b8154.",
+          "description": "Synthetic description d2429afa.",
+          "page_age": "2026-11-16T14:41:23",
+          "favicon_url": "https://example.com/synthetic/4a14425a0a",
+          "snippets": [
+            "Synthetic snippets 53fafb96."
+          ],
+          "contents": {
+            "markdown": "Synthetic markdown aa8c4320.",
+            "html": "Synthetic html 944af265."
+          }
+        }
+      ]
+    },
+    "metadata": {
+      "query": "Example Domain",
+      "search_uuid": "a0a00000-0a00-0a0a-a000-0aa0000aa000",
+      "latency": 0.25978321399816195
+    }
+  }
+}

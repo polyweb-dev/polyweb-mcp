@@ -38,6 +38,7 @@ a global resolver or ambient environment fallback.
 import asyncio
 import json
 import traceback
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -48,7 +49,14 @@ from pydantic import SecretStr
 from polyweb.adapters.base import ProviderAdapter
 from polyweb.adapters.parallel import ParallelAdapter
 from polyweb.infrastructure.resilience import ProviderOperationError, ResilientRunner
-from polyweb.models.contracts import FetchRequest, SearchRequest, UsageOperation
+from polyweb.models.contracts import (
+    FetchRequest,
+    QuotaSnapshot,
+    SearchRequest,
+    UnitKind,
+    UsageEvent,
+    UsageOperation,
+)
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "parallel"
 
@@ -999,6 +1007,75 @@ async def test_quota_is_unsupported() -> None:
 
         assert adapter.capabilities.quota is False
         assert await adapter.quota() is None
+    finally:
+        await caller.aclose()
+
+
+class _LedgerReads:
+    """The two hydration reads of a repository, served from memory."""
+
+    def __init__(self, events: list[UsageEvent], latest: QuotaSnapshot | None = None) -> None:
+        self.events = events
+        self.latest = latest
+
+    async def latest_quota(self, provider: str) -> QuotaSnapshot | None:
+        assert provider == "parallel"
+        return self.latest
+
+    async def list_provider_usage(self, *, provider: str) -> list[UsageEvent]:
+        assert provider == "parallel"
+        return self.events
+
+
+def _spend(amount: str, *, at: datetime | None = None) -> UsageEvent:
+    return UsageEvent(
+        provider="parallel",
+        operation=UsageOperation.SEARCH,
+        units=Decimal(amount),
+        unit_kind=UnitKind.USD,
+        observed_at=at or datetime.now(UTC),
+    )
+
+
+async def test_free_seed_sets_the_local_ledger_and_none_clears_it() -> None:
+    """AC #7: a seed starts the local USD ledger; no seed keeps quota unknown."""
+    caller = make_client()
+    try:
+        adapter = make_adapter(caller)
+        adapter.set_free_seed(Decimal("5"))
+        snapshot = await adapter.quota()
+        assert snapshot is not None
+        assert (snapshot.limit, snapshot.remaining) == (Decimal("5"), Decimal("5"))
+
+        adapter.set_free_seed(None)
+        assert await adapter.quota() is None
+    finally:
+        await caller.aclose()
+
+
+async def test_hydrate_restores_current_month_spend_once() -> None:
+    """AC #7: hydration counts this month's spend once and ignores older months."""
+    caller = make_client()
+    try:
+        adapter = make_adapter(caller)
+        adapter.set_free_seed(Decimal("5"))
+        reads = _LedgerReads(
+            [_spend("1.25"), _spend("0.25"), _spend("3", at=datetime(2020, 1, 5, tzinfo=UTC))]
+        )
+        snapshot = await adapter.hydrate_quota(reads)
+        assert snapshot is not None
+        assert snapshot.remaining == Decimal("3.5")
+        assert await adapter.hydrate_quota(reads) is None
+    finally:
+        await caller.aclose()
+
+
+async def test_hydrate_without_seed_reads_nothing() -> None:
+    """AC #7: an unseeded adapter has no local ledger to restore."""
+    caller = make_client()
+    try:
+        adapter = make_adapter(caller)
+        assert await adapter.hydrate_quota(_LedgerReads([_spend("1")])) is None
     finally:
         await caller.aclose()
 
