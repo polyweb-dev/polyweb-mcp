@@ -107,12 +107,14 @@ describe("ProjectProvidersPage private keys", () => {
     expect(document.body.textContent).not.toContain("secret-value")
   })
 
-  it("offers OAuth only for Parallel and then sends no secret", async () => {
+  it("offers OAuth for Parallel and then sends no secret", async () => {
     api.createVaultKey.mockResolvedValue({ ...key, provider_type: "parallel", auth_mode: "oauth" })
     api.startVaultOAuth.mockResolvedValue({ user_code: "ABCD", verification_uri: "https://example.com", interval: 0.01, expires_in: 60 })
     api.pollVaultOAuth.mockResolvedValue({ status: "connected" })
     open("parallel")
     const dialog = await screen.findByRole("dialog", { name: "Add Parallel key" })
+    await userEvent.click(within(dialog).getByRole("combobox", { name: "Authentication" }))
+    await userEvent.click(await screen.findByRole("option", { name: "OAuth" }))
     expect(within(dialog).queryByLabelText("API key")).toBeNull()
     await userEvent.click(within(dialog).getByRole("button", { name: "Connect" }))
     expect(await screen.findByRole("dialog", { name: "Add Parallel capacity" })).toBeInTheDocument()

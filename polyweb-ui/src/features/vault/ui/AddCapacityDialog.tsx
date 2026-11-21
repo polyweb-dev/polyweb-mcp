@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 import type { FormEvent } from "react"
-import { authModeNeedsSecret, credentialAuthModes, providerIdentity, providerTypeName, supportsKeyless, supportsOAuth } from "@/domains/providers"
+import { authModeNeedsSecret, credentialAuthModes, providerIdentity, providerTypeName } from "@/domains/providers"
 import { createVaultKey } from "@/domains/vault"
 import type { KeyPool, VaultKey, VaultProject } from "@/domains/vault"
 import { Button } from "@/shared/ui/button"
