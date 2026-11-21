@@ -107,3 +107,15 @@ Bundled skills and third-party materials retain their own licenses.
 See [Licensing scope](LICENSING.md) for the exceptions.
 Distribution details appear in [Third-party notices](THIRD_PARTY_NOTICES.md).
 Project credits appear in [Contributors](CONTRIBUTORS.md).
+# Code complexity analysis
+
+The development environment includes [crapper](https://github.com/unclebob/crapper),
+which can analyze the Python backend and all three UI projects from the repository root:
+
+```bash
+uv run crapper --no-coverage src/polyweb polyweb-ui/src polyweb-landing/src polyweb-docs/src
+```
+
+This reports complexity only; CRAP scores require coverage. Crapper writes its latest
+snapshot to `.metrics/crap.edn`. See its documentation for coverage options; its default
+coverage mode runs tests and may install missing tools.

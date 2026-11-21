@@ -1,0 +1,25 @@
+# coverage.py settings for the backend CI suites. scripts/ci/backend_coverage.py
+# selects this file and the per-suite data file through COVERAGE_RCFILE and
+# COVERAGE_FILE; see scripts/ci/README.md.
+
+[tool.coverage.run]
+branch = true
+source_pkgs = ["polyweb"]
+# Store repository-relative paths so data from different CI workers, and from
+# developer checkouts, combine and map onto src/polyweb.
+relative_files = true
+# xdist workers, CLI subprocesses, and test servers each write their own file.
+parallel = true
+patch = ["subprocess", "_exit"]
+sigterm = true
+# Child processes that never import polyweb must not add warnings to the
+# stderr that tests inspect.
+disable_warnings = ["no-data-collected", "module-not-imported", "module-not-measured"]
+
+[tool.coverage.paths]
+# Installed or absolute paths fold back onto the source tree when combined.
+polyweb = ["src/polyweb", "*/src/polyweb", "*/site-packages/polyweb"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
