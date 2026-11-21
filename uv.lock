@@ -1216,10 +1216,12 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+crapper = [
+    { name = "crapper" },
+]
 dev = [
     { name = "behave" },
     { name = "coverage" },
-    { name = "crapper" },
     { name = "mypy" },
     { name = "pyinstrument" },
     { name = "pytest" },
@@ -1250,10 +1252,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+crapper = [{ name = "crapper", git = "https://github.com/unclebob/crapper.git?rev=c757ec79a6c15dc815238bbd9c2f4601eb54d3cc" }]
 dev = [
     { name = "behave", specifier = ">=1.3.3" },
     { name = "coverage", specifier = ">=7.15.4,<8" },
-    { name = "crapper", git = "https://github.com/unclebob/crapper.git?rev=c757ec79a6c15dc815238bbd9c2f4601eb54d3cc" },
     { name = "mypy", specifier = ">=1.10,<2.0" },
     { name = "pyinstrument", specifier = ">=5.1.3,<6" },
     { name = "pytest", specifier = ">=8.2,<9.0" },

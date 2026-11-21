@@ -42,7 +42,7 @@ To combine suites, extract the unit and integration ZIPs into separate folders a
 ```bash
 uv run --no-sync python scripts/ci/backend_coverage.py combine combined \
   .gitea-packages/unit .gitea-packages/integration
-uv run --no-sync crapper --use-existing-coverage src/polyweb
+uv run --group crapper crapper --use-existing-coverage src/polyweb
 ```
 
 `combine` takes `coverage.sqlite` files or folders that contain them. It writes the same
