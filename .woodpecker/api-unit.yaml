@@ -27,7 +27,7 @@ steps:
           test -f .env || cp .env.example .env
           uv sync --frozen
           mkdir -p test_reports
-          export COVERAGE_FILE=test_reports/coverage.data
+          export COVERAGE_FILE=test_reports/coverage.json
           uv run --with pytest-cov pytest tests/unit -n auto -q --cov=src/polyweb --cov-report=
         '
 

@@ -33,7 +33,7 @@ steps:
           test -f .env || cp .env.example .env
           uv sync --frozen
           mkdir -p test_reports
-          export COVERAGE_FILE=test_reports/coverage.data
+          export COVERAGE_FILE=test_reports/coverage.json
           timeout -s ABRT -k 30 180 uv run polyweb-db upgrade || { echo "polyweb-db upgrade failed or hit its 180 s bound (exit status $?)"; exit 1; }
           timeout -s ABRT -k 60 1200 uv run --with pytest-cov pytest tests/integration -n auto -q --cov=src/polyweb --cov-report= || { echo "pytest failed or hit its 1200 s bound (exit status $?)"; exit 1; }
         '
