@@ -3,8 +3,14 @@ import type { ProjectUsageTotal } from "@/domains/usage"
 import type { ProjectOrder } from "@/domains/routing"
 import { usageFigures } from "./usageFigures"
 
+/** A ledger total as a server before priced usage decodes it. */
 function total(unitKind: ProjectUsageTotal["unitKind"], totalUnits = 1): ProjectUsageTotal {
-  return { provider: "exa", operation: "search", eventCount: 1, unitKind, totalUnits }
+  return {
+    provider: "exa", operation: "search", eventCount: 1, unitKind, totalUnits,
+    costUsd: unitKind === "USD" ? totalUnits : null,
+    costEstimated: false,
+    unpricedCount: unitKind === "USD" || unitKind === "FREE" ? 0 : 1,
+  }
 }
 
 const order: ProjectOrder = {
@@ -44,5 +50,19 @@ describe("usageFigures", () => {
     expect(usageFigures([keyless, unknown], order)).toMatchObject({ free: false, costIncomplete: true })
     expect(usageFigures([{ ...zero, operation: "fetch" }], order)).toMatchObject({ free: false, costIncomplete: true })
     expect(usageFigures([total("USD", 0)])).toMatchObject({ free: true, costIncomplete: false })
+  })
+
+  it("adds estimated request costs to reported dollars and marks the sum as estimated", () => {
+    const brave = { ...total("REQUEST", 3), provider: "brave", costUsd: 0.015, costEstimated: true, unpricedCount: 0 }
+    const figures = usageFigures([total("USD", 0.035), brave])
+
+    expect(figures).toMatchObject({ estimated: true, costIncomplete: false, free: false })
+    expect(figures.usd).toBeCloseTo(0.05, 6)
+    expect(usageFigures([total("USD", 0.035)])).toMatchObject({ estimated: false })
+  })
+
+  it("sums cents without binary addition noise", () => {
+    const costs = [0.005, 0.007, 0.005, 0.008, 0.005].map((cost) => total("USD", cost))
+    expect(usageFigures(costs).usd).toBe(0.03)
   })
 })

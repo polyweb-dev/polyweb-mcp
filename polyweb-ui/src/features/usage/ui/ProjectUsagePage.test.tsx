@@ -147,6 +147,40 @@ describe("ProjectUsagePage", () => {
     expect(within(totalRow).getByText("$0.035")).toBeInTheDocument()
   })
 
+  it("shows estimated costs beside a legacy server's reported dollars", async () => {
+    installFetchStub(() =>
+      ok({
+        project_id: PROJECT_ALPHA_ID,
+        totals: [
+          { provider: "exa", operation: "search", total_units: "0.035", event_count: 6, unit_kind: "USD" },
+          {
+            provider: "brave", operation: "search", total_units: "9", event_count: 9, unit_kind: "REQUEST",
+            cost_usd: "0.045", cost_estimated: true, unpriced_event_count: 0,
+          },
+        ],
+        recent_usage: [],
+        generated_at: "x",
+      })
+    )
+    render(page(PROJECT_ALPHA_ID))
+
+    const totals = await screen.findByRole("table", { name: "Usage totals" })
+    expect(within(totals).getByRole("columnheader", { name: "Cost" })).toHaveAttribute(
+      "title",
+      "Provider charges in US dollars. ~ marks an estimate from the catalog price; totals include known costs only"
+    )
+    const exa = within(totals).getByText("Exa").closest("tr")!
+    expect(within(exa).getByText("$0.035")).not.toHaveAttribute("title")
+    const brave = within(totals).getByText("Brave Search").closest("tr")!
+    const braveCost = within(brave).getByRole("cell", { name: "Estimated $0.045" })
+    expect(braveCost).toHaveAttribute("title", "Estimated from the catalog price")
+    expect(braveCost).toHaveTextContent("~$0.045")
+    expect(within(braveCost).getByText("~")).toHaveAttribute("aria-hidden", "true")
+    expect(within(braveCost).getByText("Estimated")).toHaveClass("sr-only")
+    const totalRow = within(totals).getByText("Total").closest("tr")!
+    expect(within(totalRow).getByRole("cell", { name: "Estimated $0.08" })).toHaveTextContent("~$0.08")
+  })
+
   it("shows the empty state in the totals table", async () => {
     installFetchStub(() =>
       ok({ project_id: PROJECT_ALPHA_ID, totals: [], recent_usage: [], generated_at: "x" })

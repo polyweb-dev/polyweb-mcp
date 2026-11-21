@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import { installFetchStub, ok } from "@/test/fetchMock"
 import { ProjectUsageSummary } from "./ProjectUsageSummary"
 
@@ -32,5 +32,22 @@ describe("ProjectUsageSummary", () => {
     const card = (await screen.findByText(label)).closest("div")!
     expect(card).toHaveTextContent(amount)
     expect(card).not.toHaveTextContent("Tavily credit")
+  })
+
+  it("marks a cost estimated from the catalog price with a tilde", async () => {
+    installFetchStub(() => ok({
+      project_id: "p",
+      totals: [{
+        provider: "tavily", operation: "search", total_units: "2", event_count: 2, unit_kind: "CREDIT",
+        cost_usd: "0.016", cost_estimated: true, unpriced_event_count: 0,
+      }],
+      recent_usage: [], generated_at: "2026-11-08T12:00:00Z",
+    }))
+    render(<ProjectUsageSummary accountId="a" projectId="p" />)
+
+    const card = (await screen.findByText("Provider cost")).closest("div")!
+    expect(card).toHaveTextContent("~$0.016")
+    expect(within(card).getByText("~")).toHaveAttribute("aria-hidden", "true")
+    expect(within(card).getByText("Estimated")).toHaveClass("sr-only")
   })
 })

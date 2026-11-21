@@ -460,6 +460,104 @@ async def test_numeric_exa_usage_persists_with_healthy_health(
     )
 
 
+async def test_response_telemetry_stores_catalog_cost_per_auth_rail(
+    repository: SQLiteRepository,
+) -> None:
+    observed_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+    def response(provider: str, units: str, kind: UnitKind) -> SearchResponse:
+        usage = UsageEvent(
+            provider=provider,
+            operation=UsageOperation.SEARCH,
+            units=Decimal(units),
+            unit_kind=kind,
+            observed_at=observed_at,
+        )
+        return SearchResponse(query="cost", results=[], provider=provider, usage=usage)
+
+    attribution = await seed_execution_project(repository)
+    await monitoring.record_response_telemetry(
+        repository, response("brave", "1", UnitKind.REQUEST), attribution=attribution
+    )
+    await monitoring.record_response_telemetry(
+        repository, response("tavily", "2", UnitKind.CREDIT), attribution=attribution
+    )
+    await monitoring.record_response_telemetry(
+        repository,
+        response("tavily", "2", UnitKind.CREDIT),
+        attribution=attribution,
+        auth_mode=AuthMode.KEYLESS,
+    )
+    await monitoring.record_response_telemetry(
+        repository,
+        SearchResponse(
+            query="gap", results=[], provider="you", usage_gap={"units": Decimal("0.005")}
+        ),
+        attribution=attribution,
+    )
+
+    totals = {total.provider: total for total in await repository.installation_usage_totals()}
+    assert {
+        provider: (
+            total.event_count,
+            total.cost_usd,
+            total.cost_estimated,
+            total.unpriced_event_count,
+        )
+        for provider, total in totals.items()
+    } == {
+        "brave": (1, Decimal("0.005"), True, 0),
+        "tavily": (2, Decimal("0.016"), True, 1),
+        "you": (1, Decimal("0.005"), True, 0),
+    }
+    assert monitoring._contract_totals([totals["tavily"]])[0].model_dump(mode="json") == {
+        "provider": "tavily",
+        "operation": "search",
+        "total_units": "4",
+        "event_count": 2,
+        "unit_kind": "CREDIT",
+        "cost_usd": "0.016",
+        "cost_estimated": True,
+        "unpriced_event_count": 1,
+    }
+
+
+async def test_unmetered_catalog_success_records_one_estimated_catalog_event(
+    repository: SQLiteRepository,
+) -> None:
+    attribution = await seed_execution_project(repository)
+    request = SearchRequest(query="unmetered", limit=10)
+
+    await monitoring.record_response_telemetry(
+        repository,
+        SearchResponse(query="unmetered", results=[], provider="firecrawl"),
+        attribution=attribution,
+        request=request,
+    )
+    await monitoring.record_response_telemetry(
+        repository,
+        SearchResponse(query="unmetered", results=[], provider="non-catalog"),
+        attribution=attribution,
+        request=request,
+    )
+
+    events = await all_usage_events(repository)
+    assert [
+        (event.provider, event.operation, event.units, event.unit_kind, event.display_unit)
+        for event in events
+    ] == [("firecrawl", UsageOperation.SEARCH, Decimal("2"), UnitKind.CREDIT, "credits")]
+    assert events[0].metadata == {
+        "estimated": True,
+        "metering_gap": True,
+        "catalog_fallback": True,
+    }
+    totals = {total.provider: total for total in await repository.installation_usage_totals()}
+    assert {
+        provider: (total.event_count, total.cost_usd, total.cost_estimated)
+        for provider, total in totals.items()
+    } == {"firecrawl": (1, Decimal("0.0076"), True)}
+
+
 async def test_rest_fetch_and_mcp_search_fetch_persist_identical_usage(
     repository: SQLiteRepository,
     auth_secret: str,
@@ -1441,7 +1539,13 @@ async def test_dashboard_endpoint_omits_sensitive_projection_fields_and_values(
             "operation",
             "total_units",
             "event_count",
+            "cost_usd",
+            "cost_estimated",
+            "unpriced_event_count",
         }
+        assert body["usage_totals"][0]["cost_usd"] is None
+        assert body["usage_totals"][0]["cost_estimated"] is False
+        assert body["usage_totals"][0]["unpriced_event_count"] == 1
         assert len(body["recent_usage"]) == 1
         assert len(body["latest_quota"]) == 1
         assert set(body["latest_quota"][0]) == {

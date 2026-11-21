@@ -193,6 +193,26 @@ class UnitKind(StrEnum):
     FREE = "FREE"
 
 
+#: Bookkeeping provider name of the one usage row a fan-out search records.
+AGGREGATED_PROVIDER = "aggregated"
+
+
+class CostSource(StrEnum):
+    """Whether a usage event's USD cost was reported by the vendor or estimated."""
+
+    REPORTED = "reported"
+    ESTIMATED = "estimated"
+
+
+class UsageCost(ContractModel):
+    """USD cost of one usage event and where that figure came from."""
+
+    model_config = ConfigDict(frozen=True)
+
+    usd: Decimal = Field(ge=0)
+    source: CostSource
+
+
 class UsageEvent(ContractModel):
     provider: str
     operation: UsageOperation

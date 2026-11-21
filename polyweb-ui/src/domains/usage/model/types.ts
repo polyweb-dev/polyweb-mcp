@@ -12,6 +12,12 @@ export interface ProjectUsageTotal {
   totalUnits: number
   eventCount: number
   unitKind: UnitKind | null
+  /** USD cost of the priced events (reported or estimated); null when no event has a known price. */
+  costUsd: number | null
+  /** At least one priced event was estimated from the catalog price, not reported by the provider. */
+  costEstimated: boolean
+  /** Events of the group with no known price. */
+  unpricedCount: number
 }
 
 /** One privacy-projected recent usage event. */

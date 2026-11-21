@@ -55,12 +55,11 @@ Feature: Project activity and usage
     When I open the "usage" section of project Alpha
     Then I see the heading "Usage"
     And I see "What this project's calls used, per provider"
-    And the "Usage totals" table should have the columns "Provider, Operation, Calls, Reported cost (USD), Billed requests, Other units"
+    And the "Usage totals" table should have the columns "Provider, Operation, Calls, Cost, Other units"
     And the "Usage totals" table should show a "brave" "search" row
     And the "Usage totals" table should show "14" in the "brave" row
+    And the "Usage totals" table should show "~$0.07" in the "brave" row
     And the "Usage totals" table should show a "keenable" "fetch" row
-    And the "Usage totals" table should show "Not reported" in the "brave" row
-    And I see "Known cost"
     And I see "See every call in Activity"
     And no usage table should show the usage of project Beta
     When I open the "usage" section of project Beta

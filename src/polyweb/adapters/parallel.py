@@ -101,6 +101,45 @@ def extract_cost_usd(url_count: int) -> Decimal:
     return Decimal("0.001") * Decimal(url_count)
 
 
+def usage_event_cost_usd(event: UsageEvent) -> Decimal | None:
+    """Price one recorded Parallel SKU usage event from its mode, bundles, and URL count.
+
+    Return ``None`` when the event is not a SKU request event, carries an
+    unknown legacy search mode, or has malformed pricing metadata.
+    """
+
+    metadata = event.metadata
+    if event.unit_kind is not UnitKind.REQUEST or not isinstance(metadata.get("skus"), list):
+        return None
+    try:
+        if event.operation is UsageOperation.FETCH:
+            return extract_cost_usd(int(metadata.get("url_count", 1)))
+        mode = metadata.get("mode")
+        if isinstance(mode, str) and mode not in SEARCH_USD_BY_MODE and mode != "omitted":
+            return None
+        bundles = int(metadata.get("extra_bundles", 0))
+        return search_cost_usd(mode if isinstance(mode, str) else None, bundles)
+    except (TypeError, ValueError):
+        return None
+
+
+def _search_mode(request: SearchRequest) -> str | None:
+    """Return the Parallel search mode: the provider option first, then the request's mode."""
+
+    options = request.provider_options.parallel if request.provider_options is not None else None
+    if options is not None and options.mode is not None:
+        return options.mode
+    return request.mode
+
+
+def request_cost_usd(request: SearchRequest | FetchRequest) -> Decimal:
+    """Price one Parallel request locally from its mode, extra bundles, or URL count."""
+
+    if isinstance(request, SearchRequest):
+        return search_cost_usd(_search_mode(request), request.extra_bundles)
+    return extract_cost_usd(request.url_count)
+
+
 def parse_seed(value: Decimal | None) -> Decimal | None:
     """Validate an optional exact, non-negative local seed."""
 
@@ -201,12 +240,6 @@ class ParallelAdapter(ProviderAdapter):
         provider_options = request.provider_options
         return None if provider_options is None else provider_options.parallel
 
-    def _search_mode(self, request: SearchRequest) -> str | None:
-        options = self._parallel_search_options(request)
-        if options is not None and options.mode is not None:
-            return options.mode
-        return request.mode
-
     def _search_limit(self, request: SearchRequest) -> int:
         options = self._parallel_search_options(request)
         advanced = None if options is None else options.advanced_settings
@@ -224,7 +257,7 @@ class ParallelAdapter(ProviderAdapter):
             "search_queries": [request.query],
             "advanced_settings": settings,
         }
-        mode = self._search_mode(request)
+        mode = _search_mode(request)
         if mode is not None:
             body["mode"] = mode
 
@@ -263,7 +296,7 @@ class ParallelAdapter(ProviderAdapter):
             payload,
             UsageOperation.SEARCH,
             request_id,
-            mode=self._search_mode(request),
+            mode=_search_mode(request),
             extra_bundles=request.extra_bundles,
         )
         usage_gap: dict[str, Any] | None = None
@@ -385,13 +418,11 @@ class ParallelAdapter(ProviderAdapter):
         raise self._error("fetch_failed", "no successful extraction result") from None
 
     async def estimate_cost(self, request: SearchRequest | FetchRequest) -> CostEstimate:
+        units = request_cost_usd(request)
         if isinstance(request, SearchRequest):
-            units = search_cost_usd(self._search_mode(request), request.extra_bundles)
             operation = UsageOperation.SEARCH
             notes = "mode-aware local estimate"
         else:
-            count = int(getattr(request, "url_count", 1))
-            units = extract_cost_usd(count)
             operation = UsageOperation.FETCH
             notes = "estimated per extracted URL"
         return CostEstimate(
@@ -596,23 +627,14 @@ class ParallelAdapter(ProviderAdapter):
     def _event_spend(event: UsageEvent) -> Decimal:
         if event.unit_kind is UnitKind.USD:
             return event.units
-        if event.unit_kind is not UnitKind.REQUEST:
-            return Decimal("0")
-        metadata = event.metadata
-        if not isinstance(metadata.get("skus"), list):
-            return Decimal("0")
-        if event.operation is UsageOperation.FETCH:
-            return extract_cost_usd(int(metadata.get("url_count", 1)))
-        mode = metadata.get("mode")
-        bundles = metadata.get("extra_bundles", 0)
-        if isinstance(mode, str) and mode not in SEARCH_USD_BY_MODE and mode != "omitted":
-            logger.warning("skipping Parallel usage with unknown legacy mode: %s", mode)
-            return Decimal("0")
-        try:
-            return search_cost_usd(mode if isinstance(mode, str) else None, int(bundles))
-        except (TypeError, ValueError):
-            logger.warning("skipping malformed Parallel usage pricing metadata")
-            return Decimal("0")
+        cost = usage_event_cost_usd(event)
+        if cost is not None:
+            return cost
+        if event.unit_kind is UnitKind.REQUEST and isinstance(event.metadata.get("skus"), list):
+            logger.warning(
+                "skipping Parallel usage with unknown legacy mode or malformed pricing metadata"
+            )
+        return Decimal("0")
 
     def _snapshot_spend(self, snapshot: QuotaSnapshot | None) -> Decimal:
         if snapshot is None or snapshot.remaining is None or self._free_seed is None:

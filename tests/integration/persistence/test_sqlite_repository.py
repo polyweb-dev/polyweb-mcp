@@ -51,6 +51,8 @@ _SCHEMA: dict[str, dict[str, object]] = {
             "credential_id": ("CHAR", True),
             "binding_id": ("CHAR", True),
             "pool_id": ("CHAR", True),
+            "cost_usd": ("TEXT", True),
+            "cost_source": ("TEXT", True),
         },
         "primary_key": ("id",),
         "indexes": {
