@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import http.server
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -72,9 +74,7 @@ class ArtifactTests(unittest.TestCase):
             root = Path(directory)
             (root / "outside/gremlins").mkdir(parents=True)
             (root / "outside/gremlins/secret.json").write_text("secret")
-            self.symlink_or_skip(
-                root / "coverage", root / "outside", target_is_directory=True
-            )
+            self.symlink_or_skip(root / "coverage", root / "outside", target_is_directory=True)
             self.assertEqual(uploader.report_files(root, "api-mutation"), [])
 
     def test_ui_reports_include_playwright_output_and_exclude_test_artifacts(self) -> None:
@@ -223,10 +223,98 @@ class ArtifactTests(unittest.TestCase):
                 ],
                 capture_output=True,
                 check=False,
+                env={**os.environ, "CI_METRICS_DIR": str(Path(directory) / "metrics")},
             )
             self.assertEqual(result.returncode, 7)
             self.assertEqual(result.stdout, b"first\nsecond\n")
             self.assertEqual(log.read_bytes(), b"first\rsecond\n")
+            metrics = json.loads((Path(directory) / "metrics" / "command.json").read_text())
+            self.assertEqual(metrics["exit_status"], 7)
+            self.assertFalse(metrics["timed_out"])
+            self.assertEqual(metrics["limit_seconds"], 3300)
+
+    def run_wrapper(
+        self, directory: str, command: str, **env: str
+    ) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [
+                "bash",
+                str(SCRIPT_DIR / "run-and-log.sh"),
+                str(Path(directory) / "step.log"),
+                *("bash", "-c", command),
+            ],
+            capture_output=True,
+            check=False,
+            env={**os.environ, "CI_METRICS_DIR": str(Path(directory) / "metrics"), **env},
+        )
+
+    def test_log_wrapper_stops_a_stalled_step_with_a_clear_time_limit_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_wrapper(
+                directory, "echo started; sleep 30", CI_STEP_TIMEOUT_SECONDS="1"
+            )
+            self.assertEqual(result.returncode, 124)
+            self.assertIn(b"CI_TIME_LIMIT_EXCEEDED", result.stderr)
+            self.assertIn(b"60 minutes", result.stderr)
+            log = (Path(directory) / "step.log").read_text()
+            self.assertTrue(log.startswith("started\n"))
+            self.assertIn("CI_TIME_LIMIT_EXCEEDED", log)
+            metrics = json.loads((Path(directory) / "metrics" / "step.json").read_text())
+            self.assertTrue(metrics["timed_out"])
+
+    def test_log_wrapper_never_raises_the_step_limit_past_the_fixed_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_wrapper(directory, "true", CI_STEP_TIMEOUT_SECONDS="86400")
+            self.assertEqual(result.returncode, 0)
+            self.assertIn(b"exceeds the fixed cap", result.stderr)
+            metrics = json.loads((Path(directory) / "metrics" / "step.json").read_text())
+            self.assertEqual(metrics["limit_seconds"], 3300)
+
+    def test_log_wrapper_shortens_the_limit_to_the_worker_vm_deadline(self) -> None:
+        # /proc/uptime of a long-running host is far past any VM lifetime.
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_wrapper(directory, "true", CI_MACHINE="gcp-spot-standard-1")
+            self.assertEqual(result.returncode, 0)
+            metrics = json.loads((Path(directory) / "metrics" / "step.json").read_text())
+            self.assertLessEqual(metrics["limit_seconds"], 3300)
+
+    def test_log_wrapper_finds_the_worker_vm_through_gcp_metadata(self) -> None:
+        # Woodpecker leaves CI_MACHINE empty; the wrapper asks the metadata server.
+        class Metadata(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                flavored = self.headers.get("Metadata-Flavor") == "Google"
+                body = b"gcp-spot-mutation-123" if flavored else b"forbidden"
+                self.send_response(200 if flavored else 403)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Metadata)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_wrapper(
+                directory,
+                "true",
+                CI="woodpecker",
+                CI_MACHINE="",
+                CI_GCP_METADATA_ADDRESS=f"127.0.0.1/{server.server_port}",
+            )
+            self.assertEqual(result.returncode, 0)
+            metrics = json.loads((Path(directory) / "metrics" / "step.json").read_text())
+            self.assertEqual(metrics["machine"], "gcp-spot-mutation-123")
+            # This host has been up far longer than a mutation VM's 30 minutes.
+            self.assertEqual(metrics["limit_seconds"], 60)
+
+    def test_log_wrapper_metrics_can_be_turned_off(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_wrapper(directory, "true", CI_JOB_METRICS="0")
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stderr, b"")
+            self.assertFalse((Path(directory) / "metrics").exists())
 
 
 if __name__ == "__main__":

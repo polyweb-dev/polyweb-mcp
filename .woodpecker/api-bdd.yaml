@@ -27,7 +27,7 @@ steps:
           test -f .env || cp .env.example .env
           uv sync --frozen
           uv run polyweb-db upgrade
-          uv run behave tests/bdd/features
+          uv run behave tests/bdd/features --junit --junit-directory test_reports/junit/api-bdd
         '
 
   upload-artifacts:

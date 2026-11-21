@@ -29,6 +29,46 @@ Download `reports.zip`. Extract the ZIP to open its reports.
 
 The upload step also prints the package URL, download URL, size, and SHA256 checksum.
 
+## Time limit
+
+No CI job may run longer than 60 minutes. Three independent checks enforce it:
+
+1. `run-and-log.sh` gives each test step at most 55 minutes, which leaves time
+   for the clone and the upload. On a GCP worker it also stops 2 minutes before
+   the VM's own deadline, which matters on a reused VM. A stopped step exits
+   with status 124 and prints a `CI_TIME_LIMIT_EXCEEDED` banner, also written
+   to the uploaded log. `CI_STEP_TIMEOUT_SECONDS` can lower the limit for one
+   step; it cannot raise it.
+2. GCP deletes every worker VM 60 minutes after it starts (30 for the
+   mutation profile) through `--max-run-duration`, even if the guest hangs.
+3. The autoscaler cancels any pipeline whose workflow has been marked running
+   for 60 minutes. Woodpecker applies timeouts on the agent, so a workflow
+   whose VM disappeared would otherwise stay running on the server forever.
+   The autoscaler journal logs `CI_TIME_LIMIT_EXCEEDED` with the pipeline and
+   workflow.
+
+A stall is often intermittent. Rerun the pipeline once; if the same step stops
+again, the last lines before the banner show what hung.
+
+## Test metrics
+
+Every step that uses `run-and-log.sh` records job-level resource use (layer 3)
+from its container's cgroup: CPU time and average use of the VM's CPUs, CPU
+throttling, peak memory, OOM kills, disk I/O, and pressure stall time. The
+summary goes to the step output and `test_reports/ci-metrics/<step>.json`.
+
+Test suites also write JUnit XML (layer 1) to `test_reports/junit/`:
+pytest, Behave, Vitest and Playwright. With `POLYWEB_TEST_METRICS=1`:
+
+- pytest adds per-test `metric.*` properties to its JUnit XML: wall time, CPU
+  time, CPU-to-wall ratio, memory, and disk I/O (`tests/resource_metrics.py`).
+- Vitest writes one JSON line per test to `test_reports/metrics/`: wall time,
+  worker thread CPU time, and V8 heap (`polyweb-ui/src/test/resource-metrics.ts`).
+
+Playwright and Behave rely on layer 3, because their work happens in browser,
+server, or API processes outside the test runner. All of these files are in
+the uploaded report ZIP. `CI_JOB_METRICS=0` turns off the step metrics.
+
 ## Credentials and network
 
 The repository secret is `gitea_artifact_upload_token`.

@@ -36,6 +36,17 @@ logger = logging.getLogger("gcp-ci-autoscaler")
 
 RUNNING = True
 
+# Fixed policy: no CI job (Woodpecker workflow) runs longer than an hour. The
+# job wrapper and the VM deadline normally end it first; this server-side
+# check catches a workflow whose agent vanished, which Woodpecker otherwise
+# shows as running indefinitely (pipeline 205 ran for 24 hours that way).
+JOB_LIMIT_SECONDS = 60 * 60
+# A VM is deleted by GCP at 60 minutes; anything still tracked later is stale.
+WORKER_MAX_AGE_SECONDS = JOB_LIMIT_SECONDS + 5 * 60
+REAP_INTERVAL_SECONDS = 60
+REAP_LOOKBACK_SECONDS = 3 * 24 * 60 * 60
+REAP_MAX_PAGES = 5
+
 
 def signal_handler(signum: int, frame: Any) -> None:
     global RUNNING
@@ -89,33 +100,110 @@ def save_state(state: dict[str, Any]) -> None:
         logger.error("Failed to write state file %s: %s", STATE_FILE, e)
 
 
-def fetch_queue_info(server_url: str, token: str) -> dict[str, Any] | None:
-    """Query Woodpecker /api/queue/info."""
-    url = f"{server_url.rstrip('/')}/api/queue/info"
+def api_request(server_url: str, token: str, path: str, method: str = "GET") -> Any:
+    """Call the Woodpecker REST API and return the decoded JSON body (or None)."""
+    url = f"{server_url.rstrip('/')}{path}"
     req = urllib.request.Request(
         url,
+        method=method,
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "User-Agent": "gcp-ci-autoscaler/1.0",
         },
     )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = resp.read()
+    return json.loads(body.decode("utf-8")) if body.strip() else None
+
+
+def fetch_queue_info(server_url: str, token: str) -> dict[str, Any] | None:
+    """Query Woodpecker /api/queue/info."""
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status == 200:
-                data = resp.read()
-                result = json.loads(data.decode("utf-8"))
-                if not isinstance(result, dict):
-                    raise ValueError("Queue response must be an object")
-                return result
+        result = api_request(server_url, token, "/api/queue/info")
+        if not isinstance(result, dict):
+            raise ValueError("Queue response must be an object")
+        return result
     except urllib.error.HTTPError as e:
         if e.code == 401:
             logger.error("Authentication failed: WOODPECKER_API_TOKEN is invalid or unauthorized.")
         else:
-            logger.error("HTTP error querying %s: %s %s", url, e.code, e.reason)
+            logger.error("HTTP error querying queue info: %s %s", e.code, e.reason)
     except Exception as e:
-        logger.error("Error connecting to Woodpecker server at %s: %s", url, e)
+        logger.error("Error connecting to Woodpecker server at %s: %s", server_url, e)
     return None
+
+
+def overdue_workflows(pipeline: dict[str, Any], now: float, limit: int) -> list[dict[str, Any]]:
+    """Workflows still marked running after the fixed job limit."""
+    return [
+        workflow
+        for workflow in pipeline.get("workflows") or []
+        if workflow.get("state") == "running"
+        and workflow.get("started")
+        and now - workflow["started"] >= limit
+    ]
+
+
+def reap_overdue_pipelines(
+    server_url: str, token: str, now: float, limit: int = JOB_LIMIT_SECONDS
+) -> list[tuple[int, int]]:
+    """Cancel every pipeline that has a workflow running past the fixed job limit.
+
+    Woodpecker enforces timeouts on the agent, so a workflow whose agent or VM
+    disappeared stays "running" on the server forever. Returns (repo id,
+    pipeline number) pairs that were cancelled.
+    """
+    cancelled: list[tuple[int, int]] = []
+    for repo in api_request(server_url, token, "/api/user/repos") or []:
+        if not repo.get("active", True):
+            continue
+        repo_id = repo["id"]
+        for page in range(1, REAP_MAX_PAGES + 1):
+            pipelines = api_request(
+                server_url,
+                token,
+                f"/api/repos/{repo_id}/pipelines?page={page}&perPage=50&per_page=50",
+            )
+            if not pipelines:
+                break
+            for summary in pipelines:
+                if summary.get("status") != "running" or not summary.get("started"):
+                    continue
+                if now - summary["started"] < limit:
+                    continue
+                number = summary["number"]
+                pipeline = api_request(
+                    server_url, token, f"/api/repos/{repo_id}/pipelines/{number}"
+                )
+                overdue = overdue_workflows(pipeline or {}, now, limit)
+                if not overdue:
+                    continue
+                for workflow in overdue:
+                    logger.error(
+                        "CI_TIME_LIMIT_EXCEEDED: %s pipeline %s workflow '%s' has been running "
+                        "%d minutes, past the fixed %d-minute CI job limit (agent %s). "
+                        "Cancelling the pipeline; rerun it if the stall was intermittent.",
+                        repo.get("full_name", repo_id),
+                        number,
+                        workflow.get("name"),
+                        (now - workflow["started"]) // 60,
+                        limit // 60,
+                        workflow.get("agent_id"),
+                    )
+                try:
+                    api_request(
+                        server_url,
+                        token,
+                        f"/api/repos/{repo_id}/pipelines/{number}/cancel",
+                        method="POST",
+                    )
+                    cancelled.append((repo_id, number))
+                except Exception as e:
+                    logger.error("Could not cancel pipeline %s: %s", number, e)
+            if min(p.get("created") or now for p in pipelines) < now - REAP_LOOKBACK_SECONDS:
+                break
+    return cancelled
 
 
 def spawn_worker(profile: str, instance_name: str) -> bool:
@@ -262,6 +350,19 @@ def manage_queue(
         return
     workers = normalize_workers(state)
     busy = busy_workers(qinfo, workers)
+    for name, worker in list(workers.items()):
+        age = now - worker.get("created_at", now)
+        if age >= WORKER_MAX_AGE_SECONDS:
+            # GCP deletes the VM at 60 minutes; never keep or protect it longer.
+            logger.error(
+                "CI_TIME_LIMIT_EXCEEDED: worker '%s' is %d minutes old, past the fixed "
+                "%d-minute limit; deleting it.",
+                name,
+                age // 60,
+                JOB_LIMIT_SECONDS // 60,
+            )
+            retire_worker(name, workers, state)
+            busy.discard(name)
     for name in busy:
         workers[name].update(last_busy=now, seen_running=True)
     for name, worker in list(workers.items()):
@@ -311,6 +412,7 @@ def manage_queue(
 def run_loop() -> None:
     logger.info("Starting GCP Spot CI Autoscaler service...")
     state = load_state()
+    last_reap = 0.0
 
     while RUNNING:
         config = load_env()
@@ -338,6 +440,13 @@ def run_loop() -> None:
                 max_cpus=max(1, int(config.get("MAX_TOTAL_CPUS", "64"))),
                 startup_timeout=max(1, int(config.get("WORKER_STARTUP_TIMEOUT_SECONDS", "300"))),
             )
+
+        if time.time() - last_reap >= REAP_INTERVAL_SECONDS:
+            last_reap = time.time()
+            try:
+                reap_overdue_pipelines(server_url, token, last_reap)
+            except Exception as e:
+                logger.error("Overdue pipeline check failed: %s", e)
 
         # Sleep for poll interval
         for _ in range(poll_interval):

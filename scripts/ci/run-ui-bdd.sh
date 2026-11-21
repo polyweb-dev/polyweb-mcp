@@ -67,10 +67,16 @@ done
 # Pass 2: the `@serial` scenarios on one worker, only after pass 1 has
 # finished, so their fixed delay windows never compete with other workers.
 # The gate selection may hold no `@serial` scenario, so pass 2 may be empty.
+# Each pass also writes a JUnit report for per-scenario durations and status.
 status=0
+junit_dir="$REPO_ROOT/test_reports/junit"
+mkdir -p "$junit_dir"
 PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report \
-  pnpm exec playwright test --project chromium "${grep_args[@]}" --reporter=line --reporter=html || status=$?
+PLAYWRIGHT_JUNIT_OUTPUT_FILE="$junit_dir/ui-bdd-chromium.xml" \
+  pnpm exec playwright test --project chromium "${grep_args[@]}" \
+    --reporter=line --reporter=html --reporter=junit || status=$?
 PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report/serial \
+PLAYWRIGHT_JUNIT_OUTPUT_FILE="$junit_dir/ui-bdd-chromium-serial.xml" \
   pnpm exec playwright test --project chromium-serial --workers 1 --pass-with-no-tests \
-    "${grep_args[@]}" --reporter=line --reporter=html || status=$?
+    "${grep_args[@]}" --reporter=line --reporter=html --reporter=junit || status=$?
 exit "$status"

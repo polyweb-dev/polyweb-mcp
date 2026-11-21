@@ -25,6 +25,10 @@ steps:
       - |
         bash scripts/ci/run-and-log.sh ui-quality.log bash -euo pipefail -c '
           npm install --global pnpm@12.15.0
+          # Vitest JUnit report and per-test thread CPU and heap metrics.
+          export POLYWEB_JUNIT_DIR="$PWD/test_reports/junit"
+          # On unless a manual pipeline sets POLYWEB_TEST_METRICS=0.
+          export POLYWEB_TEST_METRICS="$${POLYWEB_TEST_METRICS:-1}"
           cd polyweb-ui
           pnpm install --frozen-lockfile
           pnpm depcruise

@@ -73,6 +73,7 @@ def report_files(root: Path, workflow: str) -> list[Path]:
         ) or path.suffix.lower() not in {
             ".html",
             ".json",
+            ".jsonl",
             ".md",
             ".txt",
             ".xml",

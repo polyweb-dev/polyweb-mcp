@@ -57,7 +57,7 @@ class BootstrapTests(unittest.TestCase):
             self.assertNotIn(command, script)
 
     def test_bootstrap_requires_a_shutdown_deadline(self):
-        for lifetime in (0, -1):
+        for lifetime in (0, -1, worker.MAX_LIFETIME_MINUTES + 1, 120):
             with self.assertRaises(ValueError):
                 worker.generate_startup_script(
                     "ci-test", "auth", "secret", "provider=gcp", lifetime
@@ -284,7 +284,33 @@ class AllocationTests(unittest.TestCase):
                 self.assertEqual(worker.cmd_create(args), 0)
                 self.assertIn("--machine-type=" + machine, create.call_args.args[0])
                 self.assertIn("--provisioning-model=SPOT", create.call_args.args[0])
+                # GCP itself deletes the VM at the deadline, even if the guest hangs.
+                self.assertIn("--instance-termination-action=DELETE", create.call_args.args[0])
+                lifetime = worker.PROFILES[profile]["lifetime"]
+                self.assertLessEqual(lifetime, 60)
+                self.assertIn(f"--max-run-duration={lifetime}m", create.call_args.args[0])
                 self.assertEqual(startup.call_args.kwargs["agent_labels"], labels)
+
+    def test_create_refuses_a_lifetime_past_the_fixed_limit(self):
+        args = argparse.Namespace(
+            profile="standard",
+            project=None,
+            zone=None,
+            machine_type=None,
+            labels=None,
+            lifetime=worker.MAX_LIFETIME_MINUTES + 1,
+            name="test-worker",
+        )
+        with (
+            patch.object(
+                worker,
+                "get_config",
+                return_value={"GCP_PROJECT_ID": "test", "WOODPECKER_AGENT_SECRET": "secret"},
+            ),
+            patch.object(worker, "create_in_candidates") as create,
+        ):
+            self.assertEqual(worker.cmd_create(args), 1)
+            create.assert_not_called()
 
 
 class DestroyTests(unittest.TestCase):

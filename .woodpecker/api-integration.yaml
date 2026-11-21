@@ -30,10 +30,13 @@ steps:
           # into this log; -k then force-kills what survives. Exit 124 means timeout.
           command -v timeout >/dev/null || { echo "GNU timeout is required"; exit 127; }
           export PYTHONFAULTHANDLER=1
+          # Per-test CPU, memory and I/O as JUnit properties (tests/resource_metrics.py).
+          # On unless a manual pipeline sets POLYWEB_TEST_METRICS=0.
+          export POLYWEB_TEST_METRICS="$${POLYWEB_TEST_METRICS:-1}"
           test -f .env || cp .env.example .env
           uv sync --frozen
           timeout -s ABRT -k 30 180 uv run polyweb-db upgrade || { echo "polyweb-db upgrade failed or hit its 180 s bound (exit status $?)"; exit 1; }
-          timeout -s ABRT -k 60 1200 uv run pytest tests/integration --ignore=tests/integration/latency -n auto -q || { echo "pytest failed or hit its 1200 s bound (exit status $?)"; exit 1; }
+          timeout -s ABRT -k 60 1200 uv run pytest tests/integration --ignore=tests/integration/latency -n auto -q --junitxml=test_reports/junit/api-integration.xml || { echo "pytest failed or hit its 1200 s bound (exit status $?)"; exit 1; }
         '
 
   upload-artifacts:

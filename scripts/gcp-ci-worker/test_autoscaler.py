@@ -156,6 +156,81 @@ class QueueTests(unittest.TestCase):
         self.destroy.assert_not_called()
 
 
+class TimeLimitTests(unittest.TestCase):
+    def setUp(self):
+        self.destroy = self.enterContext(
+            patch.object(autoscaler, "destroy_worker", return_value=True)
+        )
+        self.enterContext(patch.object(autoscaler, "spawn_worker", return_value=True))
+        self.enterContext(patch.object(autoscaler, "save_state"))
+
+    def test_worker_past_the_fixed_limit_is_deleted_even_while_busy(self):
+        now = 10_000
+        old = worker(created_at=now - autoscaler.WORKER_MAX_AGE_SECONDS, last_busy=now)
+        state = {"workers": {"vm": old}}
+        autoscaler.manage_queue({"running": [task(name="vm")]}, state, 120, now)
+        self.destroy.assert_called_once_with("vm")
+        self.assertEqual(state["workers"], {})
+
+    def test_busy_worker_inside_the_limit_is_kept(self):
+        now = 10_000
+        state = {"workers": {"vm": worker(created_at=now - 50 * 60, last_busy=now)}}
+        autoscaler.manage_queue({"running": [task(name="vm")]}, state, 120, now)
+        self.destroy.assert_not_called()
+
+    def pipeline(self, number, started, workflows, status="running", created=None):
+        return {
+            "number": number,
+            "status": status,
+            "started": started,
+            "created": created or started,
+            "workflows": workflows,
+        }
+
+    def reap(self, pipelines, now):
+        """Run the reaper against a fake API; return cancel calls."""
+        details = {p["number"]: p for p in pipelines}
+        calls = []
+
+        def fake(server, token, path, method="GET"):
+            calls.append((method, path))
+            if path == "/api/user/repos":
+                return [{"id": 1, "full_name": "org/repo", "active": True}]
+            if "?page=1&" in path:
+                return [{k: v for k, v in p.items() if k != "workflows"} for p in pipelines]
+            if "?page=" in path:
+                return []
+            if method == "POST":
+                return None
+            return details[int(path.rsplit("/", 1)[1])]
+
+        with patch.object(autoscaler, "api_request", side_effect=fake):
+            cancelled = autoscaler.reap_overdue_pipelines("http://ci", "token", now)
+        return cancelled, [path for method, path in calls if method == "POST"]
+
+    def test_workflow_running_past_an_hour_cancels_its_pipeline(self):
+        now = 100_000
+        stuck = {"name": "api-bdd", "state": "running", "started": now - 3600}
+        done = {"name": "api-unit", "state": "success", "started": now - 3600}
+        cancelled, posts = self.reap([self.pipeline(205, now - 3700, [stuck, done])], now)
+        self.assertEqual(cancelled, [(1, 205)])
+        self.assertEqual(posts, ["/api/repos/1/pipelines/205/cancel"])
+
+    def test_long_pipeline_whose_workflows_are_each_short_is_left_alone(self):
+        # Workflows that waited for capacity: the pipeline is old, each job is not.
+        now = 100_000
+        late = {"name": "api-mutation", "state": "running", "started": now - 20 * 60}
+        cancelled, posts = self.reap([self.pipeline(7, now - 90 * 60, [late])], now)
+        self.assertEqual((cancelled, posts), ([], []))
+
+    def test_recent_and_finished_pipelines_are_not_fetched_or_cancelled(self):
+        now = 100_000
+        recent = self.pipeline(8, now - 600, [{"state": "running", "started": now - 600}])
+        finished = self.pipeline(9, now - 9000, [], status="killed")
+        cancelled, posts = self.reap([recent, finished], now)
+        self.assertEqual((cancelled, posts), ([], []))
+
+
 class StateTests(unittest.TestCase):
     def test_saved_state_can_be_loaded_without_partial_file(self):
         with tempfile.TemporaryDirectory() as directory:

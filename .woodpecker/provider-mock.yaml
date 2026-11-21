@@ -39,7 +39,7 @@ steps:
             uv run --no-sync ruff check .
             uv run --no-sync ruff format --check .
             uv run --no-sync mypy src
-            uv run --no-sync pytest -q -n auto
+            uv run --no-sync pytest -q -n auto --junitxml=../test_reports/junit/provider-mock.xml
           )
           echo "== root Behave @live suite against the provider mock"
           uv run --no-sync --project polyweb-provider-mock polyweb-provider-mock \
