@@ -160,6 +160,8 @@ if [[ "$metrics" != 0 ]]; then
   (
   snapshot
   cpus=$(nproc 2>/dev/null || echo 0)
+  # Tells VM families apart (n2 and e2 differ here) without any cloud API.
+  cpu_model=$(awk -F': *' '$1 ~ /^model name/ { print $2; exit }' /proc/cpuinfo 2>/dev/null | tr -cd 'A-Za-z0-9 ()@._-')
   cpu_max=none
   memory_max=none
   memory_peak=0
@@ -187,6 +189,7 @@ if [[ "$metrics" != 0 ]]; then
   "step": "$name",
   "machine": "$machine",
   "machine_type": "$machine_type",
+  "cpu_model": "$cpu_model",
   "test_metrics": "${POLYWEB_TEST_METRICS:-0}",
   "exit_status": $status,
   "timed_out": $timed_out,
@@ -216,7 +219,7 @@ EOF
     echo "--- step metrics ($name) ---"
     echo "wall $(( wall_ms / 1000 )).$(( wall_ms % 1000 / 100 ))s, limit ${limit_s}s, exit ${status}${machine:+, machine $machine}${machine_type:+ ($machine_type)}"
     if [[ -n "$cgroup" ]]; then
-      echo "cpu $(( cpu_ms / 1000 ))s on ${cpus} cpus (${utilisation} average use), throttled $(( (${snap_throttled:-0} - before[3]) / 1000 ))ms"
+      echo "cpu $(( cpu_ms / 1000 ))s on ${cpus} cpus${cpu_model:+ ($cpu_model)} (${utilisation} average use), throttled $(( (${snap_throttled:-0} - before[3]) / 1000 ))ms"
       echo "memory peak $(( memory_peak / 1048576 )) MiB (max ${memory_max}), oom kills $(( ${snap_oom:-0} - before[9] ))"
       echo "disk read $(( (${snap_read:-0} - before[4]) / 1048576 )) MiB, write $(( (${snap_write:-0} - before[5]) / 1048576 )) MiB"
       echo "stall cpu $(( (${snap_cpu_stall:-0} - before[6]) / 1000 ))ms, memory $(( (${snap_memory_stall:-0} - before[7]) / 1000 ))ms, io $(( (${snap_io_stall:-0} - before[8]) / 1000 ))ms"
