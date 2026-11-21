@@ -309,6 +309,28 @@ class ArtifactTests(unittest.TestCase):
             # This host has been up far longer than a mutation VM's 30 minutes.
             self.assertEqual(metrics["limit_seconds"], 60)
 
+    def test_log_wrapper_metrics_failure_never_changes_the_exit_status(self) -> None:
+        # Debian's mawk printed a large io.stat sum as 2.4761e+09, which bash
+        # arithmetic rejected and which once failed a passing step.
+        real_awk = shutil.which("awk")
+        if real_awk is None:
+            self.skipTest("awk is not available")
+        with tempfile.TemporaryDirectory() as directory:
+            stub = Path(directory) / "bin"
+            stub.mkdir()
+            (stub / "awk").write_text(
+                "#!/usr/bin/env bash\n"
+                'case "$*" in *sum*) echo 2.4761e+09; exit 0 ;; esac\n'
+                f'exec {real_awk} "$@"\n'
+            )
+            (stub / "awk").chmod(0o755)
+            for command, expected in (("true", 0), ("exit 5", 5)):
+                with self.subTest(command=command):
+                    result = self.run_wrapper(
+                        directory, command, PATH=f"{stub}:{os.environ['PATH']}"
+                    )
+                    self.assertEqual(result.returncode, expected)
+
     def test_log_wrapper_metrics_can_be_turned_off(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             result = self.run_wrapper(directory, "true", CI_JOB_METRICS="0")

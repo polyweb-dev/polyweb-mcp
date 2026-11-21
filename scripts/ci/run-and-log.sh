@@ -94,7 +94,7 @@ cg_stall() {
     "$cgroup/$1" 2>/dev/null || echo 0
 }
 cg_io() {
-  awk -v field="$1" '{ for (i = 2; i <= NF; i++) { split($i, kv, "="); if (kv[1] == field) sum += kv[2] } } END { print sum + 0 }' \
+  awk -v field="$1" '{ for (i = 2; i <= NF; i++) { split($i, kv, "="); if (kv[1] == field) sum += kv[2] } } END { printf "%.0f\n", sum }' \
     "$cgroup/io.stat" 2>/dev/null || echo 0
 }
 snapshot() {
@@ -151,6 +151,13 @@ EOF
 fi
 
 if [[ "$metrics" != 0 ]]; then
+  # `times` must run in this shell (a subshell has no children); its second
+  # line is the CPU time of every waited-for descendant, as "XmY.YYYs".
+  times_file=$(mktemp 2>/dev/null) || times_file=
+  if [[ -n "$times_file" ]]; then times > "$times_file"; fi
+  # Everything else runs in a subshell: a metrics problem (an odd cgroup
+  # value, a full disk) is reported but never changes the step's exit status.
+  (
   snapshot
   cpus=$(nproc 2>/dev/null || echo 0)
   cpu_max=none
@@ -161,12 +168,10 @@ if [[ "$metrics" != 0 ]]; then
     memory_max=$(cg_number memory.max)
     memory_peak=$(cg_number memory.peak)
   fi
-  # `times` must run in this shell (a subshell has no children); its second
-  # line is the CPU time of every waited-for descendant, as "XmY.YYYs".
-  times_file=$(mktemp)
-  times > "$times_file"
-  read -r -a shell_times < <(awk 'NR == 2 { for (i = 1; i <= 2; i++) { split($i, t, "m"); sub("s", "", t[2]); printf "%.3f ", t[1] * 60 + t[2] } }' "$times_file") || true
-  rm -f "$times_file"
+  shell_times=()
+  if [[ -n "$times_file" ]]; then
+    read -r -a shell_times < <(awk 'NR == 2 { for (i = 1; i <= 2; i++) { split($i, t, "m"); sub("s", "", t[2]); printf "%.3f ", t[1] * 60 + t[2] } }' "$times_file") || true
+  fi
   cpu_ms=$(( (${snap_cpu:-0} - before[0]) / 1000 ))
   utilisation="n/a"
   if [[ -n "$cgroup" ]] && (( wall_ms > 0 && cpus > 0 )); then
@@ -219,5 +224,7 @@ EOF
       echo "no readable cgroup v2; child cpu user ${shell_times[0]:-?}s system ${shell_times[1]:-?}s"
     fi
   } >&2
+  ) || echo "step metrics could not be recorded; the step's exit status is unchanged" >&2
+  if [[ -n "$times_file" ]]; then rm -f "$times_file"; fi
 fi
 exit "$status"
