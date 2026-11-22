@@ -20,6 +20,7 @@ polyweb-mock = "polyweb_provider_mock.cli:main"
 # The editable Polyweb dependency lets the end-to-end tests drive the real
 # adapters and the real startup interception against a live mock.
 dev = [
+    "coverage>=7.15.4,<8",
     "httpx==0.28.1",
     "mypy==1.20.2",
     "polyweb",
