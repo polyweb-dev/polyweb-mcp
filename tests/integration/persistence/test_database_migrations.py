@@ -42,7 +42,8 @@ _POOL_LIMITS = "0004_pool_limits"
 _POOL_BUDGET = "0005_pool_budget"
 _KEYLESS = "0006_keyless_credentials"
 _PROVIDER_BUDGET = "0007_provider_budget_period"
-_HEAD = "0008_owned_keyless_credentials"
+_OWNED_KEYLESS = "0008_owned_keyless_credentials"
+_HEAD = "0009_usage_event_cost"
 _OLDER_REVISION = "0009_provider_credentials"
 _UNKNOWN_REVISION = "ffffffffffff_not_a_polyweb_revision"
 
@@ -242,12 +243,14 @@ def test_exactly_one_migration_revision_is_the_alpha_baseline() -> None:
         "0006_keyless_credentials.py",
         "0007_provider_budget_period.py",
         "0008_owned_keyless_credentials.py",
+        "0009_usage_event_cost.py",
     ]
 
     script = ScriptDirectory.from_config(_config_for(Path("unused.db")))
     revisions = list(script.walk_revisions())
     assert [revision.revision for revision in revisions] == [
         _HEAD,
+        _OWNED_KEYLESS,
         _PROVIDER_BUDGET,
         _KEYLESS,
         _POOL_BUDGET,
@@ -547,6 +550,79 @@ def test_pool_budget_upgrade_backs_up_pool_limits_revision(tmp_path: Path) -> No
     assert len(backups) == 1
     assert _revision(backups[0]) == [_POOL_LIMITS]
     validate_database_schema(database)
+
+
+def test_usage_event_cost_upgrade_backfills_usd_and_free_rows_only(tmp_path: Path) -> None:
+    database = tmp_path / "usage-cost.db"
+    migration_module.command.upgrade(_config_for(database), _OWNED_KEYLESS)
+    rows = [
+        (1, "exa", "0.0042", "USD", "{}"),
+        (2, "you", "0.005", "USD", '{"estimated":true,"metering_gap":true}'),
+        (3, "tinyfish", "1", "FREE", "{}"),
+        (4, "brave", "1", "REQUEST", "{}"),
+        (5, "tavily", "2", "CREDIT", '{"estimated":true}'),
+        (6, "legacy", "3", None, "not json"),
+        (7, "odd", "0.25", "USD", "not json"),
+    ]
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            "INSERT INTO usage_events (id, provider, operation, units, observed_at, metadata, "
+            "status, unit_kind, project_id, actor_type, actor_id) VALUES "
+            "(?, ?, 'search', ?, '2026-01-01T00:00:00+00:00', ?, 'success', ?, ?, 'human', ?)",
+            [
+                (row_id, provider, units, metadata, kind, str(uuid.uuid4()), str(uuid.uuid4()))
+                for row_id, provider, units, kind, metadata in rows
+            ],
+        )
+
+    migration_module.command.upgrade(_config_for(database), "head")
+
+    assert _revision(database) == [_HEAD]
+    with sqlite3.connect(database) as connection:
+        costs = connection.execute(
+            "SELECT id, cost_usd, cost_source FROM usage_events ORDER BY id"
+        ).fetchall()
+    assert costs == [
+        (1, "0.0042", "reported"),
+        (2, "0.005", "estimated"),
+        (3, "0", "estimated"),
+        (4, None, None),
+        (5, None, None),
+        (6, None, None),
+        (7, "0.25", "reported"),
+    ]
+
+    migration_module.command.downgrade(_config_for(database), _OWNED_KEYLESS)
+
+    assert _revision(database) == [_OWNED_KEYLESS]
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(usage_events)")}
+        assert connection.execute("SELECT COUNT(*) FROM usage_events").fetchone() == (7,)
+    assert {"cost_usd", "cost_source"}.isdisjoint(columns)
+
+
+def test_usage_event_cost_upgrade_backfills_exa_pricing_fallback_as_estimated(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "usage-cost-exa-fallback.db"
+    migration_module.command.upgrade(_config_for(database), _OWNED_KEYLESS)
+    metadata = (
+        '{"provenance":"exa_pricing_fallback","source":"estimated","pricing_date":"2026-01-01"}'
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO usage_events (id, provider, operation, units, observed_at, metadata, "
+            "status, unit_kind, project_id, actor_type, actor_id) VALUES "
+            "(1, 'exa', 'search', '0.007', '2026-01-01T00:00:00+00:00', ?, 'success', 'USD', "
+            "?, 'human', ?)",
+            (metadata, str(uuid.uuid4()), str(uuid.uuid4())),
+        )
+
+    migration_module.command.upgrade(_config_for(database), "head")
+
+    with sqlite3.connect(database) as connection:
+        costs = connection.execute("SELECT cost_usd, cost_source FROM usage_events").fetchall()
+    assert costs == [("0.007", "estimated")]
 
 
 @pytest.mark.parametrize("rejected_database", _REJECTED_IDS[:1] + _REJECTED_IDS[3:4], indirect=True)

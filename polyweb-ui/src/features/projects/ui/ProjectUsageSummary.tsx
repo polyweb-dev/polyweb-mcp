@@ -2,6 +2,7 @@ import { useCallback } from "react"
 import { getProjectDashboard } from "@/domains/usage"
 import type { ProjectOrder } from "@/domains/routing"
 import { useScopedResource } from "@/shared/lib/useScopedResource"
+import { EstimatedMark } from "@/shared/ui/EstimatedMark"
 import { Stat } from "@/shared/ui/Stat"
 import { formatCallCost, formatCostTotal } from "@/domains/providers"
 import { usageFigures } from "../model/usageFigures"
@@ -53,7 +54,7 @@ export function ProjectUsageSummary({
         <Stat label="Fetches" value={figures.fetches.toLocaleString("en-US")} detail={PERIOD} />
         <Stat
           label={figures.costIncomplete ? "Known provider cost" : "Provider cost"}
-          value={figures.free ? formatCallCost(0) : formatCostTotal(figures.usd)}
+          value={figures.free ? formatCallCost(0) : <>{figures.estimated && <EstimatedMark />}{formatCostTotal(figures.usd)}</>}
           detail={PERIOD}
         />
       </dl>

@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest"
 import type { ProjectUsageTotal } from "@/domains/usage"
 import type { ProjectOrder } from "@/domains/routing"
-import { usageAmountText, usageTotalsView } from "./usageTotalsView"
+import { usageAmountText, usageAmountTitle, usageTotalsView } from "./usageTotalsView"
 
+/** A ledger total; without cost overrides it decodes like a legacy row. */
 function total(overrides: Partial<ProjectUsageTotal>): ProjectUsageTotal {
+  const base = { provider: "brave", operation: "search", totalUnits: 0, eventCount: 0, unitKind: null, ...overrides }
   return {
-    provider: "brave",
-    operation: "search",
-    totalUnits: 0,
-    eventCount: 0,
-    unitKind: null,
-    ...overrides,
+    costUsd: base.unitKind === "USD" ? base.totalUnits : null,
+    costEstimated: false,
+    unpricedCount: base.unitKind === "USD" || base.unitKind === "FREE" ? 0 : base.eventCount,
+    ...base,
   }
 }
 
@@ -140,5 +140,58 @@ describe("usageTotalsView", () => {
     ])
     expect(usageAmountText(view.rows[0]!, "usd")).toBe("—")
     expect(usageAmountText(view.total, "usd")).toBe("—")
+  })
+
+  it("shows an estimated request cost with a tilde and an estimate tooltip", () => {
+    const view = usageTotalsView([
+      total({ provider: "brave", totalUnits: 1, eventCount: 1, unitKind: "REQUEST", costUsd: 0.005, costEstimated: true, unpricedCount: 0 }),
+    ])
+
+    expect(usageAmountText(view.rows[0]!, "usd")).toBe("~$0.005")
+    expect(usageAmountTitle(view.rows[0]!, "usd")).toBe("Estimated from the catalog price")
+    expect(view.rows[0]!.unreportedCost).toBe(false)
+  })
+
+  it("shows the cost and the native credits of a priced credit row", () => {
+    const view = usageTotalsView([
+      total({ provider: "tavily", totalUnits: 12, eventCount: 4, unitKind: "CREDIT", costUsd: 0.096, costEstimated: true, unpricedCount: 0 }),
+    ])
+
+    expect(view.columns).toEqual(["usd", "credits"])
+    expect(usageAmountText(view.rows[0]!, "usd")).toBe("~$0.096")
+    expect(usageAmountText(view.rows[0]!, "credits")).toBe("12")
+  })
+
+  it("sums reported and estimated costs into an estimated total", () => {
+    const view = usageTotalsView([
+      total({ provider: "exa", totalUnits: 0.007, eventCount: 1, unitKind: "USD" }),
+      total({ provider: "brave", totalUnits: 3, eventCount: 3, unitKind: "REQUEST", costUsd: 0.015, costEstimated: true, unpricedCount: 0 }),
+    ])
+    const exa = view.rows.find((row) => row.provider === "exa")!
+
+    expect(usageAmountText(exa, "usd")).toBe("$0.007")
+    expect(usageAmountTitle(exa, "usd")).toBeUndefined()
+    expect(view.total.usd).toBeCloseTo(0.022, 6)
+    expect(usageAmountText(view.total, "usd")).toBe("~$0.022")
+    expect(view.total.unreportedCost).toBe(false)
+  })
+
+  it("shows the known cost of a partly unpriced row and flags it as incomplete", () => {
+    const view = usageTotalsView([
+      total({ provider: "brave", totalUnits: 5, eventCount: 5, unitKind: "REQUEST", costUsd: 0.01, costEstimated: true, unpricedCount: 3 }),
+    ])
+
+    expect(usageAmountText(view.rows[0]!, "usd")).toBe("~$0.01")
+    expect(view.rows[0]!.unreportedCost).toBe(true)
+  })
+
+  it("labels a zero estimated cost as free but not when mixed with unpriced calls", () => {
+    const tinyfish = total({ provider: "tinyfish", eventCount: 2, unitKind: "REQUEST", costUsd: 0, costEstimated: true, unpricedCount: 0 })
+    const unpriced = total({ provider: "tinyfish", eventCount: 1, unitKind: "REQUEST", costUsd: null, unpricedCount: 1 })
+
+    expect(usageAmountText(usageTotalsView([tinyfish]).rows[0]!, "usd")).toBe("Free")
+    const mixed = usageTotalsView([tinyfish, unpriced])
+    expect(usageAmountText(mixed.rows[0]!, "usd")).toBe("~$0.00")
+    expect(usageAmountText(mixed.total, "usd")).not.toBe("Free")
   })
 })

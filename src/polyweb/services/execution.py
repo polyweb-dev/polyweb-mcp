@@ -77,6 +77,7 @@ from polyweb.infrastructure.trace_payloads import (
     _search_results_payload,
 )
 from polyweb.models.contracts import (
+    AGGREGATED_PROVIDER,
     FallbackPolicy,
     FetchRequest,
     FetchResponse,
@@ -2471,7 +2472,7 @@ class ExecutionService:
                 with suppress(Exception):
                     await self._repository.record_usage(
                         UsageEvent(
-                            provider="aggregated",
+                            provider=AGGREGATED_PROVIDER,
                             operation=UsageOperation.SEARCH,
                             units=Decimal("0"),
                             observed_at=datetime.now(UTC),
@@ -2489,7 +2490,9 @@ class ExecutionService:
                     query=request.query,
                     results=fused_results,
                     provider=(
-                        "aggregated" if len(successful_results) > 1 else successful_results[0][0]
+                        AGGREGATED_PROVIDER
+                        if len(successful_results) > 1
+                        else successful_results[0][0]
                     ),
                     total_results=len(fused_results),
                     participating_providers=participating,

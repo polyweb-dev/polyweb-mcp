@@ -48,6 +48,7 @@ from polyweb.models.contracts import (
     SearchRequest,
     SearchResponse,
     UnitKind,
+    UsageCost,
     UsageEvent,
     UsageOperation,
     UsageStatus,
@@ -72,6 +73,7 @@ from polyweb.persistence.storage import LegacyUsageTotal, SQLiteRepository, Usag
 from polyweb.services.authorization import ScopedAuthorizationService
 from polyweb.services.control_access import require_project_permission, run_control_read
 from polyweb.services.control_errors import ControlStorageUnavailable
+from polyweb.services.usage_cost import catalog_usage_event, usage_cost
 
 if TYPE_CHECKING:
     from polyweb.services.provider_limits import ProviderLimitsService
@@ -164,13 +166,21 @@ def clear_quota_poll_cache(
 
 
 class ProviderUsageTotal(ContractModel):
-    """Aggregated usage units for one provider and operation."""
+    """Aggregated usage units for one provider and operation.
+
+    ``cost_usd`` sums the USD cost of the priced events and is ``None`` when no
+    event in the group is priced; ``cost_estimated`` marks a sum that includes
+    an estimate, and ``unpriced_event_count`` counts the events without a cost.
+    """
 
     provider: str
     operation: UsageOperation
     total_units: Decimal
     event_count: int
     unit_kind: UnitKind | None = None
+    cost_usd: Decimal | None = None
+    cost_estimated: bool = False
+    unpriced_event_count: int = 0
 
     @model_serializer(mode="wrap")
     def _serialize_compat(self, handler: Any) -> Any:
@@ -335,6 +345,31 @@ def _estimated_gap_event(response: SearchResponse | FetchResponse) -> UsageEvent
     )
 
 
+def _catalog_fallback_event(
+    response: SearchResponse | FetchResponse,
+    auth_mode: AuthMode,
+    request: SearchRequest | FetchRequest | None,
+) -> UsageEvent | None:
+    """Estimate usage from the catalog for a success the vendor did not meter."""
+
+    operation = (
+        UsageOperation.SEARCH if isinstance(response, SearchResponse) else UsageOperation.FETCH
+    )
+    return catalog_usage_event(
+        response.provider, operation, auth_mode, request, _response_instant(response)
+    )
+
+
+def _priced_usage(event: UsageEvent, auth_mode: AuthMode) -> UsageCost | None:
+    """Price one usage event; a pricing fault stores the event without a cost."""
+
+    try:
+        return usage_cost(event, auth_mode=auth_mode)
+    except Exception:
+        logger.warning("usage cost could not be computed")
+        return None
+
+
 async def record_response_telemetry(
     repository: SQLiteRepository | None,
     response: SearchResponse | FetchResponse,
@@ -344,6 +379,8 @@ async def record_response_telemetry(
     status: UsageStatus = UsageStatus.SUCCESS,
     binding: AttemptBinding | None = None,
     queue_wait_ms: int | None = None,
+    auth_mode: AuthMode = AuthMode.KEYED,
+    request: SearchRequest | FetchRequest | None = None,
 ) -> None:
     """Persist ``response.usage`` and a healthy observation; never raise.
 
@@ -355,13 +392,19 @@ async def record_response_telemetry(
     and ``status`` are attached to the stored event, which is owned by the
     execution ``attribution`` and linked to the request trace when one is live.
     The credential/binding/pool ``binding`` attributes both writes to the exact
-    attempt that produced them.
+    attempt that produced them. The stored event carries its USD cost on the
+    ``auth_mode`` rail when it can be priced. A success with neither vendor
+    usage nor a usage gap records the catalog estimate for ``request``, if any.
     """
 
     if repository is None:
         return
     try:
-        usage = response.usage or _estimated_gap_event(response)
+        usage = (
+            response.usage
+            or _estimated_gap_event(response)
+            or _catalog_fallback_event(response, auth_mode, request)
+        )
         if usage is not None:
             metadata = dict(usage.metadata)
             if queue_wait_ms is not None:
@@ -376,6 +419,7 @@ async def record_response_telemetry(
                 credential_id=binding.credential_id if binding is not None else None,
                 binding_id=binding.binding_id if binding is not None else None,
                 pool_id=binding.pool_id if binding is not None else None,
+                cost=_priced_usage(measured, auth_mode),
             )
     except Exception:
         logger.warning("response telemetry could not be persisted")
@@ -1047,6 +1091,8 @@ async def _record_success_telemetry_for(
         latency_ms=_measured_latency_ms(adapter.name, latency_ms),
         binding=binding,
         queue_wait_ms=consume_queue_wait(),
+        auth_mode=_adapter_auth_mode(adapter),
+        request=request,
     )
     await _record_adapter_quota(
         repository,
@@ -1806,6 +1852,9 @@ def _contract_totals(
             total_units=total.total_units,
             event_count=total.event_count,
             unit_kind=getattr(total, "unit_kind", None),
+            cost_usd=total.cost_usd,
+            cost_estimated=total.cost_estimated,
+            unpriced_event_count=total.unpriced_event_count,
         )
         for total in totals
     ]

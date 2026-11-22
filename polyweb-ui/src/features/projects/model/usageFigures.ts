@@ -6,9 +6,11 @@ import { usageTotalsView } from "@/features/usage/model/usageTotalsView"
 interface UsageFigures {
   searches: number
   fetches: number
-  /** Dollar cost the providers reported, or `null` when none reports dollars. */
+  /** Known dollar cost, reported or estimated, or `null` when no call has a known price. */
   usd: number | null
   costIncomplete: boolean
+  /** Part of the dollar cost is estimated from the catalog price. */
+  estimated: boolean
   free: boolean
 }
 
@@ -21,6 +23,7 @@ export function usageFigures(totals: readonly ProjectUsageTotal[], order?: Proje
   const figures: UsageFigures = {
     searches: 0, fetches: 0, usd: amounts.calls === 0 ? 0 : amounts.usd,
     costIncomplete: amounts.calls > 0 && amounts.unreportedCost,
+    estimated: amounts.estimated,
     free: amounts.calls > 0 && amounts.free && !amounts.unreportedCost && (amounts.usd === null || amounts.usd === 0),
   }
   for (const total of totals) {

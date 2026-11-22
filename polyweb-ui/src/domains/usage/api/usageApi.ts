@@ -28,18 +28,45 @@ function asLatency(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null
 }
 
+/** A non-negative decimal string or number; anything else is null. */
+function asCost(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+function asCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null
+}
+
+type TotalCost = Pick<ProjectUsageTotal, "costUsd" | "costEstimated" | "unpricedCount">
+
+/**
+ * Servers before priced usage send no cost fields: a USD row still reports
+ * its dollars, and every event of another metered kind counts as unpriced.
+ */
+function decodeCost(record: Record<string, unknown>, total: Omit<ProjectUsageTotal, keyof TotalCost>): TotalCost {
+  const reportsUsd = total.unitKind === "USD"
+  const legacyUnpriced = reportsUsd || total.unitKind === "FREE" ? 0 : total.eventCount
+  return {
+    costUsd: asCost(record.cost_usd) ?? (reportsUsd ? total.totalUnits : null),
+    costEstimated: record.cost_estimated === true,
+    unpricedCount: asCount(record.unpriced_event_count) ?? legacyUnpriced,
+  }
+}
+
 function decodeTotal(value: unknown): ProjectUsageTotal | null {
   const record = asRecord(value)
   const provider = asString(record?.provider)
   const operation = asString(record?.operation)
   if (record === null || provider === null || operation === null) return null
-  return {
+  const total = {
     provider,
     operation,
     totalUnits: asAmount(record.total_units),
     eventCount: Math.max(0, Math.round(asAmount(record.event_count))),
     unitKind: normalizeUnitKind(record.unit_kind),
   }
+  return { ...total, ...decodeCost(record, total) }
 }
 
 function decodeEntry(value: unknown): ProjectUsageEntry | null {

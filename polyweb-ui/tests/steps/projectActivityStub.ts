@@ -315,8 +315,19 @@ const USAGE_BY_PROJECT: Record<string, { totals: Json[]; recent: Json[] }> = {
         event_count: 14,
         unit_kind: "REQUEST",
         display_unit: "requests",
+        cost_usd: "0.07",
+        cost_estimated: true,
+        unpriced_event_count: 0,
       },
-      { provider: "keenable", operation: "fetch", total_units: "0.5", event_count: 5 },
+      {
+        provider: "keenable",
+        operation: "fetch",
+        total_units: "0.5",
+        event_count: 5,
+        cost_usd: null,
+        cost_estimated: false,
+        unpriced_event_count: 5,
+      },
     ],
     recent: [
       {
@@ -346,6 +357,9 @@ const USAGE_BY_PROJECT: Record<string, { totals: Json[]; recent: Json[] }> = {
         operation: "search",
         total_units: BETA_USAGE_UNITS,
         event_count: BETA_USAGE_EVENTS,
+        cost_usd: null,
+        cost_estimated: false,
+        unpriced_event_count: BETA_USAGE_EVENTS,
       },
     ],
     recent: [

@@ -44,11 +44,14 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from polyweb.models.contracts import (
+    AGGREGATED_PROVIDER,
+    CostSource,
     HealthStatus,
     ProviderHealth,
     QuotaSnapshot,
     QuotaSource,
     UnitKind,
+    UsageCost,
     UsageEvent,
     UsageOperation,
     UsageStatus,
@@ -296,6 +299,9 @@ class UsageEventRow(Base):
     credential_id: Mapped[str | None] = mapped_column(CHAR(36))
     binding_id: Mapped[str | None] = mapped_column(CHAR(36))
     pool_id: Mapped[str | None] = mapped_column(CHAR(36))
+    # Exact USD cost text and its ``CostSource``; both NULL when unpriced.
+    cost_usd: Mapped[str | None] = mapped_column(Text)
+    cost_source: Mapped[str | None] = mapped_column(Text)
 
 
 class RuntimeSettingRow(Base):
@@ -487,13 +493,19 @@ class TraceSpanRow(Base):
 
 @dataclass(frozen=True)
 class UsageTotal:
-    """Usage units aggregated for one provider, operation, and unit kind."""
+    """Usage units aggregated for one provider, operation, and unit kind.
+
+    ``cost_usd`` sums the priced events and stays ``None`` when none is priced.
+    """
 
     provider: str
     operation: UsageOperation
     total_units: Decimal
     event_count: int
     unit_kind: UnitKind
+    cost_usd: Decimal | None = None
+    cost_estimated: bool = False
+    unpriced_event_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -504,6 +516,43 @@ class LegacyUsageTotal:
     operation: UsageOperation
     total_units: Decimal
     event_count: int
+    cost_usd: Decimal | None = None
+    cost_estimated: bool = False
+    unpriced_event_count: int = 0
+
+
+@dataclass
+class _TotalAccumulator:
+    """Mutable running sum for one usage-total group."""
+
+    total_units: Decimal = Decimal("0")
+    event_count: int = 0
+    cost_usd: Decimal | None = None
+    cost_estimated: bool = False
+    unpriced_event_count: int = 0
+
+    def add(self, units: Decimal, cost: Decimal | None, estimated: bool) -> None:
+        self.total_units += units
+        self.event_count += 1
+        if cost is None:
+            self.unpriced_event_count += 1
+            return
+        self.cost_usd = cost if self.cost_usd is None else self.cost_usd + cost
+        self.cost_estimated = self.cost_estimated or estimated
+
+
+def _row_cost(raw_cost: object, raw_source: object) -> tuple[Decimal | None, bool]:
+    """Return a stored usage cost and whether it is an estimate; bad text is unpriced."""
+
+    if raw_cost is None:
+        return None, False
+    try:
+        cost = Decimal(str(raw_cost))
+    except ArithmeticError:
+        return None, False
+    if not cost.is_finite() or cost < 0:
+        return None, False
+    return cost, raw_source != CostSource.REPORTED.value
 
 
 def _display_unit(raw_kind: str | None) -> str | None:
@@ -688,43 +737,57 @@ def _known_total_sort_key(total: UsageTotal) -> tuple[str, str, str]:
 
 
 def _sum_usage_rows(rows: Sequence[Row[Any]]) -> list[UsageTotal | LegacyUsageTotal]:
-    """Group known dimensions and retain all-legacy totals for compatibility."""
+    """Group known dimensions and retain all-legacy totals for compatibility.
 
-    totals: dict[tuple[str, UsageOperation, UnitKind], UsageTotal] = {}
-    legacy: dict[tuple[str, UsageOperation], LegacyUsageTotal] = {}
+    The fan-out bookkeeping row is not provider usage, so totals skip it.
+    """
+
+    groups: dict[tuple[str, UsageOperation, UnitKind], _TotalAccumulator] = {}
+    legacy_groups: dict[tuple[str, UsageOperation], _TotalAccumulator] = {}
     for row in rows:
         if row.status == UsageStatus.FAILURE.value and Decimal(str(row.units)) == 0:
             continue
+        if row.provider == AGGREGATED_PROVIDER:
+            continue
         key_base = (str(row.provider), UsageOperation(str(row.operation)))
         units = Decimal(str(row.units))
+        cost, estimated = _row_cost(row.cost_usd, row.cost_source)
         raw_kind = row.unit_kind
         try:
             kind = UnitKind(str(raw_kind)) if raw_kind is not None else None
         except ValueError:
             kind = None
         if kind is None:
-            current_legacy = legacy.get(key_base)
-            legacy[key_base] = LegacyUsageTotal(
-                provider=key_base[0],
-                operation=key_base[1],
-                total_units=units
-                + (current_legacy.total_units if current_legacy else Decimal("0")),
-                event_count=1 + (current_legacy.event_count if current_legacy else 0),
-            )
-            continue
-        key = (*key_base, kind)
-        current = totals.get(key)
-        totals[key] = UsageTotal(
-            provider=key[0],
-            operation=key[1],
-            total_units=units + (current.total_units if current else Decimal("0")),
-            event_count=1 + (current.event_count if current else 0),
-            unit_kind=kind,
+            legacy_groups.setdefault(key_base, _TotalAccumulator()).add(units, cost, estimated)
+        else:
+            groups.setdefault((*key_base, kind), _TotalAccumulator()).add(units, cost, estimated)
+    totals = [
+        UsageTotal(
+            provider=provider,
+            operation=operation,
+            total_units=group.total_units,
+            event_count=group.event_count,
+            unit_kind=unit_kind,
+            cost_usd=group.cost_usd,
+            cost_estimated=group.cost_estimated,
+            unpriced_event_count=group.unpriced_event_count,
         )
-    known_totals: list[UsageTotal] = sorted(totals.values(), key=_known_total_sort_key)
-    legacy_totals = sorted(
-        legacy.values(), key=lambda total: (total.provider, total.operation.value)
-    )
+        for (provider, operation, unit_kind), group in groups.items()
+    ]
+    legacy = [
+        LegacyUsageTotal(
+            provider=provider,
+            operation=operation,
+            total_units=group.total_units,
+            event_count=group.event_count,
+            cost_usd=group.cost_usd,
+            cost_estimated=group.cost_estimated,
+            unpriced_event_count=group.unpriced_event_count,
+        )
+        for (provider, operation), group in legacy_groups.items()
+    ]
+    known_totals: list[UsageTotal] = sorted(totals, key=_known_total_sort_key)
+    legacy_totals = sorted(legacy, key=lambda total: (total.provider, total.operation.value))
     return cast(list[UsageTotal | LegacyUsageTotal], [*known_totals, *legacy_totals])
 
 
@@ -1150,11 +1213,13 @@ class SQLiteRepository:
         credential_id: UUID | None = None,
         binding_id: UUID | None = None,
         pool_id: UUID | None = None,
+        cost: UsageCost | None = None,
     ) -> None:
         """Append a provider usage event owned by ``attribution``'s project.
 
         ``credential_id``, ``binding_id``, and ``pool_id`` attribute the event
-        to the credential, binding, and upstream pool that served it.
+        to the credential, binding, and upstream pool that served it. ``cost``
+        is the event's USD cost when it is priced.
         """
 
         async with self._session_factory() as session:
@@ -1176,6 +1241,8 @@ class SQLiteRepository:
                     credential_id=_optional_id(credential_id),
                     binding_id=_optional_id(binding_id),
                     pool_id=_optional_id(pool_id),
+                    cost_usd=str(cost.usd) if cost is not None else None,
+                    cost_source=cost.source.value if cost is not None else None,
                 )
             )
             await session.commit()
@@ -1302,6 +1369,8 @@ class SQLiteRepository:
             UsageEventRow.units,
             UsageEventRow.status,
             UsageEventRow.unit_kind,
+            UsageEventRow.cost_usd,
+            UsageEventRow.cost_source,
         )
         if scope is not None:
             statement = statement.where(scope)

@@ -36,6 +36,7 @@ from polyweb.models.contracts import (
     SearchRequest,
     SearchResponse,
     SearchResult,
+    UnitKind,
     UsageEvent,
     UsageOperation,
     UsageStatus,
@@ -1455,12 +1456,12 @@ async def test_rest_and_mcp_success_record_latency_and_success_status(
 
 
 @pytest.mark.asyncio
-async def test_success_without_usage_writes_no_usage_row(
+async def test_success_without_usage_writes_one_catalog_estimate_row(
     repository: SQLiteRepository,
     monkeypatch: pytest.MonkeyPatch,
     auth_secret: str,
 ) -> None:
-    """AC-8: the existing no-usage success contract remains unchanged."""
+    """A catalog provider's unmetered success records one estimated catalog row."""
     # Use one Agent account for the search.
     adapter = ControlAdapter("exa", with_usage=False)
     store = _execution_store(repository)
@@ -1486,7 +1487,10 @@ async def test_success_without_usage_writes_no_usage_row(
         )
 
     assert response.status_code == 200
-    assert await all_usage_events(repository) == []
+    assert [
+        (event.provider, event.units, event.unit_kind, event.metadata.get("catalog_fallback"))
+        for event in await all_usage_events(repository)
+    ] == [("exa", Decimal("0.007"), UnitKind.USD, True)]
 
 
 @pytest.mark.asyncio
