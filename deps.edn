@@ -1,8 +1,0 @@
-{:paths []
- :aliases
- {:uml-viewer
-  {:extra-deps {io.github.unclebob/uml-viewer
-                {:git/url "https://github.com/unclebob/uml-viewer.git"
-                 :git/sha "ad6c36d964ef4dab07623ab98122d72010ecb5a6"}
-                quil/quil {:mvn/version "4.3.1563"}}
-   :main-opts ["-m" "uml-viewer.main.uml-viewer"]}}}
