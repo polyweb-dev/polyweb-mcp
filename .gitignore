@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .metrics/
+.cpcache/
+.uml-viewer/
+uml-viewer-log.txt
 .mypy_cache/
 .ruff_cache/
 .stryker-tmp/

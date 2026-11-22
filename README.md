@@ -119,3 +119,20 @@ uv run --group crapper crapper --no-coverage src/polyweb polyweb-ui/src polyweb-
 This reports complexity only; CRAP scores require coverage. Crapper writes its latest
 snapshot to `.metrics/crap.edn`. See its documentation for coverage options; its default
 coverage mode runs tests and may install missing tools.
+
+### Optional UML viewer
+
+[UML Viewer](https://github.com/unclebob/uml-viewer) is available through the
+`uml-viewer` Clojure alias. It requires Java 21 or later, the Clojure CLI, and
+a graphical desktop. These prerequisites and the viewer are not installed by
+the Python or UI setup. Clojure fetches the pinned viewer when the alias is run:
+
+```bash
+clojure -M:uml-viewer
+```
+
+The viewer needs a generated diagram and policy for the source to display;
+the existing `.metrics/crap.edn` supplies metric overlays, not the diagram.
+See the viewer documentation for creating a policy and generating the diagram.
+Its default launch starts a Grok companion with broad permissions and can
+change files; review that behavior before launching it.
