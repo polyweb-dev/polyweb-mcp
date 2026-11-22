@@ -306,7 +306,7 @@ class ArtifactTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             metrics = json.loads((Path(directory) / "metrics" / "step.json").read_text())
             self.assertEqual(metrics["machine"], "gcp-spot-mutation-123")
-            # This host has been up far longer than a mutation VM's 30 minutes.
+            # This host has been up far longer than a worker VM's 60 minutes.
             self.assertEqual(metrics["limit_seconds"], 60)
 
     def test_log_wrapper_metrics_failure_never_changes_the_exit_status(self) -> None:

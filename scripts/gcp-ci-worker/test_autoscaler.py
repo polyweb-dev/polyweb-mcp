@@ -3,6 +3,7 @@
 import copy
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest.mock import patch
 
@@ -229,6 +230,82 @@ class TimeLimitTests(unittest.TestCase):
         finished = self.pipeline(9, now - 9000, [], status="killed")
         cancelled, posts = self.reap([recent, finished], now)
         self.assertEqual((cancelled, posts), ([], []))
+
+
+class DrainTests(unittest.TestCase):
+    """Deletion must not race Woodpecker handing the agent a new workflow."""
+
+    def setUp(self):
+        self.destroy = self.enterContext(
+            patch.object(autoscaler, "destroy_worker", return_value=True)
+        )
+        self.spawn = self.enterContext(patch.object(autoscaler, "spawn_worker", return_value=True))
+        self.enterContext(patch.object(autoscaler, "save_state"))
+
+    def api(self, agents, running=()):
+        """Fake Woodpecker API: agents list, agent PATCH, queue info."""
+        calls = []
+
+        def fake(server, token, path, method="GET", body=None):
+            calls.append((method, path, body))
+            if path.startswith("/api/agents?page=1"):
+                return agents
+            if path.startswith("/api/agents?page="):
+                return []
+            if method == "PATCH":
+                return {}
+            if path == "/api/queue/info":
+                return {"running": list(running), "pending": []}
+            raise AssertionError(path)
+
+        self.enterContext(patch.object(autoscaler, "api_request", side_effect=fake))
+        return calls
+
+    def test_idle_agent_is_marked_no_schedule_with_its_name_then_deleted(self):
+        calls = self.api([{"id": 7, "name": "vm", "no_schedule": False}])
+        self.assertTrue(autoscaler.drain_agent("http://ci", "token", "vm"))
+        patches = [(path, body) for method, path, body in calls if method == "PATCH"]
+        # The agent PATCH replaces the name, so it must be sent back unchanged.
+        self.assertEqual(patches, [("/api/agents/7", {"name": "vm", "no_schedule": True})])
+
+    def test_agent_that_took_a_workflow_meanwhile_is_not_deleted(self):
+        self.api([{"id": 7, "name": "vm"}], running=[{"agent_id": 7, "agent_name": ""}])
+        self.assertFalse(autoscaler.drain_agent("http://ci", "token", "vm"))
+
+    def test_unregistered_agent_is_safe_to_delete(self):
+        calls = self.api([{"id": 8, "name": "other"}])
+        self.assertTrue(autoscaler.drain_agent("http://ci", "token", "vm"))
+        self.assertFalse([c for c in calls if c[0] == "PATCH"])
+
+    def test_api_failure_keeps_the_vm(self):
+        self.enterContext(patch.object(autoscaler, "api_request", side_effect=OSError("down")))
+        self.assertFalse(autoscaler.drain_agent("http://ci", "token", "vm"))
+
+    def test_busy_drained_worker_is_kept_and_not_offered_for_new_work(self):
+        state = {"workers": {"vm": worker(last_busy=1)}}
+        drain = unittest.mock.Mock(return_value=False)
+        autoscaler.manage_queue({"pending": [task()]}, state, 120, 1000, drain=drain)
+        drain.assert_called_once_with("vm")
+        self.destroy.assert_not_called()
+        self.assertTrue(state["workers"]["vm"]["draining"])
+        # The pending workflow gets a fresh worker rather than the draining one.
+        self.spawn.assert_called_once()
+
+    def test_drained_idle_worker_is_deleted(self):
+        state = {"workers": {"vm": worker(last_busy=1, seen_running=True)}}
+        drain = unittest.mock.Mock(return_value=True)
+        autoscaler.manage_queue({}, state, 120, 1000, drain=drain)
+        self.destroy.assert_called_once_with("vm")
+        self.assertEqual(state["workers"], {})
+
+    def test_over_age_worker_is_deleted_without_waiting_for_a_drain(self):
+        now = 10_000
+        old = worker(created_at=now - autoscaler.WORKER_MAX_AGE_SECONDS, last_busy=now)
+        state = {"workers": {"vm": old}}
+        drain = unittest.mock.Mock(return_value=False)
+        autoscaler.manage_queue({"running": [task(name="vm")]}, state, 120, now, drain=drain)
+        drain.assert_not_called()
+        self.destroy.assert_called_once_with("vm")
 
 
 class StateTests(unittest.TestCase):

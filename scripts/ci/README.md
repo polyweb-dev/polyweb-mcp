@@ -39,8 +39,10 @@ No CI job may run longer than 60 minutes. Three independent checks enforce it:
    with status 124 and prints a `CI_TIME_LIMIT_EXCEEDED` banner, also written
    to the uploaded log. `CI_STEP_TIMEOUT_SECONDS` can lower the limit for one
    step; it cannot raise it.
-2. GCP deletes every worker VM 60 minutes after it starts (30 for the
-   mutation profile) through `--max-run-duration`, even if the guest hangs.
+2. GCP deletes every worker VM 60 minutes after it starts through
+   `--max-run-duration`, even if the guest hangs. Before deleting an idle VM,
+   the autoscaler marks its agent `no_schedule` and checks the queue again, so
+   Woodpecker cannot hand it a workflow while the VM is going away.
 3. The autoscaler cancels any pipeline whose workflow has been marked running
    for 60 minutes. Woodpecker applies timeouts on the agent, so a workflow
    whose VM disappeared would otherwise stay running on the server forever.

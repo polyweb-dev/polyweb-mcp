@@ -8,9 +8,9 @@
 # Time limit. No CI job may run longer than 60 minutes. A step gets at most
 # CI_STEP_LIMIT_CAP_SECONDS (55 min), which leaves room for the clone and the
 # artifact upload. CI_STEP_TIMEOUT_SECONDS may lower the limit, never raise it.
-# On a GCP worker the VM deletes itself 60 minutes after boot (30 for the
-# mutation profile), so on a reused VM the step also stops 2 minutes before
-# that deadline. Either way the step ends with exit status 124 and a
+# On a GCP worker the VM deletes itself 60 minutes after boot (every profile
+# in scripts/gcp-ci-worker/worker.py), so on a reused VM the step also stops
+# 2 minutes before that deadline. Either way the step ends with exit status 124 and a
 # CI_TIME_LIMIT_EXCEEDED banner instead of disappearing with its VM.
 #
 # Metrics. The step's cgroup (the step container in CI) gives CPU time,
@@ -60,7 +60,6 @@ if [[ -z "$machine" && -n "${CI:-}" ]]; then
   fi
 fi
 case "$machine" in
-  gcp-spot-mutation-*) vm_lifetime_s=1800 ;;
   gcp-spot-* | gcp-worker-*) vm_lifetime_s=3600 ;;
   *) vm_lifetime_s= ;;
 esac

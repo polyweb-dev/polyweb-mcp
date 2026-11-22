@@ -11,6 +11,7 @@ Zero external dependencies - Python stdlib only.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import signal
@@ -19,6 +20,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -100,21 +102,28 @@ def save_state(state: dict[str, Any]) -> None:
         logger.error("Failed to write state file %s: %s", STATE_FILE, e)
 
 
-def api_request(server_url: str, token: str, path: str, method: str = "GET") -> Any:
+def api_request(
+    server_url: str,
+    token: str,
+    path: str,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+) -> Any:
     """Call the Woodpecker REST API and return the decoded JSON body (or None)."""
     url = f"{server_url.rstrip('/')}{path}"
-    req = urllib.request.Request(
-        url,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "User-Agent": "gcp-ci-autoscaler/1.0",
-        },
-    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "User-Agent": "gcp-ci-autoscaler/1.0",
+    }
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=10) as resp:
-        body = resp.read()
-    return json.loads(body.decode("utf-8")) if body.strip() else None
+        payload = resp.read()
+    return json.loads(payload.decode("utf-8")) if payload.strip() else None
 
 
 def fetch_queue_info(server_url: str, token: str) -> dict[str, Any] | None:
@@ -132,6 +141,60 @@ def fetch_queue_info(server_url: str, token: str) -> dict[str, Any] | None:
     except Exception as e:
         logger.error("Error connecting to Woodpecker server at %s: %s", server_url, e)
     return None
+
+
+AGENT_PAGES = 10
+
+
+def find_agent(server_url: str, token: str, name: str) -> dict[str, Any] | None:
+    """The Woodpecker agent a worker registered; agents use the VM name as hostname."""
+    for page in range(1, AGENT_PAGES + 1):
+        agents = api_request(server_url, token, f"/api/agents?page={page}&perPage=100")
+        if not agents:
+            return None
+        for agent in agents:
+            if agent.get("name") == name:
+                return dict(agent)
+    return None
+
+
+def drain_agent(server_url: str, token: str, name: str) -> bool:
+    """Stop Woodpecker scheduling on a worker; True when it is safe to delete.
+
+    Deleting a VM from a queue snapshot races with assignment: Woodpecker can hand
+    the agent a workflow while the VM is being deleted, and that workflow is then
+    orphaned (pipeline 83). So: mark the agent no_schedule, then re-read the queue.
+    An agent that never registered is safe to delete. Any API failure keeps the VM;
+    GCP still deletes it at its fixed lifetime.
+    """
+    try:
+        agent = find_agent(server_url, token, name)
+        if agent is None:
+            return True
+        if not agent.get("no_schedule"):
+            # PATCH replaces the name as well, so send it back unchanged.
+            api_request(
+                server_url,
+                token,
+                f"/api/agents/{agent['id']}",
+                method="PATCH",
+                body={"name": agent["name"], "no_schedule": True},
+            )
+            logger.info("Drained worker '%s' (agent %s) before deletion.", name, agent["id"])
+        qinfo = fetch_queue_info(server_url, token)
+        if qinfo is None:
+            return False
+        for task in qinfo.get("running") or []:
+            if task.get("agent_name") == name or task.get("agent_id") == agent["id"]:
+                logger.info(
+                    "Worker '%s' took a workflow before it was drained; deleting it after that.",
+                    name,
+                )
+                return False
+        return True
+    except Exception as e:
+        logger.error("Could not drain worker '%s'; keeping it for now: %s", name, e)
+        return False
 
 
 def overdue_workflows(pipeline: dict[str, Any], now: float, limit: int) -> list[dict[str, Any]]:
@@ -294,7 +357,18 @@ def compatible(worker: dict[str, Any], profile: str) -> bool:
     return worker["profile"] in {profile, "combined"}
 
 
-def retire_worker(name: str, workers: dict[str, Any], state: dict[str, Any]) -> bool:
+Drain = Callable[[str], bool]
+
+
+def retire_worker(
+    name: str, workers: dict[str, Any], state: dict[str, Any], drain: Drain | None = None
+) -> bool:
+    """Delete a worker. With ``drain``, first stop new work reaching it; a worker
+    that took a workflow meanwhile is kept (and marked draining) until idle."""
+    if drain is not None and not drain(name):
+        workers[name]["draining"] = True
+        save_state(state)
+        return False
     if not destroy_worker(name):
         return False
     del workers[name]
@@ -321,6 +395,7 @@ def make_room(
     state: dict[str, Any],
     max_workers: int,
     max_cpus: int,
+    drain: Drain | None = None,
 ) -> bool:
     """Reclaim unused workers when a different size needs the capacity budget."""
 
@@ -331,7 +406,7 @@ def make_room(
     for name in list(workers):
         if fits():
             return True
-        if name not in reserved and not retire_worker(name, workers, state):
+        if name not in reserved and not retire_worker(name, workers, state, drain):
             return False
     return fits()
 
@@ -344,8 +419,13 @@ def manage_queue(
     max_workers: int = 4,
     max_cpus: int = 64,
     startup_timeout: int = 300,
+    drain: Drain | None = None,
 ) -> None:
-    """Allocate one capacity-1 agent per ready workflow, including booting agents."""
+    """Allocate one capacity-1 agent per ready workflow, including booting agents.
+
+    ``drain`` (see drain_agent) runs before an idle or unneeded worker is deleted,
+    so Woodpecker cannot hand it a workflow while its VM is being deleted.
+    """
     if qinfo.get("paused"):
         return
     workers = normalize_workers(state)
@@ -374,7 +454,7 @@ def manage_queue(
         )
         idle = now - worker.get("last_busy", now) >= idle_timeout
         if expired or idle:
-            retire_worker(name, workers, state)
+            retire_worker(name, workers, state, drain)
 
     reserved = set(busy)
     failed_profiles: set[str] = set()
@@ -386,7 +466,9 @@ def manage_queue(
             (
                 name
                 for name, worker in workers.items()
-                if name not in reserved and compatible(worker, profile)
+                if name not in reserved
+                and compatible(worker, profile)
+                and not worker.get("draining")
             ),
             None,
         )
@@ -395,7 +477,7 @@ def manage_queue(
             workers[available]["last_busy"] = now
             continue
         if profile in failed_profiles or not make_room(
-            workers, reserved, profile, state, max_workers, max_cpus
+            workers, reserved, profile, state, max_workers, max_cpus, drain
         ):
             continue
         # Names remain unique for several allocations in the same poll and after restart.
@@ -439,6 +521,7 @@ def run_loop() -> None:
                 max_workers=max(1, int(config.get("MAX_WORKERS", "4"))),
                 max_cpus=max(1, int(config.get("MAX_TOTAL_CPUS", "64"))),
                 startup_timeout=max(1, int(config.get("WORKER_STARTUP_TIMEOUT_SECONDS", "300"))),
+                drain=functools.partial(drain_agent, server_url, token),
             )
 
         if time.time() - last_reap >= REAP_INTERVAL_SECONDS:

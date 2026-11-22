@@ -48,7 +48,9 @@ PROFILES: dict[str, dict[str, Any]] = {
     "mutation": {
         "candidates": HEAVY_CANDIDATES,
         "labels": "size=heavy,provider=gcp,spot=true",
-        "lifetime": 30,
+        # A mutation run takes about 21 minutes; a reused 30-minute VM could not
+        # fit a second one. Idle VMs are deleted after 2 minutes regardless.
+        "lifetime": 60,
     },
     "combined": {
         "candidates": HEAVY_CANDIDATES,

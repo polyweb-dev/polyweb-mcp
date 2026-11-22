@@ -86,8 +86,12 @@ Each agent retains `WOODPECKER_MAX_WORKFLOWS=1`.
 The autoscaler can reuse a compatible idle VM for another workflow.
 Dependent workflows receive capacity only after Woodpecker places them in the ready queue.
 A worker that never accepts work receives a replacement after the startup timeout.
-VM lifetimes are 60 minutes for standard and combined, and 30 minutes for mutation.
-60 minutes is a fixed maximum: `worker.py create --lifetime` refuses a longer value.
+Every profile's VM lifetime is 60 minutes, a fixed maximum: `worker.py create --lifetime`
+refuses a longer value. A reused VM can therefore still fit a second 21-minute mutation run.
+Before it deletes an idle or unneeded worker, the autoscaler drains it: it marks the
+Woodpecker agent `no_schedule` (sending the agent name back, because the agent PATCH
+replaces it), then reads the queue again. A worker that took a workflow meanwhile is kept
+until it is idle. This closes the race that orphaned a workflow assigned during deletion.
 GCP deletes the VM at its lifetime (`--max-run-duration` with the `DELETE` action),
 even if the guest hangs. The autoscaler also deletes any tracked worker older than
 65 minutes and cancels any pipeline whose workflow has run for 60 minutes;
