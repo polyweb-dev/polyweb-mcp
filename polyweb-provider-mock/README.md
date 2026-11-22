@@ -15,6 +15,27 @@ The mock is never part of the production stack. It has its own
 `pyproject.toml` and `uv.lock`, it is not a workspace member of the root
 project, and the production image does not contain it.
 
+## Coverage and CRAP metrics
+
+The `provider-mock` Woodpecker workflow records branch coverage for the mock
+package while it runs the mock tests and the root `@live` scenarios against the
+mock. Reports are uploaded in the usual `reports.zip` under
+`coverage/backend/provider-mock/`; coverage data is kept out of Git.
+
+After downloading and extracting that artifact in the repository root, copy its
+LCOV report into this project so Crapper can find it, then run Crapper from the
+repository root:
+
+```bash
+mkdir -p polyweb-provider-mock/coverage
+cp coverage/backend/provider-mock/coverage.lcov polyweb-provider-mock/coverage/lcov.info
+uv run --group crapper crapper --root polyweb-provider-mock --use-existing-coverage src
+```
+
+Crapper writes this project's separate snapshot to
+`polyweb-provider-mock/.metrics/crap.edn`. Its `--use-existing-coverage` option
+uses the copied LCOV report and does not rerun tests.
+
 ## Run it
 
 ```bash

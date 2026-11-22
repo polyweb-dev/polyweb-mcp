@@ -8,9 +8,48 @@ No artifact service or Git repository in Gitea is necessary.
 
 Each ZIP contains `ci-metadata.json` and the available report files.
 The metadata includes the workflow, pipeline number, commit, branch, and workflow status.
-The archive contains files from `coverage/gremlins` and `test_reports`, plus that workflow's log.
+The archive contains files from `coverage/backend`, `coverage/gremlins`, and `test_reports`,
+plus that workflow's log.
 Mutation reports include `coverage/gremlins/index.html` and `coverage/gremlins/gremlins.json`.
 The uploader excludes caches, database files, environment files, hidden paths, and symbolic links.
+The one database exception is `coverage/backend/<suite>/coverage.sqlite`. The uploader admits it
+only when its tables match the coverage.py data schema.
+
+## Backend coverage
+
+`api-unit` and `api-integration` run pytest through `scripts/ci/backend_coverage.py`.
+It sets `COVERAGE_PROCESS_START`, so coverage.py starts in every Python process the tests create:
+pytest, the xdist workers, and CLI or server subprocesses that inherit the environment.
+Settings live in `scripts/ci/coverage.toml`: branch coverage of the `polyweb` package,
+with repository-relative paths.
+
+Reports land in `coverage/backend/unit/` or `coverage/backend/integration/`. The whole
+`coverage/` tree is gitignored. The helper writes them after test failures too, and the
+integration time bound applies to pytest only, so a timeout still leaves reports.
+Each suite directory holds:
+
+| File | Use |
+| :--- | :--- |
+| `coverage.sqlite` | Raw coverage.py data, for combining suites or pipelines |
+| `coverage.lcov` | LCOV for this suite |
+| `coverage.xml` | Cobertura XML |
+| `coverage.json` | coverage.py JSON |
+| `summary.txt` | Text report with missing lines |
+| `html/` | Browsable HTML report |
+
+To combine suites, extract the unit and integration ZIPs into separate folders and run:
+
+```bash
+uv run --no-sync python scripts/ci/backend_coverage.py combine combined \
+  .gitea-packages/unit .gitea-packages/integration
+uv run --group crapper crapper --use-existing-coverage src/polyweb
+```
+
+`combine` takes `coverage.sqlite` files or folders that contain them. It writes the same
+reports to `coverage/backend/combined/` and copies its LCOV to `coverage/backend/lcov.info`.
+Crapper reads every `coverage/**/lcov.info` but keeps a single record per source file
+rather than summing them. That is why per-suite reports use the name `coverage.lcov` and
+only the combined file is `lcov.info`. Crapper writes `.metrics/crap.edn`, which is also ignored.
 
 The uploader limits each ZIP to 256 MiB and 2000 source files.
 It also limits the total source size to 256 MiB.
@@ -69,7 +108,7 @@ These commands do not start CI jobs or contact Gitea:
 ```bash
 uv run --no-sync --with pyyaml python -m unittest discover -s scripts/ci -p 'test_*.py' -v
 uv run --no-sync ruff check scripts/ci
-uv run --no-sync mypy --follow-imports=silent scripts/ci/upload_gitea.py
+uv run --no-sync mypy --follow-imports=silent scripts/ci/upload_gitea.py scripts/ci/backend_coverage.py
 ```
 
 The UI jobs use Node 24 for static checks and unit tests, and the official

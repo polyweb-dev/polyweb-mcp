@@ -33,7 +33,9 @@ steps:
           test -f .env || cp .env.example .env
           uv sync --frozen
           timeout -s ABRT -k 30 180 uv run polyweb-db upgrade || { echo "polyweb-db upgrade failed or hit its 180 s bound (exit status $?)"; exit 1; }
-          timeout -s ABRT -k 60 1200 uv run pytest tests/integration --ignore=tests/integration/latency -n auto -q || { echo "pytest failed or hit its 1200 s bound (exit status $?)"; exit 1; }
+          # Coverage reports go to coverage/backend/integration. The bound sits inside the
+          # measured command, so reports are still written after a failure or a timeout.
+          uv run python scripts/ci/backend_coverage.py run integration -- timeout -s ABRT -k 60 1200 uv run pytest tests/integration --ignore=tests/integration/latency -n auto -q || { echo "pytest failed, hit its 1200 s bound, or coverage reporting failed (exit status $?)"; exit 1; }
         '
 
   upload-artifacts:

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import ssl
 import sys
 import tempfile
@@ -34,6 +35,7 @@ WORKFLOWS = {
     "ui-bdd": "ui-bdd-tests.log",
 }
 REPORT_DIRECTORIES = (
+    "coverage/backend",
     "coverage/gremlins",
     "test_reports",
     "polyweb-ui/coverage",
@@ -49,6 +51,46 @@ METADATA_KEYS = (
     "CI_PIPELINE_STATUS",
     "CI_PIPELINE_RERUNS",
 )
+REPORT_SUFFIXES = {
+    ".html",
+    ".json",
+    ".md",
+    ".txt",
+    ".xml",
+    ".csv",
+    ".log",
+    ".lcov",
+    ".svg",
+    ".css",
+    ".js",
+    ".png",
+}
+# Raw coverage.py data, kept so suites from separate pipelines can be combined.
+COVERAGE_DATA = "coverage.sqlite"
+COVERAGE_TABLES = {"coverage_schema", "meta", "file", "context", "line_bits", "arc", "tracer"}
+
+
+def is_coverage_data(path: Path, relative: Path) -> bool:
+    """Admit coverage/backend/<suite>/coverage.sqlite only with the coverage.py schema.
+
+    Other databases stay excluded, so a test database cannot ride along under this name.
+    """
+    if relative.parts[:2] != ("coverage", "backend") or len(relative.parts) != 4:
+        return False
+    if relative.name != COVERAGE_DATA:
+        return False
+    try:
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            rows = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view', 'trigger')"
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return False
+    tables = {str(name) for (name,) in rows if not str(name).startswith("sqlite_")}
+    return {"coverage_schema", "meta", "file"} <= tables <= COVERAGE_TABLES
 
 
 def report_files(root: Path, workflow: str) -> list[Path]:
@@ -68,21 +110,10 @@ def report_files(root: Path, workflow: str) -> list[Path]:
         if any(p.is_symlink() for p in path.parents) or not path.resolve().is_relative_to(root):
             continue
         # A report directory must not accidentally archive an environment file or DB.
-        if any(
-            part.startswith(".") for part in path.relative_to(root).parts
-        ) or path.suffix.lower() not in {
-            ".html",
-            ".json",
-            ".md",
-            ".txt",
-            ".xml",
-            ".csv",
-            ".log",
-            ".svg",
-            ".css",
-            ".js",
-            ".png",
-        }:
+        relative = path.relative_to(root)
+        if any(part.startswith(".") for part in relative.parts):
+            continue
+        if path.suffix.lower() not in REPORT_SUFFIXES and not is_coverage_data(path, relative):
             continue
         total += path.stat().st_size
         files.append(path)
