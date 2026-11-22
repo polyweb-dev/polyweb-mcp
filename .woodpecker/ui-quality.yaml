@@ -32,7 +32,7 @@ steps:
           pnpm lint
           pnpm typecheck
           pnpm typecheck:e2e
-          pnpm test
+          pnpm test:coverage
           pnpm build
         '
 
