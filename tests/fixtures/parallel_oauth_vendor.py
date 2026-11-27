@@ -33,6 +33,7 @@ class FakeParallelVendor:
     token_calls: list[str] = field(default_factory=list)
     holds: dict[str, tuple[asyncio.Event, asyncio.Event]] = field(default_factory=dict)
     access_tokens: list[str] = field(default_factory=list)
+    reject_refresh: bool = False
     counter: int = 0
 
     def _secret(self, kind: str) -> str:
@@ -101,6 +102,8 @@ class FakeParallelVendor:
                 entered.set()
                 await release.wait()
             if kind == "refresh":
+                if self.reject_refresh:
+                    return httpx.Response(400, json={"error": "invalid_grant"})
                 return self._tokens()
             if form.get("device_code") in self.approved:
                 return self._tokens()

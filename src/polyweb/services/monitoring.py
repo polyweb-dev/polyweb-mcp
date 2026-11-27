@@ -1741,6 +1741,10 @@ async def _latest_quotas(
     snapshots: list[QuotaSnapshot] = []
     for provider in providers:
         snapshot = await repository.latest_quota(provider)
+        if snapshot is None:
+            any_scope_reader = getattr(repository, "latest_quota_any_scope", None)
+            if callable(any_scope_reader):
+                snapshot = await any_scope_reader(provider)
         if snapshot is not None:
             normalized = normalize_degenerate_quota(snapshot)
             if normalized.provider == "brave":

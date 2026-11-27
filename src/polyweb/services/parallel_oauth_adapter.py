@@ -1,5 +1,7 @@
 """Credential-scoped Parallel adapter with OAuth account balance support."""
 
+from typing import Any
+
 import httpx
 from pydantic import SecretStr
 
@@ -22,6 +24,17 @@ class ParallelOAuthAdapter(ParallelAdapter):
         super().__init__(client, api_key=token)
         self._balance_client = ParallelOAuthClient(client)
         self._balance_token = token
+
+    async def _request(self, url: str, body: dict[str, Any]) -> httpx.Response:
+        token = self._balance_token.get_secret_value()
+        return await self._http.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "x-api-key": token,
+            },
+            json=body,
+        )
 
     async def usage_snapshot(self, request: UsageSyncRequest) -> NativeUsageSnapshot | None:
         payload = await self._balance_client.get_balance(self._balance_token)

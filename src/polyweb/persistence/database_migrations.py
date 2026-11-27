@@ -517,7 +517,6 @@ _HEAD_INDEXES = frozenset(
         "ix_project_memberships_user_id",
         "project_memberships_one_provider_owner",
         "key_pools_credential_project_key",
-        "key_pools_project_provider_key",
         "ix_system_role_assignments_user_id",
         "ix_project_role_assignments_user_id",
         "ix_project_role_assignments_project_user",

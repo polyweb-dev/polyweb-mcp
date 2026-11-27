@@ -90,6 +90,17 @@ export function usageTotalsView(totals: readonly ProjectUsageTotal[], order?: Pr
     const knownFree = price !== undefined && (price.keyless || (price.callCostUsd !== null && Number(price.callCostUsd) === 0))
     accumulate(row, entry, knownFree)
     accumulate(total, entry, knownFree)
+    if (providerIdentity(entry.provider).id === "parallel" && entry.unitKind !== "USD") {
+      const callCost = price?.callCostUsd !== null && price?.callCostUsd !== undefined
+        ? Number(price.callCostUsd)
+        : (entry.operation === "fetch" ? 0.001 : 0.005)
+      if (Number.isFinite(callCost) && callCost > 0) {
+        const computed = entry.eventCount * callCost
+        row.usd = add(row.usd, computed)
+        total.usd = add(total.usd, computed)
+        row.unreportedCost = false
+      }
+    }
     byKey.set(key, row)
   }
   return {

@@ -70,13 +70,6 @@ class KeyPoolRow(Base):
             unique=True,
             sqlite_where=text("project_id IS NOT NULL"),
         ),
-        Index(
-            "key_pools_project_provider_key",
-            "project_id",
-            "provider_type",
-            unique=True,
-            sqlite_where=text("project_id IS NOT NULL"),
-        ),
     )
 
     id: Mapped[str] = mapped_column(CHAR(36), primary_key=True)

@@ -141,4 +141,13 @@ describe("usageTotalsView", () => {
     expect(usageAmountText(view.rows[0]!, "usd")).toBe("—")
     expect(usageAmountText(view.total, "usd")).toBe("—")
   })
+
+  it("computes Parallel USD cost from catalog pricing when reported in request units", () => {
+    const view = usageTotalsView([
+      total({ provider: "parallel", operation: "search", totalUnits: 1, eventCount: 1, unitKind: "REQUEST" }),
+    ])
+    const parallel = view.rows.find((row) => row.provider === "parallel")!
+    expect(usageAmountText(parallel, "usd")).toBe("$0.005")
+    expect(usageAmountText(view.total, "usd")).toBe("$0.005")
+  })
 })

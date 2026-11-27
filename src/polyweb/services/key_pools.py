@@ -290,17 +290,22 @@ class KeyPoolService:
             await _require_vault(session, actor.id)
             ids = await ProjectRepository(session).list_provider_owner_projects(actor.id)
             keys = await CredentialRepository(session).list_for_owner(actor.id)
-            providers = {key.credential.provider_type for key in keys}
             result = []
             for project_id in ids:
                 project = await session.get(ProjectRow, str(project_id))
                 assert project is not None
                 assigned = await KeyPoolRepository(session).list_for_project(project_id)
+                assigned_credential_ids = {p.credential_id for p in assigned}
+                unassigned_keys = [
+                    key for key in keys if key.credential.id not in assigned_credential_ids
+                ]
                 result.append(
                     VaultProject(
                         id=project_id,
                         name=project.name,
-                        available_providers=sorted(providers - {p.provider_type for p in assigned}),
+                        available_providers=sorted(
+                            {key.credential.provider_type for key in unassigned_keys}
+                        ),
                     )
                 )
             return result

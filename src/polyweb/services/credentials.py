@@ -29,12 +29,14 @@ performs the live actor permission check.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Final, TypeVar
 from uuid import UUID
 
+import httpx
 from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,9 +85,12 @@ from polyweb.services.authorization import (
     project_query,
     system_query,
 )
+from polyweb.services.parallel_oauth import REFRESH_SKEW_SECONDS
 from polyweb.services.projects import ProjectsRolloutGate
 
 _T = TypeVar("_T")
+
+logger = logging.getLogger(__name__)
 
 #: Audit actions of credential and grant lifecycle events.
 CREDENTIAL_CREATED: Final[str] = "credential.created"
@@ -214,6 +219,8 @@ class CredentialService:
         account_id: UUID = DEFAULT_INSTALLATION_ACCOUNT_ID,
         rollout_state: ProjectRolloutState = ProjectRolloutState.PROJECTS_PREVIEW,
         max_write_attempts: int = 5,
+        http_client: httpx.AsyncClient | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._repository = repository
         self._secret_store = secret_store
@@ -221,6 +228,8 @@ class CredentialService:
         self._rollout = ProjectsRolloutGate(rollout_state)
         self._authorization = ScopedAuthorizationService(repository, account_id=account_id)
         self._max_write_attempts = max(1, max_write_attempts)
+        self._http_client = http_client
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     # ------------------------------------------------------------------
     # System-scope surface (system.credentials.manage)
@@ -483,7 +492,13 @@ class CredentialService:
             return None
         if expected_generation is not None and usable.generation != expected_generation:
             return None
-        material = await self._load_material(session, usable)
+        # For OAuth credentials, _load_material_refreshing handles token refresh
+        # outside the caller's read session.  For all other auth modes, it falls
+        # through to a plain in-session read (identical result, one extra session).
+        if usable.auth_mode == CredentialAuthMode.OAUTH.value:
+            material = await self._load_material_refreshing(usable)
+        else:
+            material = await self._load_material(session, usable)
         if material is None:
             return None
         plaintext, token_generation = material
@@ -521,7 +536,10 @@ class CredentialService:
                     credential = entry.credential
                     if credential_id is not None and credential.id != credential_id:
                         continue
-                    material = await self._load_material(session, credential)
+                    if credential.auth_mode == CredentialAuthMode.OAUTH.value:
+                        material = await self._load_material_refreshing(credential)
+                    else:
+                        material = await self._load_material(session, credential)
                     if material is None:
                         continue
                     plaintext, token_generation = material
@@ -559,12 +577,79 @@ class CredentialService:
         )
         if grant is None or grant.status is not OAuthGrantStatus.CONNECTED:
             return None
-        if grant.access_expires_at is not None and grant.access_expires_at <= datetime.now(UTC):
+        skew = timedelta(seconds=REFRESH_SKEW_SECONDS)
+        needs_refresh = (
+            grant.access_expires_at is not None and grant.access_expires_at <= self._clock() + skew
+        )
+        if needs_refresh:
+            # Refresh must run outside this read session — CredentialOAuthService
+            # manages its own write transactions.  Return None to signal the
+            # caller; _load_material_refreshing will retry after the refresh.
             return None
         token = await self._secret_store.get_in_session(
             session, oauth_secret_slot(credential.id, "access", grant.token_generation)
         )
         return None if token is None else (token, grant.token_generation)
+
+    async def _load_material_refreshing(
+        self, credential: CredentialInstanceRead
+    ) -> tuple[str, int | None] | None:
+        """Load OAuth material, refreshing an expired/near-expiry token first.
+
+        For non-OAuth credentials this is equivalent to _load_material inside a
+        fresh read session.  For OAuth credentials it detects near-expiry via
+        _load_material, calls CredentialOAuthService.refresh() outside any
+        session, then re-reads the new token.  At most one refresh attempt is
+        made per call; a second near-expiry after refresh is returned as-is.
+        """
+
+        # Local import avoids a circular dependency:
+        # credential_oauth.py imports oauth_slot_names from this module.
+        from polyweb.services.control_errors import UpstreamUnavailable
+        from polyweb.services.credential_oauth import (
+            CredentialOAuthService,
+            OAuthTarget,
+        )
+
+        async def _read(session: AsyncSession) -> tuple[str, int | None] | None:
+            await begin_read_snapshot(session)
+            return await self._load_material(session, credential)
+
+        async with self._repository.session() as session:
+            result = await _read(session)
+
+        if result is not None or credential.auth_mode != CredentialAuthMode.OAUTH.value:
+            return result
+
+        # result is None and credential is OAuth → token is near-expiry or expired.
+        # Attempt a refresh; CredentialOAuthService owns the write transactions.
+        oauth_service = CredentialOAuthService(
+            self._repository,
+            self._secret_store,
+            account_id=self._account_id,
+            http_client=self._http_client,
+            clock=self._clock,
+        )
+        target = OAuthTarget(project_id=credential.owner_project_id)
+        try:
+            await oauth_service.refresh(target, credential.id)
+        except UpstreamUnavailable:
+            logger.warning(
+                "OAuth token refresh failed for credential %s; provider temporarily unavailable",
+                credential.id,
+            )
+            return None
+        except Exception:
+            logger.warning(
+                "OAuth token refresh failed for credential %s",
+                credential.id,
+                exc_info=True,
+            )
+            return None
+
+        # Re-read the (potentially new) token.
+        async with self._repository.session() as session:
+            return await _read(session)
 
     # ------------------------------------------------------------------
     # Shared helpers

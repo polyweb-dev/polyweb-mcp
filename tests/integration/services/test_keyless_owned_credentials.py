@@ -421,7 +421,7 @@ async def test_cloud_0007_populated_upgrade_preserves_and_coexists(
     with sqlite3.connect(database) as connection:
         schema_before = set(connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master"))
         revision_before = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert revision_before == ("0008_owned_keyless_credentials",)
+    assert revision_before == ("0009_mixed_parallel_pools",)
     with pytest.raises(NotImplementedError, match="owned keyless credentials cannot be downgraded"):
         alembic_command.downgrade(config, "0007_provider_budget_period")
     # A rejected rollback must not rebuild tables, change the index/CHECK, or lose vault data.

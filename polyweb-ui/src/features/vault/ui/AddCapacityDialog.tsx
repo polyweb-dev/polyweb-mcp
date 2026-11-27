@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 import type { FormEvent } from "react"
-import { authModeNeedsSecret, credentialAuthModes, providerIdentity, providerTypeName, supportsKeyless, supportsOAuth } from "@/domains/providers"
+import { authModeNeedsSecret, credentialAuthModes, providerIdentity, providerTypeName } from "@/domains/providers"
 import { createVaultKey } from "@/domains/vault"
 import type { KeyPool, VaultKey, VaultProject } from "@/domains/vault"
 import { Button } from "@/shared/ui/button"
@@ -44,10 +44,10 @@ export function AddCapacityDialog({ item, provider, pool, projects, project, onC
   if (key) return <PoolCapacityDialog item={key} pool={pool} projects={projects} project={project} onClose={onClose} onSaved={onSaved} />
   if (!provider) return null
   if (connecting && oauthKey) return <VaultOAuthDialog keyId={oauthKey.id} onClose={() => setConnecting(false)} onConnected={connected} />
-  const oauth = supportsOAuth(provider)
-  const keyless = supportsKeyless(provider)
-  const offerKeyChoice = keyless && !oauth
-  const secretRequired = !oauth && authModeNeedsSecret(auth)
+  const modes = credentialAuthModes(provider)
+  const offerKeyChoice = modes.length > 1
+  const isOAuth = auth === "oauth"
+  const secretRequired = !isOAuth && authModeNeedsSecret(auth)
   async function addKey(event: FormEvent) {
     event.preventDefault()
     setSubmitted(true)
@@ -60,8 +60,8 @@ export function AddCapacityDialog({ item, provider, pool, projects, project, onC
     setError(null)
     try {
       const created = await createVaultKey({ provider_type: provider, label: label.trim(),
-        auth_mode: oauth ? "oauth" : auth, ...(secretRequired ? { secret } : {}), overcommit: true, contention_mode: "equal" })
-      if (oauth) {
+        auth_mode: auth, ...(secretRequired ? { secret } : {}), overcommit: true, contention_mode: "equal" })
+      if (isOAuth) {
         setOAuthKey(created)
         setConnecting(true)
       } else setKey(created)
@@ -81,13 +81,13 @@ export function AddCapacityDialog({ item, provider, pool, projects, project, onC
         {offerKeyChoice && (
           <Field id="capacity-auth" label="Authentication">
             <Select id="capacity-auth" value={auth} onValueChange={setAuth}
-              options={credentialAuthModes(provider)} />
+              options={modes} />
           </Field>
         )}
       </KeyFormFields>
       {error && <p role="alert" className="fs-field-error">{error}</p>}
       <FormActions><Button type="button" variant="outline" size="form" onClick={onClose}>Cancel</Button>
-        <Button type="submit" size="form" pending={pending}>{oauth ? "Connect" : "Add key"}</Button></FormActions>
+        <Button type="submit" size="form" pending={pending}>{isOAuth ? "Connect" : "Add key"}</Button></FormActions>
     </form>
   </Modal>
 }

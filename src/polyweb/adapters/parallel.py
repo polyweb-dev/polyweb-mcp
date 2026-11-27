@@ -604,6 +604,18 @@ class ParallelAdapter(ProviderAdapter):
         if event.operation is UsageOperation.FETCH:
             return extract_cost_usd(int(metadata.get("url_count", 1)))
         mode = metadata.get("mode")
+        if mode in (None, "omitted", "advanced"):
+            for item in metadata.get("skus", []):
+                sku_name = str(item.get("sku") or "").upper()
+                if "TURBO" in sku_name:
+                    mode = "turbo"
+                    break
+                elif "FAST" in sku_name:
+                    mode = "fast"
+                    break
+                elif "BASIC" in sku_name:
+                    mode = "basic"
+                    break
         bundles = metadata.get("extra_bundles", 0)
         if isinstance(mode, str) and mode not in SEARCH_USD_BY_MODE and mode != "omitted":
             logger.warning("skipping Parallel usage with unknown legacy mode: %s", mode)

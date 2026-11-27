@@ -107,8 +107,11 @@ class _World:
             self.boot.repository, self.store, http_client=self.http, clock=lambda: self.clock[0]
         )
 
-    def credentials(self) -> CredentialService:
-        return CredentialService(self.boot.repository, self.store)
+    def credentials(self, *, with_http: bool = False) -> CredentialService:
+        client = self.http if with_http else None
+        return CredentialService(
+            self.boot.repository, self.store, http_client=client, clock=lambda: self.clock[0]
+        )
 
     def vault_oauth(self) -> VaultOAuthService:
         service = VaultOAuthService(
@@ -247,7 +250,7 @@ async def _live_oauth_slots(world: _World, credential_id: UUID) -> dict[str, str
 async def _vault_grant(world: _World, credential_id: UUID) -> CredentialOAuthGrantRow:
     async with world.repository.session() as session:
         grant = await session.get(CredentialOAuthGrantRow, str(credential_id))
-        assert grant is not None
+        assert isinstance(grant, CredentialOAuthGrantRow)
         return grant
 
 
@@ -710,3 +713,75 @@ async def test_oauth_audit_lands_in_the_credential_owner_scope(world: _World) ->
     for row in system_rows:
         if row["target_id"] == str(private.id):
             assert str(row["actor_id"]) == str(world.initiator.id)
+
+
+@pytest.mark.asyncio
+async def test_expired_token_resolution_refreshes_and_persists_new_token(
+    world: _World,
+) -> None:
+    """TASK-000069 AC #1, AC #3: near-expiry token is refreshed on resolution and persisted."""
+
+    credential = await _system_oauth_credential(world, "parallel-refresh-ac1")
+    await _connect(world, world.system_admin, _SYSTEM, credential.id)
+    initial_token = world.vendor.access_tokens[-1]
+
+    # Advance clock so that the token is within REFRESH_SKEW_SECONDS (60s) of expiry.
+    # The fake vendor issues tokens with expires_in=3600s.
+    # At +3550s, remaining lifetime is 50s (< 60s skew).
+    world.clock[0] = world.clock[0] + timedelta(seconds=3550)
+
+    credentials_service = world.credentials(with_http=True)
+    async with world.repository.session() as session:
+        await begin_read_snapshot(session)
+        resolved = await credentials_service.resolve_material_in_session(
+            session,
+            world.context(world.project.id),
+            credential.id,
+            operation=CredentialOperation.SEARCH,
+        )
+
+    assert resolved is not None
+    new_token = resolved.secret.get_secret_value()
+    assert new_token != initial_token
+    assert new_token == world.vendor.access_tokens[-1]
+    assert resolved.token_generation == 3
+
+    # Verify the new token is persisted in the encrypted secret store and grant is connected.
+    slots = await _live_oauth_slots(world, credential.id)
+    assert slots[f"credential.{credential.id}.oauth.access.t3"] == new_token
+    status = await world.oauth().status(world.system_admin, _SYSTEM, credential.id)
+    assert status.status is OAuthGrantStatus.CONNECTED
+
+
+@pytest.mark.asyncio
+async def test_failed_refresh_marks_credential_with_visible_status(
+    world: _World,
+) -> None:
+    """TASK-000069 AC #2: a failed refresh marks the grant as refresh_failed with error code."""
+
+    credential = await _system_oauth_credential(world, "parallel-refresh-ac2")
+    await _connect(world, world.system_admin, _SYSTEM, credential.id)
+
+    # Advance clock past token expiry.
+    world.clock[0] = world.clock[0] + timedelta(hours=2)
+
+    # Vendor rejects refresh with invalid_grant.
+    world.vendor.reject_refresh = True
+
+    credentials_service = world.credentials(with_http=True)
+    async with world.repository.session() as session:
+        await begin_read_snapshot(session)
+        resolved = await credentials_service.resolve_material_in_session(
+            session,
+            world.context(world.project.id),
+            credential.id,
+            operation=CredentialOperation.SEARCH,
+        )
+
+    # Returns no material because the refresh failed.
+    assert resolved is None
+
+    # But the grant is visibly marked with status=refresh_failed and error_code=invalid_grant.
+    status = await world.oauth().status(world.system_admin, _SYSTEM, credential.id)
+    assert status.status is OAuthGrantStatus.REFRESH_FAILED
+    assert status.last_error_code == "invalid_grant"

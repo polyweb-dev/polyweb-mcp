@@ -42,8 +42,9 @@ _POOL_LIMITS = "0004_pool_limits"
 _POOL_BUDGET = "0005_pool_budget"
 _KEYLESS = "0006_keyless_credentials"
 _PROVIDER_BUDGET = "0007_provider_budget_period"
-_HEAD = "0008_owned_keyless_credentials"
-_OLDER_REVISION = "0009_provider_credentials"
+_OWNED_KEYLESS = "0008_owned_keyless_credentials"
+_HEAD = "0009_mixed_parallel_pools"
+_OLDER_REVISION = "0010_provider_credentials"
 _UNKNOWN_REVISION = "ffffffffffff_not_a_polyweb_revision"
 
 
@@ -242,12 +243,14 @@ def test_exactly_one_migration_revision_is_the_alpha_baseline() -> None:
         "0006_keyless_credentials.py",
         "0007_provider_budget_period.py",
         "0008_owned_keyless_credentials.py",
+        "0009_mixed_parallel_pools.py",
     ]
 
     script = ScriptDirectory.from_config(_config_for(Path("unused.db")))
     revisions = list(script.walk_revisions())
     assert [revision.revision for revision in revisions] == [
         _HEAD,
+        _OWNED_KEYLESS,
         _PROVIDER_BUDGET,
         _KEYLESS,
         _POOL_BUDGET,

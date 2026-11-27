@@ -805,11 +805,6 @@ def test_vault_partial_indexes_match_migrated_definitions(baseline: Path) -> Non
             ("credential_id", "project_id"),
             "project_id IS NOT NULL",
         ),
-        "key_pools_project_provider_key": (
-            "key_pools",
-            ("project_id", "provider_type"),
-            "project_id IS NOT NULL",
-        ),
     }
     metadata = load_all_rows()
     with sqlite3.connect(baseline) as connection:
