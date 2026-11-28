@@ -37,6 +37,7 @@ module.exports = {
           '\\.test\\.(ts|tsx|js|jsx)$',
           '\\.spec\\.(ts|tsx|js|jsx)$',
           '(^|/)src/test/setup\\.ts$',
+          '(^|/)src/test/resource-metrics\\.ts$',
           'tests/steps/.*',
         ],
       },

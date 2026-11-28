@@ -28,7 +28,7 @@ steps:
           uv sync --frozen
           uv run polyweb-db upgrade
           uv run behave tests/bdd/features/routing_latency.feature
-          uv run pytest tests/integration/latency/ -q
+          uv run pytest tests/integration/latency/ -q --junitxml=test_reports/junit/api-latency.xml
           echo "=========================================================="
           echo "               ROUTING LATENCY REPORT                     "
           echo "=========================================================="

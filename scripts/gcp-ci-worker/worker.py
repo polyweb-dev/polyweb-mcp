@@ -24,6 +24,10 @@ HEADSCALE_COMPOSE = Path("/home/administrator/headscale/docker-compose.yml")
 WOODPECKER_ENV = Path("/home/administrator/Programs/woodpecker/.env")
 HEADSCALE_URL = "https://headscale.thiocyanate.dev"
 TAILSCALE_SERVER_TARGET = "100.64.0.2:9000"
+# Fixed policy: no CI job runs longer than an hour, so no worker VM may either.
+# GCP deletes the VM at this deadline (--max-run-duration) even if the guest
+# hangs; a guest systemd timer powers it off at the same time as a backstop.
+MAX_LIFETIME_MINUTES = 60
 
 STANDARD_CANDIDATES = (
     ("n2-highcpu-16", "northamerica-northeast2"),
@@ -44,12 +48,14 @@ PROFILES: dict[str, dict[str, Any]] = {
     "mutation": {
         "candidates": HEAVY_CANDIDATES,
         "labels": "size=heavy,provider=gcp,spot=true",
-        "lifetime": 30,
+        # A mutation run takes about 21 minutes; a reused 30-minute VM could not
+        # fit a second one. Idle VMs are deleted after 2 minutes regardless.
+        "lifetime": 60,
     },
     "combined": {
         "candidates": HEAVY_CANDIDATES,
         "labels": "size=*,provider=gcp,spot=true",
-        "lifetime": 120,
+        "lifetime": 60,
     },
 }
 
@@ -247,8 +253,8 @@ def generate_startup_script(
     max_lifetime_min: int,
 ) -> str:
     """Join the tailnet and start the agent using a pre-baked worker image."""
-    if max_lifetime_min <= 0:
-        raise ValueError("Worker lifetime must be positive")
+    if not 0 < max_lifetime_min <= MAX_LIFETIME_MINUTES:
+        raise ValueError(f"Worker lifetime must be 1 to {MAX_LIFETIME_MINUTES} minutes")
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 printf 'CI_WORKER_BOOTSTRAP_START uptime=%s\\n' "$(cut -d' ' -f1 /proc/uptime)"
@@ -294,6 +300,13 @@ def cmd_create(args: argparse.Namespace) -> int:
     image_project = config.get("GCP_IMAGE_PROJECT", "polyweb-513423")
     agent_labels = args.labels or default_labels
     lifetime_min = int(args.lifetime or default_lifetime)
+    if not 0 < lifetime_min <= MAX_LIFETIME_MINUTES:
+        print(
+            f"Error: --lifetime must be 1 to {MAX_LIFETIME_MINUTES} minutes; CI jobs have a "
+            f"fixed {MAX_LIFETIME_MINUTES}-minute limit.",
+            file=sys.stderr,
+        )
+        return 1
 
     agent_secret = config.get("WOODPECKER_AGENT_SECRET")
 
@@ -359,6 +372,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             f"--machine-type={machine_type}",
             "--provisioning-model=SPOT",
             "--instance-termination-action=DELETE",
+            f"--max-run-duration={lifetime_min}m",
             f"--image-family={image_family}",
             f"--image-project={image_project}",
             f"--boot-disk-size={disk_size}",
@@ -545,7 +559,9 @@ def main() -> int:
         "--labels", help="Woodpecker agent labels (e.g. 'size=large,provider=gcp')"
     )
     p_create.add_argument(
-        "--lifetime", type=int, help="Max lifetime in minutes before auto-shutdown"
+        "--lifetime",
+        type=int,
+        help=f"Max lifetime in minutes before deletion (at most {MAX_LIFETIME_MINUTES})",
     )
     p_create.set_defaults(func=cmd_create)
 

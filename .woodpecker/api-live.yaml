@@ -28,7 +28,7 @@ steps:
           test -f .env || cp .env.example .env
           uv sync --frozen
           uv run polyweb-db upgrade
-          uv run behave --tags="@live"
+          uv run behave --tags="@live" --junit --junit-directory test_reports/junit/api-live
         '
 
   upload-artifacts:

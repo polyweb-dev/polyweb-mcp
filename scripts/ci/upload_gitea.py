@@ -54,6 +54,7 @@ METADATA_KEYS = (
 REPORT_SUFFIXES = {
     ".html",
     ".json",
+    ".jsonl",
     ".md",
     ".txt",
     ".xml",

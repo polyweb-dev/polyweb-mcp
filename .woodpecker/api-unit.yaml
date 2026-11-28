@@ -25,9 +25,12 @@ steps:
       - |
         bash scripts/ci/run-and-log.sh unit-tests.log bash -euo pipefail -c '
           test -f .env || cp .env.example .env
+          # Per-test CPU, memory and I/O as JUnit properties (tests/resource_metrics.py).
+          # On unless a manual pipeline sets POLYWEB_TEST_METRICS=0.
+          export POLYWEB_TEST_METRICS="$${POLYWEB_TEST_METRICS:-1}"
           uv sync --frozen
           # Coverage reports go to coverage/backend/unit, also after test failures.
-          uv run python scripts/ci/backend_coverage.py run unit -- uv run pytest tests/unit -n auto -q
+          uv run python scripts/ci/backend_coverage.py run unit -- uv run pytest tests/unit -n auto -q --junitxml=test_reports/junit/api-unit.xml
         '
 
   upload-artifacts:

@@ -11,6 +11,7 @@ Zero external dependencies - Python stdlib only.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import signal
@@ -19,6 +20,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,17 @@ logging.basicConfig(
 logger = logging.getLogger("gcp-ci-autoscaler")
 
 RUNNING = True
+
+# Fixed policy: no CI job (Woodpecker workflow) runs longer than an hour. The
+# job wrapper and the VM deadline normally end it first; this server-side
+# check catches a workflow whose agent vanished, which Woodpecker otherwise
+# shows as running indefinitely (pipeline 205 ran for 24 hours that way).
+JOB_LIMIT_SECONDS = 60 * 60
+# A VM is deleted by GCP at 60 minutes; anything still tracked later is stale.
+WORKER_MAX_AGE_SECONDS = JOB_LIMIT_SECONDS + 5 * 60
+REAP_INTERVAL_SECONDS = 60
+REAP_LOOKBACK_SECONDS = 3 * 24 * 60 * 60
+REAP_MAX_PAGES = 5
 
 
 def signal_handler(signum: int, frame: Any) -> None:
@@ -89,33 +102,171 @@ def save_state(state: dict[str, Any]) -> None:
         logger.error("Failed to write state file %s: %s", STATE_FILE, e)
 
 
+def api_request(
+    server_url: str,
+    token: str,
+    path: str,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+) -> Any:
+    """Call the Woodpecker REST API and return the decoded JSON body (or None)."""
+    url = f"{server_url.rstrip('/')}{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "User-Agent": "gcp-ci-autoscaler/1.0",
+    }
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        payload = resp.read()
+    return json.loads(payload.decode("utf-8")) if payload.strip() else None
+
+
 def fetch_queue_info(server_url: str, token: str) -> dict[str, Any] | None:
     """Query Woodpecker /api/queue/info."""
-    url = f"{server_url.rstrip('/')}/api/queue/info"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "User-Agent": "gcp-ci-autoscaler/1.0",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status == 200:
-                data = resp.read()
-                result = json.loads(data.decode("utf-8"))
-                if not isinstance(result, dict):
-                    raise ValueError("Queue response must be an object")
-                return result
+        result = api_request(server_url, token, "/api/queue/info")
+        if not isinstance(result, dict):
+            raise ValueError("Queue response must be an object")
+        return result
     except urllib.error.HTTPError as e:
         if e.code == 401:
             logger.error("Authentication failed: WOODPECKER_API_TOKEN is invalid or unauthorized.")
         else:
-            logger.error("HTTP error querying %s: %s %s", url, e.code, e.reason)
+            logger.error("HTTP error querying queue info: %s %s", e.code, e.reason)
     except Exception as e:
-        logger.error("Error connecting to Woodpecker server at %s: %s", url, e)
+        logger.error("Error connecting to Woodpecker server at %s: %s", server_url, e)
     return None
+
+
+AGENT_PAGES = 10
+
+
+def find_agent(server_url: str, token: str, name: str) -> dict[str, Any] | None:
+    """The Woodpecker agent a worker registered; agents use the VM name as hostname."""
+    for page in range(1, AGENT_PAGES + 1):
+        agents = api_request(server_url, token, f"/api/agents?page={page}&perPage=100")
+        if not agents:
+            return None
+        for agent in agents:
+            if agent.get("name") == name:
+                return dict(agent)
+    return None
+
+
+def drain_agent(server_url: str, token: str, name: str) -> bool:
+    """Stop Woodpecker scheduling on a worker; True when it is safe to delete.
+
+    Deleting a VM from a queue snapshot races with assignment: Woodpecker can hand
+    the agent a workflow while the VM is being deleted, and that workflow is then
+    orphaned (pipeline 83). So: mark the agent no_schedule, then re-read the queue.
+    An agent that never registered is safe to delete. Any API failure keeps the VM;
+    GCP still deletes it at its fixed lifetime.
+    """
+    try:
+        agent = find_agent(server_url, token, name)
+        if agent is None:
+            return True
+        if not agent.get("no_schedule"):
+            # PATCH replaces the name as well, so send it back unchanged.
+            api_request(
+                server_url,
+                token,
+                f"/api/agents/{agent['id']}",
+                method="PATCH",
+                body={"name": agent["name"], "no_schedule": True},
+            )
+            logger.info("Drained worker '%s' (agent %s) before deletion.", name, agent["id"])
+        qinfo = fetch_queue_info(server_url, token)
+        if qinfo is None:
+            return False
+        for task in qinfo.get("running") or []:
+            if task.get("agent_name") == name or task.get("agent_id") == agent["id"]:
+                logger.info(
+                    "Worker '%s' took a workflow before it was drained; deleting it after that.",
+                    name,
+                )
+                return False
+        return True
+    except Exception as e:
+        logger.error("Could not drain worker '%s'; keeping it for now: %s", name, e)
+        return False
+
+
+def overdue_workflows(pipeline: dict[str, Any], now: float, limit: int) -> list[dict[str, Any]]:
+    """Workflows still marked running after the fixed job limit."""
+    return [
+        workflow
+        for workflow in pipeline.get("workflows") or []
+        if workflow.get("state") == "running"
+        and workflow.get("started")
+        and now - workflow["started"] >= limit
+    ]
+
+
+def reap_overdue_pipelines(
+    server_url: str, token: str, now: float, limit: int = JOB_LIMIT_SECONDS
+) -> list[tuple[int, int]]:
+    """Cancel every pipeline that has a workflow running past the fixed job limit.
+
+    Woodpecker enforces timeouts on the agent, so a workflow whose agent or VM
+    disappeared stays "running" on the server forever. Returns (repo id,
+    pipeline number) pairs that were cancelled.
+    """
+    cancelled: list[tuple[int, int]] = []
+    for repo in api_request(server_url, token, "/api/user/repos") or []:
+        if not repo.get("active", True):
+            continue
+        repo_id = repo["id"]
+        for page in range(1, REAP_MAX_PAGES + 1):
+            pipelines = api_request(
+                server_url,
+                token,
+                f"/api/repos/{repo_id}/pipelines?page={page}&perPage=50&per_page=50",
+            )
+            if not pipelines:
+                break
+            for summary in pipelines:
+                if summary.get("status") != "running" or not summary.get("started"):
+                    continue
+                if now - summary["started"] < limit:
+                    continue
+                number = summary["number"]
+                pipeline = api_request(
+                    server_url, token, f"/api/repos/{repo_id}/pipelines/{number}"
+                )
+                overdue = overdue_workflows(pipeline or {}, now, limit)
+                if not overdue:
+                    continue
+                for workflow in overdue:
+                    logger.error(
+                        "CI_TIME_LIMIT_EXCEEDED: %s pipeline %s workflow '%s' has been running "
+                        "%d minutes, past the fixed %d-minute CI job limit (agent %s). "
+                        "Cancelling the pipeline; rerun it if the stall was intermittent.",
+                        repo.get("full_name", repo_id),
+                        number,
+                        workflow.get("name"),
+                        (now - workflow["started"]) // 60,
+                        limit // 60,
+                        workflow.get("agent_id"),
+                    )
+                try:
+                    api_request(
+                        server_url,
+                        token,
+                        f"/api/repos/{repo_id}/pipelines/{number}/cancel",
+                        method="POST",
+                    )
+                    cancelled.append((repo_id, number))
+                except Exception as e:
+                    logger.error("Could not cancel pipeline %s: %s", number, e)
+            if min(p.get("created") or now for p in pipelines) < now - REAP_LOOKBACK_SECONDS:
+                break
+    return cancelled
 
 
 def spawn_worker(profile: str, instance_name: str) -> bool:
@@ -206,7 +357,18 @@ def compatible(worker: dict[str, Any], profile: str) -> bool:
     return worker["profile"] in {profile, "combined"}
 
 
-def retire_worker(name: str, workers: dict[str, Any], state: dict[str, Any]) -> bool:
+Drain = Callable[[str], bool]
+
+
+def retire_worker(
+    name: str, workers: dict[str, Any], state: dict[str, Any], drain: Drain | None = None
+) -> bool:
+    """Delete a worker. With ``drain``, first stop new work reaching it; a worker
+    that took a workflow meanwhile is kept (and marked draining) until idle."""
+    if drain is not None and not drain(name):
+        workers[name]["draining"] = True
+        save_state(state)
+        return False
     if not destroy_worker(name):
         return False
     del workers[name]
@@ -233,6 +395,7 @@ def make_room(
     state: dict[str, Any],
     max_workers: int,
     max_cpus: int,
+    drain: Drain | None = None,
 ) -> bool:
     """Reclaim unused workers when a different size needs the capacity budget."""
 
@@ -243,7 +406,7 @@ def make_room(
     for name in list(workers):
         if fits():
             return True
-        if name not in reserved and not retire_worker(name, workers, state):
+        if name not in reserved and not retire_worker(name, workers, state, drain):
             return False
     return fits()
 
@@ -256,12 +419,30 @@ def manage_queue(
     max_workers: int = 4,
     max_cpus: int = 64,
     startup_timeout: int = 300,
+    drain: Drain | None = None,
 ) -> None:
-    """Allocate one capacity-1 agent per ready workflow, including booting agents."""
+    """Allocate one capacity-1 agent per ready workflow, including booting agents.
+
+    ``drain`` (see drain_agent) runs before an idle or unneeded worker is deleted,
+    so Woodpecker cannot hand it a workflow while its VM is being deleted.
+    """
     if qinfo.get("paused"):
         return
     workers = normalize_workers(state)
     busy = busy_workers(qinfo, workers)
+    for name, worker in list(workers.items()):
+        age = now - worker.get("created_at", now)
+        if age >= WORKER_MAX_AGE_SECONDS:
+            # GCP deletes the VM at 60 minutes; never keep or protect it longer.
+            logger.error(
+                "CI_TIME_LIMIT_EXCEEDED: worker '%s' is %d minutes old, past the fixed "
+                "%d-minute limit; deleting it.",
+                name,
+                age // 60,
+                JOB_LIMIT_SECONDS // 60,
+            )
+            retire_worker(name, workers, state)
+            busy.discard(name)
     for name in busy:
         workers[name].update(last_busy=now, seen_running=True)
     for name, worker in list(workers.items()):
@@ -273,7 +454,7 @@ def manage_queue(
         )
         idle = now - worker.get("last_busy", now) >= idle_timeout
         if expired or idle:
-            retire_worker(name, workers, state)
+            retire_worker(name, workers, state, drain)
 
     reserved = set(busy)
     failed_profiles: set[str] = set()
@@ -285,7 +466,9 @@ def manage_queue(
             (
                 name
                 for name, worker in workers.items()
-                if name not in reserved and compatible(worker, profile)
+                if name not in reserved
+                and compatible(worker, profile)
+                and not worker.get("draining")
             ),
             None,
         )
@@ -294,7 +477,7 @@ def manage_queue(
             workers[available]["last_busy"] = now
             continue
         if profile in failed_profiles or not make_room(
-            workers, reserved, profile, state, max_workers, max_cpus
+            workers, reserved, profile, state, max_workers, max_cpus, drain
         ):
             continue
         # Names remain unique for several allocations in the same poll and after restart.
@@ -311,6 +494,7 @@ def manage_queue(
 def run_loop() -> None:
     logger.info("Starting GCP Spot CI Autoscaler service...")
     state = load_state()
+    last_reap = 0.0
 
     while RUNNING:
         config = load_env()
@@ -337,7 +521,15 @@ def run_loop() -> None:
                 max_workers=max(1, int(config.get("MAX_WORKERS", "4"))),
                 max_cpus=max(1, int(config.get("MAX_TOTAL_CPUS", "64"))),
                 startup_timeout=max(1, int(config.get("WORKER_STARTUP_TIMEOUT_SECONDS", "300"))),
+                drain=functools.partial(drain_agent, server_url, token),
             )
+
+        if time.time() - last_reap >= REAP_INTERVAL_SECONDS:
+            last_reap = time.time()
+            try:
+                reap_overdue_pipelines(server_url, token, last_reap)
+            except Exception as e:
+                logger.error("Overdue pipeline check failed: %s", e)
 
         # Sleep for poll interval
         for _ in range(poll_interval):
