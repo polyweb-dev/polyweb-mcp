@@ -28,7 +28,8 @@ steps:
         echo "Free Disk:     $(df -h / | awk "NR==2 {print \$4}")"
         echo "=========================================================="
       - |
-        bash scripts/ci/run-and-log.sh provider-mock-tests.log bash -euo pipefail -c '
+        uv run --project polyweb-provider-mock python polyweb-provider-mock/scripts/coverage.py run -- \
+          bash scripts/ci/run-and-log.sh provider-mock-tests.log bash -euo pipefail -c '
           test -f .env || cp .env.example .env
           mkdir -p test_reports/provider-mock "$(dirname "$POLYWEB_PROVIDER_MOCK_DB")"
           uv sync --frozen

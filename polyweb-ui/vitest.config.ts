@@ -27,6 +27,11 @@ export default defineConfig({
       "test-results/**",
       "playwright-report/**"
     ],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "lcov", "json"],
+      reportsDirectory: "./coverage",
+    },
     // worker_threads avoid subprocess pipes, which restricted sandboxes deny
     pool: "threads",
     maxWorkers: 16,

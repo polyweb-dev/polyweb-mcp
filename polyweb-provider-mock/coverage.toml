@@ -1,0 +1,20 @@
+# Coverage settings for the standalone provider-mock app.
+[tool.coverage.run]
+branch = true
+source_pkgs = ["polyweb_provider_mock"]
+relative_files = true
+parallel = true
+patch = ["subprocess", "_exit"]
+sigterm = true
+disable_warnings = ["no-data-collected", "module-not-imported", "module-not-measured"]
+
+[tool.coverage.paths]
+provider_mock = [
+    "polyweb-provider-mock/src/polyweb_provider_mock",
+    "*/polyweb-provider-mock/src/polyweb_provider_mock",
+    "*/site-packages/polyweb_provider_mock",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

@@ -34,6 +34,7 @@ polyweb-secrets = "polyweb.cli.secrets:main"
 [dependency-groups]
 dev = [
     "behave>=1.3.3",
+    "coverage>=7.15.4,<8",
     "mypy>=1.10,<2.0",
     "pyinstrument>=5.1.3,<6",
     "pytest>=8.2,<9.0",
@@ -43,6 +44,7 @@ dev = [
     "pyyaml>=6.0,<7.0",
     "ruff>=0.5,<1.0",
 ]
+crapper = ["crapper"]
 
 [build-system]
 requires = ["hatchling>=1.27,<2.0"]
@@ -112,3 +114,6 @@ python_version = "3.12"
 strict = true
 packages = ["polyweb"]
 mypy_path = ["src"]
+
+[tool.uv.sources]
+crapper = { git = "https://github.com/unclebob/crapper.git", rev = "c757ec79a6c15dc815238bbd9c2f4601eb54d3cc" }
